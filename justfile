@@ -247,4 +247,4 @@ app-backend:
 
 [group("App commands")]
 app-frontend:
-    cd app/frontend && pnpm install --frozen-lockfile && pnpm dev
+    cd app/frontend && pnpm dev
