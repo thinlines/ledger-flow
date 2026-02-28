@@ -1,0 +1,30 @@
+[[reports]]
+# Each of these defines the args given to ledger for the given
+# report. Used in default.txt.do to create reports.
+type = "balance"  # Use this in the filename
+name = "balance statement"  # This will be used in the statement text
+bottom_line_label = "Net Assets"
+
+[reports.cmds]
+# These commands are ledger options and arguments.
+Assets = ["^Assets", "--historical"]
+Liabilities = ["^Liabilities", "--invert", "empty", "--historical"]
+
+
+[[reports]]
+type = "income"
+name = "income statement"
+bottom_line_label = "Net Income"
+
+[reports.cmds]
+Income = ["^Income", "--account", "tag('country')", "--invert", "--historical"]
+Expenses = ["^Expenses", "--historical"]
+
+
+[[reports]]
+type = "cashflow"
+name = "cash flow statement"
+bottom_line_label = "Net Change in Assets"
+
+[reports.cmds]
+Assets = ["^Assets", "and", "not", "payee", "Opening", "--historical"]

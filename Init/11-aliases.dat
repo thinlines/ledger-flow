@@ -1,0 +1,13 @@
+alias alipay=Assets:Alipay
+alias bjb=Assets:BJB
+alias icbc=Assets:ICBC
+alias schwab=Assets:Schwab
+alias wfchk=Assets:Wells Fargo Checking
+alias wfsav=Assets:Wells Fargo Savings
+alias wfcc=Liabilities:Wells Fargo Credit Card
+alias cc=Liabilities:Wells Fargo Credit Card
+alias checking=Assets:Wells Fargo Checking
+alias food=Expenses:Food and Dining
+alias entertainment=Expenses:Entertainment
+alias health=Expenses:Health and Fitness
+alias shopping=Expenses:Shopping

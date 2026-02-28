@@ -1,0 +1,56 @@
+price_db = ".pricedb"
+# payee_aliases: CSV with format `payee,alias`.
+# Payees are transformed from `alias` --> `payee`
+# in the payee fields of your journal's transactions
+payee_aliases = "payee_aliases.csv"
+
+alphavantage_api_key = "KZ87O4QYKQT95C9F"
+
+# Tell the system where to look for your files
+[dirs]
+csv_dir = "CSVs"
+journal_dir = "Journals"
+init_dir = "Init"
+opening_bal_dir = "Opening balances"
+
+# Define the info for importing your CSVs
+[institutions.alipay]
+account = "Assets:Alipay"
+# What encoding are the CSV files in? This is optional and defaults to
+# UTF-8.
+encoding = "GB18030"
+# These define how many lines of the input CSV files should be cut off.
+# They are optional and default to 0.
+head = 13
+tail = 1
+CSV_date_format = "%Y-%m-%d"
+
+[institutions.icbc]
+account = "Assets:ICBC"
+head = 7
+tail = 2
+CSV_date_format = "%Y-%m-%d"
+
+[institutions.bjb]
+account = "Assets:BJB"
+CSV_date_format = "%Y/%m/%d"
+head = 1
+tail = 0
+
+[institutions.schwab]
+account = "Assets:Schwab"
+head = 1
+tail = 0
+CSV_date_format = "%m/%d/%Y"
+
+[institutions.wfcc]
+account = "Liabilities:Wells Fargo Credit Card"
+CSV_date_format = "%m/%d/%Y"
+
+[institutions.wfchk]
+account = "Assets:Wells Fargo Checking"
+CSV_date_format = "%m/%d/%Y"
+
+[institutions.wfsav]
+account = "Assets:Wells Fargo Savings"
+CSV_date_format = "%m/%d/%Y"

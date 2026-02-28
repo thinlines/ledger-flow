@@ -1,0 +1,6 @@
+pandas==3.0.*
+pyarrow
+numpy
+matplotlib
+jupyter
+pricehist

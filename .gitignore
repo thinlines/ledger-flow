@@ -1,0 +1,34 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
+.venv/
+venv/
+
+# Node / SvelteKit
+node_modules/
+app/frontend/.svelte-kit/
+app/frontend/build/
+app/frontend/dist/
+
+# Runtime / temp
+.workflow/
+*.tmp
+*.bak
+*.swp
+
+# Existing financial data (keep local, don't track)
+CSVs/
+Journals/
+Opening balances/
+Special journals/
+DrCr/
+*.journal
+*.qfx
+*.db
+*.db.bak
+
+# Notebook outputs
+.ipynb_checkpoints/

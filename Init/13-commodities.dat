@@ -1,0 +1,10 @@
+commodity ¥
+	format ¥1,000.00
+	alias CNY
+commodity €
+	format €1,000.00
+	alias EUR
+commodity $
+	format $1,000.00
+	alias USD
+commodity SWTSX

@@ -1,0 +1,77 @@
+payee,alias
+7-11,711北京
+7-11,7-ELEVEn
+7-11,柒一拾壹
+Amazon,AMZN Mktp
+BHG,北京华联综合超市股份有限公司
+BHG,华联精品生鲜超市
+BHG,支付-北京海淀复兴路店
+Boise Ultrasound,BOISE ULTRASOUND
+Bonnie,陈雅晴
+Burger King,BK\d+门店
+Burger King,汉堡王
+China Post,邮政
+Connor Chappelle,CHAPPELLE CONNOR JAMES
+Costco Wholesale,COSTCO
+Credit Card Payment,ONLINE PAYMENT
+Credit Card Payment,ONLINE SCHED PAYMENT .+? TO WELLS FARGO CASH WISE VISA PLATINUM CARD
+Credit Card Payment,ONLINE TRANSFER .+? TO WELLS FARGO CASH WISE VISA PLATINUM CARD
+Dairy Queen,DAIRY QUEEN
+Dairy Queen,DQ
+Easen,易奇峰
+Great Outdoors,野友趣
+Hollister,"BOISE, ID-HCO."
+Jianbing,刘张彪
+Jing-A,京A
+KFC,1品牌BJN\d+
+KFC,KFC
+KFC,肯德基
+Lawson,LAWSON
+Lawson,罗松商贸有限公司
+Manner Coffee,26234-北京荟聚二层店
+McDonald's,McDonalds
+McDonald's,金拱门
+McDonald's,麦当劳
+Meituan shared bike,北京三快在线科技有限公司
+Mullvad,AMAGICOM AB
+Mullvad,VPN\*
+Nintendo,NINTENDO
+Nugget,DAVID NOEL CAREY
+Phone top-up,中国移动
+Phone top-up,广西南宁赛尔维思
+Phone top-up,手机充值
+Phone top-up,话费充值
+Recurring Transfer from Checking,RECURRING TRANSFER FROM JOSLEYN R (EVERYDAY )?CHECKING
+Recurring Transfer to Savings,RECURRING TRANSFER TO JOSLEYN R WAY2SAVE SAVINGS
+Runze School,代发工资
+Runze School,润泽学校
+Saizeriya,萨莉亚
+Shake Shack,北京市大兴区欣宁街15号院1号楼1层01F26（门牌号）
+Shell Oil,SHELL OIL
+Silverline Medical, SILVERLINE
+Slowboat,悠航鲜啤
+Soi Baochao Bar,高云成
+St. Luke's,ST LUKES
+Subway,赛百味
+Taco Bell,3品牌PBJ677门店
+The Whale Tea,THE WHALE TEA
+T-Mobile,T-?MOBILE
+Uber,PAYPAL \*UBER
+Uniqlo,优衣库
+University of the People,UNIVERSITY OF THE PE
+University of the People,UNIVERSITYP
+Wall Street English,华尔街英语
+Wal-Mart,WAL-MART
+Wal-Mart,WM SUPERCENTER
+Wanshoulu Baozi 江南大包,江南大包
+Water Stand,支付宝-陈真
+Whole Foods,WHOLEFDS
+WinCo Foods,WINCO
+Yoshinoya,吉野家
+全时,全时
+哈啰单车,上海钧正网络科技有限公司
+大润发,等\d+类商品
+新隆嘉,鞍山工人街店（鞍山35店）
+晋来顺,晋来顺
+物美,奥士凯
+鱼你在一起,鱼你在一起
