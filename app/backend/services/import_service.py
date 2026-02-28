@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -47,7 +48,7 @@ def _generate_payees(config: AppConfig) -> None:
     alias_csv = config.init_dir / config.payee_aliases
     alias_dat = config.init_dir / f"{Path(config.payee_aliases).stem}.dat"
     run_cmd(
-        ["python3", "Scripts/generate_payees.py", "-o", str(alias_dat), str(alias_csv)],
+        [sys.executable, "Scripts/generate_payees.py", "-o", str(alias_dat), str(alias_csv)],
         cwd=config.root_dir,
     )
 
@@ -69,7 +70,7 @@ def preview_import(config: AppConfig, csv_path: Path, year: str, institution: st
     _generate_payees(config)
 
     converted_csv = run_cmd(
-        ["python3", "Scripts/convert_csv.py", str(csv_path), institution],
+        [sys.executable, "Scripts/convert_csv.py", str(csv_path), institution],
         cwd=config.root_dir,
     )
 
