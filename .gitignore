@@ -32,3 +32,5 @@ DrCr/
 
 # Notebook outputs
 .ipynb_checkpoints/
+
+*.ipynb
