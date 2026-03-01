@@ -10,7 +10,7 @@
     detected_institution_display_name: string | null;
     is_configured_institution: boolean;
   };
-  type InstitutionOption = { id: string; displayName: string };
+  type InstitutionOption = { id: string; displayName: string; defaultAccount?: string };
 
   let initialized = false;
   let candidates: Candidate[] = [];
@@ -18,6 +18,7 @@
   let selectedPath = '';
   let year = String(new Date().getFullYear());
   let institution = '';
+  let destinationAccount = '';
   let preview: any = null;
   let error = '';
   let loading = false;
@@ -44,7 +45,8 @@
       preview = await apiPost('/api/import/preview', {
         csvPath: selectedPath,
         year,
-        institution
+        institution,
+        destinationAccount: destinationAccount || null
       });
     } catch (e) {
       error = String(e);
@@ -70,6 +72,18 @@
     selectedPath = c.abs_path;
     year = c.detected_year ?? year;
     institution = c.detected_institution ?? '';
+    const picked = institutions.find((x) => x.id === institution);
+    if (picked?.defaultAccount) {
+      destinationAccount = picked.defaultAccount;
+    }
+  }
+
+  function onInstitutionChange(id: string) {
+    institution = id;
+    const picked = institutions.find((x) => x.id === id);
+    if (picked?.defaultAccount) {
+      destinationAccount = picked.defaultAccount;
+    }
   }
 
   onMount(loadCandidates);
@@ -133,13 +147,18 @@
 
         <div class="field">
           <label for="institution">Institution</label>
-          <select id="institution" bind:value={institution}>
+          <select id="institution" bind:value={institution} on:change={(e) => onInstitutionChange((e.currentTarget as HTMLSelectElement).value)}>
             <option value="">Select...</option>
             {#each institutions as inst}
               <option value={inst.id}>{inst.displayName}</option>
             {/each}
           </select>
         </div>
+      </div>
+
+      <div class="field">
+        <label for="destinationAccount">Destination Account</label>
+        <input id="destinationAccount" bind:value={destinationAccount} placeholder="Assets:Bank:Checking" />
       </div>
 
       <button class="btn btn-primary" disabled={loading || !selectedPath || !year || !institution} on:click={runPreview}>

@@ -20,8 +20,6 @@ args = parser.parse_args()
 
 
 def main():
-    inst_name = args.institution
-
     # Set up configuration
     with open(args.config if args.config else "config.toml", "rb") as f:
         config = tomllib.load(f)
@@ -34,12 +32,13 @@ def main():
         head = csv_config.get("head", 0)
         tail = csv_config.get("tail", False)
         encoding = csv_config.get("encoding", "utf-8")
+        parser_key = csv_config.get("parser", args.institution)
 
     with open(args.input, encoding=encoding) as file:
         lns = file.readlines()
         tail = -tail if tail else len(lns)
         lines = lns[head:tail]
-        bank_csv = create_bank_csv(inst_name, lines, config)
+        bank_csv = create_bank_csv(parser_key, lines, config)
         reader = bank_csv.reader()
 
         output = []

@@ -135,7 +135,11 @@ def import_candidates() -> dict:
         rows.append(row)
 
     institutions = [
-        {"id": inst_id, "displayName": display_name_for(inst_id, fallback=inst_cfg.get("display_name"))}
+        {
+            "id": inst_id,
+            "displayName": display_name_for(inst_id, fallback=inst_cfg.get("display_name")),
+            "defaultAccount": inst_cfg.get("account", ""),
+        }
         for inst_id, inst_cfg in sorted(config.institutions.items(), key=lambda x: x[0])
     ]
     return {"candidates": rows, "institutions": institutions}
@@ -161,7 +165,13 @@ def journals() -> dict:
 def import_preview(req: ImportPreviewRequest) -> dict:
     config = _require_workspace_config()
     try:
-        data = preview_import(config, Path(req.csvPath), req.year, req.institution)
+        data = preview_import(
+            config,
+            Path(req.csvPath),
+            req.year,
+            req.institution,
+            destination_account=req.destinationAccount,
+        )
     except (FileNotFoundError, ValueError, CommandError) as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
 

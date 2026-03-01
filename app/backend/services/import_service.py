@@ -8,6 +8,7 @@ from pathlib import Path
 
 from .config_service import AppConfig
 from .import_index import ImportIndex
+from .institution_registry import canonical_template_id
 from .ledger_runner import run_cmd
 
 
@@ -40,7 +41,8 @@ def scan_candidates(config: AppConfig) -> list[ImportCandidate]:
     for csv_path in sorted(config.csv_dir.glob("*.csv")):
         m = YEAR_INST_RE.match(csv_path.name)
         detected_year = m.group("year") if m else None
-        detected_inst = m.group("institution") if m else None
+        detected_raw_inst = m.group("institution") if m else None
+        detected_inst = canonical_template_id(detected_raw_inst) if detected_raw_inst else None
         rows.append(
             ImportCandidate(
                 file_name=csv_path.name,
@@ -226,14 +228,20 @@ def _build_existing_map(config: AppConfig, institution: str, target_journal: Pat
     return merged
 
 
-def preview_import(config: AppConfig, csv_path: Path, year: str, institution: str) -> dict:
+def preview_import(
+    config: AppConfig,
+    csv_path: Path,
+    year: str,
+    institution: str,
+    destination_account: str | None = None,
+) -> dict:
     if institution not in config.institutions:
         raise ValueError(f"Unknown institution: {institution}")
     if not csv_path.exists():
         raise FileNotFoundError(str(csv_path))
 
     institution_cfg = config.institutions[institution]
-    account = institution_cfg["account"]
+    account = destination_account or institution_cfg["account"]
     date_fmt = institution_cfg["CSV_date_format"]
 
     _generate_payees(config)
@@ -283,6 +291,7 @@ def preview_import(config: AppConfig, csv_path: Path, year: str, institution: st
 
     return {
         "sourceFileSha256": source_file_sha256,
+        "destinationAccount": account,
         "summary": {
             "count": len(txns),
             "unknownCount": converted_journal.count("Expenses:Unknown"),

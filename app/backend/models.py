@@ -7,6 +7,7 @@ class ImportPreviewRequest(BaseModel):
     csvPath: str
     year: str = Field(pattern=r"^\d{4}$")
     institution: str
+    destinationAccount: str | None = None
 
 
 class StageApplyRequest(BaseModel):
