@@ -3,7 +3,7 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 
 from models import (
@@ -143,6 +143,38 @@ def import_candidates() -> dict:
         for inst_id, inst_cfg in sorted(config.institutions.items(), key=lambda x: x[0])
     ]
     return {"candidates": rows, "institutions": institutions}
+
+
+@app.post("/api/import/upload")
+async def import_upload(
+    file: UploadFile = File(...),
+    year: str = Form(...),
+    institution: str = Form(...),
+) -> dict:
+    config = _require_workspace_config()
+
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="No file selected")
+    if not file.filename.lower().endswith(".csv"):
+        raise HTTPException(status_code=400, detail="Only CSV files are supported")
+    if institution not in config.institutions:
+        raise HTTPException(status_code=400, detail="Unknown institution selected")
+
+    safe_name = f"{year}-{institution}.csv"
+    dest = config.csv_dir / safe_name
+    dest.parent.mkdir(parents=True, exist_ok=True)
+
+    content = await file.read()
+    if not content:
+        raise HTTPException(status_code=400, detail="Uploaded file is empty")
+    dest.write_bytes(content)
+
+    return {
+        "uploaded": True,
+        "fileName": safe_name,
+        "absPath": str(dest.resolve()),
+        "sizeBytes": len(content),
+    }
 
 
 @app.get("/api/journals")

@@ -19,6 +19,7 @@
   let year = String(new Date().getFullYear());
   let institution = '';
   let destinationAccount = '';
+  let selectedFile: File | null = null;
   let preview: any = null;
   let error = '';
   let loading = false;
@@ -34,6 +35,32 @@
       institutions = data.institutions;
     } catch (e) {
       error = String(e);
+    }
+  }
+
+  async function uploadFile() {
+    if (!selectedFile || !institution || !year) return;
+    loading = true;
+    error = '';
+    try {
+      const form = new FormData();
+      form.append('file', selectedFile);
+      form.append('year', year);
+      form.append('institution', institution);
+
+      const res = await fetch('/api/import/upload', { method: 'POST', body: form });
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(text || 'Upload failed');
+      }
+      const data = (await res.json()) as { absPath: string };
+      selectedPath = data.absPath;
+      selectedFile = null;
+      await loadCandidates();
+    } catch (e) {
+      error = String(e);
+    } finally {
+      loading = false;
     }
   }
 
@@ -92,7 +119,7 @@
 <section class="view-card hero">
   <p class="eyebrow">Import Center</p>
   <h2 class="page-title">Preview and Import Transactions</h2>
-  <p class="subtitle">Parse institution CSV files and apply only net-new entries.</p>
+  <p class="subtitle">Upload a statement, preview match results, and apply only net-new transactions.</p>
 </section>
 
 {#if !initialized}
@@ -107,7 +134,43 @@
 
   <section class="grid-2">
     <article class="view-card">
-      <p class="eyebrow">Inbox</p>
+      <p class="eyebrow">Step 1</p>
+      <h3>Upload Statement File</h3>
+
+      <div class="field grid-2 compact">
+        <div class="field">
+          <label for="uploadInstitution">Institution</label>
+          <select id="uploadInstitution" bind:value={institution} on:change={(e) => onInstitutionChange((e.currentTarget as HTMLSelectElement).value)}>
+            <option value="">Select...</option>
+            {#each institutions as inst}
+              <option value={inst.id}>{inst.displayName}</option>
+            {/each}
+          </select>
+        </div>
+        <div class="field">
+          <label for="uploadYear">Year</label>
+          <input id="uploadYear" bind:value={year} />
+        </div>
+      </div>
+
+      <div class="field">
+        <label for="statementFile">CSV File</label>
+        <input
+          id="statementFile"
+          type="file"
+          accept=".csv,text/csv"
+          on:change={(e) => (selectedFile = (e.currentTarget as HTMLInputElement).files?.[0] ?? null)}
+        />
+      </div>
+
+      <button class="btn btn-primary" disabled={loading || !selectedFile || !institution || !year} on:click={uploadFile}>
+        {loading ? 'Uploading...' : 'Upload File'}
+      </button>
+      <p class="muted">Uploaded files are saved to your workspace inbox and auto-detected below.</p>
+    </article>
+
+    <article class="view-card">
+      <p class="eyebrow">Step 2</p>
       <h3>Detected CSV Files</h3>
       {#if candidates.length === 0}
         <p class="muted">No CSV files found in workspace inbox.</p>
@@ -131,7 +194,7 @@
     </article>
 
     <article class="view-card">
-      <p class="eyebrow">Configuration</p>
+      <p class="eyebrow">Step 3</p>
       <h3>Import Preview Inputs</h3>
 
       <div class="field">
