@@ -11,20 +11,22 @@ from models import (
     StageApplyRequest,
     UnknownScanRequest,
     UnknownStageRequest,
+    WorkspaceBootstrapRequest,
+    WorkspaceSelectRequest,
 )
 from services.backup_service import backup_file
-from services.config_service import load_config
 from services.import_index import ImportIndex
-from services.import_service import preview_import, scan_candidates, apply_import
+from services.import_service import apply_import, preview_import, scan_candidates
 from services.ledger_runner import CommandError, run_cmd
 from services.stage_store import StageStore
 from services.unknowns_service import apply_unknown_mappings, scan_unknowns
+from services.workspace_service import DEFAULT_INSTITUTION_TEMPLATES, WorkspaceManager
 
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
-config = load_config(ROOT_DIR)
 stages = StageStore(ROOT_DIR)
 import_index = ImportIndex(ROOT_DIR / ".workflow" / "state.db")
+workspace_manager = WorkspaceManager(ROOT_DIR)
 
 
 @asynccontextmanager
@@ -34,7 +36,7 @@ async def lifespan(_app: FastAPI):
     yield
 
 
-app = FastAPI(title="Ledger Workflow API", lifespan=lifespan)
+app = FastAPI(title="Ledger Flow API", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
@@ -42,6 +44,13 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+def _require_workspace_config():
+    config = workspace_manager.load_active_config()
+    if config is None:
+        raise HTTPException(status_code=409, detail="workspace_not_initialized")
+    return config
 
 
 @app.get("/api/health")
@@ -55,14 +64,70 @@ def health() -> dict:
     return {"status": "ok", "ledgerVersion": ledger_version, "hledgerVersion": hledger_version}
 
 
+@app.get("/api/app/state")
+def app_state() -> dict:
+    config = workspace_manager.load_active_config()
+    if config is None:
+        return {
+            "initialized": False,
+            "workspacePath": None,
+            "workspaceName": None,
+            "institutions": [],
+            "journals": 0,
+            "csvInbox": 0,
+            "institutionTemplates": sorted(DEFAULT_INSTITUTION_TEMPLATES.keys()),
+        }
+
+    journals = list(config.journal_dir.glob("*.journal"))
+    csvs = list(config.csv_dir.glob("*.csv"))
+    return {
+        "initialized": True,
+        "workspacePath": str(config.root_dir.resolve()),
+        "workspaceName": config.name,
+        "institutions": sorted(config.institutions.keys()),
+        "journals": len(journals),
+        "csvInbox": len(csvs),
+        "institutionTemplates": sorted(DEFAULT_INSTITUTION_TEMPLATES.keys()),
+    }
+
+
+@app.post("/api/workspace/bootstrap")
+def workspace_bootstrap(req: WorkspaceBootstrapRequest) -> dict:
+    try:
+        root = workspace_manager.bootstrap_workspace(
+            workspace_path=Path(req.workspacePath),
+            workspace_name=req.workspaceName,
+            base_currency=req.baseCurrency,
+            start_year=req.startYear,
+            institutions=req.institutions,
+        )
+    except OSError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+    return {"ok": True, "workspacePath": str(root)}
+
+
+@app.post("/api/workspace/select")
+def workspace_select(req: WorkspaceSelectRequest) -> dict:
+    root = Path(req.workspacePath).resolve()
+    cfg = root / "settings" / "workspace.toml"
+    if not cfg.exists():
+        raise HTTPException(status_code=404, detail="workspace config not found")
+
+    workspace_manager.set_active_workspace(root)
+    return {"ok": True, "workspacePath": str(root)}
+
+
 @app.get("/api/import/candidates")
 def import_candidates() -> dict:
+    config = _require_workspace_config()
     rows = [c.__dict__ for c in scan_candidates(config)]
     return {"candidates": rows, "institutions": sorted(config.institutions.keys())}
 
 
 @app.get("/api/journals")
 def journals() -> dict:
+    config = _require_workspace_config()
     rows = []
     for path in sorted(config.journal_dir.glob("*.journal")):
         rows.append(
@@ -78,6 +143,7 @@ def journals() -> dict:
 
 @app.post("/api/import/preview")
 def import_preview(req: ImportPreviewRequest) -> dict:
+    config = _require_workspace_config()
     try:
         data = preview_import(config, Path(req.csvPath), req.year, req.institution)
     except (FileNotFoundError, ValueError, CommandError) as e:
@@ -98,6 +164,7 @@ def import_preview(req: ImportPreviewRequest) -> dict:
 
 @app.post("/api/import/apply")
 def import_apply(req: StageApplyRequest) -> dict:
+    config = _require_workspace_config()
     try:
         stage = stages.load(req.stageId)
     except FileNotFoundError as e:
@@ -131,6 +198,7 @@ def import_apply(req: StageApplyRequest) -> dict:
 
 @app.post("/api/unknowns/scan")
 def unknown_scan(req: UnknownScanRequest) -> dict:
+    config = _require_workspace_config()
     journal_path = Path(req.journalPath)
     if not journal_path.exists():
         raise HTTPException(status_code=404, detail="journal not found")
@@ -171,6 +239,7 @@ def unknown_stage_mappings(req: UnknownStageRequest) -> dict:
 
 @app.post("/api/unknowns/apply")
 def unknown_apply(req: StageApplyRequest) -> dict:
+    config = _require_workspace_config()
     try:
         stage = stages.load(req.stageId)
     except FileNotFoundError as e:

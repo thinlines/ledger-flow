@@ -25,3 +25,15 @@ class UnknownMapping(BaseModel):
 class UnknownStageRequest(BaseModel):
     stageId: str
     mappings: list[UnknownMapping]
+
+
+class WorkspaceBootstrapRequest(BaseModel):
+    workspacePath: str
+    workspaceName: str = "My Books"
+    baseCurrency: str = "USD"
+    startYear: int
+    institutions: list[str] = []
+
+
+class WorkspaceSelectRequest(BaseModel):
+    workspacePath: str

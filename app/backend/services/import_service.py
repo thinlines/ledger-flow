@@ -58,6 +58,8 @@ def scan_candidates(config: AppConfig) -> list[ImportCandidate]:
 def _generate_payees(config: AppConfig) -> None:
     alias_csv = config.init_dir / config.payee_aliases
     alias_dat = config.init_dir / f"{Path(config.payee_aliases).stem}.dat"
+    if not alias_csv.exists():
+        alias_csv.write_text("payee,alias\n", encoding="utf-8")
     run_cmd(
         [sys.executable, "Scripts/generate_payees.py", "-o", str(alias_dat), str(alias_csv)],
         cwd=config.root_dir,
@@ -241,11 +243,15 @@ def preview_import(config: AppConfig, csv_path: Path, year: str, institution: st
         cwd=config.root_dir,
     )
 
+    year_journal = config.journal_dir / f"{year}.journal"
+    if not year_journal.exists():
+        year_journal.write_text("", encoding="utf-8")
+
     converted_journal = run_cmd(
         [
             "ledger",
             "-f",
-            f"{year}.journal",
+            str(year_journal),
             "convert",
             "--invert",
             "--account",
@@ -260,7 +266,7 @@ def preview_import(config: AppConfig, csv_path: Path, year: str, institution: st
         stdin=converted_csv,
     )
 
-    target_journal = config.journal_dir / f"{year}-{institution}.journal"
+    target_journal = config.journal_dir / f"{year}.journal"
     source_file_sha256 = _sha256_file(csv_path)
 
     txns = []

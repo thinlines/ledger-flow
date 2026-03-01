@@ -13,9 +13,18 @@ except ModuleNotFoundError:  # pragma: no cover
 class AppConfig:
     root_dir: Path
     config_toml: Path
+    workspace: dict
     dirs: dict
     institutions: dict
     payee_aliases: str
+
+    @property
+    def name(self) -> str:
+        return str(self.workspace.get("name", "Workspace"))
+
+    @property
+    def start_year(self) -> int:
+        return int(self.workspace.get("start_year", 2026))
 
     @property
     def csv_dir(self) -> Path:
@@ -34,15 +43,15 @@ class AppConfig:
         return self.root_dir / self.dirs["opening_bal_dir"]
 
 
-def load_config(root_dir: Path) -> AppConfig:
-    config_toml = root_dir / "config.toml"
+def load_config(config_toml: Path) -> AppConfig:
     with config_toml.open("rb") as f:
         raw = tomllib.load(f)
 
     return AppConfig(
-        root_dir=root_dir,
+        root_dir=config_toml.parent.parent,
         config_toml=config_toml,
+        workspace=raw.get("workspace", {}),
         dirs=raw["dirs"],
-        institutions=raw["institutions"],
-        payee_aliases=raw["payee_aliases"],
+        institutions=raw.get("institutions", {}),
+        payee_aliases=raw.get("payee_aliases", "payee_aliases.csv"),
     )
