@@ -15,6 +15,8 @@
     groupKey: string;
     payeeDisplay: string;
     suggestedAccount: string | null;
+    matchedRuleId?: string | null;
+    matchedRulePattern?: string | null;
     txns: TxnRow[];
   };
 
@@ -114,6 +116,7 @@
     selectedAccount: string;
     status: 'matched' | 'needs';
     hasExistingRule: boolean;
+    matchedRuleId: string | null;
   }> {
     const rows: Array<{
       rowId: string;
@@ -126,6 +129,7 @@
       selectedAccount: string;
       status: 'matched' | 'needs';
       hasExistingRule: boolean;
+      matchedRuleId: string | null;
     }> = [];
     for (const g of stage?.groups ?? []) {
       const selected = effectiveAccountFor(g);
@@ -141,7 +145,8 @@
           currentAccount: t.currentAccount,
           selectedAccount: selected,
           status,
-          hasExistingRule: !!g.suggestedAccount
+          hasExistingRule: !!g.suggestedAccount,
+          matchedRuleId: g.matchedRuleId || null
         });
       }
     }
@@ -364,6 +369,7 @@
               <th>Current</th>
               <th>Match To</th>
               <th>Rule</th>
+              <th>Rule ID</th>
             </tr>
           </thead>
           <tbody>
@@ -406,6 +412,7 @@
                     {r.hasExistingRule ? 'Edit Rule...' : 'Make Rule...'}
                   </button>
                 </td>
+                <td>{r.matchedRuleId ?? '-'}</td>
               </tr>
             {/each}
           </tbody>

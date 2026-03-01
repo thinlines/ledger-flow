@@ -42,3 +42,12 @@ export async function apiPost<T>(path: string, body: unknown): Promise<T> {
   }
   return (await res.json()) as T;
 }
+
+export async function apiDelete<T>(path: string): Promise<T> {
+  const res = await fetch(path, { method: 'DELETE' });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(normalizeError(path, res.status, text));
+  }
+  return (await res.json()) as T;
+}

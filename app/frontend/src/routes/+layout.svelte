@@ -5,7 +5,8 @@
     { href: '/setup', label: 'Setup' },
     { href: '/', label: 'Home' },
     { href: '/import', label: 'Import' },
-    { href: '/unknowns', label: 'Review' }
+    { href: '/unknowns', label: 'Review' },
+    { href: '/rules', label: 'Rules' }
   ];
 
   function isActive(pathname: string, href: string): boolean {
