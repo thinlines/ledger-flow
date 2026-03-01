@@ -35,3 +35,6 @@ DrCr/
 .ipynb_checkpoints/
 
 *.ipynb
+
+# Workspace folder
+workspace/
