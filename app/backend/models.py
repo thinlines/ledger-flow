@@ -28,6 +28,11 @@ class UnknownStageRequest(BaseModel):
     mappings: list[UnknownMapping]
 
 
+class PayeeRuleRequest(BaseModel):
+    payee: str
+    account: str
+
+
 class WorkspaceBootstrapRequest(BaseModel):
     workspacePath: str
     workspaceName: str = "My Books"

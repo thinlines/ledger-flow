@@ -8,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from models import (
     ImportPreviewRequest,
+    PayeeRuleRequest,
     StageApplyRequest,
     UnknownScanRequest,
     UnknownStageRequest,
@@ -20,7 +21,7 @@ from services.import_service import apply_import, preview_import, scan_candidate
 from services.institution_registry import display_name_for, list_templates
 from services.ledger_runner import CommandError, run_cmd
 from services.stage_store import StageStore
-from services.unknowns_service import apply_unknown_mappings, scan_unknowns
+from services.unknowns_service import add_payee_rule, apply_unknown_mappings, list_known_accounts, scan_unknowns
 from services.workspace_service import WorkspaceManager
 
 
@@ -193,6 +194,13 @@ def journals() -> dict:
     return {"journals": rows}
 
 
+@app.get("/api/accounts")
+def accounts() -> dict:
+    config = _require_workspace_config()
+    accounts_dat = config.init_dir / "10-accounts.dat"
+    return {"accounts": list_known_accounts(accounts_dat)}
+
+
 @app.post("/api/import/preview")
 def import_preview(req: ImportPreviewRequest) -> dict:
     config = _require_workspace_config()
@@ -317,23 +325,36 @@ def unknown_apply(req: StageApplyRequest) -> dict:
     journal_backup = backup_file(journal_path, "unknowns")
     accounts_backup = backup_file(accounts_dat, "rules")
 
-    txn_updates, rule_adds, warnings = apply_unknown_mappings(
-        journal_path=journal_path,
-        accounts_dat=accounts_dat,
-        mappings=mappings,
-        scanned_groups=stage["groups"],
-    )
+    try:
+        txn_updates, warnings = apply_unknown_mappings(
+            journal_path=journal_path,
+            accounts_dat=accounts_dat,
+            mappings=mappings,
+            scanned_groups=stage["groups"],
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
 
     stage["status"] = "applied"
     stage["result"] = {
         "applied": True,
         "backupPaths": [str(journal_backup.resolve()), str(accounts_backup.resolve())],
         "updatedTxnCount": txn_updates,
-        "addedRuleCount": rule_adds,
         "warnings": warnings,
     }
     stages.save(req.stageId, stage)
     return stage
+
+
+@app.post("/api/rules/payee")
+def create_payee_rule(req: PayeeRuleRequest) -> dict:
+    config = _require_workspace_config()
+    accounts_dat = config.init_dir / "10-accounts.dat"
+    try:
+        added, warning = add_payee_rule(accounts_dat, req.payee, req.account)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return {"added": added, "warning": warning}
 
 
 @app.get("/api/stages/{stage_id}")

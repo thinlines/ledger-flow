@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from services.unknowns_service import apply_unknown_mappings, scan_unknowns
+from services.unknowns_service import add_payee_rule, apply_unknown_mappings, scan_unknowns
 
 
 def test_scan_unknowns_groups_by_payee(tmp_path: Path) -> None:
@@ -36,7 +36,7 @@ account Expenses:Eating Out
     assert len(group["txns"]) == 2
 
 
-def test_apply_unknown_mappings_updates_journal_and_rules(tmp_path: Path) -> None:
+def test_apply_unknown_mappings_updates_journal_only(tmp_path: Path) -> None:
     journal = tmp_path / "sample.journal"
     accounts = tmp_path / "10-accounts.dat"
 
@@ -62,7 +62,7 @@ account Assets:Wells Fargo Checking
     )
 
     groups = scan_unknowns(journal, accounts)["groups"]
-    txn_updates, rule_adds, warnings = apply_unknown_mappings(
+    txn_updates, warnings = apply_unknown_mappings(
         journal_path=journal,
         accounts_dat=accounts,
         mappings={"coffee shop": "Expenses:Eating Out"},
@@ -70,7 +70,21 @@ account Assets:Wells Fargo Checking
     )
 
     assert txn_updates == 1
-    assert rule_adds == 1
     assert warnings == []
     assert "Expenses:Eating Out" in journal.read_text(encoding="utf-8")
+
+
+def test_add_payee_rule_adds_mapping(tmp_path: Path) -> None:
+    accounts = tmp_path / "10-accounts.dat"
+    accounts.write_text(
+        """
+account Expenses:Eating Out
+    ; type: Expense
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    added, warning = add_payee_rule(accounts, "Coffee Shop", "Expenses:Eating Out")
+    assert added is True
+    assert warning is None
     assert "payee Coffee Shop" in accounts.read_text(encoding="utf-8")
