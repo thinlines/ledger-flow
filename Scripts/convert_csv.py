@@ -23,10 +23,11 @@ def main():
     # Set up configuration
     with open(args.config if args.config else "config.toml", "rb") as f:
         config = tomllib.load(f)
-        csv_config = config["institutions"][args.institution]
-        if csv_config == None:
+        institutions_cfg = config.get("institutions", {})
+        csv_config = institutions_cfg.get(args.institution)
+        if csv_config is None:
             raise ValueError(
-                f"Account config for {institution} not found. Check your config file"
+                f"Institution config for {args.institution!r} not found. Check your config file"
             )
 
         head = csv_config.get("head", 0)
