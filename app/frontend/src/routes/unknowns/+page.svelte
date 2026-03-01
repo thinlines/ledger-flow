@@ -359,11 +359,20 @@
       <p class="muted">Create a reusable mapping from payee to account.</p>
       <div class="field">
         <label for="rulePayee">Payee</label>
-        <input id="rulePayee" bind:value={rulePayee} />
+        <input
+          id="rulePayee"
+          bind:value={rulePayee}
+          on:keydown={(e) => (e.key === 'Enter' ? (e.preventDefault(), saveRule()) : undefined)}
+        />
       </div>
       <div class="field">
         <label for="ruleAccount">Account</label>
-        <input id="ruleAccount" bind:value={ruleAccount} placeholder="Type to filter accounts" />
+        <input
+          id="ruleAccount"
+          bind:value={ruleAccount}
+          placeholder="Type to filter accounts"
+          on:keydown={(e) => (e.key === 'Enter' ? (e.preventDefault(), saveRule()) : undefined)}
+        />
         <div class="suggestions">
           {#each filteredAccounts(ruleAccount) as acct}
             <button type="button" class="suggestion" on:click={() => (ruleAccount = acct)}>{acct}</button>
