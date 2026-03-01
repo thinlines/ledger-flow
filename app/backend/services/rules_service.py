@@ -7,6 +7,8 @@ from uuid import uuid4
 
 
 RULES_FILE = "20-match-rules.ndjson"
+ALLOWED_FIELDS = {"payee"}
+ALLOWED_OPERATORS = {"exact", "contains"}
 
 
 def rules_path(rules_dir: Path) -> Path:
@@ -39,8 +41,8 @@ def _parse_legacy_payee_rules(accounts_dat: Path) -> list[dict]:
         out.append(
             {
                 "id": uuid4().hex[:12],
-                "type": "payee",
-                "pattern": payee,
+                "type": "match",
+                "conditions": [{"field": "payee", "operator": "exact", "value": payee}],
                 "account": account,
                 "enabled": True,
                 "position": idx,
@@ -51,6 +53,24 @@ def _parse_legacy_payee_rules(accounts_dat: Path) -> list[dict]:
     return out
 
 
+def _normalize_conditions(raw_conditions: list[dict] | None, pattern: str | None = None) -> list[dict]:
+    if raw_conditions is None:
+        fallback = (pattern or "").strip()
+        if not fallback:
+            return []
+        return [{"field": "payee", "operator": "exact", "value": fallback}]
+
+    normalized: list[dict] = []
+    for c in raw_conditions:
+        field = str(c.get("field", "")).strip().lower()
+        operator = str(c.get("operator", "")).strip().lower()
+        value = str(c.get("value", "")).strip()
+        if field not in ALLOWED_FIELDS or operator not in ALLOWED_OPERATORS or not value:
+            continue
+        normalized.append({"field": field, "operator": operator, "value": value})
+    return normalized
+
+
 def _normalize_rules(rules: list[dict]) -> list[dict]:
     ordered = sorted(rules, key=lambda r: (int(r.get("position", 0)), str(r.get("id", ""))))
     now = _now_iso()
@@ -59,8 +79,8 @@ def _normalize_rules(rules: list[dict]) -> list[dict]:
         normalized.append(
             {
                 "id": str(rule.get("id") or uuid4().hex[:12]),
-                "type": "payee",
-                "pattern": str(rule.get("pattern", "")).strip(),
+                "type": "match",
+                "conditions": _normalize_conditions(rule.get("conditions"), pattern=rule.get("pattern")),
                 "account": str(rule.get("account", "")).strip(),
                 "enabled": bool(rule.get("enabled", True)),
                 "position": idx,
@@ -68,7 +88,7 @@ def _normalize_rules(rules: list[dict]) -> list[dict]:
                 "updatedAt": str(rule.get("updatedAt") or now),
             }
         )
-    return [r for r in normalized if r["pattern"] and r["account"]]
+    return [r for r in normalized if r["conditions"] and r["account"]]
 
 
 def save_rules(path: Path, rules: list[dict]) -> None:
@@ -101,14 +121,24 @@ def ensure_rules_store(rules_dir: Path, accounts_dat: Path) -> Path:
     return path
 
 
-def find_matching_rule(payee: str, rules: list[dict]) -> dict | None:
-    key = payee.strip().lower()
-    if not key:
-        return None
+def _matches_condition(condition: dict, context: dict[str, str]) -> bool:
+    field = condition["field"]
+    operator = condition["operator"]
+    expected = condition["value"].strip().lower()
+    actual = context.get(field, "").strip().lower()
+
+    if operator == "exact":
+        return actual == expected
+    if operator == "contains":
+        return expected in actual
+    return False
+
+
+def find_matching_rule(context: dict[str, str], rules: list[dict]) -> dict | None:
     for rule in _normalize_rules(rules):
         if not rule["enabled"]:
             continue
-        if key == rule["pattern"].strip().lower():
+        if all(_matches_condition(c, context) for c in rule["conditions"]):
             return rule
     return None
 
@@ -125,7 +155,12 @@ def upsert_payee_rule(path: Path, payee: str, account: str) -> tuple[dict, bool]
     key = payee_clean.lower()
     now = _now_iso()
     for rule in rules:
-        if rule["type"] == "payee" and rule["pattern"].strip().lower() == key:
+        if (
+            len(rule["conditions"]) == 1
+            and rule["conditions"][0]["field"] == "payee"
+            and rule["conditions"][0]["operator"] == "exact"
+            and rule["conditions"][0]["value"].strip().lower() == key
+        ):
             changed = rule["account"] != account_clean
             rule["account"] = account_clean
             rule["enabled"] = True
@@ -135,8 +170,8 @@ def upsert_payee_rule(path: Path, payee: str, account: str) -> tuple[dict, bool]
 
     created = {
         "id": uuid4().hex[:12],
-        "type": "payee",
-        "pattern": payee_clean,
+        "type": "match",
+        "conditions": [{"field": "payee", "operator": "exact", "value": payee_clean}],
         "account": account_clean,
         "enabled": True,
         "position": len(rules) + 1,
@@ -146,6 +181,31 @@ def upsert_payee_rule(path: Path, payee: str, account: str) -> tuple[dict, bool]
     rules.append(created)
     save_rules(path, rules)
     return created, True
+
+
+def create_rule(path: Path, conditions: list[dict], account: str, enabled: bool = True) -> dict:
+    account_clean = account.strip()
+    if not account_clean:
+        raise ValueError("Account is required")
+    normalized_conditions = _normalize_conditions(conditions)
+    if not normalized_conditions:
+        raise ValueError("At least one valid condition is required")
+
+    rules = load_rules(path)
+    now = _now_iso()
+    created = {
+        "id": uuid4().hex[:12],
+        "type": "match",
+        "conditions": normalized_conditions,
+        "account": account_clean,
+        "enabled": enabled,
+        "position": len(rules) + 1,
+        "createdAt": now,
+        "updatedAt": now,
+    }
+    rules.append(created)
+    save_rules(path, rules)
+    return created
 
 
 def reorder_rules(path: Path, ordered_ids: list[str]) -> list[dict]:
@@ -167,7 +227,7 @@ def update_rule(
     path: Path,
     rule_id: str,
     *,
-    pattern: str | None = None,
+    conditions: list[dict] | None = None,
     account: str | None = None,
     enabled: bool | None = None,
 ) -> dict:
@@ -176,11 +236,11 @@ def update_rule(
     for rule in rules:
         if rule["id"] != rule_id:
             continue
-        if pattern is not None:
-            pattern_clean = pattern.strip()
-            if not pattern_clean:
-                raise ValueError("Pattern is required")
-            rule["pattern"] = pattern_clean
+        if conditions is not None:
+            normalized_conditions = _normalize_conditions(conditions)
+            if not normalized_conditions:
+                raise ValueError("At least one valid condition is required")
+            rule["conditions"] = normalized_conditions
         if account is not None:
             account_clean = account.strip()
             if not account_clean:

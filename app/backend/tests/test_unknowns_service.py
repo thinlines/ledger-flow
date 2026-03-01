@@ -31,7 +31,14 @@ account Expenses:Eating Out
 
     result = scan_unknowns(
         journal,
-        [{"id": "r1", "type": "payee", "pattern": "Coffee Shop", "account": "Expenses:Eating Out", "enabled": True, "position": 1}],
+        [{
+            "id": "r1",
+            "type": "match",
+            "conditions": [{"field": "payee", "operator": "contains", "value": "coffee"}],
+            "account": "Expenses:Eating Out",
+            "enabled": True,
+            "position": 1,
+        }],
     )
     assert len(result["groups"]) == 1
     group = result["groups"][0]
@@ -68,7 +75,14 @@ account Assets:Wells Fargo Checking
 
     groups = scan_unknowns(
         journal,
-        [{"id": "r1", "type": "payee", "pattern": "Coffee Shop", "account": "Expenses:Eating Out", "enabled": True, "position": 1}],
+        [{
+            "id": "r1",
+            "type": "match",
+            "conditions": [{"field": "payee", "operator": "contains", "value": "coffee"}],
+            "account": "Expenses:Eating Out",
+            "enabled": True,
+            "position": 1,
+        }],
     )["groups"]
     txn_updates, warnings = apply_unknown_mappings(
         journal_path=journal,

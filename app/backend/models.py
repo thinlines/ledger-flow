@@ -33,12 +33,24 @@ class PayeeRuleRequest(BaseModel):
     account: str
 
 
+class RuleCondition(BaseModel):
+    field: str
+    operator: str
+    value: str
+
+
+class RuleCreateRequest(BaseModel):
+    conditions: list[RuleCondition]
+    account: str
+    enabled: bool = True
+
+
 class RuleReorderRequest(BaseModel):
     orderedIds: list[str]
 
 
 class RuleUpdateRequest(BaseModel):
-    pattern: str | None = None
+    conditions: list[RuleCondition] | None = None
     account: str | None = None
     enabled: bool | None = None
 

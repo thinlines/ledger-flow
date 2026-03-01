@@ -96,13 +96,13 @@ def scan_unknowns(journal_path: Path, rules: list[dict]) -> dict:
                 break
 
         key = current_payee.lower()
-        matched = find_matching_rule(current_payee, rules)
+        matched = find_matching_rule({"payee": current_payee}, rules)
         group = grouped[key]
         group["groupKey"] = key
         group["payeeDisplay"] = current_payee
         group["suggestedAccount"] = matched["account"] if matched else None
         group["matchedRuleId"] = matched["id"] if matched else None
-        group["matchedRulePattern"] = matched["pattern"] if matched else None
+        group["matchedRulePattern"] = matched["conditions"][0]["value"] if matched else None
 
         for p in unknown_postings:
             group["txns"].append(

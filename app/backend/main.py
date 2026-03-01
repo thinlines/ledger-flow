@@ -10,6 +10,7 @@ from models import (
     CreateAccountRequest,
     ImportPreviewRequest,
     PayeeRuleRequest,
+    RuleCreateRequest,
     RuleReorderRequest,
     RuleUpdateRequest,
     StageApplyRequest,
@@ -25,6 +26,7 @@ from services.institution_registry import display_name_for, list_templates
 from services.ledger_runner import CommandError, run_cmd
 from services.stage_store import StageStore
 from services.rules_service import (
+    create_rule,
     delete_rule,
     ensure_rules_store,
     load_rules,
@@ -225,6 +227,26 @@ def rules_list() -> dict:
     return {"rules": load_rules(path)}
 
 
+@app.post("/api/rules")
+def rules_create(req: RuleCreateRequest) -> dict:
+    config = _require_workspace_config()
+    accounts_dat = config.init_dir / "10-accounts.dat"
+    known_accounts = set(list_known_accounts(accounts_dat))
+    if req.account not in known_accounts:
+        raise HTTPException(status_code=400, detail=f"Unknown account: {req.account}")
+    path = ensure_rules_store(config.init_dir, accounts_dat)
+    try:
+        rule = create_rule(
+            path,
+            conditions=[c.model_dump() for c in req.conditions],
+            account=req.account,
+            enabled=req.enabled,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return {"rule": rule}
+
+
 @app.post("/api/accounts")
 def accounts_create(req: CreateAccountRequest) -> dict:
     config = _require_workspace_config()
@@ -419,7 +441,13 @@ def rules_update(rule_id: str, req: RuleUpdateRequest) -> dict:
             raise HTTPException(status_code=400, detail=f"Unknown account: {req.account}")
     path = ensure_rules_store(config.init_dir, accounts_dat)
     try:
-        rule = update_rule(path, rule_id, pattern=req.pattern, account=req.account, enabled=req.enabled)
+        rule = update_rule(
+            path,
+            rule_id,
+            conditions=[c.model_dump() for c in req.conditions] if req.conditions is not None else None,
+            account=req.account,
+            enabled=req.enabled,
+        )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     return {"rule": rule}
