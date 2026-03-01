@@ -9,7 +9,7 @@
     institutions: Array<{ id: string; displayName: string }>;
     journals: number;
     csvInbox: number;
-    institutionTemplates: Array<{ id: string; displayName: string }>;
+    institutionTemplates: Array<{ id: string; displayName: string } | string>;
   };
 
   let state: AppState | null = null;
@@ -21,6 +21,14 @@
   let baseCurrency = '$';
   let startYear = new Date().getFullYear();
   let selectedInstitutions: string[] = [];
+
+  function templateId(tpl: { id: string; displayName: string } | string): string {
+    return typeof tpl === 'string' ? tpl : tpl.id;
+  }
+
+  function templateLabel(tpl: { id: string; displayName: string } | string): string {
+    return typeof tpl === 'string' ? tpl : tpl.displayName;
+  }
 
   async function loadState() {
     state = await apiGet<AppState>('/api/app/state');
@@ -118,8 +126,8 @@
         {#each state?.institutionTemplates ?? [] as inst}
           <button
             type="button"
-            class:selected={selectedInstitutions.includes(inst.id)}
-            on:click={() => toggleInstitution(inst.id)}>{inst.displayName}</button>
+            class:selected={selectedInstitutions.includes(templateId(inst))}
+            on:click={() => toggleInstitution(templateId(inst))}>{templateLabel(inst)}</button>
         {/each}
       </div>
     </div>
