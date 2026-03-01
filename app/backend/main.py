@@ -29,6 +29,7 @@ from services.rules_service import (
     create_rule,
     delete_rule,
     ensure_rules_store,
+    extract_set_account,
     load_rules,
     reorder_rules,
     update_rule,
@@ -232,14 +233,16 @@ def rules_create(req: RuleCreateRequest) -> dict:
     config = _require_workspace_config()
     accounts_dat = config.init_dir / "10-accounts.dat"
     known_accounts = set(list_known_accounts(accounts_dat))
-    if req.account not in known_accounts:
-        raise HTTPException(status_code=400, detail=f"Unknown account: {req.account}")
+    requested_actions = [a.model_dump() for a in req.actions]
+    requested_account = extract_set_account({"actions": requested_actions})
+    if requested_account is not None and requested_account not in known_accounts:
+        raise HTTPException(status_code=400, detail=f"Unknown account: {requested_account}")
     path = ensure_rules_store(config.init_dir, accounts_dat)
     try:
         rule = create_rule(
             path,
             conditions=[c.model_dump() for c in req.conditions],
-            account=req.account,
+            actions=requested_actions,
             enabled=req.enabled,
         )
     except ValueError as e:
@@ -435,17 +438,18 @@ def rules_reorder(req: RuleReorderRequest) -> dict:
 def rules_update(rule_id: str, req: RuleUpdateRequest) -> dict:
     config = _require_workspace_config()
     accounts_dat = config.init_dir / "10-accounts.dat"
-    if req.account is not None:
-        known_accounts = set(list_known_accounts(accounts_dat))
-        if req.account not in known_accounts:
-            raise HTTPException(status_code=400, detail=f"Unknown account: {req.account}")
+    known_accounts = set(list_known_accounts(accounts_dat))
+    requested_actions = [a.model_dump() for a in req.actions] if req.actions is not None else None
+    requested_account = extract_set_account({"actions": requested_actions}) if requested_actions is not None else None
+    if requested_account is not None and requested_account not in known_accounts:
+        raise HTTPException(status_code=400, detail=f"Unknown account: {requested_account}")
     path = ensure_rules_store(config.init_dir, accounts_dat)
     try:
         rule = update_rule(
             path,
             rule_id,
             conditions=[c.model_dump() for c in req.conditions] if req.conditions is not None else None,
-            account=req.account,
+            actions=requested_actions,
             enabled=req.enabled,
         )
     except ValueError as e:

@@ -9,6 +9,8 @@ from uuid import uuid4
 RULES_FILE = "20-match-rules.ndjson"
 ALLOWED_FIELDS = {"payee"}
 ALLOWED_OPERATORS = {"exact", "contains"}
+ALLOWED_JOINERS = {"and", "or"}
+ALLOWED_ACTION_TYPES = {"set_account", "add_tag", "set_kv", "append_comment"}
 
 
 def rules_path(rules_dir: Path) -> Path:
@@ -65,10 +67,75 @@ def _normalize_conditions(raw_conditions: list[dict] | None, pattern: str | None
         field = str(c.get("field", "")).strip().lower()
         operator = str(c.get("operator", "")).strip().lower()
         value = str(c.get("value", "")).strip()
+        joiner = str(c.get("joiner", "and")).strip().lower()
         if field not in ALLOWED_FIELDS or operator not in ALLOWED_OPERATORS or not value:
             continue
-        normalized.append({"field": field, "operator": operator, "value": value})
+        if joiner not in ALLOWED_JOINERS:
+            joiner = "and"
+        normalized.append(
+            {
+                "field": field,
+                "operator": operator,
+                "value": value,
+                "joiner": "and" if not normalized else joiner,
+            }
+        )
     return normalized
+
+
+def _normalized_account_action(account: str) -> dict | None:
+    account_clean = account.strip()
+    if not account_clean:
+        return None
+    return {"type": "set_account", "account": account_clean}
+
+
+def _normalize_actions(raw_actions: list[dict] | None, account: str | None = None) -> list[dict]:
+    normalized: list[dict] = []
+    for action in raw_actions or []:
+        action_type = str(action.get("type", "")).strip().lower()
+        if action_type not in ALLOWED_ACTION_TYPES:
+            continue
+        if action_type == "set_account":
+            account_action = _normalized_account_action(str(action.get("account", "")))
+            if account_action:
+                normalized.append(account_action)
+            continue
+        if action_type == "add_tag":
+            tag = str(action.get("tag", "")).strip()
+            if tag:
+                normalized.append({"type": "add_tag", "tag": tag})
+            continue
+        if action_type == "set_kv":
+            key = str(action.get("key", "")).strip()
+            value = str(action.get("value", "")).strip()
+            if key and value:
+                normalized.append({"type": "set_kv", "key": key, "value": value})
+            continue
+        if action_type == "append_comment":
+            text = str(action.get("text", "")).strip()
+            if text:
+                normalized.append({"type": "append_comment", "text": text})
+
+    if account is not None:
+        account_action = _normalized_account_action(account)
+        if account_action:
+            replaced = False
+            for idx, existing in enumerate(normalized):
+                if existing["type"] == "set_account":
+                    normalized[idx] = account_action
+                    replaced = True
+                    break
+            if not replaced:
+                normalized.insert(0, account_action)
+    return normalized
+
+
+def _extract_account(actions: list[dict]) -> str:
+    for action in actions:
+        if action.get("type") == "set_account":
+            return str(action.get("account", "")).strip()
+    return ""
 
 
 def _normalize_rules(rules: list[dict]) -> list[dict]:
@@ -81,14 +148,14 @@ def _normalize_rules(rules: list[dict]) -> list[dict]:
                 "id": str(rule.get("id") or uuid4().hex[:12]),
                 "type": "match",
                 "conditions": _normalize_conditions(rule.get("conditions"), pattern=rule.get("pattern")),
-                "account": str(rule.get("account", "")).strip(),
+                "actions": _normalize_actions(rule.get("actions"), account=str(rule.get("account", "") or "")),
                 "enabled": bool(rule.get("enabled", True)),
                 "position": idx,
                 "createdAt": str(rule.get("createdAt") or now),
                 "updatedAt": str(rule.get("updatedAt") or now),
             }
         )
-    return [r for r in normalized if r["conditions"] and r["account"]]
+    return [r for r in normalized if r["conditions"] and r["actions"]]
 
 
 def save_rules(path: Path, rules: list[dict]) -> None:
@@ -138,9 +205,24 @@ def find_matching_rule(context: dict[str, str], rules: list[dict]) -> dict | Non
     for rule in _normalize_rules(rules):
         if not rule["enabled"]:
             continue
-        if all(_matches_condition(c, context) for c in rule["conditions"]):
+        matched = False
+        for idx, condition in enumerate(rule["conditions"]):
+            condition_match = _matches_condition(condition, context)
+            if idx == 0:
+                matched = condition_match
+                continue
+            if condition["joiner"] == "or":
+                matched = matched or condition_match
+            else:
+                matched = matched and condition_match
+        if matched:
             return rule
     return None
+
+
+def extract_set_account(rule: dict) -> str | None:
+    account = _extract_account(rule.get("actions", []))
+    return account or None
 
 
 def upsert_payee_rule(path: Path, payee: str, account: str) -> tuple[dict, bool]:
@@ -161,8 +243,8 @@ def upsert_payee_rule(path: Path, payee: str, account: str) -> tuple[dict, bool]
             and rule["conditions"][0]["operator"] == "exact"
             and rule["conditions"][0]["value"].strip().lower() == key
         ):
-            changed = rule["account"] != account_clean
-            rule["account"] = account_clean
+            changed = extract_set_account(rule) != account_clean
+            rule["actions"] = _normalize_actions(rule.get("actions"), account=account_clean)
             rule["enabled"] = True
             rule["updatedAt"] = now
             save_rules(path, rules)
@@ -172,7 +254,7 @@ def upsert_payee_rule(path: Path, payee: str, account: str) -> tuple[dict, bool]
         "id": uuid4().hex[:12],
         "type": "match",
         "conditions": [{"field": "payee", "operator": "exact", "value": payee_clean}],
-        "account": account_clean,
+        "actions": [{"type": "set_account", "account": account_clean}],
         "enabled": True,
         "position": len(rules) + 1,
         "createdAt": now,
@@ -183,13 +265,19 @@ def upsert_payee_rule(path: Path, payee: str, account: str) -> tuple[dict, bool]
     return created, True
 
 
-def create_rule(path: Path, conditions: list[dict], account: str, enabled: bool = True) -> dict:
-    account_clean = account.strip()
-    if not account_clean:
-        raise ValueError("Account is required")
+def create_rule(
+    path: Path,
+    conditions: list[dict],
+    *,
+    actions: list[dict] | None = None,
+    enabled: bool = True,
+) -> dict:
     normalized_conditions = _normalize_conditions(conditions)
     if not normalized_conditions:
         raise ValueError("At least one valid condition is required")
+    normalized_actions = _normalize_actions(actions)
+    if not normalized_actions:
+        raise ValueError("At least one valid action is required")
 
     rules = load_rules(path)
     now = _now_iso()
@@ -197,7 +285,7 @@ def create_rule(path: Path, conditions: list[dict], account: str, enabled: bool 
         "id": uuid4().hex[:12],
         "type": "match",
         "conditions": normalized_conditions,
-        "account": account_clean,
+        "actions": normalized_actions,
         "enabled": enabled,
         "position": len(rules) + 1,
         "createdAt": now,
@@ -228,7 +316,7 @@ def update_rule(
     rule_id: str,
     *,
     conditions: list[dict] | None = None,
-    account: str | None = None,
+    actions: list[dict] | None = None,
     enabled: bool | None = None,
 ) -> dict:
     rules = load_rules(path)
@@ -241,11 +329,11 @@ def update_rule(
             if not normalized_conditions:
                 raise ValueError("At least one valid condition is required")
             rule["conditions"] = normalized_conditions
-        if account is not None:
-            account_clean = account.strip()
-            if not account_clean:
-                raise ValueError("Account is required")
-            rule["account"] = account_clean
+        if actions is not None:
+            normalized_actions = _normalize_actions(actions)
+            if not normalized_actions:
+                raise ValueError("At least one valid action is required")
+            rule["actions"] = normalized_actions
         if enabled is not None:
             rule["enabled"] = enabled
         rule["updatedAt"] = now

@@ -4,7 +4,7 @@ import re
 from collections import defaultdict
 from pathlib import Path
 
-from .rules_service import find_matching_rule
+from .rules_service import extract_set_account, find_matching_rule
 
 ACCOUNT_LINE_RE = re.compile(r"^(\s+)([^\s].*?)(\s{2,}|\t+)(.*)$")
 HEADER_RE = re.compile(r"^(\d{4}[-/]\d{2}[-/]\d{2})(?:\s+[*!])?(?:\s+\([^)]+\))?\s*(.*)$")
@@ -100,7 +100,7 @@ def scan_unknowns(journal_path: Path, rules: list[dict]) -> dict:
         group = grouped[key]
         group["groupKey"] = key
         group["payeeDisplay"] = current_payee
-        group["suggestedAccount"] = matched["account"] if matched else None
+        group["suggestedAccount"] = extract_set_account(matched) if matched else None
         group["matchedRuleId"] = matched["id"] if matched else None
         group["matchedRulePattern"] = matched["conditions"][0]["value"] if matched else None
 

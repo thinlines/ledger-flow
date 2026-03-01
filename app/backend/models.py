@@ -37,11 +37,21 @@ class RuleCondition(BaseModel):
     field: str
     operator: str
     value: str
+    joiner: str | None = None
+
+
+class RuleAction(BaseModel):
+    type: str
+    account: str | None = None
+    tag: str | None = None
+    key: str | None = None
+    value: str | None = None
+    text: str | None = None
 
 
 class RuleCreateRequest(BaseModel):
     conditions: list[RuleCondition]
-    account: str
+    actions: list[RuleAction]
     enabled: bool = True
 
 
@@ -51,7 +61,7 @@ class RuleReorderRequest(BaseModel):
 
 class RuleUpdateRequest(BaseModel):
     conditions: list[RuleCondition] | None = None
-    account: str | None = None
+    actions: list[RuleAction] | None = None
     enabled: bool | None = None
 
 

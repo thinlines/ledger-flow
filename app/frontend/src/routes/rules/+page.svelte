@@ -1,18 +1,14 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import RuleEditor from '$lib/components/RuleEditor.svelte';
+  import type { RuleAction, RuleCondition } from '$lib/components/rule-editor-types';
   import { apiDelete, apiGet, apiPost } from '$lib/api';
-
-  type RuleCondition = {
-    field: 'payee';
-    operator: 'exact' | 'contains';
-    value: string;
-  };
 
   type Rule = {
     id: string;
     type: 'match';
     conditions: RuleCondition[];
-    account: string;
+    actions: RuleAction[];
     enabled: boolean;
     position: number;
     updatedAt: string;
@@ -24,13 +20,36 @@
   let rules: Rule[] = [];
   let accounts: string[] = [];
 
-  let newConditions: RuleCondition[] = [{ field: 'payee', operator: 'exact', value: '' }];
-  let newAccount = '';
+  let newConditions: RuleCondition[] = [{ field: 'payee', operator: 'exact', value: '', joiner: 'and' }];
+  let newActions: RuleAction[] = [{ type: 'set_account', account: '' }];
   let dragIndex: number | null = null;
 
   onMount(async () => {
     await refresh();
   });
+
+  function normalizeConditions(conditions: RuleCondition[]): RuleCondition[] {
+    return conditions.map((c, i) => ({ ...c, joiner: i === 0 ? 'and' : (c.joiner ?? 'and') }));
+  }
+
+  function normalizeActions(actions: RuleAction[]): RuleAction[] {
+    return [...(actions || [])];
+  }
+
+  function normalizeRule(rule: Rule): Rule {
+    return {
+      ...rule,
+      conditions: normalizeConditions(rule.conditions),
+      actions: normalizeActions(rule.actions)
+    };
+  }
+
+  function ensureSetAccountAction(actions: RuleAction[], fallbackAccount: string) {
+    const hasSetAccount = actions.some((a) => a.type === 'set_account');
+    if (!hasSetAccount) {
+      actions.unshift({ type: 'set_account', account: fallbackAccount });
+    }
+  }
 
   async function refresh() {
     error = '';
@@ -43,9 +62,9 @@
         apiGet<{ rules: Rule[] }>('/api/rules'),
         apiGet<{ accounts: string[] }>('/api/accounts')
       ]);
-      rules = rulesData.rules;
+      rules = rulesData.rules.map(normalizeRule);
       accounts = accountsData.accounts;
-      if (!newAccount && accounts.length) newAccount = accounts[0];
+      ensureSetAccountAction(newActions, accounts[0] ?? '');
     } catch (e) {
       error = String(e);
     } finally {
@@ -53,38 +72,45 @@
     }
   }
 
-  function addNewCondition() {
-    newConditions = [...newConditions, { field: 'payee', operator: 'contains', value: '' }];
-  }
-
-  function removeNewCondition(index: number) {
-    if (newConditions.length <= 1) return;
-    newConditions = newConditions.filter((_, i) => i !== index);
-  }
-
-  function addConditionToRule(rule: Rule) {
-    rule.conditions = [...rule.conditions, { field: 'payee', operator: 'contains', value: '' }];
-    rules = [...rules];
-  }
-
-  function removeConditionFromRule(rule: Rule, index: number) {
-    if (rule.conditions.length <= 1) return;
-    rule.conditions = rule.conditions.filter((_, i) => i !== index);
-    rules = [...rules];
-  }
-
   function sanitizedConditions(conditions: RuleCondition[]): RuleCondition[] {
-    return conditions.map((c) => ({ ...c, value: c.value.trim() })).filter((c) => c.value.length > 0);
+    return conditions
+      .map((c) => ({ ...c, value: c.value.trim() }))
+      .filter((c) => c.value.length > 0)
+      .map((c, i) => ({ ...c, joiner: i === 0 ? 'and' : c.joiner }));
+  }
+
+  function sanitizedActions(actions: RuleAction[]): RuleAction[] {
+    const output: RuleAction[] = [];
+    for (const action of actions) {
+      if (action.type === 'set_account') {
+        const account = (action.account ?? '').trim();
+        if (account) output.push({ type: 'set_account', account });
+      } else if (action.type === 'add_tag') {
+        const tag = (action.tag ?? '').trim();
+        if (tag) output.push({ type: 'add_tag', tag });
+      } else if (action.type === 'set_kv') {
+        const key = (action.key ?? '').trim();
+        const value = (action.value ?? '').trim();
+        if (key && value) output.push({ type: 'set_kv', key, value });
+      } else if (action.type === 'append_comment') {
+        const text = (action.text ?? '').trim();
+        if (text) output.push({ type: 'append_comment', text });
+      }
+    }
+    return output;
   }
 
   async function createRule() {
-    const cleaned = sanitizedConditions(newConditions);
-    if (!cleaned.length || !newAccount) return;
+    const cleanedConditions = sanitizedConditions(newConditions);
+    const cleanedActions = sanitizedActions(newActions);
+    if (!cleanedConditions.length || !cleanedActions.length) return;
+
     loading = true;
     error = '';
     try {
-      await apiPost('/api/rules', { conditions: cleaned, account: newAccount, enabled: true });
-      newConditions = [{ field: 'payee', operator: 'exact', value: '' }];
+      await apiPost('/api/rules', { conditions: cleanedConditions, actions: cleanedActions, enabled: true });
+      newConditions = [{ field: 'payee', operator: 'exact', value: '', joiner: 'and' }];
+      newActions = [{ type: 'set_account', account: accounts[0] ?? '' }];
       await refresh();
     } catch (e) {
       error = String(e);
@@ -94,13 +120,15 @@
   }
 
   async function saveRule(rule: Rule) {
-    const cleaned = sanitizedConditions(rule.conditions);
+    const cleanedConditions = sanitizedConditions(rule.conditions);
+    const cleanedActions = sanitizedActions(rule.actions);
+
     loading = true;
     error = '';
     try {
       await apiPost(`/api/rules/${rule.id}`, {
-        conditions: cleaned,
-        account: rule.account,
+        conditions: cleanedConditions,
+        actions: cleanedActions,
         enabled: rule.enabled
       });
       await refresh();
@@ -130,7 +158,7 @@
     try {
       const orderedIds = rules.map((r) => r.id);
       const data = await apiPost<{ rules: Rule[] }>('/api/rules/reorder', { orderedIds });
-      rules = data.rules;
+      rules = data.rules.map(normalizeRule);
     } catch (e) {
       error = String(e);
     } finally {
@@ -178,33 +206,13 @@
 
   <section class="view-card">
     <p class="eyebrow">Create Rule</p>
-    <div class="conditions-block">
-      {#each newConditions as condition, i}
-        <div class="condition-row">
-          <select bind:value={condition.field}>
-            <option value="payee">Payee</option>
-          </select>
-          <select bind:value={condition.operator}>
-            <option value="exact">is exactly</option>
-            <option value="contains">contains</option>
-          </select>
-          <input bind:value={condition.value} placeholder="abc123" on:keydown={(e) => (e.key === 'Enter' ? createRule() : undefined)} />
-          <button class="btn" on:click={() => removeNewCondition(i)} disabled={newConditions.length <= 1}>Remove</button>
-        </div>
-      {/each}
-      <button class="btn" on:click={addNewCondition}>Add Condition...</button>
-    </div>
+    <RuleEditor bind:conditions={newConditions} bind:actions={newActions} {accounts} accountMode="select" />
     <div class="create-actions">
-      <div class="field">
-        <label for="newAccount">Then map to account</label>
-        <select id="newAccount" bind:value={newAccount}>
-          <option value="">Select account...</option>
-          {#each accounts as acct}
-            <option value={acct}>{acct}</option>
-          {/each}
-        </select>
-      </div>
-      <button class="btn btn-primary" disabled={loading || !newAccount || !sanitizedConditions(newConditions).length} on:click={createRule}>
+      <button
+        class="btn btn-primary"
+        disabled={loading || !sanitizedConditions(newConditions).length || !sanitizedActions(newActions).length}
+        on:click={createRule}
+      >
         Add Rule
       </button>
     </div>
@@ -226,31 +234,10 @@
             <p><strong>#{i + 1}</strong> Rule {rule.id}</p>
             <p class="muted">Updated: {rule.updatedAt}</p>
           </div>
-          <div class="conditions-block">
-            {#each rule.conditions as condition, cIndex}
-              <div class="condition-row">
-                <select bind:value={condition.field}>
-                  <option value="payee">Payee</option>
-                </select>
-                <select bind:value={condition.operator}>
-                  <option value="exact">is exactly</option>
-                  <option value="contains">contains</option>
-                </select>
-                <input bind:value={condition.value} placeholder="abc123" />
-                <button class="btn" on:click={() => removeConditionFromRule(rule, cIndex)} disabled={rule.conditions.length <= 1}>Remove</button>
-              </div>
-            {/each}
-            <button class="btn" on:click={() => addConditionToRule(rule)}>Add Condition...</button>
-          </div>
+
+          <RuleEditor bind:conditions={rule.conditions} bind:actions={rule.actions} {accounts} accountMode="select" />
+
           <div class="rule-actions">
-            <div class="field">
-              <label for={`rule-account-${rule.id}`}>Then map to account</label>
-              <select id={`rule-account-${rule.id}`} bind:value={rule.account}>
-                {#each accounts as acct}
-                  <option value={acct}>{acct}</option>
-                {/each}
-              </select>
-            </div>
             <label class="enabled">
               <input type="checkbox" bind:checked={rule.enabled} />
               Enabled
@@ -271,18 +258,6 @@
 {/if}
 
 <style>
-  .conditions-block {
-    display: grid;
-    gap: 0.45rem;
-  }
-
-  .condition-row {
-    display: grid;
-    grid-template-columns: 10rem 9rem 1fr auto;
-    gap: 0.45rem;
-    align-items: center;
-  }
-
   .create-actions {
     margin-top: 0.7rem;
     display: flex;
@@ -329,11 +304,5 @@
     gap: 0.3rem;
     align-items: center;
     font-weight: 600;
-  }
-
-  @media (max-width: 760px) {
-    .condition-row {
-      grid-template-columns: 1fr;
-    }
   }
 </style>
