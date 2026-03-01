@@ -7,12 +7,14 @@
     abs_path: string;
     detected_year: string | null;
     detected_institution: string | null;
+    detected_institution_display_name: string | null;
     is_configured_institution: boolean;
   };
+  type InstitutionOption = { id: string; displayName: string };
 
   let initialized = false;
   let candidates: Candidate[] = [];
-  let institutions: string[] = [];
+  let institutions: InstitutionOption[] = [];
   let selectedPath = '';
   let year = String(new Date().getFullYear());
   let institution = '';
@@ -26,7 +28,7 @@
       initialized = state.initialized;
       if (!initialized) return;
 
-      const data = await apiGet<{ candidates: Candidate[]; institutions: string[] }>('/api/import/candidates');
+      const data = await apiGet<{ candidates: Candidate[]; institutions: InstitutionOption[] }>('/api/import/candidates');
       candidates = data.candidates;
       institutions = data.institutions;
     } catch (e) {
@@ -100,6 +102,9 @@
           {#each candidates as c}
             <button class="row" on:click={() => pickCandidate(c)}>
               <span>{c.file_name}</span>
+              {#if c.detected_institution_display_name}
+                <span class="muted small">{c.detected_institution_display_name}</span>
+              {/if}
               {#if c.is_configured_institution}
                 <span class="pill ok">Configured</span>
               {:else}
@@ -131,7 +136,7 @@
           <select id="institution" bind:value={institution}>
             <option value="">Select...</option>
             {#each institutions as inst}
-              <option value={inst}>{inst}</option>
+              <option value={inst.id}>{inst.displayName}</option>
             {/each}
           </select>
         </div>
@@ -216,6 +221,11 @@
     gap: 0.45rem;
     flex-wrap: wrap;
     margin-bottom: 0.8rem;
+  }
+
+  .small {
+    margin-left: 0.5rem;
+    font-size: 0.8rem;
   }
 
   pre {

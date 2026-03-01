@@ -5,52 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .config_service import AppConfig, load_config
-
-
-DEFAULT_INSTITUTION_TEMPLATES = {
-    "wfchk": {
-        "display_name": "Wells Fargo Checking",
-        "account": "Assets:Bank:Checking",
-        "CSV_date_format": "%m/%d/%Y",
-    },
-    "wfsav": {
-        "display_name": "Wells Fargo Savings",
-        "account": "Assets:Bank:Savings",
-        "CSV_date_format": "%m/%d/%Y",
-    },
-    "wfcc": {
-        "display_name": "Wells Fargo Credit Card",
-        "account": "Liabilities:Credit Card",
-        "CSV_date_format": "%m/%d/%Y",
-    },
-    "schwab": {
-        "display_name": "Schwab",
-        "account": "Assets:Investments:Schwab",
-        "CSV_date_format": "%m/%d/%Y",
-    },
-    "icbc": {
-        "display_name": "ICBC",
-        "account": "Assets:Bank:ICBC",
-        "CSV_date_format": "%Y-%m-%d",
-        "head": 7,
-        "tail": 2,
-    },
-    "alipay": {
-        "display_name": "Alipay",
-        "account": "Assets:Alipay",
-        "CSV_date_format": "%Y-%m-%d",
-        "head": 13,
-        "tail": 1,
-        "encoding": "GB18030",
-    },
-    "bjb": {
-        "display_name": "BJB",
-        "account": "Assets:Bank:BJB",
-        "CSV_date_format": "%Y/%m/%d",
-        "head": 1,
-        "tail": 0,
-    },
-}
+from .institution_registry import get_template
 
 
 @dataclass(frozen=True)
@@ -127,11 +82,11 @@ class WorkspaceManager:
         ]
 
         for inst in institutions:
-            template = DEFAULT_INSTITUTION_TEMPLATES.get(inst)
-            if not template:
+            template = get_template(inst)
+            if template is None:
                 continue
             cfg_lines.append(f"[institutions.{inst}]")
-            for k, v in template.items():
+            for k, v in template.as_config().items():
                 if isinstance(v, str):
                     cfg_lines.append(f'{k} = "{v}"')
                 else:

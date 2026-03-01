@@ -6,10 +6,10 @@
     initialized: boolean;
     workspacePath: string | null;
     workspaceName: string | null;
-    institutions: string[];
+    institutions: Array<{ id: string; displayName: string }>;
     journals: number;
     csvInbox: number;
-    institutionTemplates: string[];
+    institutionTemplates: Array<{ id: string; displayName: string }>;
   };
 
   let state: AppState | null = null;
@@ -118,8 +118,8 @@
         {#each state?.institutionTemplates ?? [] as inst}
           <button
             type="button"
-            class:selected={selectedInstitutions.includes(inst)}
-            on:click={() => toggleInstitution(inst)}>{inst}</button>
+            class:selected={selectedInstitutions.includes(inst.id)}
+            on:click={() => toggleInstitution(inst.id)}>{inst.displayName}</button>
         {/each}
       </div>
     </div>
@@ -166,7 +166,7 @@
     background: #f4f8fd;
     padding: 0.3rem 0.65rem;
     cursor: pointer;
-    text-transform: lowercase;
+    font-weight: 600;
   }
 
   .chips button.selected {

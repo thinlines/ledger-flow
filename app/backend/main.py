@@ -17,10 +17,11 @@ from models import (
 from services.backup_service import backup_file
 from services.import_index import ImportIndex
 from services.import_service import apply_import, preview_import, scan_candidates
+from services.institution_registry import display_name_for, list_templates
 from services.ledger_runner import CommandError, run_cmd
 from services.stage_store import StageStore
 from services.unknowns_service import apply_unknown_mappings, scan_unknowns
-from services.workspace_service import DEFAULT_INSTITUTION_TEMPLATES, WorkspaceManager
+from services.workspace_service import WorkspaceManager
 
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
@@ -75,7 +76,7 @@ def app_state() -> dict:
             "institutions": [],
             "journals": 0,
             "csvInbox": 0,
-            "institutionTemplates": sorted(DEFAULT_INSTITUTION_TEMPLATES.keys()),
+            "institutionTemplates": list_templates(),
         }
 
     journals = list(config.journal_dir.glob("*.journal"))
@@ -84,10 +85,13 @@ def app_state() -> dict:
         "initialized": True,
         "workspacePath": str(config.root_dir.resolve()),
         "workspaceName": config.name,
-        "institutions": sorted(config.institutions.keys()),
+        "institutions": [
+            {"id": inst_id, "displayName": display_name_for(inst_id, fallback=inst_cfg.get("display_name"))}
+            for inst_id, inst_cfg in sorted(config.institutions.items(), key=lambda x: x[0])
+        ],
         "journals": len(journals),
         "csvInbox": len(csvs),
-        "institutionTemplates": sorted(DEFAULT_INSTITUTION_TEMPLATES.keys()),
+        "institutionTemplates": list_templates(),
     }
 
 
@@ -121,8 +125,20 @@ def workspace_select(req: WorkspaceSelectRequest) -> dict:
 @app.get("/api/import/candidates")
 def import_candidates() -> dict:
     config = _require_workspace_config()
-    rows = [c.__dict__ for c in scan_candidates(config)]
-    return {"candidates": rows, "institutions": sorted(config.institutions.keys())}
+    rows = []
+    for c in scan_candidates(config):
+        row = c.__dict__.copy()
+        inst_id = row.get("detected_institution")
+        row["detected_institution_display_name"] = (
+            display_name_for(inst_id) if inst_id else None
+        )
+        rows.append(row)
+
+    institutions = [
+        {"id": inst_id, "displayName": display_name_for(inst_id, fallback=inst_cfg.get("display_name"))}
+        for inst_id, inst_cfg in sorted(config.institutions.items(), key=lambda x: x[0])
+    ]
+    return {"candidates": rows, "institutions": institutions}
 
 
 @app.get("/api/journals")
