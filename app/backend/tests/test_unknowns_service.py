@@ -90,6 +90,28 @@ account Expenses:Eating Out
     assert "payee Coffee Shop" in accounts.read_text(encoding="utf-8")
 
 
+def test_add_payee_rule_updates_existing_mapping(tmp_path: Path) -> None:
+    accounts = tmp_path / "10-accounts.dat"
+    accounts.write_text(
+        """
+account Expenses:Eating Out
+    ; type: Expense
+    payee Coffee Shop
+
+account Expenses:Coffee
+    ; type: Expense
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    added, warning = add_payee_rule(accounts, "Coffee Shop", "Expenses:Coffee")
+    assert added is True
+    assert warning is None
+    content = accounts.read_text(encoding="utf-8")
+    assert "payee Coffee Shop" in content
+    assert "account Expenses:Eating Out\n    ; type: Expense\n    payee Coffee Shop" not in content
+
+
 def test_create_account_appends_account_block(tmp_path: Path) -> None:
     accounts = tmp_path / "10-accounts.dat"
     accounts.write_text("account Expenses:Eating Out\n    ; type: Expense\n", encoding="utf-8")

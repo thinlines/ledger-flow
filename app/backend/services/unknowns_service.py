@@ -155,6 +155,18 @@ def apply_unknown_mappings(
     return txn_updates, warnings
 
 
+def _remove_payee_rule_lines(lines: list[str], payee_key: str) -> list[str]:
+    kept: list[str] = []
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("payee "):
+            existing_payee = stripped[len("payee "):].strip().lower()
+            if existing_payee == payee_key:
+                continue
+        kept.append(line)
+    return kept
+
+
 def add_payee_rule(accounts_dat: Path, payee: str, account: str) -> tuple[bool, str | None]:
     known_accounts = _load_known_accounts(accounts_dat)
     if account not in known_accounts:
@@ -168,10 +180,13 @@ def add_payee_rule(accounts_dat: Path, payee: str, account: str) -> tuple[bool, 
     existing = _load_payee_rules(accounts_dat)
     key = payee_clean.lower()
 
-    if existing.get(key) == account:
+    existing_account = existing.get(key)
+    if existing_account == account:
         return False, None
-    if key in existing and existing[key] != account:
-        return False, f"Payee already mapped to {existing[key]}"
+
+    # Support rule edits by replacing existing payee mapping with the new target.
+    if existing_account is not None:
+        rules_lines = _remove_payee_rule_lines(rules_lines, key)
 
     insert_at = None
     for i, line in enumerate(rules_lines):
