@@ -31,6 +31,7 @@
   let showRuleModal = false;
   let rulePayee = '';
   let ruleAccount = '';
+  let ruleMode: 'create' | 'edit' = 'create';
   let ruleError = '';
   let ruleAccountInputEl: HTMLInputElement | null = null;
 
@@ -39,6 +40,7 @@
   let newAccountType = 'Expense';
   let createAccountError = '';
   let newAccountInputEl: HTMLInputElement | null = null;
+  let statusFilter: 'all' | 'matched' | 'needs' = 'all';
 
   function inferAccountType(accountName: string): string {
     const prefix = accountName.split(':', 1)[0]?.trim().toLowerCase() || '';
@@ -93,6 +95,61 @@
     }
   }
 
+  function effectiveAccountFor(group: UnknownGroup): string {
+    return (mappings[group.groupKey] || '').trim();
+  }
+
+  function statusFor(group: UnknownGroup): 'matched' | 'needs' {
+    return effectiveAccountFor(group) ? 'matched' : 'needs';
+  }
+
+  function transactionRows(): Array<{
+    rowId: string;
+    groupKey: string;
+    payee: string;
+    date: string;
+    amount: string;
+    counterparty: string;
+    currentAccount: string;
+    selectedAccount: string;
+    status: 'matched' | 'needs';
+    hasExistingRule: boolean;
+  }> {
+    const rows: Array<{
+      rowId: string;
+      groupKey: string;
+      payee: string;
+      date: string;
+      amount: string;
+      counterparty: string;
+      currentAccount: string;
+      selectedAccount: string;
+      status: 'matched' | 'needs';
+      hasExistingRule: boolean;
+    }> = [];
+    for (const g of stage?.groups ?? []) {
+      const selected = effectiveAccountFor(g);
+      const status = selected ? 'matched' : 'needs';
+      for (const t of g.txns) {
+        rows.push({
+          rowId: t.txnId,
+          groupKey: g.groupKey,
+          payee: g.payeeDisplay,
+          date: t.date,
+          amount: t.amount || '-',
+          counterparty: t.counterpartyAccount || '-',
+          currentAccount: t.currentAccount,
+          selectedAccount: selected,
+          status,
+          hasExistingRule: !!g.suggestedAccount
+        });
+      }
+    }
+    if (statusFilter === 'all') return rows;
+    if (statusFilter === 'matched') return rows.filter((r) => r.status === 'matched');
+    return rows.filter((r) => r.status === 'needs');
+  }
+
   async function stageMappings() {
     if (!stage?.stageId) return;
     loading = true;
@@ -136,6 +193,7 @@
   async function openRuleModal(group: UnknownGroup) {
     rulePayee = group.payeeDisplay;
     ruleAccount = mappings[group.groupKey] || group.suggestedAccount || '';
+    ruleMode = group.suggestedAccount ? 'edit' : 'create';
     ruleError = '';
     showRuleModal = true;
     await tick();
@@ -183,6 +241,10 @@
     } finally {
       loading = false;
     }
+  }
+
+  function setAccountForGroup(groupKey: string, account: string) {
+    mappings[groupKey] = account;
   }
 
   async function createAccountAndSaveRule() {
@@ -272,59 +334,82 @@
   {#if stage}
     <section class="view-card">
       <p class="eyebrow">Review</p>
-      <h3>Unknown Groups ({stage.groups?.length ?? 0})</h3>
+      <h3>Transactions To Review</h3>
 
       {#if (stage.groups?.length ?? 0) === 0}
         <p><span class="pill ok">No unknown postings found</span></p>
       {/if}
 
-      <div class="groups">
-        {#each stage.groups ?? [] as g}
-          <article class="group">
-            <header>
-              <div>
-                <strong>{g.payeeDisplay}</strong>
-                <div class="muted">{g.txns.length} transactions</div>
-              </div>
-              <button class="btn" on:click={() => openRuleModal(g)}>Make Rule...</button>
-            </header>
+      <div class="filters">
+        <button class="btn" class:active-filter={statusFilter === 'needs'} on:click={() => (statusFilter = 'needs')}>
+          Needs Matching
+        </button>
+        <button class="btn" class:active-filter={statusFilter === 'matched'} on:click={() => (statusFilter = 'matched')}>
+          Matched
+        </button>
+        <button class="btn" class:active-filter={statusFilter === 'all'} on:click={() => (statusFilter = 'all')}>
+          All
+        </button>
+      </div>
 
-            <div class="field">
-              <label for={'acct-' + g.groupKey}>Category Account</label>
-              <input id={'acct-' + g.groupKey} bind:value={mappings[g.groupKey]} placeholder="Type to filter accounts" />
-              {#if mappings[g.groupKey] !== undefined}
-                <div class="suggestions">
-                  {#each filteredAccounts(mappings[g.groupKey]) as acct}
-                    <button type="button" class="suggestion" on:click={() => (mappings[g.groupKey] = acct)}>{acct}</button>
-                  {/each}
-                </div>
-              {/if}
-            </div>
-
-            <div class="table-wrap">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Date</th>
-                    <th>Amount</th>
-                    <th>From/To</th>
-                    <th>Current Category</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {#each g.txns as t}
-                    <tr>
-                      <td>{t.date}</td>
-                      <td>{t.amount || '-'}</td>
-                      <td>{t.counterpartyAccount || '-'}</td>
-                      <td>{t.currentAccount}</td>
-                    </tr>
-                  {/each}
-                </tbody>
-              </table>
-            </div>
-          </article>
-        {/each}
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Status</th>
+              <th>Date</th>
+              <th>Payee</th>
+              <th>Amount</th>
+              <th>From/To</th>
+              <th>Current</th>
+              <th>Match To</th>
+              <th>Rule</th>
+            </tr>
+          </thead>
+          <tbody>
+            {#each transactionRows() as r}
+              <tr>
+                <td>
+                  {#if r.status === 'matched'}
+                    <span class="pill ok">Matched</span>
+                  {:else}
+                    <span class="pill warn">Needs Match</span>
+                  {/if}
+                </td>
+                <td>{r.date}</td>
+                <td>{r.payee}</td>
+                <td>{r.amount}</td>
+                <td>{r.counterparty}</td>
+                <td>{r.currentAccount}</td>
+                <td>
+                  <select
+                    value={r.selectedAccount}
+                    on:change={(e) => setAccountForGroup(r.groupKey, (e.currentTarget as HTMLSelectElement).value)}
+                  >
+                    <option value="">Select account...</option>
+                    {#each accounts as acct}
+                      <option value={acct}>{acct}</option>
+                    {/each}
+                  </select>
+                </td>
+                <td>
+                  <button
+                    class="btn"
+                    on:click={() =>
+                      openRuleModal({
+                        groupKey: r.groupKey,
+                        payeeDisplay: r.payee,
+                        suggestedAccount: r.hasExistingRule ? r.selectedAccount || null : null,
+                        txns: []
+                      })}
+                  >
+                    {r.hasExistingRule ? 'Edit Rule...' : 'Make Rule...'}
+                  </button>
+                </td>
+              </tr>
+            {/each}
+          </tbody>
+        </table>
       </div>
 
       {#if stage.summary}
@@ -363,8 +448,12 @@
     on:keydown={(e) => (e.key === 'Escape' || e.key === 'Enter' ? (showRuleModal = false) : undefined)}
   >
     <div class="modal" role="dialog" tabindex="-1" aria-modal="true" aria-label="Make Rule">
-      <h3>Make Rule</h3>
-      <p class="muted">Create a reusable mapping from payee to account.</p>
+      <h3>{ruleMode === 'edit' ? 'Edit Rule' : 'Make Rule'}</h3>
+      <p class="muted">
+        {ruleMode === 'edit'
+          ? 'Update the reusable mapping for this payee.'
+          : 'Create a reusable mapping from payee to account.'}
+      </p>
       <div class="field">
         <label for="rulePayee">Payee</label>
         <input
@@ -391,7 +480,9 @@
       {#if ruleError}<p class="error-text">{ruleError}</p>{/if}
       <div class="actions">
         <button class="btn" on:click={() => (showRuleModal = false)}>Cancel</button>
-        <button class="btn btn-primary" disabled={loading || !rulePayee || !ruleAccount} on:click={saveRule}>Save Rule</button>
+        <button class="btn btn-primary" disabled={loading || !rulePayee || !ruleAccount} on:click={saveRule}>
+          {ruleMode === 'edit' ? 'Save Rule Changes' : 'Save Rule'}
+        </button>
       </div>
     </div>
   </div>
@@ -452,25 +543,16 @@
     margin: 0.3rem 0 0.8rem;
   }
 
-  .groups {
-    display: grid;
-    gap: 0.8rem;
-    margin-bottom: 0.8rem;
-  }
-
-  .group {
-    border: 1px solid var(--line);
-    border-radius: 12px;
-    background: var(--card-2);
-    padding: 0.85rem;
-  }
-
-  .group header {
+  .filters {
     display: flex;
-    justify-content: space-between;
-    align-items: center;
     gap: 0.5rem;
     margin-bottom: 0.7rem;
+    flex-wrap: wrap;
+  }
+
+  .active-filter {
+    background: #d8efff;
+    border-color: #9ecfe9;
   }
 
   .table-wrap {
@@ -488,22 +570,7 @@
     border-bottom: 1px solid var(--line);
     text-align: left;
     padding: 0.42rem;
-  }
-
-  .suggestions {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.35rem;
-    margin-top: 0.35rem;
-  }
-
-  .suggestion {
-    border: 1px solid var(--line);
-    border-radius: 999px;
-    background: #f7fbff;
-    padding: 0.2rem 0.55rem;
-    cursor: pointer;
-    font-size: 0.8rem;
+    vertical-align: top;
   }
 
   .actions {
