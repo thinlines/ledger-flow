@@ -14,6 +14,7 @@ from models import (
 )
 from services.backup_service import backup_file
 from services.config_service import load_config
+from services.import_index import ImportIndex
 from services.import_service import preview_import, scan_candidates, apply_import
 from services.ledger_runner import CommandError, run_cmd
 from services.stage_store import StageStore
@@ -23,11 +24,13 @@ from services.unknowns_service import apply_unknown_mappings, scan_unknowns
 ROOT_DIR = Path(__file__).resolve().parents[2]
 config = load_config(ROOT_DIR)
 stages = StageStore(ROOT_DIR)
+import_index = ImportIndex(ROOT_DIR / ".workflow" / "state.db")
 
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     stages.cleanup_old(days=7)
+    import_index.ensure_schema()
     yield
 
 
@@ -94,7 +97,7 @@ def import_apply(req: StageApplyRequest) -> dict:
     backup = backup_file(journal, "import") if journal.exists() else None
 
     try:
-        journal_path, appended_count = apply_import(config, stage)
+        journal_path, appended_count, skipped_duplicate_count, conflicts = apply_import(config, stage)
     except CommandError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
 
@@ -104,6 +107,8 @@ def import_apply(req: StageApplyRequest) -> dict:
         "backupPath": str(backup.resolve()) if backup else None,
         "journalPath": journal_path,
         "appendedTxnCount": appended_count,
+        "skippedDuplicateCount": skipped_duplicate_count,
+        "conflicts": conflicts,
     }
     stages.save(req.stageId, stage)
     return stage

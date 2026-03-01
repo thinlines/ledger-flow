@@ -111,11 +111,21 @@
       <p>Status: {preview.status}</p>
       <p>Target: {preview.targetJournalPath}</p>
       {#if preview.summary}
-        <p>Transactions: {preview.summary.count} | Unknowns: {preview.summary.unknownCount}</p>
+        <p>
+          Transactions: {preview.summary.count}
+          | New: {preview.summary.newCount}
+          | Duplicates: {preview.summary.duplicateCount}
+          | Conflicts: {preview.summary.conflictCount}
+          | Unknowns: {preview.summary.unknownCount}
+        </p>
       {/if}
 
       {#if preview.result}
-        <p>Applied. Appended transactions: {preview.result.appendedTxnCount}</p>
+        <p>
+          Applied. Appended: {preview.result.appendedTxnCount}
+          | Skipped duplicates: {preview.result.skippedDuplicateCount}
+          | Conflicts: {preview.result.conflicts?.length ?? 0}
+        </p>
         {#if preview.result.backupPath}<p>Backup: {preview.result.backupPath}</p>{/if}
       {:else}
         <button disabled={loading} on:click={applyStage}>Apply Import</button>
