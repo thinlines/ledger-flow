@@ -29,11 +29,16 @@ account Expenses:Eating Out
         encoding="utf-8",
     )
 
-    result = scan_unknowns(journal, accounts)
+    result = scan_unknowns(
+        journal,
+        [{"id": "r1", "type": "payee", "pattern": "Coffee Shop", "account": "Expenses:Eating Out", "enabled": True, "position": 1}],
+    )
     assert len(result["groups"]) == 1
     group = result["groups"][0]
     assert group["payeeDisplay"] == "Coffee Shop"
     assert len(group["txns"]) == 2
+    assert group["suggestedAccount"] == "Expenses:Eating Out"
+    assert group["matchedRuleId"] == "r1"
 
 
 def test_apply_unknown_mappings_updates_journal_only(tmp_path: Path) -> None:
@@ -61,7 +66,10 @@ account Assets:Wells Fargo Checking
         encoding="utf-8",
     )
 
-    groups = scan_unknowns(journal, accounts)["groups"]
+    groups = scan_unknowns(
+        journal,
+        [{"id": "r1", "type": "payee", "pattern": "Coffee Shop", "account": "Expenses:Eating Out", "enabled": True, "position": 1}],
+    )["groups"]
     txn_updates, warnings = apply_unknown_mappings(
         journal_path=journal,
         accounts_dat=accounts,

@@ -33,6 +33,16 @@ class PayeeRuleRequest(BaseModel):
     account: str
 
 
+class RuleReorderRequest(BaseModel):
+    orderedIds: list[str]
+
+
+class RuleUpdateRequest(BaseModel):
+    pattern: str | None = None
+    account: str | None = None
+    enabled: bool | None = None
+
+
 class CreateAccountRequest(BaseModel):
     account: str
     accountType: str | None = None

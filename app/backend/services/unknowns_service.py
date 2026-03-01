@@ -4,6 +4,8 @@ import re
 from collections import defaultdict
 from pathlib import Path
 
+from .rules_service import find_matching_rule
+
 ACCOUNT_LINE_RE = re.compile(r"^(\s+)([^\s].*?)(\s{2,}|\t+)(.*)$")
 HEADER_RE = re.compile(r"^(\d{4}[-/]\d{2}[-/]\d{2})(?:\s+[*!])?(?:\s+\([^)]+\))?\s*(.*)$")
 TXN_START_RE = re.compile(r"^\d{4}[-/]\d{2}[-/]\d{2}")
@@ -68,9 +70,8 @@ def _parse_postings(lines: list[str], start: int, end: int) -> list[dict]:
     return postings
 
 
-def scan_unknowns(journal_path: Path, accounts_dat: Path) -> dict:
+def scan_unknowns(journal_path: Path, rules: list[dict]) -> dict:
     lines = journal_path.read_text(encoding="utf-8").splitlines()
-    payee_rules = _load_payee_rules(accounts_dat)
     grouped: dict[str, dict] = defaultdict(lambda: {"txns": []})
 
     for start, end in _iter_transaction_ranges(lines):
@@ -95,10 +96,13 @@ def scan_unknowns(journal_path: Path, accounts_dat: Path) -> dict:
                 break
 
         key = current_payee.lower()
+        matched = find_matching_rule(current_payee, rules)
         group = grouped[key]
         group["groupKey"] = key
         group["payeeDisplay"] = current_payee
-        group["suggestedAccount"] = payee_rules.get(key)
+        group["suggestedAccount"] = matched["account"] if matched else None
+        group["matchedRuleId"] = matched["id"] if matched else None
+        group["matchedRulePattern"] = matched["pattern"] if matched else None
 
         for p in unknown_postings:
             group["txns"].append(

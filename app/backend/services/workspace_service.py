@@ -101,6 +101,10 @@ class WorkspaceManager:
         if not payee_alias_csv.exists():
             payee_alias_csv.write_text("payee,alias\n", encoding="utf-8")
 
+        match_rules = rules / "20-match-rules.ndjson"
+        if not match_rules.exists():
+            match_rules.write_text("", encoding="utf-8")
+
         accounts_dat = rules / "10-accounts.dat"
         if not accounts_dat.exists():
             accounts_dat.write_text(

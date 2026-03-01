@@ -10,6 +10,8 @@ from models import (
     CreateAccountRequest,
     ImportPreviewRequest,
     PayeeRuleRequest,
+    RuleReorderRequest,
+    RuleUpdateRequest,
     StageApplyRequest,
     UnknownScanRequest,
     UnknownStageRequest,
@@ -22,8 +24,15 @@ from services.import_service import apply_import, preview_import, scan_candidate
 from services.institution_registry import display_name_for, list_templates
 from services.ledger_runner import CommandError, run_cmd
 from services.stage_store import StageStore
+from services.rules_service import (
+    delete_rule,
+    ensure_rules_store,
+    load_rules,
+    reorder_rules,
+    update_rule,
+    upsert_payee_rule,
+)
 from services.unknowns_service import (
-    add_payee_rule,
     apply_unknown_mappings,
     create_account,
     list_known_accounts,
@@ -208,6 +217,14 @@ def accounts() -> dict:
     return {"accounts": list_known_accounts(accounts_dat)}
 
 
+@app.get("/api/rules")
+def rules_list() -> dict:
+    config = _require_workspace_config()
+    accounts_dat = config.init_dir / "10-accounts.dat"
+    path = ensure_rules_store(config.init_dir, accounts_dat)
+    return {"rules": load_rules(path)}
+
+
 @app.post("/api/accounts")
 def accounts_create(req: CreateAccountRequest) -> dict:
     config = _require_workspace_config()
@@ -288,7 +305,8 @@ def unknown_scan(req: UnknownScanRequest) -> dict:
         raise HTTPException(status_code=404, detail="journal not found")
 
     accounts_dat = config.init_dir / "10-accounts.dat"
-    data = scan_unknowns(journal_path, accounts_dat)
+    rule_path = ensure_rules_store(config.init_dir, accounts_dat)
+    data = scan_unknowns(journal_path, load_rules(rule_path))
     payload = {
         "kind": "unknowns",
         "status": "ready",
@@ -368,11 +386,54 @@ def unknown_apply(req: StageApplyRequest) -> dict:
 def create_payee_rule(req: PayeeRuleRequest) -> dict:
     config = _require_workspace_config()
     accounts_dat = config.init_dir / "10-accounts.dat"
+    known_accounts = set(list_known_accounts(accounts_dat))
+    if req.account not in known_accounts:
+        raise HTTPException(status_code=400, detail=f"Unknown account: {req.account}")
+    path = ensure_rules_store(config.init_dir, accounts_dat)
     try:
-        added, warning = add_payee_rule(accounts_dat, req.payee, req.account)
+        rule, changed = upsert_payee_rule(path, req.payee, req.account)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
-    return {"added": added, "warning": warning}
+    return {"added": changed, "warning": None, "rule": rule}
+
+
+@app.post("/api/rules/reorder")
+def rules_reorder(req: RuleReorderRequest) -> dict:
+    config = _require_workspace_config()
+    accounts_dat = config.init_dir / "10-accounts.dat"
+    path = ensure_rules_store(config.init_dir, accounts_dat)
+    try:
+        rules = reorder_rules(path, req.orderedIds)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return {"rules": rules}
+
+
+@app.post("/api/rules/{rule_id}")
+def rules_update(rule_id: str, req: RuleUpdateRequest) -> dict:
+    config = _require_workspace_config()
+    accounts_dat = config.init_dir / "10-accounts.dat"
+    if req.account is not None:
+        known_accounts = set(list_known_accounts(accounts_dat))
+        if req.account not in known_accounts:
+            raise HTTPException(status_code=400, detail=f"Unknown account: {req.account}")
+    path = ensure_rules_store(config.init_dir, accounts_dat)
+    try:
+        rule = update_rule(path, rule_id, pattern=req.pattern, account=req.account, enabled=req.enabled)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return {"rule": rule}
+
+
+@app.delete("/api/rules/{rule_id}")
+def rules_delete(rule_id: str) -> dict:
+    config = _require_workspace_config()
+    accounts_dat = config.init_dir / "10-accounts.dat"
+    path = ensure_rules_store(config.init_dir, accounts_dat)
+    deleted = delete_rule(path, rule_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="rule not found")
+    return {"deleted": True}
 
 
 @app.get("/api/stages/{stage_id}")
