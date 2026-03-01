@@ -68,110 +68,159 @@
   onMount(loadCandidates);
 </script>
 
-<section>
-  <h2>Import CSV</h2>
-  {#if error}<p class="error">{error}</p>{/if}
-
-  <div class="panel">
-    <h3>Candidates</h3>
-    {#if candidates.length === 0}
-      <p>No CSV files found in `CSVs/`.</p>
-    {:else}
-      <ul>
-        {#each candidates as c}
-          <li>
-            <button on:click={() => pickCandidate(c)}>{c.file_name}</button>
-            {#if !c.is_configured_institution}
-              <span class="warn">Unconfigured institution</span>
-            {/if}
-          </li>
-        {/each}
-      </ul>
-    {/if}
-  </div>
-
-  <div class="panel">
-    <h3>Preview Settings</h3>
-    <label>CSV path <input bind:value={selectedPath} /></label>
-    <label>Year <input bind:value={year} /></label>
-    <label>Institution
-      <select bind:value={institution}>
-        <option value="">Select...</option>
-        {#each institutions as inst}
-          <option value={inst}>{inst}</option>
-        {/each}
-      </select>
-    </label>
-    <button disabled={loading || !selectedPath || !year || !institution} on:click={runPreview}>Preview Import</button>
-  </div>
-
-  {#if preview}
-    <div class="panel">
-      <h3>Stage {preview.stageId}</h3>
-      <p>Status: {preview.status}</p>
-      <p>Target: {preview.targetJournalPath}</p>
-      {#if preview.summary}
-        <p>
-          Transactions: {preview.summary.count}
-          | New: {preview.summary.newCount}
-          | Duplicates: {preview.summary.duplicateCount}
-          | Conflicts: {preview.summary.conflictCount}
-          | Unknowns: {preview.summary.unknownCount}
-        </p>
-      {/if}
-
-      {#if preview.result}
-        <p>
-          Applied. Appended: {preview.result.appendedTxnCount}
-          | Skipped duplicates: {preview.result.skippedDuplicateCount}
-          | Conflicts: {preview.result.conflicts?.length ?? 0}
-        </p>
-        {#if preview.result.backupPath}<p>Backup: {preview.result.backupPath}</p>{/if}
-      {:else}
-        <button disabled={loading} on:click={applyStage}>Apply Import</button>
-      {/if}
-
-      {#if preview.preview?.length}
-        <h4>Transaction Preview</h4>
-        <pre>{preview.preview.slice(0, 10).join('\n\n')}</pre>
-      {/if}
-    </div>
-  {/if}
+<section class="view-card hero">
+  <p class="eyebrow">Import Center</p>
+  <h2 class="page-title">Preview and Import Institution Transactions</h2>
+  <p class="subtitle">Select a file, preview match outcomes, and apply only net-new transactions.</p>
 </section>
 
+{#if error}
+  <section class="view-card"><p class="error-text">{error}</p></section>
+{/if}
+
+<section class="grid-2">
+  <article class="view-card">
+    <p class="eyebrow">Inbox</p>
+    <h3>Detected CSV Files</h3>
+    {#if candidates.length === 0}
+      <p class="muted">No CSV files found in the import folder.</p>
+    {:else}
+      <div class="list">
+        {#each candidates as c}
+          <button class="row" on:click={() => pickCandidate(c)}>
+            <span>{c.file_name}</span>
+            {#if c.is_configured_institution}
+              <span class="pill ok">Configured</span>
+            {:else}
+              <span class="pill warn">Needs setup</span>
+            {/if}
+          </button>
+        {/each}
+      </div>
+    {/if}
+  </article>
+
+  <article class="view-card">
+    <p class="eyebrow">Configuration</p>
+    <h3>Import Preview Inputs</h3>
+
+    <div class="field">
+      <label for="csvPath">CSV Path</label>
+      <input id="csvPath" bind:value={selectedPath} />
+    </div>
+
+    <div class="field grid-2 compact">
+      <div class="field">
+        <label for="year">Year</label>
+        <input id="year" bind:value={year} />
+      </div>
+
+      <div class="field">
+        <label for="institution">Institution</label>
+        <select id="institution" bind:value={institution}>
+          <option value="">Select...</option>
+          {#each institutions as inst}
+            <option value={inst}>{inst}</option>
+          {/each}
+        </select>
+      </div>
+    </div>
+
+    <button class="btn btn-primary" disabled={loading || !selectedPath || !year || !institution} on:click={runPreview}>
+      {loading ? 'Preparing preview...' : 'Preview Import'}
+    </button>
+  </article>
+</section>
+
+{#if preview}
+  <section class="view-card">
+    <p class="eyebrow">Preview Result</p>
+    <h3>Stage {preview.stageId}</h3>
+    <p class="muted">Target journal: {preview.targetJournalPath}</p>
+
+    {#if preview.summary}
+      <div class="summary">
+        <span class="pill ok">New {preview.summary.newCount}</span>
+        <span class="pill">Duplicates {preview.summary.duplicateCount}</span>
+        <span class="pill warn">Conflicts {preview.summary.conflictCount}</span>
+        <span class="pill">Unknown {preview.summary.unknownCount}</span>
+      </div>
+    {/if}
+
+    {#if preview.result}
+      <div class="result">
+        <p><span class="pill ok">Applied</span></p>
+        <p>
+          Appended {preview.result.appendedTxnCount} | Skipped duplicates {preview.result.skippedDuplicateCount} |
+          Conflicts {preview.result.conflicts?.length ?? 0}
+        </p>
+        {#if preview.result.backupPath}
+          <p class="muted">Backup: {preview.result.backupPath}</p>
+        {/if}
+      </div>
+    {:else}
+      <button class="btn btn-primary" disabled={loading} on:click={applyStage}>Apply Import</button>
+    {/if}
+
+    {#if preview.preview?.length}
+      <h4>Sample Transactions</h4>
+      <pre>{preview.preview.slice(0, 8).join('\n\n')}</pre>
+    {/if}
+  </section>
+{/if}
+
 <style>
-  .panel {
-    background: #fff;
-    border: 1px solid #d2e0ee;
+  h3 {
+    margin: 0.1rem 0 0.8rem;
+  }
+
+  .compact {
+    gap: 0.8rem;
+    margin: 0.3rem 0 0.8rem;
+  }
+
+  .list {
+    display: grid;
+    gap: 0.5rem;
+    max-height: 360px;
+    overflow: auto;
+  }
+
+  .row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    border: 1px solid var(--line);
+    background: var(--card-2);
     border-radius: 10px;
-    padding: 1rem;
-    margin-bottom: 1rem;
+    padding: 0.55rem 0.6rem;
+    cursor: pointer;
+    text-align: left;
+    width: 100%;
   }
 
-  label {
-    display: block;
-    margin-bottom: 0.6rem;
+  .row:hover {
+    background: #eef6ff;
   }
 
-  input, select {
-    display: block;
-    margin-top: 0.25rem;
-    width: min(36rem, 100%);
-    padding: 0.45rem;
+  .summary {
+    display: flex;
+    gap: 0.45rem;
+    flex-wrap: wrap;
+    margin-bottom: 0.8rem;
   }
 
-  button {
-    padding: 0.45rem 0.75rem;
+  .result {
+    margin: 0.4rem 0 0.8rem;
   }
 
-  .warn { color: #9a6417; margin-left: 0.5rem; }
-  .error { color: #9f1c1c; }
   pre {
+    background: #0c1925;
+    color: #d5ecff;
+    border-radius: 12px;
+    padding: 0.8rem;
     white-space: pre-wrap;
     max-height: 320px;
     overflow: auto;
-    background: #f9fcff;
-    border: 1px solid #e2ebf3;
-    padding: 0.75rem;
   }
 </style>
