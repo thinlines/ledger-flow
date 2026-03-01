@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import { apiGet, apiPost } from '$lib/api';
 
+  let initialized = false;
   let journalPath = '';
   let journals: Array<{ fileName: string; absPath: string }> = [];
   let stage: any = null;
@@ -11,6 +12,10 @@
 
   onMount(async () => {
     try {
+      const state = await apiGet<{ initialized: boolean }>('/api/app/state');
+      initialized = state.initialized;
+      if (!initialized) return;
+
       const data = await apiGet<{ journals: Array<{ fileName: string; absPath: string }> }>('/api/journals');
       journals = data.journals;
       if (journals.length) {
@@ -72,83 +77,88 @@
   <p class="subtitle">Scan a journal, assign accounts by payee group, and apply staged mappings.</p>
 </section>
 
-{#if error}
-  <section class="view-card"><p class="error-text">{error}</p></section>
-{/if}
-
-<section class="view-card">
-  <p class="eyebrow">Scan Input</p>
-  <h3>Choose Journal</h3>
-
-  <div class="field grid-2 compact">
-    <div class="field">
-      <label for="journalSelect">Detected Journals</label>
-      <select id="journalSelect" bind:value={journalPath}>
-        <option value="">Select...</option>
-        {#each journals as j}
-          <option value={j.absPath}>{j.fileName}</option>
-        {/each}
-      </select>
-    </div>
-
-    <div class="field">
-      <label for="journalPath">Journal Path</label>
-      <input id="journalPath" bind:value={journalPath} placeholder="/abs/path/to/journal" />
-    </div>
-  </div>
-
-  <button class="btn btn-primary" disabled={loading || !journalPath} on:click={scan}>Scan Unknowns</button>
-</section>
-
-{#if stage}
+{#if !initialized}
   <section class="view-card">
-    <p class="eyebrow">Stage</p>
-    <h3>Stage {stage.stageId}</h3>
-    <p class="muted">Payee groups: {stage.groups?.length ?? 0}</p>
+    <p class="error-text">Workspace not initialized yet.</p>
+    <a class="btn btn-primary" href="/setup">Go to Setup</a>
+  </section>
+{:else}
+  {#if error}
+    <section class="view-card"><p class="error-text">{error}</p></section>
+  {/if}
 
-    {#if (stage.groups?.length ?? 0) === 0}
-      <p><span class="pill ok">No unknown postings found</span></p>
-    {/if}
+  <section class="view-card">
+    <p class="eyebrow">Scan Input</p>
+    <h3>Choose Journal</h3>
 
-    <div class="groups">
-      {#each stage.groups ?? [] as g}
-        <article class="group">
-          <header>
-            <strong>{g.payeeDisplay}</strong>
-            <span class="pill">{g.txns.length} transactions</span>
-          </header>
-          <div class="field">
-            <label for={"acct-" + g.groupKey}>Assign account</label>
-            <input id={"acct-" + g.groupKey} bind:value={mappings[g.groupKey]} placeholder="Expenses:Groceries" />
-          </div>
-        </article>
-      {/each}
+    <div class="field grid-2 compact">
+      <div class="field">
+        <label for="journalSelect">Detected Journals</label>
+        <select id="journalSelect" bind:value={journalPath}>
+          <option value="">Select...</option>
+          {#each journals as j}
+            <option value={j.absPath}>{j.fileName}</option>
+          {/each}
+        </select>
+      </div>
+
+      <div class="field">
+        <label for="journalPath">Journal Path</label>
+        <input id="journalPath" bind:value={journalPath} placeholder="/abs/path/to/journal" />
+      </div>
     </div>
 
-    {#if stage.summary}
-      <p class="muted">Staged updates: {stage.summary.txnUpdates}</p>
-    {/if}
-
-    {#if stage.result}
-      <p><span class="pill ok">Applied</span></p>
-      <p>
-        Updated transactions: {stage.result.updatedTxnCount} | Learned rules: {stage.result.addedRuleCount}
-      </p>
-      {#if stage.result.warnings?.length}
-        <h4>Warnings</h4>
-        <ul>
-          {#each stage.result.warnings as w}
-            <li>{w.groupKey}: {w.warning}</li>
-          {/each}
-        </ul>
-      {/if}
-    {:else}
-      <div class="actions">
-        <button class="btn" disabled={loading} on:click={stageMappings}>Stage Mappings</button>
-        <button class="btn btn-primary" disabled={loading} on:click={applyMappings}>Apply Mappings</button>
-      </div>
-    {/if}
+    <button class="btn btn-primary" disabled={loading || !journalPath} on:click={scan}>Scan Unknowns</button>
   </section>
+
+  {#if stage}
+    <section class="view-card">
+      <p class="eyebrow">Stage</p>
+      <h3>Stage {stage.stageId}</h3>
+      <p class="muted">Payee groups: {stage.groups?.length ?? 0}</p>
+
+      {#if (stage.groups?.length ?? 0) === 0}
+        <p><span class="pill ok">No unknown postings found</span></p>
+      {/if}
+
+      <div class="groups">
+        {#each stage.groups ?? [] as g}
+          <article class="group">
+            <header>
+              <strong>{g.payeeDisplay}</strong>
+              <span class="pill">{g.txns.length} transactions</span>
+            </header>
+            <div class="field">
+              <label for={'acct-' + g.groupKey}>Assign account</label>
+              <input id={'acct-' + g.groupKey} bind:value={mappings[g.groupKey]} placeholder="Expenses:Groceries" />
+            </div>
+          </article>
+        {/each}
+      </div>
+
+      {#if stage.summary}
+        <p class="muted">Staged updates: {stage.summary.txnUpdates}</p>
+      {/if}
+
+      {#if stage.result}
+        <p><span class="pill ok">Applied</span></p>
+        <p>Updated transactions: {stage.result.updatedTxnCount} | Learned rules: {stage.result.addedRuleCount}</p>
+        {#if stage.result.warnings?.length}
+          <h4>Warnings</h4>
+          <ul>
+            {#each stage.result.warnings as w}
+              <li>{w.groupKey}: {w.warning}</li>
+            {/each}
+          </ul>
+        {/if}
+      {:else}
+        <div class="actions">
+          <button class="btn" disabled={loading} on:click={stageMappings}>Stage Mappings</button>
+          <button class="btn btn-primary" disabled={loading} on:click={applyMappings}>Apply Mappings</button>
+        </div>
+      {/if}
+    </section>
+  {/if}
 {/if}
 
 <style>

@@ -3,6 +3,7 @@
 ## Product intent
 
 The interface is the user's primary interaction surface. The user should feel they are operating a modern finance workspace with clear workflows for setup, import, and review.
+The system must boot from zero data files; workspace initialization is a first-class GUI workflow.
 
 ## Information architecture
 
@@ -20,20 +21,23 @@ Purpose:
 
 Sections:
 - Welcome panel with a single primary CTA.
-- Environment readiness checklist:
-  - backend reachable
-  - ledger available
-  - hledger available
-- Institution coverage panel:
-  - configured institutions count
-  - list of institutions
-- Import readiness panel:
-  - CSV files discovered
-  - journal files discovered
+- Workspace bootstrap form:
+  - workspace path
+  - workspace name
+  - base currency
+  - start year
+  - optional institution templates
+- Existing workspace selector:
+  - select an existing workspace path containing `settings/workspace.toml`
+- Active workspace status summary:
+  - institutions configured
+  - journals discovered
+  - inbox files discovered
 
 Primary actions:
-- `Go to Import` when environment is healthy.
-- `Go to Unknowns` when unresolved items likely exist.
+- `Create Workspace` for first-time initialization.
+- `Select Workspace` to attach an existing workspace.
+- `Go to Import` and `Go to Unknowns` when ready.
 
 ### 2) Home (`/`)
 
