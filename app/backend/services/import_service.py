@@ -2,14 +2,15 @@ from __future__ import annotations
 
 import hashlib
 import re
-import sys
 from dataclasses import dataclass
 from pathlib import Path
 
 from .config_service import AppConfig
+from .csv_normalizer import normalize_csv_to_intermediate
 from .import_index import ImportIndex
 from .institution_registry import canonical_template_id
 from .ledger_runner import run_cmd
+from .payee_alias_service import ensure_payee_alias_dat
 
 
 YEAR_INST_RE = re.compile(r"^(?P<year>\d{4})-(?P<institution>[^.]+)\.csv$")
@@ -55,17 +56,6 @@ def scan_candidates(config: AppConfig) -> list[ImportCandidate]:
             )
         )
     return rows
-
-
-def _generate_payees(config: AppConfig) -> None:
-    alias_csv = config.init_dir / config.payee_aliases
-    alias_dat = config.init_dir / f"{Path(config.payee_aliases).stem}.dat"
-    if not alias_csv.exists():
-        alias_csv.write_text("payee,alias\n", encoding="utf-8")
-    run_cmd(
-        [sys.executable, "Scripts/generate_payees.py", "-o", str(alias_dat), str(alias_csv)],
-        cwd=config.root_dir,
-    )
 
 
 def _sha256_text(text: str) -> str:
@@ -244,12 +234,8 @@ def preview_import(
     account = destination_account or institution_cfg["account"]
     date_fmt = institution_cfg["CSV_date_format"]
 
-    _generate_payees(config)
-
-    converted_csv = run_cmd(
-        [sys.executable, "Scripts/convert_csv.py", str(csv_path), institution],
-        cwd=config.root_dir,
-    )
+    ensure_payee_alias_dat(config)
+    converted_csv = normalize_csv_to_intermediate(config, csv_path, institution)
 
     year_journal = config.journal_dir / f"{year}.journal"
     if not year_journal.exists():

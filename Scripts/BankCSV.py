@@ -16,10 +16,23 @@ from datetime import datetime
 
 def create_bank_csv(institution, input_lines, config):
     institutions = {
-        inst: globals()[inst.capitalize() + "CSV"] for inst in config["institutions"]
+        "alipay": AlipayCSV,
+        "bjb": BjbCSV,
+        "bank_of_beijing": BjbCSV,
+        "icbc": IcbcCSV,
+        "schwab": SchwabCSV,
+        "charles_schwab": SchwabCSV,
+        "wfchk": WellsFargoCSV,
+        "wfsav": WellsFargoCSV,
+        "wfcc": WellsFargoCSV,
+        "wells_fargo": WellsFargoCSV,
     }
+    for inst, inst_cfg in config.get("institutions", {}).items():
+        parser_key = str(inst_cfg.get("parser", inst)).lower()
+        if parser_key in institutions:
+            institutions[inst.lower()] = institutions[parser_key]
     try:
-        return institutions[institution](input_lines)
+        return institutions[institution.lower()](input_lines)
     except KeyError:
         available_institutions = ", ".join(institutions.keys())
         raise ValueError(
