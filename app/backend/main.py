@@ -61,6 +61,21 @@ def import_candidates() -> dict:
     return {"candidates": rows, "institutions": sorted(config.institutions.keys())}
 
 
+@app.get("/api/journals")
+def journals() -> dict:
+    rows = []
+    for path in sorted(config.journal_dir.glob("*.journal")):
+        rows.append(
+            {
+                "fileName": path.name,
+                "absPath": str(path.resolve()),
+                "sizeBytes": path.stat().st_size,
+                "mtime": path.stat().st_mtime,
+            }
+        )
+    return {"journals": rows}
+
+
 @app.post("/api/import/preview")
 def import_preview(req: ImportPreviewRequest) -> dict:
     try:
