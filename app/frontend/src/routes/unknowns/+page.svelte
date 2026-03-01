@@ -33,6 +33,25 @@
   let ruleAccount = '';
   let ruleError = '';
 
+  let showCreateAccountModal = false;
+  let newAccountName = '';
+  let newAccountType = 'Expense';
+  let createAccountError = '';
+
+  function inferAccountType(accountName: string): string {
+    const prefix = accountName.split(':', 1)[0]?.trim().toLowerCase() || '';
+    if (prefix === 'assets') return 'Asset';
+    if (prefix === 'liabilities' || prefix === 'liability') return 'Liability';
+    if (prefix === 'expenses' || prefix === 'expense') return 'Expense';
+    if (prefix === 'income' || prefix === 'revenue') return 'Revenue';
+    if (prefix === 'equity') return 'Equity';
+    return 'Expense';
+  }
+
+  function updateInferredTypeFromName() {
+    newAccountType = inferAccountType(newAccountName);
+  }
+
   onMount(async () => {
     try {
       const state = await apiGet<{ initialized: boolean }>('/api/app/state');
@@ -119,10 +138,22 @@
     showRuleModal = true;
   }
 
-  async function createRule() {
+  async function saveRule() {
     if (!rulePayee || !ruleAccount) return;
-    loading = true;
     ruleError = '';
+
+    if (!accounts.includes(ruleAccount)) {
+      const shouldCreate = window.confirm(`The account "${ruleAccount}" does not exist. Create it now?`);
+      if (!shouldCreate) return;
+      newAccountName = ruleAccount;
+      updateInferredTypeFromName();
+      createAccountError = '';
+      showRuleModal = false;
+      showCreateAccountModal = true;
+      return;
+    }
+
+    loading = true;
     try {
       const result = await apiPost<{ added: boolean; warning: string | null }>('/api/rules/payee', {
         payee: rulePayee,
@@ -146,22 +177,44 @@
     }
   }
 
-  async function createAccountFromModal() {
-    if (!ruleAccount) return;
+  async function createAccountAndSaveRule() {
+    if (!newAccountName || !newAccountType) return;
     loading = true;
-    ruleError = '';
+    createAccountError = '';
     try {
-      const result = await apiPost<{ added: boolean; warning: string | null }>('/api/accounts', {
+      const created = await apiPost<{ added: boolean; warning: string | null }>('/api/accounts', {
+        account: newAccountName,
+        accountType: newAccountType
+      });
+      if (created.warning) {
+        createAccountError = created.warning;
+        return;
+      }
+
+      const refreshed = await apiGet<{ accounts: string[] }>('/api/accounts');
+      accounts = refreshed.accounts;
+      ruleAccount = newAccountName;
+
+      const rule = await apiPost<{ added: boolean; warning: string | null }>('/api/rules/payee', {
+        payee: rulePayee,
         account: ruleAccount
       });
-      if (result.warning) {
-        ruleError = result.warning;
-      } else {
-        const refreshed = await apiGet<{ accounts: string[] }>('/api/accounts');
-        accounts = refreshed.accounts;
+      if (rule.warning) {
+        createAccountError = rule.warning;
+        return;
       }
+
+      for (const g of stage?.groups ?? []) {
+        if (g.payeeDisplay === rulePayee) {
+          mappings[g.groupKey] = ruleAccount;
+          g.suggestedAccount = ruleAccount;
+        }
+      }
+
+      showCreateAccountModal = false;
+      showRuleModal = false;
     } catch (e) {
-      ruleError = String(e);
+      createAccountError = String(e);
     } finally {
       loading = false;
     }
@@ -317,12 +370,53 @@
           {/each}
         </div>
       </div>
-      <p class="muted">Account type is inferred from the account prefix (e.g. `Assets:`, `Expenses:`, `Income:`).</p>
       {#if ruleError}<p class="error-text">{ruleError}</p>{/if}
       <div class="actions">
         <button class="btn" on:click={() => (showRuleModal = false)}>Cancel</button>
-        <button class="btn" disabled={loading || !ruleAccount} on:click={createAccountFromModal}>Create Account</button>
-        <button class="btn btn-primary" disabled={loading || !rulePayee || !ruleAccount} on:click={createRule}>Save Rule</button>
+        <button class="btn btn-primary" disabled={loading || !rulePayee || !ruleAccount} on:click={saveRule}>Save Rule</button>
+      </div>
+    </div>
+  </div>
+{/if}
+
+{#if showCreateAccountModal}
+  <div
+    class="modal-backdrop"
+    role="button"
+    aria-label="Close dialog"
+    tabindex="0"
+    on:click={(e) => ((e.target as HTMLElement) === (e.currentTarget as HTMLElement) ? (showCreateAccountModal = false) : undefined)}
+    on:keydown={(e) => (e.key === 'Escape' || e.key === 'Enter' ? (showCreateAccountModal = false) : undefined)}
+  >
+    <div class="modal" role="dialog" tabindex="-1" aria-modal="true" aria-label="Create Account">
+      <h3>Create New Account</h3>
+      <p class="muted">Enter a fully qualified account name.</p>
+      <div class="field">
+        <label for="newAccountName">Account Name</label>
+        <input
+          id="newAccountName"
+          bind:value={newAccountName}
+          placeholder="Assets:Transfers"
+          on:input={updateInferredTypeFromName}
+        />
+      </div>
+      <div class="field">
+        <label for="newAccountType">Account Type</label>
+        <select id="newAccountType" bind:value={newAccountType}>
+          <option value="Asset">Asset</option>
+          <option value="Cash">Cash</option>
+          <option value="Liability">Liability</option>
+          <option value="Expense">Expense</option>
+          <option value="Revenue">Revenue</option>
+          <option value="Equity">Equity</option>
+        </select>
+      </div>
+      {#if createAccountError}<p class="error-text">{createAccountError}</p>{/if}
+      <div class="actions">
+        <button class="btn" on:click={() => (showCreateAccountModal = false)}>Cancel</button>
+        <button class="btn btn-primary" disabled={loading || !newAccountName || !newAccountType} on:click={createAccountAndSaveRule}>
+          Create Account and Save Rule
+        </button>
       </div>
     </div>
   </div>

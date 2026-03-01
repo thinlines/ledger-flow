@@ -99,3 +99,12 @@ def test_create_account_appends_account_block(tmp_path: Path) -> None:
     content = accounts.read_text(encoding="utf-8")
     assert "account Assets:Transfers" in content
     assert "; type: Asset" in content
+
+
+def test_create_account_respects_explicit_account_type(tmp_path: Path) -> None:
+    accounts = tmp_path / "10-accounts.dat"
+    accounts.write_text("", encoding="utf-8")
+    added, warning = create_account(accounts, "Assets:Cashbox", "Cash")
+    assert added is True
+    assert warning is None
+    assert "; type: Cash" in accounts.read_text(encoding="utf-8")

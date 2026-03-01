@@ -35,6 +35,7 @@ class PayeeRuleRequest(BaseModel):
 
 class CreateAccountRequest(BaseModel):
     account: str
+    accountType: str | None = None
 
 
 class WorkspaceBootstrapRequest(BaseModel):
