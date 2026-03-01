@@ -31,6 +31,7 @@
   let showRuleModal = false;
   let rulePayee = '';
   let ruleAccount = '';
+  let ruleAccountType = 'Expense';
   let ruleError = '';
 
   onMount(async () => {
@@ -138,6 +139,28 @@
           }
         }
         showRuleModal = false;
+      }
+    } catch (e) {
+      ruleError = String(e);
+    } finally {
+      loading = false;
+    }
+  }
+
+  async function createAccountFromModal() {
+    if (!ruleAccount) return;
+    loading = true;
+    ruleError = '';
+    try {
+      const result = await apiPost<{ added: boolean; warning: string | null }>('/api/accounts', {
+        account: ruleAccount,
+        accountType: ruleAccountType
+      });
+      if (result.warning) {
+        ruleError = result.warning;
+      } else {
+        const refreshed = await apiGet<{ accounts: string[] }>('/api/accounts');
+        accounts = refreshed.accounts;
       }
     } catch (e) {
       ruleError = String(e);
@@ -296,9 +319,21 @@
           {/each}
         </div>
       </div>
+      <div class="field">
+        <label for="ruleAccountType">If creating account, account type</label>
+        <select id="ruleAccountType" bind:value={ruleAccountType}>
+          <option value="Asset">Asset</option>
+          <option value="Liability">Liability</option>
+          <option value="Expense">Expense</option>
+          <option value="Revenue">Revenue</option>
+          <option value="Equity">Equity</option>
+          <option value="Cash">Cash</option>
+        </select>
+      </div>
       {#if ruleError}<p class="error-text">{ruleError}</p>{/if}
       <div class="actions">
         <button class="btn" on:click={() => (showRuleModal = false)}>Cancel</button>
+        <button class="btn" disabled={loading || !ruleAccount} on:click={createAccountFromModal}>Create Account</button>
         <button class="btn btn-primary" disabled={loading || !rulePayee || !ruleAccount} on:click={createRule}>Save Rule</button>
       </div>
     </div>

@@ -33,6 +33,11 @@ class PayeeRuleRequest(BaseModel):
     account: str
 
 
+class CreateAccountRequest(BaseModel):
+    account: str
+    accountType: str = "Expense"
+
+
 class WorkspaceBootstrapRequest(BaseModel):
     workspacePath: str
     workspaceName: str = "My Books"

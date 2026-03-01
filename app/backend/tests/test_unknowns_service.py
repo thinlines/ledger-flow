@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from services.unknowns_service import add_payee_rule, apply_unknown_mappings, scan_unknowns
+from services.unknowns_service import add_payee_rule, apply_unknown_mappings, create_account, scan_unknowns
 
 
 def test_scan_unknowns_groups_by_payee(tmp_path: Path) -> None:
@@ -88,3 +88,14 @@ account Expenses:Eating Out
     assert added is True
     assert warning is None
     assert "payee Coffee Shop" in accounts.read_text(encoding="utf-8")
+
+
+def test_create_account_appends_account_block(tmp_path: Path) -> None:
+    accounts = tmp_path / "10-accounts.dat"
+    accounts.write_text("account Expenses:Eating Out\n    ; type: Expense\n", encoding="utf-8")
+    added, warning = create_account(accounts, "Assets:Transfers", "Asset")
+    assert added is True
+    assert warning is None
+    content = accounts.read_text(encoding="utf-8")
+    assert "account Assets:Transfers" in content
+    assert "; type: Asset" in content

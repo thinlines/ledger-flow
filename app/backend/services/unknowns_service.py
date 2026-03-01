@@ -188,3 +188,27 @@ def add_payee_rule(accounts_dat: Path, payee: str, account: str) -> tuple[bool, 
     rules_lines.insert(insert_at, rule_line)
     accounts_dat.write_text("\n".join(rules_lines) + "\n", encoding="utf-8")
     return True, None
+
+
+def create_account(accounts_dat: Path, account: str, account_type: str = "Expense") -> tuple[bool, str | None]:
+    account_clean = account.strip()
+    if not account_clean:
+        raise ValueError("Account is required")
+    if ":" not in account_clean:
+        raise ValueError("Account must be fully qualified, e.g. Expenses:Food")
+
+    known = _load_known_accounts(accounts_dat)
+    if account_clean in known:
+        return False, None
+
+    account_type_clean = account_type.strip() or "Expense"
+    if accounts_dat.exists():
+        lines = accounts_dat.read_text(encoding="utf-8").splitlines()
+    else:
+        lines = []
+    if lines and lines[-1].strip():
+        lines.append("")
+    lines.append(f"account {account_clean}")
+    lines.append(f"    ; type: {account_type_clean}")
+    accounts_dat.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return True, None

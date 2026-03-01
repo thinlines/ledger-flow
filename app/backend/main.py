@@ -7,6 +7,7 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 
 from models import (
+    CreateAccountRequest,
     ImportPreviewRequest,
     PayeeRuleRequest,
     StageApplyRequest,
@@ -21,7 +22,13 @@ from services.import_service import apply_import, preview_import, scan_candidate
 from services.institution_registry import display_name_for, list_templates
 from services.ledger_runner import CommandError, run_cmd
 from services.stage_store import StageStore
-from services.unknowns_service import add_payee_rule, apply_unknown_mappings, list_known_accounts, scan_unknowns
+from services.unknowns_service import (
+    add_payee_rule,
+    apply_unknown_mappings,
+    create_account,
+    list_known_accounts,
+    scan_unknowns,
+)
 from services.workspace_service import WorkspaceManager
 
 
@@ -199,6 +206,17 @@ def accounts() -> dict:
     config = _require_workspace_config()
     accounts_dat = config.init_dir / "10-accounts.dat"
     return {"accounts": list_known_accounts(accounts_dat)}
+
+
+@app.post("/api/accounts")
+def accounts_create(req: CreateAccountRequest) -> dict:
+    config = _require_workspace_config()
+    accounts_dat = config.init_dir / "10-accounts.dat"
+    try:
+        added, warning = create_account(accounts_dat, req.account, req.accountType)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return {"added": added, "warning": warning}
 
 
 @app.post("/api/import/preview")
