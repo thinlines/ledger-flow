@@ -213,7 +213,7 @@ def accounts_create(req: CreateAccountRequest) -> dict:
     config = _require_workspace_config()
     accounts_dat = config.init_dir / "10-accounts.dat"
     try:
-        added, warning = create_account(accounts_dat, req.account, req.accountType)
+        added, warning = create_account(accounts_dat, req.account)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     return {"added": added, "warning": warning}

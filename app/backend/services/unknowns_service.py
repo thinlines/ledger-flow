@@ -190,7 +190,22 @@ def add_payee_rule(accounts_dat: Path, payee: str, account: str) -> tuple[bool, 
     return True, None
 
 
-def create_account(accounts_dat: Path, account: str, account_type: str = "Expense") -> tuple[bool, str | None]:
+def _infer_account_type(account: str) -> str:
+    prefix = account.split(":", 1)[0].strip().lower()
+    if prefix == "assets":
+        return "Asset"
+    if prefix in {"liabilities", "liability"}:
+        return "Liability"
+    if prefix in {"expenses", "expense"}:
+        return "Expense"
+    if prefix in {"income", "revenue"}:
+        return "Revenue"
+    if prefix == "equity":
+        return "Equity"
+    return "Other"
+
+
+def create_account(accounts_dat: Path, account: str) -> tuple[bool, str | None]:
     account_clean = account.strip()
     if not account_clean:
         raise ValueError("Account is required")
@@ -201,7 +216,7 @@ def create_account(accounts_dat: Path, account: str, account_type: str = "Expens
     if account_clean in known:
         return False, None
 
-    account_type_clean = account_type.strip() or "Expense"
+    account_type_clean = _infer_account_type(account_clean)
     if accounts_dat.exists():
         lines = accounts_dat.read_text(encoding="utf-8").splitlines()
     else:

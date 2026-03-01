@@ -35,7 +35,6 @@ class PayeeRuleRequest(BaseModel):
 
 class CreateAccountRequest(BaseModel):
     account: str
-    accountType: str = "Expense"
 
 
 class WorkspaceBootstrapRequest(BaseModel):

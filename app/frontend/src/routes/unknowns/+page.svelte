@@ -31,7 +31,6 @@
   let showRuleModal = false;
   let rulePayee = '';
   let ruleAccount = '';
-  let ruleAccountType = 'Expense';
   let ruleError = '';
 
   onMount(async () => {
@@ -153,8 +152,7 @@
     ruleError = '';
     try {
       const result = await apiPost<{ added: boolean; warning: string | null }>('/api/accounts', {
-        account: ruleAccount,
-        accountType: ruleAccountType
+        account: ruleAccount
       });
       if (result.warning) {
         ruleError = result.warning;
@@ -319,17 +317,7 @@
           {/each}
         </div>
       </div>
-      <div class="field">
-        <label for="ruleAccountType">If creating account, account type</label>
-        <select id="ruleAccountType" bind:value={ruleAccountType}>
-          <option value="Asset">Asset</option>
-          <option value="Liability">Liability</option>
-          <option value="Expense">Expense</option>
-          <option value="Revenue">Revenue</option>
-          <option value="Equity">Equity</option>
-          <option value="Cash">Cash</option>
-        </select>
-      </div>
+      <p class="muted">Account type is inferred from the account prefix (e.g. `Assets:`, `Expenses:`, `Income:`).</p>
       {#if ruleError}<p class="error-text">{ruleError}</p>{/if}
       <div class="actions">
         <button class="btn" on:click={() => (showRuleModal = false)}>Cancel</button>
