@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, tick } from 'svelte';
   import { apiGet, apiPost } from '$lib/api';
 
   type TxnRow = {
@@ -32,11 +32,13 @@
   let rulePayee = '';
   let ruleAccount = '';
   let ruleError = '';
+  let ruleAccountInputEl: HTMLInputElement | null = null;
 
   let showCreateAccountModal = false;
   let newAccountName = '';
   let newAccountType = 'Expense';
   let createAccountError = '';
+  let newAccountInputEl: HTMLInputElement | null = null;
 
   function inferAccountType(accountName: string): string {
     const prefix = accountName.split(':', 1)[0]?.trim().toLowerCase() || '';
@@ -131,11 +133,14 @@
     return accounts.filter((a) => a.toLowerCase().includes(q)).slice(0, 12);
   }
 
-  function openRuleModal(group: UnknownGroup) {
+  async function openRuleModal(group: UnknownGroup) {
     rulePayee = group.payeeDisplay;
     ruleAccount = mappings[group.groupKey] || group.suggestedAccount || '';
     ruleError = '';
     showRuleModal = true;
+    await tick();
+    ruleAccountInputEl?.focus();
+    ruleAccountInputEl?.select();
   }
 
   async function saveRule() {
@@ -150,6 +155,9 @@
       createAccountError = '';
       showRuleModal = false;
       showCreateAccountModal = true;
+      await tick();
+      newAccountInputEl?.focus();
+      newAccountInputEl?.select();
       return;
     }
 
@@ -369,6 +377,7 @@
         <label for="ruleAccount">Account</label>
         <input
           id="ruleAccount"
+          bind:this={ruleAccountInputEl}
           bind:value={ruleAccount}
           placeholder="Type to filter accounts"
           on:keydown={(e) => (e.key === 'Enter' ? (e.preventDefault(), saveRule()) : undefined)}
@@ -404,9 +413,11 @@
         <label for="newAccountName">Account Name</label>
         <input
           id="newAccountName"
+          bind:this={newAccountInputEl}
           bind:value={newAccountName}
           placeholder="Assets:Transfers"
           on:input={updateInferredTypeFromName}
+          on:keydown={(e) => (e.key === 'Enter' ? (e.preventDefault(), createAccountAndSaveRule()) : undefined)}
         />
       </div>
       <div class="field">
