@@ -384,6 +384,11 @@
     await openCreateAccountModal(initialName, { mode: 'group', groupKey });
   }
 
+  async function openCreateAccountForRule(initialName = '') {
+    showRuleModal = false;
+    await openCreateAccountModal(initialName, { mode: 'rule', groupKey: ruleGroupKey });
+  }
+
   async function createAccountAndContinue() {
     if (!newAccountName || !newAccountType) return;
     loading = true;
@@ -582,7 +587,13 @@
           <strong>Rule ID:</strong> {ruleId}
         </p>
       {/if}
-      <RuleEditor bind:conditions={ruleConditions} bind:actions={ruleActions} {accounts} accountMode="input" showSuggestions={true} />
+      <RuleEditor
+        bind:conditions={ruleConditions}
+        bind:actions={ruleActions}
+        {accounts}
+        allowAccountCreate={true}
+        onAccountCreate={(seed) => void openCreateAccountForRule(seed)}
+      />
       {#if ruleError}<p class="error-text">{ruleError}</p>{/if}
       <div class="actions">
         <button class="btn" on:click={() => (showRuleModal = false)}>Cancel</button>

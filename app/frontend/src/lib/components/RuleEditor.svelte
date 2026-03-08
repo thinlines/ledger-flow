@@ -1,13 +1,14 @@
 <script lang="ts">
+  import AccountCombobox from '$lib/components/AccountCombobox.svelte';
   import type { RuleAction, RuleCondition } from '$lib/components/rule-editor-types';
 
   export let conditions: RuleCondition[] = [{ field: 'payee', operator: 'exact', value: '', joiner: 'and' }];
   export let actions: RuleAction[] = [{ type: 'set_account', account: '' }];
   export let accounts: string[] = [];
-  export let accountMode: 'select' | 'input' = 'select';
-  export let showSuggestions = false;
   export let accountLabel = 'Then map to account';
   export let actionsTitle = 'Additional actions';
+  export let allowAccountCreate = false;
+  export let onAccountCreate: ((seed: string) => void) | null = null;
 
   function normalizeConditions(items: RuleCondition[]): RuleCondition[] {
     return items.map((c, i) => ({
@@ -77,10 +78,8 @@
     actions = [...actions];
   }
 
-  function filteredAccounts(query: string): string[] {
-    const q = query.trim().toLowerCase();
-    if (!q) return accounts.slice(0, 12);
-    return accounts.filter((a) => a.toLowerCase().includes(q)).slice(0, 12);
+  function handleAccountCreate(seed: string) {
+    onAccountCreate?.(seed);
   }
 </script>
 
@@ -108,23 +107,14 @@
 
 <div class="field">
   <p class="muted">{accountLabel}</p>
-  {#if accountMode === 'select'}
-    <select value={getAccount()} on:change={(e) => setAccount((e.currentTarget as HTMLSelectElement).value)}>
-      <option value="">No account mapping</option>
-      {#each accounts as acct}
-        <option value={acct}>{acct}</option>
-      {/each}
-    </select>
-  {:else}
-    <input value={getAccount()} on:input={(e) => setAccount((e.currentTarget as HTMLInputElement).value)} placeholder="Type to filter accounts" />
-    {#if showSuggestions}
-      <div class="suggestions">
-        {#each filteredAccounts(getAccount()) as acct}
-          <button type="button" class="suggestion" on:click={() => setAccount(acct)}>{acct}</button>
-        {/each}
-      </div>
-    {/if}
-  {/if}
+  <AccountCombobox
+    {accounts}
+    value={getAccount()}
+    placeholder="Select account..."
+    allowCreate={allowAccountCreate}
+    onChange={setAccount}
+    onCreate={handleAccountCreate}
+  />
 </div>
 
 <div class="actions-block">
@@ -201,22 +191,6 @@
   .action-spacer {
     display: block;
     width: 100%;
-  }
-
-  .suggestions {
-    margin-top: 0.35rem;
-    display: flex;
-    gap: 0.35rem;
-    flex-wrap: wrap;
-  }
-
-  .suggestion {
-    border: 1px solid var(--line);
-    background: #f3f8ff;
-    border-radius: 999px;
-    padding: 0.2rem 0.55rem;
-    cursor: pointer;
-    font-size: 0.82rem;
   }
 
   @media (max-width: 760px) {

@@ -11,6 +11,7 @@
   export let value = '';
   export let placeholder = 'Select account...';
   export let disabled = false;
+  export let allowCreate = true;
   export let onChange: (account: string) => void = () => {};
   export let onCreate: (seed: string) => void = () => {};
 
@@ -42,6 +43,7 @@
   }
 
   async function requestCreate() {
+    if (!allowCreate) return;
     onCreate(query.trim());
     query = '';
     await closeAndFocusTrigger();
@@ -56,6 +58,7 @@
       void selectAccount(topMatch);
       return;
     }
+    if (!allowCreate) return;
     void requestCreate();
   }
 
@@ -101,17 +104,19 @@
           </Command.Group>
         {/if}
 
-        <div class="border-t p-1">
-          <button
-            type="button"
-            class="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-sm hover:bg-accent hover:text-accent-foreground"
-            on:click={() => void requestCreate()}
-            on:keydown={handleCreateButtonKeydown}
-          >
-            <PlusIcon class="size-4" />
-            Add account
-          </button>
-        </div>
+        {#if allowCreate}
+          <div class="border-t p-1">
+            <button
+              type="button"
+              class="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-sm hover:bg-accent hover:text-accent-foreground"
+              on:click={() => void requestCreate()}
+              on:keydown={handleCreateButtonKeydown}
+            >
+              <PlusIcon class="size-4" />
+              Add account
+            </button>
+          </div>
+        {/if}
       </Command.List>
     </Command.Root>
   </Popover.Content>

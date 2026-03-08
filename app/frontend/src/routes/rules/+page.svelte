@@ -163,7 +163,7 @@
 
   <section class="view-card">
     <p class="eyebrow">Create Rule</p>
-    <RuleEditor bind:conditions={newConditions} bind:actions={newActions} {accounts} accountMode="select" />
+    <RuleEditor bind:conditions={newConditions} bind:actions={newActions} {accounts} />
     <div class="create-actions">
       <button
         class="btn btn-primary"
@@ -192,7 +192,7 @@
             <p class="muted">Updated: {rule.updatedAt}</p>
           </div>
 
-          <RuleEditor bind:conditions={rule.conditions} bind:actions={rule.actions} {accounts} accountMode="select" />
+          <RuleEditor bind:conditions={rule.conditions} bind:actions={rule.actions} {accounts} />
 
           <div class="rule-actions">
             <label class="enabled">
