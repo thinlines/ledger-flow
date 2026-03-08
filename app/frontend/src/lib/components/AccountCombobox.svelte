@@ -58,6 +58,13 @@
     }
     void requestCreate();
   }
+
+  function handleCreateButtonKeydown(event: KeyboardEvent) {
+    if (event.key !== 'Enter' && event.key !== ' ') return;
+    event.preventDefault();
+    event.stopPropagation();
+    void requestCreate();
+  }
 </script>
 
 <Popover.Root bind:open>
@@ -99,6 +106,7 @@
             type="button"
             class="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-sm hover:bg-accent hover:text-accent-foreground"
             on:click={() => void requestCreate()}
+            on:keydown={handleCreateButtonKeydown}
           >
             <PlusIcon class="size-4" />
             Add account
