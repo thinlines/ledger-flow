@@ -50,6 +50,7 @@
   function handleInputKeydown(event: KeyboardEvent) {
     if (event.key !== 'Enter') return;
     event.preventDefault();
+    event.stopPropagation();
     const topMatch = filteredAccounts[0];
     if (topMatch) {
       void selectAccount(topMatch);
