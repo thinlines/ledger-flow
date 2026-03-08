@@ -19,14 +19,14 @@
   let query = '';
   let triggerRef: HTMLButtonElement | null = null;
 
-  $: filteredAccounts = filterAccounts(query);
+  $: filteredAccounts = filterAccounts(accounts, query);
   $: selectedValue = value || '';
   $: if (!open) query = '';
 
-  function filterAccounts(search: string): string[] {
+  function filterAccounts(items: string[], search: string): string[] {
     const normalized = search.trim().toLowerCase();
-    if (!normalized) return accounts.slice(0, 50);
-    return accounts.filter((account) => account.toLowerCase().includes(normalized)).slice(0, 50);
+    if (!normalized) return items.slice(0, 50);
+    return items.filter((account) => account.toLowerCase().includes(normalized)).slice(0, 50);
   }
 
   async function closeAndFocusTrigger() {

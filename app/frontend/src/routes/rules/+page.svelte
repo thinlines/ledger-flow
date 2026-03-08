@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, tick } from 'svelte';
   import RuleEditor from '$lib/components/RuleEditor.svelte';
   import type { RuleAction, RuleCondition } from '$lib/components/rule-editor-types';
   import { apiDelete, apiGet, apiPost } from '$lib/api';
@@ -32,9 +32,40 @@
   let newActions: RuleAction[] = createDefaultRuleActions();
   let dragIndex: number | null = null;
 
+  let showCreateAccountModal = false;
+  let newAccountName = '';
+  let newAccountType = 'Expense';
+  let createAccountError = '';
+  let newAccountInputEl: HTMLInputElement | null = null;
+  let createAccountContext: { mode: 'new-rule' | 'existing-rule'; ruleId: string | null } = {
+    mode: 'new-rule',
+    ruleId: null
+  };
+
   onMount(async () => {
     await refresh();
   });
+
+  function inferAccountType(accountName: string): string {
+    const prefix = accountName.split(':', 1)[0]?.trim().toLowerCase() || '';
+    if (prefix === 'assets') return 'Asset';
+    if (prefix === 'liabilities' || prefix === 'liability') return 'Liability';
+    if (prefix === 'expenses' || prefix === 'expense') return 'Expense';
+    if (prefix === 'income' || prefix === 'revenue') return 'Revenue';
+    if (prefix === 'equity') return 'Equity';
+    return 'Expense';
+  }
+
+  function updateInferredTypeFromName() {
+    newAccountType = inferAccountType(newAccountName);
+  }
+
+  function setActionsAccount(actions: RuleAction[], account: string): RuleAction[] {
+    const nextActions = ensureSetAccountAction(actions, account);
+    const setAccountIndex = nextActions.findIndex((action) => action.type === 'set_account');
+    nextActions[setAccountIndex] = { type: 'set_account', account };
+    return nextActions;
+  }
 
   async function refresh() {
     error = '';
@@ -143,6 +174,68 @@
     rules = reordered;
     dragIndex = null;
   }
+
+  async function openCreateAccountModal(
+    initialName = '',
+    context: { mode: 'new-rule' | 'existing-rule'; ruleId: string | null }
+  ) {
+    createAccountContext = context;
+    newAccountName = initialName;
+    updateInferredTypeFromName();
+    createAccountError = '';
+    showCreateAccountModal = true;
+    await tick();
+    newAccountInputEl?.focus();
+    newAccountInputEl?.select();
+  }
+
+  function closeCreateAccountModal() {
+    createAccountError = '';
+    showCreateAccountModal = false;
+  }
+
+  async function openCreateAccountForNewRule(initialName = '') {
+    await openCreateAccountModal(initialName, { mode: 'new-rule', ruleId: null });
+  }
+
+  async function openCreateAccountForExistingRule(ruleId: string, initialName = '') {
+    await openCreateAccountModal(initialName, { mode: 'existing-rule', ruleId });
+  }
+
+  async function createAccountAndContinue() {
+    if (!newAccountName || !newAccountType) return;
+    loading = true;
+    createAccountError = '';
+    try {
+      const created = await apiPost<{ added: boolean; warning: string | null }>('/api/accounts', {
+        account: newAccountName,
+        accountType: newAccountType
+      });
+      if (created.warning) {
+        createAccountError = created.warning;
+        return;
+      }
+
+      const refreshed = await apiGet<{ accounts: string[] }>('/api/accounts');
+      accounts = refreshed.accounts;
+
+      if (createAccountContext.mode === 'new-rule') {
+        newActions = setActionsAccount(newActions, newAccountName);
+      } else if (createAccountContext.ruleId) {
+        rules = rules.map((rule) =>
+          rule.id === createAccountContext.ruleId
+            ? { ...rule, actions: setActionsAccount(rule.actions, newAccountName) }
+            : rule
+        );
+      }
+
+      showCreateAccountModal = false;
+    } catch (e) {
+      createAccountError = String(e);
+    } finally {
+      loading = false;
+    }
+  }
 </script>
 
 <section class="view-card hero">
@@ -163,7 +256,13 @@
 
   <section class="view-card">
     <p class="eyebrow">Create Rule</p>
-    <RuleEditor bind:conditions={newConditions} bind:actions={newActions} {accounts} />
+    <RuleEditor
+      bind:conditions={newConditions}
+      bind:actions={newActions}
+      {accounts}
+      allowAccountCreate={true}
+      onAccountCreate={(seed) => void openCreateAccountForNewRule(seed)}
+    />
     <div class="create-actions">
       <button
         class="btn btn-primary"
@@ -192,7 +291,13 @@
             <p class="muted">Updated: {rule.updatedAt}</p>
           </div>
 
-          <RuleEditor bind:conditions={rule.conditions} bind:actions={rule.actions} {accounts} />
+          <RuleEditor
+            bind:conditions={rule.conditions}
+            bind:actions={rule.actions}
+            {accounts}
+            allowAccountCreate={true}
+            onAccountCreate={(seed) => void openCreateAccountForExistingRule(rule.id, seed)}
+          />
 
           <div class="rule-actions">
             <label class="enabled">
@@ -214,7 +319,56 @@
   </section>
 {/if}
 
+{#if showCreateAccountModal}
+  <div
+    class="modal-backdrop"
+    role="button"
+    aria-label="Close dialog"
+    tabindex="0"
+    on:click={(e) => ((e.target as HTMLElement) === (e.currentTarget as HTMLElement) ? closeCreateAccountModal() : undefined)}
+    on:keydown={(e) => (e.key === 'Escape' ? closeCreateAccountModal() : undefined)}
+  >
+    <div class="modal" role="dialog" tabindex="-1" aria-modal="true" aria-label="Create Account">
+      <h3>Create New Account</h3>
+      <p class="muted">Enter a fully qualified account name.</p>
+      <div class="field">
+        <label for="newAccountName">Account Name</label>
+        <input
+          id="newAccountName"
+          bind:this={newAccountInputEl}
+          bind:value={newAccountName}
+          placeholder="Assets:Transfers"
+          on:input={updateInferredTypeFromName}
+          on:keydown={(e) => (e.key === 'Enter' ? (e.preventDefault(), createAccountAndContinue()) : undefined)}
+        />
+      </div>
+      <div class="field">
+        <label for="newAccountType">Account Type</label>
+        <select id="newAccountType" bind:value={newAccountType}>
+          <option value="Asset">Asset</option>
+          <option value="Cash">Cash</option>
+          <option value="Liability">Liability</option>
+          <option value="Expense">Expense</option>
+          <option value="Revenue">Revenue</option>
+          <option value="Equity">Equity</option>
+        </select>
+      </div>
+      {#if createAccountError}<p class="error-text">{createAccountError}</p>{/if}
+      <div class="actions">
+        <button class="btn" on:click={closeCreateAccountModal}>Cancel</button>
+        <button class="btn btn-primary" disabled={loading || !newAccountName || !newAccountType} on:click={createAccountAndContinue}>
+          Create Account
+        </button>
+      </div>
+    </div>
+  </div>
+{/if}
+
 <style>
+  h3 {
+    margin: 0.1rem 0 0.8rem;
+  }
+
   .create-actions {
     margin-top: 0.7rem;
     display: flex;
@@ -261,5 +415,30 @@
     gap: 0.3rem;
     align-items: center;
     font-weight: 600;
+  }
+
+  .actions {
+    display: flex;
+    gap: 0.6rem;
+    flex-wrap: wrap;
+  }
+
+  .modal-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(10, 20, 30, 0.35);
+    display: grid;
+    place-items: center;
+    padding: 1rem;
+    z-index: 30;
+  }
+
+  .modal {
+    width: min(620px, 100%);
+    background: #fff;
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    box-shadow: var(--shadow);
+    padding: 1rem;
   }
 </style>
