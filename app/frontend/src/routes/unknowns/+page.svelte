@@ -2,6 +2,18 @@
   import { onMount, tick } from 'svelte';
   import { apiGet, apiPost } from '$lib/api';
   import AccountCombobox from '$lib/components/AccountCombobox.svelte';
+  import RuleEditor from '$lib/components/RuleEditor.svelte';
+  import type { RuleAction, RuleCondition } from '$lib/components/rule-editor-types';
+  import {
+    createDefaultRuleActions,
+    createDefaultRuleConditions,
+    ensureSetAccountAction,
+    extractSetAccount,
+    findMatchingRule,
+    normalizeRule,
+    sanitizedActions,
+    sanitizedConditions
+  } from '$lib/rules';
 
   type TxnRow = {
     txnId: string;
@@ -21,10 +33,21 @@
     txns: TxnRow[];
   };
 
+  type Rule = {
+    id: string;
+    type: 'match';
+    conditions: RuleCondition[];
+    actions: RuleAction[];
+    enabled: boolean;
+    position: number;
+    updatedAt: string;
+  };
+
   let initialized = false;
   let journalPath = '';
   let journals: Array<{ fileName: string; absPath: string }> = [];
   let accounts: string[] = [];
+  let rules: Rule[] = [];
 
   let stage: { stageId: string; groups: UnknownGroup[]; summary?: { txnUpdates: number }; result?: any } | null = null;
   let error = '';
@@ -32,11 +55,14 @@
   let mappings: Record<string, string> = {};
 
   let showRuleModal = false;
-  let rulePayee = '';
-  let ruleAccount = '';
   let ruleMode: 'create' | 'edit' = 'create';
   let ruleError = '';
-  let ruleAccountInputEl: HTMLInputElement | null = null;
+  let ruleGroupKey: string | null = null;
+  let ruleSourcePayee = '';
+  let ruleId: string | null = null;
+  let ruleEnabled = true;
+  let ruleConditions: RuleCondition[] = createDefaultRuleConditions();
+  let ruleActions: RuleAction[] = createDefaultRuleActions();
 
   let showCreateAccountModal = false;
   let newAccountName = '';
@@ -60,19 +86,27 @@
     newAccountType = inferAccountType(newAccountName);
   }
 
+  async function loadRules() {
+    const rulesData = await apiGet<{ rules: Rule[] }>('/api/rules');
+    rules = rulesData.rules.map(normalizeRule);
+    return rules;
+  }
+
   onMount(async () => {
     try {
       const state = await apiGet<{ initialized: boolean }>('/api/app/state');
       initialized = state.initialized;
       if (!initialized) return;
 
-      const [journalsData, accountsData] = await Promise.all([
+      const [journalsData, accountsData, rulesData] = await Promise.all([
         apiGet<{ journals: Array<{ fileName: string; absPath: string }> }>('/api/journals'),
-        apiGet<{ accounts: string[] }>('/api/accounts')
+        apiGet<{ accounts: string[] }>('/api/accounts'),
+        apiGet<{ rules: Rule[] }>('/api/rules')
       ]);
 
       journals = journalsData.journals;
       accounts = accountsData.accounts;
+      rules = rulesData.rules.map(normalizeRule);
       if (journals.length) {
         journalPath = journals[journals.length - 1].absPath;
       }
@@ -103,10 +137,6 @@
     return (mappings[group.groupKey] || '').trim();
   }
 
-  function statusFor(group: UnknownGroup): 'matched' | 'needs' {
-    return effectiveAccountFor(group) ? 'matched' : 'needs';
-  }
-
   function transactionRows(): Array<{
     rowId: string;
     groupKey: string;
@@ -133,28 +163,54 @@
       hasExistingRule: boolean;
       matchedRuleId: string | null;
     }> = [];
-    for (const g of stage?.groups ?? []) {
-      const selected = effectiveAccountFor(g);
+
+    for (const group of stage?.groups ?? []) {
+      const selected = effectiveAccountFor(group);
       const status = selected ? 'matched' : 'needs';
-      for (const t of g.txns) {
+      for (const txn of group.txns) {
         rows.push({
-          rowId: t.txnId,
-          groupKey: g.groupKey,
-          payee: g.payeeDisplay,
-          date: t.date,
-          amount: t.amount || '-',
-          counterparty: t.counterpartyAccount || '-',
-          currentAccount: t.currentAccount,
+          rowId: txn.txnId,
+          groupKey: group.groupKey,
+          payee: group.payeeDisplay,
+          date: txn.date,
+          amount: txn.amount || '-',
+          counterparty: txn.counterpartyAccount || '-',
+          currentAccount: txn.currentAccount,
           selectedAccount: selected,
           status,
-          hasExistingRule: !!g.suggestedAccount,
-          matchedRuleId: g.matchedRuleId || null
+          hasExistingRule: !!group.matchedRuleId,
+          matchedRuleId: group.matchedRuleId || null
         });
       }
     }
+
     if (statusFilter === 'all') return rows;
-    if (statusFilter === 'matched') return rows.filter((r) => r.status === 'matched');
-    return rows.filter((r) => r.status === 'needs');
+    if (statusFilter === 'matched') return rows.filter((row) => row.status === 'matched');
+    return rows.filter((row) => row.status === 'needs');
+  }
+
+  function syncGroupsFromRules(nextRules: Rule[]) {
+    if (!stage) return;
+
+    const nextMappings = { ...mappings };
+    for (const group of stage.groups ?? []) {
+      const previousSuggested = (group.suggestedAccount ?? '').trim();
+      const currentSelected = (nextMappings[group.groupKey] ?? '').trim();
+      const matchedRule = findMatchingRule({ payee: group.payeeDisplay }, nextRules);
+      const suggestedAccount = matchedRule ? extractSetAccount(matchedRule.actions) || null : null;
+      const shouldFollowSuggestion = !currentSelected || currentSelected === previousSuggested;
+      group.suggestedAccount = suggestedAccount;
+      group.matchedRuleId = matchedRule?.id ?? null;
+      group.matchedRulePattern = matchedRule?.conditions?.[0]?.value ?? null;
+      if (shouldFollowSuggestion && suggestedAccount) {
+        nextMappings[group.groupKey] = suggestedAccount;
+      } else if (shouldFollowSuggestion) {
+        delete nextMappings[group.groupKey];
+      }
+    }
+
+    mappings = nextMappings;
+    stage = { ...stage, groups: [...stage.groups] };
   }
 
   async function stageMappings() {
@@ -163,7 +219,7 @@
     error = '';
     try {
       const payload = Object.entries(mappings)
-        .filter(([, v]) => v && v.trim().length > 0)
+        .filter(([, value]) => value && value.trim().length > 0)
         .map(([groupKey, chosenAccount]) => ({ groupKey, chosenAccount }));
       stage = await apiPost('/api/unknowns/stage-mappings', { stageId: stage.stageId, mappings: payload });
     } catch (e) {
@@ -180,7 +236,7 @@
     try {
       const stageId = stage.stageId;
       const payload = Object.entries(mappings)
-        .filter(([, v]) => v && v.trim().length > 0)
+        .filter(([, value]) => value && value.trim().length > 0)
         .map(([groupKey, chosenAccount]) => ({ groupKey, chosenAccount }));
       stage = await apiPost('/api/unknowns/stage-mappings', { stageId, mappings: payload });
       stage = await apiPost('/api/unknowns/apply', { stageId });
@@ -191,57 +247,114 @@
     }
   }
 
-  function filteredAccounts(query: string): string[] {
-    const q = query.trim().toLowerCase();
-    if (!q) return accounts.slice(0, 12);
-    return accounts.filter((a) => a.toLowerCase().includes(q)).slice(0, 12);
+  function setRuleAccount(account: string) {
+    const nextActions = ensureSetAccountAction(ruleActions, account);
+    const setAccountIndex = nextActions.findIndex((action) => action.type === 'set_account');
+    nextActions[setAccountIndex] = { type: 'set_account', account };
+    ruleActions = nextActions;
   }
 
-  async function openRuleModal(group: UnknownGroup) {
-    rulePayee = group.payeeDisplay;
-    ruleAccount = mappings[group.groupKey] || group.suggestedAccount || '';
-    ruleMode = group.suggestedAccount ? 'edit' : 'create';
+  async function openRuleModal(groupKey: string) {
+    const group = stage?.groups.find((candidate) => candidate.groupKey === groupKey);
+    if (!group) return;
+
+    let matchedRule = group.matchedRuleId ? rules.find((candidate) => candidate.id === group.matchedRuleId) ?? null : null;
+    if (group.matchedRuleId && !matchedRule) {
+      try {
+        const refreshedRules = await loadRules();
+        matchedRule = refreshedRules.find((candidate) => candidate.id === group.matchedRuleId) ?? null;
+      } catch (e) {
+        error = String(e);
+        return;
+      }
+    }
+
+    const fallbackAccount = mappings[group.groupKey] || group.suggestedAccount || '';
+
+    ruleGroupKey = group.groupKey;
+    ruleSourcePayee = group.payeeDisplay;
+    ruleMode = matchedRule ? 'edit' : 'create';
+    ruleId = matchedRule?.id ?? null;
+    ruleEnabled = matchedRule?.enabled ?? true;
+    ruleConditions = matchedRule
+      ? matchedRule.conditions.map((condition) => ({ ...condition }))
+      : createDefaultRuleConditions(group.payeeDisplay);
+    ruleActions = matchedRule
+      ? ensureSetAccountAction(matchedRule.actions, fallbackAccount)
+      : createDefaultRuleActions(fallbackAccount);
     ruleError = '';
     showRuleModal = true;
     await tick();
-    ruleAccountInputEl?.focus();
-    ruleAccountInputEl?.select();
   }
 
-  async function saveRule() {
-    if (!rulePayee || !ruleAccount) return;
+  async function persistRule({ allowCreateAccountModal }: { allowCreateAccountModal: boolean }) {
+    const cleanedConditions = sanitizedConditions(ruleConditions);
+    const cleanedActions = sanitizedActions(ruleActions);
+    const selectedAccount = extractSetAccount(cleanedActions);
+
+    if (!cleanedConditions.length) {
+      ruleError = 'At least one rule condition is required.';
+      return false;
+    }
+    if (!selectedAccount) {
+      ruleError = 'Rule must map to an account.';
+      return false;
+    }
+
     ruleError = '';
 
-    if (!accounts.includes(ruleAccount)) {
+    if (allowCreateAccountModal && !accounts.includes(selectedAccount)) {
       showRuleModal = false;
-      await openCreateAccountModal(ruleAccount, { mode: 'rule', groupKey: null });
-      return;
+      await openCreateAccountModal(selectedAccount, { mode: 'rule', groupKey: ruleGroupKey });
+      return false;
     }
 
     loading = true;
     try {
-      const result = await apiPost<{ added: boolean; warning: string | null }>('/api/rules/payee', {
-        payee: rulePayee,
-        account: ruleAccount
-      });
-      if (result.warning) {
-        ruleError = result.warning;
+      const currentRuleId = ruleId;
+      let savedRule: Rule;
+      if (currentRuleId) {
+        const response = await apiPost<{ rule: Rule }>(`/api/rules/${currentRuleId}`, {
+          conditions: cleanedConditions,
+          actions: cleanedActions,
+          enabled: ruleEnabled
+        });
+        savedRule = normalizeRule(response.rule);
       } else {
-        const nextMappings = { ...mappings };
-        for (const g of stage?.groups ?? []) {
-          if (g.payeeDisplay === rulePayee) {
-            nextMappings[g.groupKey] = ruleAccount;
-            g.suggestedAccount = ruleAccount;
-          }
-        }
-        mappings = nextMappings;
-        showRuleModal = false;
+        const response = await apiPost<{ rule: Rule }>('/api/rules', {
+          conditions: cleanedConditions,
+          actions: cleanedActions,
+          enabled: true
+        });
+        savedRule = normalizeRule(response.rule);
       }
+
+      const existingIndex = rules.findIndex((existingRule) => existingRule.id === savedRule.id);
+      const nextRules =
+        existingIndex >= 0
+          ? rules.map((existingRule) => (existingRule.id === savedRule.id ? savedRule : existingRule))
+          : [...rules, savedRule];
+      rules = nextRules;
+      ruleId = savedRule.id;
+      ruleEnabled = savedRule.enabled;
+      ruleMode = 'edit';
+      syncGroupsFromRules(nextRules);
+      if (ruleGroupKey) {
+        mappings = { ...mappings, [ruleGroupKey]: selectedAccount };
+      }
+      showRuleModal = false;
+      return true;
     } catch (e) {
       ruleError = String(e);
+      showRuleModal = true;
+      return false;
     } finally {
       loading = false;
     }
+  }
+
+  async function saveRule() {
+    await persistRule({ allowCreateAccountModal: true });
   }
 
   function setAccountForGroup(groupKey: string, account: string) {
@@ -257,6 +370,14 @@
     await tick();
     newAccountInputEl?.focus();
     newAccountInputEl?.select();
+  }
+
+  function closeCreateAccountModal() {
+    createAccountError = '';
+    showCreateAccountModal = false;
+    if (createAccountContext.mode === 'rule') {
+      showRuleModal = true;
+    }
   }
 
   async function openCreateAccountForGroup(groupKey: string, initialName = '') {
@@ -288,28 +409,10 @@
         return;
       }
 
-      ruleAccount = newAccountName;
-
-      const rule = await apiPost<{ added: boolean; warning: string | null }>('/api/rules/payee', {
-        payee: rulePayee,
-        account: ruleAccount
-      });
-      if (rule.warning) {
-        createAccountError = rule.warning;
-        return;
-      }
-
-      const nextMappings = { ...mappings };
-      for (const g of stage?.groups ?? []) {
-        if (g.payeeDisplay === rulePayee) {
-          nextMappings[g.groupKey] = ruleAccount;
-          g.suggestedAccount = ruleAccount;
-        }
-      }
-      mappings = nextMappings;
-
+      setRuleAccount(newAccountName);
       showCreateAccountModal = false;
-      showRuleModal = false;
+      showRuleModal = true;
+      await persistRule({ allowCreateAccountModal: false });
     } catch (e) {
       createAccountError = String(e);
     } finally {
@@ -418,16 +521,7 @@
                   />
                 </td>
                 <td>
-                  <button
-                    class="btn"
-                    on:click={() =>
-                      openRuleModal({
-                        groupKey: r.groupKey,
-                        payeeDisplay: r.payee,
-                        suggestedAccount: r.hasExistingRule ? r.selectedAccount || null : null,
-                        txns: []
-                      })}
-                  >
+                  <button class="btn" on:click={() => openRuleModal(r.groupKey)}>
                     {r.hasExistingRule ? 'Edit Rule...' : 'Make Rule...'}
                   </button>
                 </td>
@@ -471,42 +565,32 @@
     aria-label="Close dialog"
     tabindex="0"
     on:click={(e) => ((e.target as HTMLElement) === (e.currentTarget as HTMLElement) ? (showRuleModal = false) : undefined)}
-    on:keydown={(e) => (e.key === 'Escape' || e.key === 'Enter' ? (showRuleModal = false) : undefined)}
+    on:keydown={(e) => (e.key === 'Escape' ? (showRuleModal = false) : undefined)}
   >
-    <div class="modal" role="dialog" tabindex="-1" aria-modal="true" aria-label="Make Rule">
+    <div class="modal rule-modal" role="dialog" tabindex="-1" aria-modal="true" aria-label="Make Rule">
       <h3>{ruleMode === 'edit' ? 'Edit Rule' : 'Make Rule'}</h3>
       <p class="muted">
         {ruleMode === 'edit'
-          ? 'Update the reusable mapping for this payee.'
-          : 'Create a reusable mapping from payee to account.'}
+          ? 'Update the reusable rule that matched this transaction group.'
+          : 'Create a reusable rule from this transaction group.'}
       </p>
-      <div class="field">
-        <label for="rulePayee">Payee</label>
-        <input
-          id="rulePayee"
-          bind:value={rulePayee}
-          on:keydown={(e) => (e.key === 'Enter' ? (e.preventDefault(), saveRule()) : undefined)}
-        />
-      </div>
-      <div class="field">
-        <label for="ruleAccount">Account</label>
-        <input
-          id="ruleAccount"
-          bind:this={ruleAccountInputEl}
-          bind:value={ruleAccount}
-          placeholder="Type to filter accounts"
-          on:keydown={(e) => (e.key === 'Enter' ? (e.preventDefault(), saveRule()) : undefined)}
-        />
-        <div class="suggestions">
-          {#each filteredAccounts(ruleAccount) as acct}
-            <button type="button" class="suggestion" on:click={() => (ruleAccount = acct)}>{acct}</button>
-          {/each}
-        </div>
-      </div>
+      <p class="rule-modal-meta">
+        <strong>Source payee:</strong> {ruleSourcePayee}
+      </p>
+      {#if ruleId}
+        <p class="rule-modal-meta">
+          <strong>Rule ID:</strong> {ruleId}
+        </p>
+      {/if}
+      <RuleEditor bind:conditions={ruleConditions} bind:actions={ruleActions} {accounts} accountMode="input" showSuggestions={true} />
       {#if ruleError}<p class="error-text">{ruleError}</p>{/if}
       <div class="actions">
         <button class="btn" on:click={() => (showRuleModal = false)}>Cancel</button>
-        <button class="btn btn-primary" disabled={loading || !rulePayee || !ruleAccount} on:click={saveRule}>
+        <button
+          class="btn btn-primary"
+          disabled={loading || !sanitizedConditions(ruleConditions).length || !extractSetAccount(ruleActions)}
+          on:click={saveRule}
+        >
           {ruleMode === 'edit' ? 'Save Rule Changes' : 'Save Rule'}
         </button>
       </div>
@@ -520,8 +604,8 @@
     role="button"
     aria-label="Close dialog"
     tabindex="0"
-    on:click={(e) => ((e.target as HTMLElement) === (e.currentTarget as HTMLElement) ? (showCreateAccountModal = false) : undefined)}
-    on:keydown={(e) => (e.key === 'Escape' || e.key === 'Enter' ? (showCreateAccountModal = false) : undefined)}
+    on:click={(e) => ((e.target as HTMLElement) === (e.currentTarget as HTMLElement) ? closeCreateAccountModal() : undefined)}
+    on:keydown={(e) => (e.key === 'Escape' ? closeCreateAccountModal() : undefined)}
   >
     <div class="modal" role="dialog" tabindex="-1" aria-modal="true" aria-label="Create Account">
       <h3>Create New Account</h3>
@@ -550,7 +634,7 @@
       </div>
       {#if createAccountError}<p class="error-text">{createAccountError}</p>{/if}
       <div class="actions">
-        <button class="btn" on:click={() => (showCreateAccountModal = false)}>Cancel</button>
+        <button class="btn" on:click={closeCreateAccountModal}>Cancel</button>
         <button class="btn btn-primary" disabled={loading || !newAccountName || !newAccountType} on:click={createAccountAndContinue}>
           {createAccountContext.mode === 'rule' ? 'Create Account and Save Rule' : 'Create Account'}
         </button>
@@ -622,5 +706,15 @@
     border-radius: 14px;
     box-shadow: var(--shadow);
     padding: 1rem;
+  }
+
+  .rule-modal {
+    width: min(760px, 100%);
+  }
+
+  .rule-modal-meta {
+    margin: 0 0 0.7rem;
+    color: var(--muted);
+    font-size: 0.92rem;
   }
 </style>

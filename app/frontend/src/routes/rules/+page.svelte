@@ -3,6 +3,14 @@
   import RuleEditor from '$lib/components/RuleEditor.svelte';
   import type { RuleAction, RuleCondition } from '$lib/components/rule-editor-types';
   import { apiDelete, apiGet, apiPost } from '$lib/api';
+  import {
+    createDefaultRuleActions,
+    createDefaultRuleConditions,
+    ensureSetAccountAction,
+    normalizeRule,
+    sanitizedActions,
+    sanitizedConditions
+  } from '$lib/rules';
 
   type Rule = {
     id: string;
@@ -20,36 +28,13 @@
   let rules: Rule[] = [];
   let accounts: string[] = [];
 
-  let newConditions: RuleCondition[] = [{ field: 'payee', operator: 'exact', value: '', joiner: 'and' }];
-  let newActions: RuleAction[] = [{ type: 'set_account', account: '' }];
+  let newConditions: RuleCondition[] = createDefaultRuleConditions();
+  let newActions: RuleAction[] = createDefaultRuleActions();
   let dragIndex: number | null = null;
 
   onMount(async () => {
     await refresh();
   });
-
-  function normalizeConditions(conditions: RuleCondition[]): RuleCondition[] {
-    return conditions.map((c, i) => ({ ...c, joiner: i === 0 ? 'and' : (c.joiner ?? 'and') }));
-  }
-
-  function normalizeActions(actions: RuleAction[]): RuleAction[] {
-    return [...(actions || [])];
-  }
-
-  function normalizeRule(rule: Rule): Rule {
-    return {
-      ...rule,
-      conditions: normalizeConditions(rule.conditions),
-      actions: normalizeActions(rule.actions)
-    };
-  }
-
-  function ensureSetAccountAction(actions: RuleAction[], fallbackAccount: string) {
-    const hasSetAccount = actions.some((a) => a.type === 'set_account');
-    if (!hasSetAccount) {
-      actions.unshift({ type: 'set_account', account: fallbackAccount });
-    }
-  }
 
   async function refresh() {
     error = '';
@@ -64,40 +49,12 @@
       ]);
       rules = rulesData.rules.map(normalizeRule);
       accounts = accountsData.accounts;
-      ensureSetAccountAction(newActions, accounts[0] ?? '');
+      newActions = ensureSetAccountAction(newActions, accountsData.accounts[0] ?? '');
     } catch (e) {
       error = String(e);
     } finally {
       loading = false;
     }
-  }
-
-  function sanitizedConditions(conditions: RuleCondition[]): RuleCondition[] {
-    return conditions
-      .map((c) => ({ ...c, value: c.value.trim() }))
-      .filter((c) => c.value.length > 0)
-      .map((c, i) => ({ ...c, joiner: i === 0 ? 'and' : c.joiner }));
-  }
-
-  function sanitizedActions(actions: RuleAction[]): RuleAction[] {
-    const output: RuleAction[] = [];
-    for (const action of actions) {
-      if (action.type === 'set_account') {
-        const account = (action.account ?? '').trim();
-        if (account) output.push({ type: 'set_account', account });
-      } else if (action.type === 'add_tag') {
-        const tag = (action.tag ?? '').trim();
-        if (tag) output.push({ type: 'add_tag', tag });
-      } else if (action.type === 'set_kv') {
-        const key = (action.key ?? '').trim();
-        const value = (action.value ?? '').trim();
-        if (key && value) output.push({ type: 'set_kv', key, value });
-      } else if (action.type === 'append_comment') {
-        const text = (action.text ?? '').trim();
-        if (text) output.push({ type: 'append_comment', text });
-      }
-    }
-    return output;
   }
 
   async function createRule() {
@@ -109,8 +66,8 @@
     error = '';
     try {
       await apiPost('/api/rules', { conditions: cleanedConditions, actions: cleanedActions, enabled: true });
-      newConditions = [{ field: 'payee', operator: 'exact', value: '', joiner: 'and' }];
-      newActions = [{ type: 'set_account', account: accounts[0] ?? '' }];
+      newConditions = createDefaultRuleConditions();
+      newActions = createDefaultRuleActions(accounts[0] ?? '');
       await refresh();
     } catch (e) {
       error = String(e);
