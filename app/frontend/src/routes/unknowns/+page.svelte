@@ -227,12 +227,14 @@
       if (result.warning) {
         ruleError = result.warning;
       } else {
+        const nextMappings = { ...mappings };
         for (const g of stage?.groups ?? []) {
           if (g.payeeDisplay === rulePayee) {
-            mappings[g.groupKey] = ruleAccount;
+            nextMappings[g.groupKey] = ruleAccount;
             g.suggestedAccount = ruleAccount;
           }
         }
+        mappings = nextMappings;
         showRuleModal = false;
       }
     } catch (e) {
@@ -243,7 +245,7 @@
   }
 
   function setAccountForGroup(groupKey: string, account: string) {
-    mappings[groupKey] = account;
+    mappings = { ...mappings, [groupKey]: account };
   }
 
   async function openCreateAccountModal(initialName = '', context: { mode: 'rule' | 'group'; groupKey: string | null }) {
@@ -280,7 +282,7 @@
 
       if (createAccountContext.mode === 'group') {
         if (createAccountContext.groupKey) {
-          mappings[createAccountContext.groupKey] = newAccountName;
+          mappings = { ...mappings, [createAccountContext.groupKey]: newAccountName };
         }
         showCreateAccountModal = false;
         return;
@@ -297,12 +299,14 @@
         return;
       }
 
+      const nextMappings = { ...mappings };
       for (const g of stage?.groups ?? []) {
         if (g.payeeDisplay === rulePayee) {
-          mappings[g.groupKey] = ruleAccount;
+          nextMappings[g.groupKey] = ruleAccount;
           g.suggestedAccount = ruleAccount;
         }
       }
+      mappings = nextMappings;
 
       showCreateAccountModal = false;
       showRuleModal = false;

@@ -35,6 +35,7 @@
   }
 
   async function selectAccount(account: string) {
+    value = account;
     onChange(account);
     query = '';
     await closeAndFocusTrigger();
