@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte';
   import { apiGet, apiPost } from '$lib/api';
+  import AccountCombobox from '$lib/components/AccountCombobox.svelte';
 
   type TxnRow = {
     txnId: string;
@@ -42,6 +43,7 @@
   let newAccountType = 'Expense';
   let createAccountError = '';
   let newAccountInputEl: HTMLInputElement | null = null;
+  let createAccountContext: { mode: 'rule' | 'group'; groupKey: string | null } = { mode: 'rule', groupKey: null };
   let statusFilter: 'all' | 'matched' | 'needs' = 'all';
 
   function inferAccountType(accountName: string): string {
@@ -211,16 +213,8 @@
     ruleError = '';
 
     if (!accounts.includes(ruleAccount)) {
-      const shouldCreate = window.confirm(`The account "${ruleAccount}" does not exist. Create it now?`);
-      if (!shouldCreate) return;
-      newAccountName = ruleAccount;
-      updateInferredTypeFromName();
-      createAccountError = '';
       showRuleModal = false;
-      showCreateAccountModal = true;
-      await tick();
-      newAccountInputEl?.focus();
-      newAccountInputEl?.select();
+      await openCreateAccountModal(ruleAccount, { mode: 'rule', groupKey: null });
       return;
     }
 
@@ -252,7 +246,22 @@
     mappings[groupKey] = account;
   }
 
-  async function createAccountAndSaveRule() {
+  async function openCreateAccountModal(initialName = '', context: { mode: 'rule' | 'group'; groupKey: string | null }) {
+    createAccountContext = context;
+    newAccountName = initialName;
+    updateInferredTypeFromName();
+    createAccountError = '';
+    showCreateAccountModal = true;
+    await tick();
+    newAccountInputEl?.focus();
+    newAccountInputEl?.select();
+  }
+
+  async function openCreateAccountForGroup(groupKey: string, initialName = '') {
+    await openCreateAccountModal(initialName, { mode: 'group', groupKey });
+  }
+
+  async function createAccountAndContinue() {
     if (!newAccountName || !newAccountType) return;
     loading = true;
     createAccountError = '';
@@ -268,6 +277,15 @@
 
       const refreshed = await apiGet<{ accounts: string[] }>('/api/accounts');
       accounts = refreshed.accounts;
+
+      if (createAccountContext.mode === 'group') {
+        if (createAccountContext.groupKey) {
+          mappings[createAccountContext.groupKey] = newAccountName;
+        }
+        showCreateAccountModal = false;
+        return;
+      }
+
       ruleAccount = newAccountName;
 
       const rule = await apiPost<{ added: boolean; warning: string | null }>('/api/rules/payee', {
@@ -388,15 +406,12 @@
                 <td>{r.counterparty}</td>
                 <td>{r.currentAccount}</td>
                 <td>
-                  <select
+                  <AccountCombobox
+                    accounts={accounts}
                     value={r.selectedAccount}
-                    on:change={(e) => setAccountForGroup(r.groupKey, (e.currentTarget as HTMLSelectElement).value)}
-                  >
-                    <option value="">Select account...</option>
-                    {#each accounts as acct}
-                      <option value={acct}>{acct}</option>
-                    {/each}
-                  </select>
+                    onChange={(account) => setAccountForGroup(r.groupKey, account)}
+                    onCreate={(seed) => void openCreateAccountForGroup(r.groupKey, seed)}
+                  />
                 </td>
                 <td>
                   <button
@@ -515,7 +530,7 @@
           bind:value={newAccountName}
           placeholder="Assets:Transfers"
           on:input={updateInferredTypeFromName}
-          on:keydown={(e) => (e.key === 'Enter' ? (e.preventDefault(), createAccountAndSaveRule()) : undefined)}
+          on:keydown={(e) => (e.key === 'Enter' ? (e.preventDefault(), createAccountAndContinue()) : undefined)}
         />
       </div>
       <div class="field">
@@ -532,8 +547,8 @@
       {#if createAccountError}<p class="error-text">{createAccountError}</p>{/if}
       <div class="actions">
         <button class="btn" on:click={() => (showCreateAccountModal = false)}>Cancel</button>
-        <button class="btn btn-primary" disabled={loading || !newAccountName || !newAccountType} on:click={createAccountAndSaveRule}>
-          Create Account and Save Rule
+        <button class="btn btn-primary" disabled={loading || !newAccountName || !newAccountType} on:click={createAccountAndContinue}>
+          {createAccountContext.mode === 'rule' ? 'Create Account and Save Rule' : 'Create Account'}
         </button>
       </div>
     </div>
