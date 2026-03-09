@@ -42,9 +42,10 @@ Its open plain-text foundation matters for durability and portability, but that 
 
 ## Current Product Shape
 
-- Setup: create/select workspace
-- Import: preview and apply account-linked CSV imports
+- Setup: staged first-run flow for create/select workspace, add tracked accounts, and complete the first import
+- Import: shared preview/apply account-linked CSV workflow, available both inside setup and on `/import`
 - Review: reconcile unknown account mappings
+- Account setup: add or edit import accounts after workspace bootstrap
 
 These workflows are the current foundation, not the full product identity.
 The app should ultimately feel like a daily finance workspace where import and review are supporting workflows that keep the user's financial picture current.

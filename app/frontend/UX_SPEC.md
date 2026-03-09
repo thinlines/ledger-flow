@@ -22,6 +22,11 @@ Purpose:
 - Default to creating a new workspace; connecting an existing one is secondary.
 - Keep the first import tightly connected to setup so momentum is not lost.
 
+Current implementation status:
+- Implemented as a staged flow with `Welcome`, `Workspace`, `Accounts`, and `First Import`.
+- Workspace creation and account setup are now separate steps.
+- First import uses the shared import workflow directly inside setup, with `/import` retained as the full import workspace.
+
 Structure:
 - Resumable checklist or staged flow, not one long form.
 - Clear progress indicator with 4 core steps:
@@ -90,6 +95,7 @@ Sections:
 
 Purpose:
 - Safely import account-linked CSVs with idempotent outcomes.
+- Serve as both the standalone import workspace and the reusable flow embedded in setup.
 
 Sections:
 - Candidate inbox table/card list.
@@ -108,6 +114,7 @@ Behavior:
 - Apply button disabled during in-flight operation.
 - Import account selection is the primary choice; institution is supporting context.
 - Manual path editing exists only as an advanced fallback, not the primary workflow.
+- The same interaction model should remain visually consistent whether rendered on `/import` or inside `/setup`.
 
 ### 4) Unknowns (`/unknowns`)
 

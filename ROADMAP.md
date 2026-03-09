@@ -8,6 +8,7 @@ It is a planning document, not a strict delivery contract.
 The app already has a usable bookkeeping workflow:
 
 - Workspace setup and selection
+- Staged setup flow with workspace-first creation, post-bootstrap account setup, and inline first import
 - CSV import with preview, duplicate detection, conflict detection, and safe apply
 - Unknown transaction review with staged account assignment
 - Reusable match rules with ordered evaluation
@@ -49,6 +50,20 @@ Merchant management remains desirable, but it is not an active priority right no
 ### 0. Setup and First-Run Flow
 
 Revamp setup so new users reach first imported activity with less friction and better momentum.
+
+Current status:
+
+- `/setup` is now a staged flow instead of a single long form
+- Workspace creation and tracked-account setup are separated
+- First import can be completed inside setup with the same preview/apply safety model used on `/import`
+- App state now exposes setup progress such as account readiness, first-import status, and review follow-up
+
+Remaining scope:
+
+- stronger post-import completion summary inside setup
+- delete/reorder account management
+- manual or unsupported institution path
+- more polished review handoff and per-account status details
 
 Scope:
 
@@ -148,6 +163,11 @@ These are valid ideas, but they are not current priorities:
 - Make workspace path and destination-account details advanced by default
 - Keep first import embedded in the setup journey where possible
 - Improve completion states and direct handoff into overview or review work
+
+Current status:
+
+- the core staged setup flow and inline first import are implemented
+- milestone completion now depends on polish and completion-state work rather than core architecture
 
 Definition of done:
 

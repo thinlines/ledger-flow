@@ -3,6 +3,23 @@
 This document turns the current setup research into an implementation-ready plan.
 It is intended to guide product, UX, and engineering work for the next setup revamp.
 
+## Implementation Status
+
+Implemented so far:
+
+- staged setup shell with welcome, workspace, accounts, and first-import steps
+- workspace creation separated from tracked-account setup
+- post-bootstrap import-account add/edit flow
+- setup progress state from `/api/app/state`
+- first import embedded directly in setup using the shared preview/apply flow
+
+Still remaining:
+
+- stronger completion summary after first import
+- delete or reorder account management
+- manual or unsupported institution path
+- richer per-account status and review handoff polish
+
 ## Why Setup Needs to Change
 
 Ledger Flow already has a safe import engine and a credible review workflow.
@@ -60,9 +77,9 @@ Workspace path, ledger account names, and file details stay secondary or advance
 5. Preserve current safety guarantees.
 Preview-before-apply, duplicate detection, conflict surfacing, and append-only import semantics remain intact.
 
-## Current Flow
+## Previous Flow
 
-Current default path:
+Before the current setup slice landed, the default path was:
 
 1. Open `/setup`
 2. Create a workspace
@@ -73,7 +90,19 @@ Current default path:
 7. Apply import
 8. Go to `/unknowns`
 
-This is functional, but it splits the user's first-run momentum across separate screens and exposes implementation choices too early.
+That flow was functional, but it split the user's first-run momentum across separate screens and exposed implementation choices too early.
+
+## Current Flow
+
+The current shipped flow is:
+
+1. Open `/setup`
+2. Create or select a workspace
+3. Add tracked accounts after bootstrap
+4. Upload, preview, and apply the first import directly inside setup
+5. Continue to review or overview based on setup state
+
+This closes the biggest first-run gap, but the completion and polish work listed above is still open.
 
 ## Target Flow
 
@@ -268,6 +297,9 @@ That means setup revamp can be phased without replacing the import engine.
 Target outcome:
 - first-run feels guided instead of form-heavy
 
+Status:
+- implemented
+
 ### Phase 2: Account Setup Improvements
 
 - add post-bootstrap account management
@@ -278,6 +310,11 @@ Target outcome:
 Target outcome:
 - users can add accounts without learning accounting structure
 
+Status:
+- partially implemented
+- add/edit and auto-generated destination accounts are done
+- manual institution support and fuller per-account status work remain
+
 ### Phase 3: Stronger Handoff
 
 - show a completion summary after first import
@@ -286,6 +323,11 @@ Target outcome:
 
 Target outcome:
 - setup blends naturally into everyday product use
+
+Status:
+- partially implemented
+- setup now routes users toward review or overview after import
+- richer completion summaries and stronger post-import polish still remain
 
 ## Risks
 
