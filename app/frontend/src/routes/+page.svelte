@@ -15,6 +15,11 @@
     institutions?: Array<{ id: string; displayName: string }>;
     journals?: number;
     csvInbox?: number;
+    setup?: {
+      needsAccounts: boolean;
+      needsFirstImport: boolean;
+      needsReview: boolean;
+    };
   };
 
   type ActionLink = {
@@ -44,18 +49,33 @@
       heroCopy = 'Start with a new workspace. If you already have one, connect it instead.';
       primaryAction = { href: '/setup', label: 'Create workspace' };
       secondaryActions = [{ href: '/setup#existing', label: 'Use existing workspace' }];
+    } else if (state.setup?.needsAccounts) {
+      heroEyebrow = 'Accounts';
+      heroTitle = 'Add the first accounts you want to track';
+      heroCopy = 'Your workspace is ready. Add at least one account before you move into the first statement import.';
+      primaryAction = { href: '/setup', label: 'Add accounts' };
+      secondaryActions = [{ href: '/setup#existing', label: 'Use existing workspace' }];
+    } else if (state.setup?.needsFirstImport) {
+      heroEyebrow = 'First Import';
+      heroTitle = 'Bring in your first statement';
+      heroCopy = 'Your tracked accounts are ready. Import a statement to start building history and make the app useful day to day.';
+      primaryAction = { href: '/import', label: 'Import activity' };
+      secondaryActions = [{ href: '/setup', label: 'Review setup' }];
     } else if (inboxCount > 0) {
       heroEyebrow = 'Import';
       heroTitle = inboxCount === 1 ? 'One statement is waiting' : `${inboxCount} statements are waiting`;
       heroCopy = 'Bring in the latest activity first. After that, review any categories that still need attention.';
       primaryAction = { href: '/import', label: 'Import statements' };
       secondaryActions = [{ href: '/unknowns', label: 'Review categories' }];
-    } else if (journalCount === 0) {
-      heroEyebrow = 'First Import';
-      heroTitle = 'Bring in your first statement';
-      heroCopy = 'Your workspace is ready. Import a statement to start building account history and make the app useful day to day.';
-      primaryAction = { href: '/import', label: 'Import activity' };
-      secondaryActions = [{ href: '/setup', label: 'Review setup' }];
+    } else if (state.setup?.needsReview) {
+      heroEyebrow = 'Review';
+      heroTitle = 'Finish cleaning up recent activity';
+      heroCopy = 'Your first import is in. Review the uncategorized items now so repeat decisions can turn into automation rules.';
+      primaryAction = { href: '/unknowns', label: 'Review categories' };
+      secondaryActions = [
+        { href: '/import', label: 'Import activity' },
+        { href: '/rules', label: 'Automation rules' }
+      ];
     } else {
       heroEyebrow = 'Review';
       heroTitle = 'Keep recent activity clean';

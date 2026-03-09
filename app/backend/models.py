@@ -72,7 +72,7 @@ class CreateAccountRequest(BaseModel):
 class WorkspaceImportAccountRequest(BaseModel):
     institutionId: str = Field(min_length=1)
     displayName: str = Field(min_length=1)
-    ledgerAccount: str = Field(min_length=1)
+    ledgerAccount: str | None = None
     last4: str | None = None
 
 
@@ -86,3 +86,7 @@ class WorkspaceBootstrapRequest(BaseModel):
 
 class WorkspaceSelectRequest(BaseModel):
     workspacePath: str
+
+
+class WorkspaceImportAccountUpsertRequest(WorkspaceImportAccountRequest):
+    accountId: str | None = None

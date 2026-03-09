@@ -8,6 +8,8 @@ from pathlib import Path
 from .config_service import AppConfig, load_config
 from .institution_registry import get_template
 
+TXN_START_RE = re.compile(r"^\d{4}[-/]\d{2}[-/]\d{2}")
+
 
 @dataclass(frozen=True)
 class WorkspaceManager:
@@ -46,6 +48,51 @@ class WorkspaceManager:
             return None
         return load_config(config_path)
 
+    def get_setup_state(self, config: AppConfig | None) -> dict:
+        if config is None:
+            return {
+                "needsWorkspace": True,
+                "needsAccounts": False,
+                "needsFirstImport": False,
+                "needsReview": False,
+                "hasImportedActivity": False,
+                "currentStep": "workspace",
+                "completedSteps": [],
+            }
+
+        has_accounts = bool(config.import_accounts)
+        has_imported_activity = self._has_imported_activity(config)
+        needs_accounts = not has_accounts
+        needs_first_import = has_accounts and not has_imported_activity
+        needs_review = has_imported_activity and self._has_unknown_activity(config)
+
+        completed_steps = ["workspace"]
+        if has_accounts:
+            completed_steps.append("accounts")
+        if has_imported_activity:
+            completed_steps.append("import")
+        if has_imported_activity and not needs_review:
+            completed_steps.append("review")
+
+        if needs_accounts:
+            current_step = "accounts"
+        elif needs_first_import:
+            current_step = "import"
+        elif needs_review:
+            current_step = "review"
+        else:
+            current_step = "done"
+
+        return {
+            "needsWorkspace": False,
+            "needsAccounts": needs_accounts,
+            "needsFirstImport": needs_first_import,
+            "needsReview": needs_review,
+            "hasImportedActivity": has_imported_activity,
+            "currentStep": current_step,
+            "completedSteps": completed_steps,
+        }
+
     def _slugify(self, value: str) -> str:
         slug = re.sub(r"[^a-z0-9]+", "_", value.strip().lower()).strip("_")
         return slug or "account"
@@ -73,6 +120,185 @@ class WorkspaceManager:
             return "Equity"
         return "Asset"
 
+    def _has_imported_activity(self, config: AppConfig) -> bool:
+        for journal_path in sorted(config.journal_dir.glob("*.journal")):
+            if not journal_path.exists():
+                continue
+            with journal_path.open("r", encoding="utf-8") as handle:
+                for line in handle:
+                    if TXN_START_RE.match(line):
+                        return True
+        return False
+
+    def _has_unknown_activity(self, config: AppConfig) -> bool:
+        for journal_path in sorted(config.journal_dir.glob("*.journal")):
+            if not journal_path.exists():
+                continue
+            if "Expenses:Unknown" in journal_path.read_text(encoding="utf-8"):
+                return True
+        return False
+
+    def _toml_value(self, value: str | int | bool) -> str:
+        if isinstance(value, str):
+            return json.dumps(value)
+        if isinstance(value, bool):
+            return "true" if value else "false"
+        return str(value)
+
+    def _ledger_suffix(self, institution_display_name: str, display_name: str) -> str:
+        candidate = display_name.strip()
+        template_name = institution_display_name.strip()
+        if template_name and candidate.lower().startswith(template_name.lower()):
+            remainder = candidate[len(template_name):].strip(" :-_")
+            if remainder:
+                candidate = remainder
+        parts = [part.title() for part in re.split(r"[^A-Za-z0-9]+", candidate) if part]
+        return ":".join(parts) or "Account"
+
+    def _suggest_ledger_account(
+        self,
+        institution_id: str,
+        display_name: str,
+        last4: str | None,
+        existing_import_accounts: dict[str, dict] | None = None,
+        existing_account_id: str | None = None,
+    ) -> str:
+        template = get_template(institution_id)
+        if template is None:
+            raise ValueError(f"Unknown institution template: {institution_id}")
+
+        candidate = f"{template.suggested_ledger_prefix}:{self._ledger_suffix(template.display_name, display_name)}"
+        if not last4 or not existing_import_accounts:
+            return candidate
+
+        existing_targets = {
+            str(account_cfg.get("ledger_account", "")).strip()
+            for account_id, account_cfg in existing_import_accounts.items()
+            if account_id != existing_account_id
+        }
+        if candidate in existing_targets:
+            return f"{candidate}:{last4}"
+        return candidate
+
+    def _normalize_import_account(
+        self,
+        raw: dict,
+        used_account_ids: set[str],
+        existing_import_accounts: dict[str, dict] | None = None,
+        existing_account_id: str | None = None,
+    ) -> tuple[dict, object]:
+        institution_id = str(raw.get("institutionId", "")).strip()
+        template = get_template(institution_id)
+        if template is None:
+            raise ValueError(f"Unknown institution template: {institution_id}")
+
+        display_name = str(raw.get("displayName", "")).strip()
+        if not display_name:
+            raise ValueError("Import account display name is required")
+
+        last4 = str(raw.get("last4", "")).strip() or None
+        ledger_account = str(raw.get("ledgerAccount", "")).strip()
+        if not ledger_account:
+            ledger_account = self._suggest_ledger_account(
+                institution_id,
+                display_name,
+                last4,
+                existing_import_accounts=existing_import_accounts,
+                existing_account_id=existing_account_id,
+            )
+
+        base_id = self._slugify(display_name)
+        if last4:
+            base_id = f"{base_id}_{self._slugify(last4)}"
+
+        return (
+            {
+                "id": existing_account_id or self._unique_account_id(base_id, used_account_ids),
+                "display_name": display_name,
+                "institution": institution_id,
+                "ledger_account": ledger_account,
+                "last4": last4,
+            },
+            template,
+        )
+
+    def _write_workspace_config(
+        self,
+        config_toml: Path,
+        *,
+        payee_aliases: str,
+        workspace: dict,
+        dirs: dict,
+        institution_templates: dict[str, dict],
+        import_accounts: dict[str, dict],
+    ) -> None:
+        cfg_lines = [
+            f"payee_aliases = {json.dumps(payee_aliases)}",
+            "",
+            "[workspace]",
+            f"name = {json.dumps(str(workspace.get('name', 'Workspace')))}",
+            f"base_currency = {json.dumps(str(workspace.get('base_currency', 'USD')))}",
+            f"start_year = {int(workspace.get('start_year', 2026))}",
+            "",
+            "[dirs]",
+            f"csv_dir = {json.dumps(str(dirs['csv_dir']))}",
+            f"journal_dir = {json.dumps(str(dirs['journal_dir']))}",
+            f"init_dir = {json.dumps(str(dirs['init_dir']))}",
+            f"opening_bal_dir = {json.dumps(str(dirs['opening_bal_dir']))}",
+            f"imports_dir = {json.dumps(str(dirs['imports_dir']))}",
+            "",
+        ]
+
+        for template_id, template_cfg in sorted(institution_templates.items(), key=lambda item: item[0]):
+            cfg_lines.append(f"[institution_templates.{template_id}]")
+            for key, value in template_cfg.items():
+                cfg_lines.append(f"{key} = {self._toml_value(value)}")
+            cfg_lines.append("")
+
+        for account_id, account_cfg in sorted(import_accounts.items(), key=lambda item: item[0]):
+            cfg_lines.append(f"[import_accounts.{account_id}]")
+            cfg_lines.append(f"display_name = {json.dumps(str(account_cfg.get('display_name', account_id)))}")
+            cfg_lines.append(f"institution = {json.dumps(str(account_cfg.get('institution', '')))}")
+            cfg_lines.append(f"ledger_account = {json.dumps(str(account_cfg.get('ledger_account', '')))}")
+            last4 = str(account_cfg.get("last4", "")).strip()
+            if last4:
+                cfg_lines.append(f"last4 = {json.dumps(last4)}")
+            cfg_lines.append("")
+
+        config_toml.parent.mkdir(parents=True, exist_ok=True)
+        config_toml.write_text("\n".join(cfg_lines).rstrip() + "\n", encoding="utf-8")
+
+    def _ensure_seeded_accounts(self, accounts_dat: Path, import_accounts: list[dict]) -> None:
+        lines = accounts_dat.read_text(encoding="utf-8").splitlines() if accounts_dat.exists() else []
+        known_accounts = {
+            line[len("account "):].strip()
+            for line in lines
+            if line.startswith("account ")
+        }
+        changed = not accounts_dat.exists()
+
+        def append_account(account_name: str, account_type: str) -> None:
+            nonlocal changed
+            if lines and lines[-1].strip():
+                lines.append("")
+            lines.append(f"account {account_name}")
+            lines.append(f"    ; type: {account_type}")
+            known_accounts.add(account_name)
+            changed = True
+
+        for account in import_accounts:
+            ledger_account = str(account.get("ledger_account", "")).strip()
+            if not ledger_account or ledger_account in known_accounts:
+                continue
+            append_account(ledger_account, self._infer_account_type(ledger_account))
+
+        if "Expenses:Unknown" not in known_accounts:
+            append_account("Expenses:Unknown", "Expense")
+
+        if changed:
+            accounts_dat.parent.mkdir(parents=True, exist_ok=True)
+            accounts_dat.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
+
     def bootstrap_workspace(
         self,
         workspace_path: Path,
@@ -92,76 +318,38 @@ class WorkspaceManager:
         for d in [settings, journals, inbox, rules, opening, imports]:
             d.mkdir(parents=True, exist_ok=True)
 
-        cfg_lines = [
-            f'payee_aliases = "payee_aliases.csv"',
-            "",
-            "[workspace]",
-            f"name = {json.dumps(workspace_name)}",
-            f"base_currency = {json.dumps(base_currency)}",
-            f"start_year = {start_year}",
-            "",
-            "[dirs]",
-            'csv_dir = "inbox"',
-            'journal_dir = "journals"',
-            'init_dir = "rules"',
-            'opening_bal_dir = "opening"',
-            'imports_dir = "imports"',
-            "",
-        ]
-
-        normalized_accounts: list[dict] = []
-        selected_templates: dict[str, object] = {}
+        normalized_accounts: dict[str, dict] = {}
+        selected_templates: dict[str, dict] = {}
         used_account_ids: set[str] = set()
 
         for raw in import_accounts:
-            institution_id = str(raw.get("institutionId", "")).strip()
-            template = get_template(institution_id)
-            if template is None:
-                raise ValueError(f"Unknown institution template: {institution_id}")
+            normalized, template = self._normalize_import_account(raw, used_account_ids)
+            normalized_accounts[normalized["id"]] = {
+                "display_name": normalized["display_name"],
+                "institution": normalized["institution"],
+                "ledger_account": normalized["ledger_account"],
+                "last4": normalized["last4"],
+            }
+            selected_templates[normalized["institution"]] = template.as_config()
 
-            display_name = str(raw.get("displayName", "")).strip()
-            ledger_account = str(raw.get("ledgerAccount", "")).strip()
-            if not display_name:
-                raise ValueError("Import account display name is required")
-            if not ledger_account:
-                raise ValueError(f"Ledger account is required for {display_name}")
-
-            last4 = str(raw.get("last4", "")).strip() or None
-
-            base_id = self._slugify(display_name)
-            if last4:
-                base_id = f"{base_id}_{self._slugify(last4)}"
-
-            normalized_accounts.append(
-                {
-                    "id": self._unique_account_id(base_id, used_account_ids),
-                    "display_name": display_name,
-                    "institution": institution_id,
-                    "ledger_account": ledger_account,
-                    "last4": last4,
-                }
-            )
-            selected_templates[institution_id] = template
-
-        for template_id, template in sorted(selected_templates.items(), key=lambda x: x[0]):
-            cfg_lines.append(f"[institution_templates.{template_id}]")
-            for k, v in template.as_config().items():
-                if isinstance(v, str):
-                    cfg_lines.append(f"{k} = {json.dumps(v)}")
-                else:
-                    cfg_lines.append(f"{k} = {v}")
-            cfg_lines.append("")
-
-        for account in normalized_accounts:
-            cfg_lines.append(f"[import_accounts.{account['id']}]")
-            cfg_lines.append(f"display_name = {json.dumps(account['display_name'])}")
-            cfg_lines.append(f"institution = {json.dumps(account['institution'])}")
-            cfg_lines.append(f"ledger_account = {json.dumps(account['ledger_account'])}")
-            if account["last4"]:
-                cfg_lines.append(f"last4 = {json.dumps(account['last4'])}")
-            cfg_lines.append("")
-
-        (settings / "workspace.toml").write_text("\n".join(cfg_lines).rstrip() + "\n", encoding="utf-8")
+        self._write_workspace_config(
+            settings / "workspace.toml",
+            payee_aliases="payee_aliases.csv",
+            workspace={
+                "name": workspace_name,
+                "base_currency": base_currency,
+                "start_year": start_year,
+            },
+            dirs={
+                "csv_dir": "inbox",
+                "journal_dir": "journals",
+                "init_dir": "rules",
+                "opening_bal_dir": "opening",
+                "imports_dir": "imports",
+            },
+            institution_templates=selected_templates,
+            import_accounts=normalized_accounts,
+        )
 
         (imports / "import-log.ndjson").touch(exist_ok=True)
 
@@ -174,28 +362,7 @@ class WorkspaceManager:
             match_rules.write_text("", encoding="utf-8")
 
         accounts_dat = rules / "10-accounts.dat"
-        if not accounts_dat.exists():
-            seeded_accounts: list[str] = []
-            seen_accounts: set[str] = set()
-            for account in normalized_accounts:
-                ledger_account = account["ledger_account"]
-                if ledger_account in seen_accounts:
-                    continue
-                seen_accounts.add(ledger_account)
-                seeded_accounts.extend(
-                    [
-                        f"account {ledger_account}",
-                        f"    ; type: {self._infer_account_type(ledger_account)}",
-                    ]
-                )
-
-            seeded_accounts.extend(
-                [
-                    "account Expenses:Unknown",
-                    "    ; type: Expense",
-                ]
-            )
-            accounts_dat.write_text("\n".join(seeded_accounts) + "\n", encoding="utf-8")
+        self._ensure_seeded_accounts(accounts_dat, list(normalized_accounts.values()))
 
         tags_dat = rules / "12-tags.dat"
         if not tags_dat.exists():
@@ -223,3 +390,52 @@ class WorkspaceManager:
 
         self.set_active_workspace(root)
         return root
+
+    def upsert_import_account(
+        self,
+        config: AppConfig,
+        account: dict,
+        account_id: str | None = None,
+    ) -> tuple[str, dict]:
+        existing_accounts = {
+            key: dict(value)
+            for key, value in config.import_accounts.items()
+        }
+        used_account_ids = set(existing_accounts)
+
+        if account_id:
+            if account_id not in existing_accounts:
+                raise ValueError(f"Unknown import account: {account_id}")
+            used_account_ids.discard(account_id)
+
+        normalized, template = self._normalize_import_account(
+            account,
+            used_account_ids,
+            existing_import_accounts=existing_accounts,
+            existing_account_id=account_id,
+        )
+
+        existing_accounts[normalized["id"]] = {
+            "display_name": normalized["display_name"],
+            "institution": normalized["institution"],
+            "ledger_account": normalized["ledger_account"],
+            "last4": normalized["last4"],
+        }
+
+        institution_templates = {
+            key: dict(value)
+            for key, value in config.institution_templates.items()
+        }
+        institution_templates[normalized["institution"]] = template.as_config()
+
+        self._write_workspace_config(
+            config.config_toml,
+            payee_aliases=config.payee_aliases,
+            workspace=dict(config.workspace),
+            dirs=dict(config.dirs),
+            institution_templates=institution_templates,
+            import_accounts=existing_accounts,
+        )
+        self._ensure_seeded_accounts(config.init_dir / "10-accounts.dat", list(existing_accounts.values()))
+
+        return normalized["id"], existing_accounts[normalized["id"]]

@@ -17,6 +17,16 @@
     last4?: string | null;
   };
 
+  type SetupState = {
+    needsWorkspace: boolean;
+    needsAccounts: boolean;
+    needsFirstImport: boolean;
+    needsReview: boolean;
+    hasImportedActivity: boolean;
+    currentStep: string;
+    completedSteps: string[];
+  };
+
   type AppState = {
     initialized: boolean;
     workspacePath: string | null;
@@ -26,6 +36,7 @@
     journals: number;
     csvInbox: number;
     institutionTemplates: InstitutionTemplate[];
+    setup: SetupState;
   };
 
   type ImportAccountDraft = {
@@ -35,31 +46,119 @@
     last4: string;
   };
 
+  type SetupStep = {
+    id: string;
+    number: string;
+    label: string;
+    detail: string;
+  };
+
+  const DEFAULT_WORKSPACE_PATH = '/home/randy/Desktop/tmp-books/workspace';
+  const STEP_ORDER: SetupStep[] = [
+    { id: 'welcome', number: '01', label: 'Welcome', detail: 'Understand the flow' },
+    { id: 'workspace', number: '02', label: 'Workspace', detail: 'Create your finance home' },
+    { id: 'accounts', number: '03', label: 'Accounts', detail: 'Choose what to track' },
+    { id: 'import', number: '04', label: 'First Import', detail: 'Bring in activity safely' }
+  ];
+
   let state: AppState | null = null;
   let error = '';
   let loading = false;
 
-  let workspacePath = '/home/randy/Desktop/tmp-books/workspace';
+  let workspacePath = DEFAULT_WORKSPACE_PATH;
   let workspaceName = 'My Books';
-  let baseCurrency = '$';
+  let baseCurrency = 'USD';
   let startYear = new Date().getFullYear();
-  let importAccounts: ImportAccountDraft[] = [];
-  let showCreate = true;
+  let showCreateWorkspace = true;
   let showExisting = false;
+  let showWorkspaceAdvanced = false;
+  let showAccountAdvanced = false;
+  let editingAccountId: string | null = null;
+  let accountDraft = newImportAccountDraft();
 
-  $: hasInvalidImportAccounts = importAccounts.some(
-    (account) => !account.institutionId || !account.displayName.trim() || !account.ledgerAccount.trim()
-  );
+  $: accountDraftInvalid = !accountDraft.institutionId || !accountDraft.displayName.trim();
+  $: accountEditorTitle = editingAccountId ? 'Update account' : 'Add account';
+  $: accountEditorAction = editingAccountId ? 'Save changes' : 'Add account';
+  $: currentHero = heroState(state);
+  $: importAction = importStepAction(state);
+
+  function heroState(appState: AppState | null) {
+    if (!appState?.initialized) {
+      return {
+        eyebrow: 'Setup',
+        title: 'Set up Ledger Flow in four short steps',
+        copy: 'Create a workspace, choose the accounts you want to track, then bring in your first statement safely.'
+      };
+    }
+    if (appState.setup.needsAccounts) {
+      return {
+        eyebrow: 'Step 3',
+        title: 'Your workspace is ready',
+        copy: 'Add the first real-world accounts you want to track so setup can move into statement import.'
+      };
+    }
+    if (appState.setup.needsFirstImport) {
+      return {
+        eyebrow: 'Step 4',
+        title: 'Bring in your first statement',
+        copy: 'Your account list is ready. The next milestone is a first successful import preview and apply.'
+      };
+    }
+    if (appState.setup.needsReview) {
+      return {
+        eyebrow: 'Review',
+        title: 'Setup is nearly done',
+        copy: 'Your first activity is in. Review the remaining uncategorized items to complete the initial workflow.'
+      };
+    }
+    return {
+      eyebrow: 'Workspace Ready',
+      title: 'Setup is complete',
+      copy: 'Your finance workspace is ready for everyday use. Add more accounts here or jump back into overview, import, or review.'
+    };
+  }
+
+  function importStepAction(appState: AppState | null) {
+    if (!appState?.initialized || appState.setup.needsAccounts) {
+      return null;
+    }
+    if (appState.setup.needsFirstImport) {
+      return { href: '/import', label: 'Import your first statement', secondary: 'The current import flow remains the safe path for preview and apply.' };
+    }
+    if (appState.setup.needsReview) {
+      return { href: '/unknowns', label: 'Review categories', secondary: 'Your first import is complete. Resolve the remaining unknown postings next.' };
+    }
+    return { href: '/', label: 'Open overview', secondary: 'Setup is complete. Continue from the dashboard.' };
+  }
+
+  function stepStatus(stepId: string): 'complete' | 'current' | 'pending' {
+    if (stepId === 'welcome') {
+      return state?.initialized || showCreateWorkspace || showExisting ? 'complete' : 'current';
+    }
+
+    if (!state?.initialized) {
+      if (stepId === 'workspace') return showCreateWorkspace ? 'current' : 'pending';
+      return 'pending';
+    }
+
+    if (stepId === 'workspace') return 'complete';
+    if (stepId === 'accounts') {
+      return state.importAccounts.length > 0 ? 'complete' : 'current';
+    }
+    if (stepId === 'import') {
+      return state.setup.needsFirstImport ? 'current' : 'complete';
+    }
+    return 'pending';
+  }
 
   function applyDefaultViewState() {
     const wantsExisting = typeof window !== 'undefined' && window.location.hash === '#existing';
     if (state?.initialized) {
-      showCreate = false;
+      showCreateWorkspace = false;
       showExisting = wantsExisting;
       return;
     }
-
-    showCreate = !wantsExisting;
+    showCreateWorkspace = !wantsExisting;
     showExisting = wantsExisting;
   }
 
@@ -72,9 +171,29 @@
     return {
       institutionId,
       displayName: template?.displayName ?? '',
-      ledgerAccount: template?.suggestedLedgerPrefix ?? '',
+      ledgerAccount: '',
       last4: ''
     };
+  }
+
+  function ledgerSuffix(templateDisplayName: string, displayName: string): string {
+    let candidate = displayName.trim();
+    if (templateDisplayName && candidate.toLowerCase().startsWith(templateDisplayName.toLowerCase())) {
+      const remainder = candidate.slice(templateDisplayName.length).replace(/^[\s:._-]+/, '').trim();
+      if (remainder) candidate = remainder;
+    }
+    const parts = candidate.split(/[^A-Za-z0-9]+/).filter(Boolean).map((part) => part[0].toUpperCase() + part.slice(1).toLowerCase());
+    return parts.join(':') || 'Account';
+  }
+
+  function suggestedLedgerAccount(draft: ImportAccountDraft): string {
+    const template = templateById(draft.institutionId);
+    if (!template?.suggestedLedgerPrefix || !draft.displayName.trim()) return '';
+    return `${template.suggestedLedgerPrefix}:${ledgerSuffix(template.displayName, draft.displayName)}`;
+  }
+
+  function effectiveLedgerAccount(draft: ImportAccountDraft): string {
+    return draft.ledgerAccount.trim() || suggestedLedgerAccount(draft);
   }
 
   async function loadState() {
@@ -82,54 +201,68 @@
     applyDefaultViewState();
   }
 
-  function addImportAccount(institutionId = '') {
-    importAccounts = [...importAccounts, newImportAccountDraft(institutionId)];
-  }
-
-  function removeImportAccount(index: number) {
-    importAccounts = importAccounts.filter((_, idx) => idx !== index);
-  }
-
-  function updateImportAccount(index: number, patch: Partial<ImportAccountDraft>) {
-    importAccounts = importAccounts.map((account, idx) => (idx === index ? { ...account, ...patch } : account));
-  }
-
-  function updateInstitution(index: number, institutionId: string) {
-    const current = importAccounts[index];
-    const nextTemplate = templateById(institutionId);
-    const previousTemplate = current?.institutionId ? templateById(current.institutionId) : undefined;
-    if (!current) return;
-
-    updateImportAccount(index, {
-      institutionId,
-      displayName:
-        !current.displayName.trim() || current.displayName === previousTemplate?.displayName
-          ? nextTemplate?.displayName ?? ''
-          : current.displayName,
-      ledgerAccount:
-        !current.ledgerAccount.trim() || current.ledgerAccount === previousTemplate?.suggestedLedgerPrefix
-          ? nextTemplate?.suggestedLedgerPrefix ?? ''
-          : current.ledgerAccount
-    });
-  }
-
-  function openCreate() {
-    showCreate = true;
+  function openCreateWorkspace() {
+    showCreateWorkspace = true;
     showExisting = false;
   }
 
   function openExisting() {
     showExisting = true;
     if (!state?.initialized) {
-      showCreate = false;
+      showCreateWorkspace = false;
     }
   }
 
   function hideExisting() {
     showExisting = false;
     if (!state?.initialized) {
-      showCreate = true;
+      showCreateWorkspace = true;
     }
+  }
+
+  function resetAccountEditor() {
+    editingAccountId = null;
+    accountDraft = newImportAccountDraft();
+    showAccountAdvanced = false;
+  }
+
+  function startNewAccount(institutionId = '') {
+    editingAccountId = null;
+    accountDraft = newImportAccountDraft(institutionId);
+    showAccountAdvanced = false;
+  }
+
+  function editAccount(account: ImportAccount) {
+    editingAccountId = account.id;
+    accountDraft = {
+      institutionId: account.institutionId ?? '',
+      displayName: account.displayName,
+      ledgerAccount: account.ledgerAccount,
+      last4: account.last4 ?? ''
+    };
+    showAccountAdvanced = true;
+  }
+
+  function updateAccountDraft(patch: Partial<ImportAccountDraft>) {
+    accountDraft = { ...accountDraft, ...patch };
+  }
+
+  function updateInstitution(institutionId: string) {
+    const nextTemplate = templateById(institutionId);
+    const previousTemplate = accountDraft.institutionId ? templateById(accountDraft.institutionId) : undefined;
+    const previousSuggested = accountDraft.institutionId ? suggestedLedgerAccount(accountDraft) : '';
+
+    updateAccountDraft({
+      institutionId,
+      displayName:
+        !accountDraft.displayName.trim() || accountDraft.displayName === previousTemplate?.displayName
+          ? nextTemplate?.displayName ?? ''
+          : accountDraft.displayName,
+      ledgerAccount:
+        !accountDraft.ledgerAccount.trim() || accountDraft.ledgerAccount === previousSuggested
+          ? ''
+          : accountDraft.ledgerAccount
+    });
   }
 
   async function bootstrap() {
@@ -141,12 +274,7 @@
         workspaceName,
         baseCurrency,
         startYear,
-        importAccounts: importAccounts.map((account) => ({
-          institutionId: account.institutionId,
-          displayName: account.displayName.trim(),
-          ledgerAccount: account.ledgerAccount.trim(),
-          last4: account.last4.trim() || null
-        }))
+        importAccounts: []
       });
       await loadState();
     } catch (e) {
@@ -169,6 +297,27 @@
     }
   }
 
+  async function saveAccount() {
+    if (!state?.initialized || accountDraftInvalid) return;
+    loading = true;
+    error = '';
+    try {
+      await apiPost('/api/workspace/import-accounts', {
+        accountId: editingAccountId,
+        institutionId: accountDraft.institutionId,
+        displayName: accountDraft.displayName.trim(),
+        ledgerAccount: accountDraft.ledgerAccount.trim() || null,
+        last4: accountDraft.last4.trim() || null
+      });
+      resetAccountEditor();
+      await loadState();
+    } catch (e) {
+      error = String(e);
+    } finally {
+      loading = false;
+    }
+  }
+
   onMount(async () => {
     try {
       await loadState();
@@ -179,153 +328,227 @@
 </script>
 
 <section class="view-card hero">
-  <p class="eyebrow">{state?.initialized ? 'Workspace Ready' : 'Setup'}</p>
-  <h2 class="page-title">{state?.initialized ? 'Your workspace is already active' : 'Create your workspace'}</h2>
-  <p class="subtitle">
-    {state?.initialized
-      ? 'Use setup only when you need to switch workspaces or create a new one.'
-      : 'Start with a new workspace. If you already have one, connect it instead.'}
-  </p>
+  <p class="eyebrow">{currentHero.eyebrow}</p>
+  <h2 class="page-title">{currentHero.title}</h2>
+  <p class="subtitle">{currentHero.copy}</p>
+</section>
+
+<section class="view-card progress-strip">
+  {#each STEP_ORDER as step}
+    <article class={`setup-step ${stepStatus(step.id)}`}>
+      <p class="step-number">{step.number}</p>
+      <div>
+        <p class="step-label">{step.label}</p>
+        <p class="step-detail">{step.detail}</p>
+      </div>
+    </article>
+  {/each}
 </section>
 
 {#if error}
   <section class="view-card"><p class="error-text">{error}</p></section>
 {/if}
 
-{#if state?.initialized}
-  <section class="view-card primary-setup-panel">
-    <p class="eyebrow">Active Workspace</p>
-    <h3>{state.workspaceName}</h3>
-    <p class="muted">{state.workspacePath}</p>
-    <p>
-      <span class="pill ok">{state.importAccounts.length} import accounts</span>
-      <span class="pill">{state.institutions.length} institutions</span>
-      <span class="pill">{state.journals} years loaded</span>
-      <span class="pill">{state.csvInbox} statements waiting</span>
+<section class="grid-2 setup-grid">
+  <article class="view-card">
+    <p class="eyebrow">Step 1</p>
+    <h3>Welcome</h3>
+    <p class="muted">
+      Ledger Flow is built around a simple loop: create your workspace, choose the accounts you care about, import a
+      statement safely, then review anything that still needs categorization.
     </p>
-    {#if state.importAccounts.length}
-      <div class="configured-accounts">
-        {#each state.importAccounts as account}
-          <div class="configured-account">
-            <strong>{account.displayName}</strong>
-            <span class="muted">{account.institutionDisplayName}</span>
-            <span class="muted small">{account.ledgerAccount}</span>
-          </div>
-        {/each}
-      </div>
-    {/if}
-    <div class="actions">
-      <a class="btn btn-primary" href="/">Open Overview</a>
-      <a class="btn" href="/import">Import Activity</a>
-      <a class="btn" href="/unknowns">Review Categories</a>
-    </div>
-  </section>
-{/if}
-
-{#if !state?.initialized || showCreate}
-  <section class="view-card primary-setup-panel">
-    <p class="eyebrow">Create New</p>
-    <h3>Create a New Workspace</h3>
-
-    <div class="field"><label for="newWorkspacePath">Workspace Path</label><input id="newWorkspacePath" bind:value={workspacePath} /></div>
-    <div class="field"><label for="workspaceName">Workspace Name</label><input id="workspaceName" bind:value={workspaceName} /></div>
-    <div class="field grid-2 compact">
-      <div class="field"><label for="baseCurrency">Base Currency</label><input id="baseCurrency" bind:value={baseCurrency} /></div>
-      <div class="field"><label for="startYear">Start Year</label><input id="startYear" type="number" bind:value={startYear} /></div>
-    </div>
-
-    <div class="field">
-      <p class="muted section-label">Accounts to Track</p>
-      <p class="muted helper-copy">
-        Add each real-world account you plan to import. One institution can appear multiple times.
-      </p>
-      <div class="chips">
-        {#each state?.institutionTemplates ?? [] as template}
-          <button type="button" on:click={() => addImportAccount(template.id)}>Add {template.displayName}</button>
-        {/each}
-        <button type="button" on:click={() => addImportAccount()}>Add Blank Account</button>
-      </div>
-    </div>
-
-    {#if importAccounts.length === 0}
-      <p class="muted helper-copy">No import accounts added yet. You can still create the workspace now and add accounts later.</p>
+    {#if state?.initialized}
+      <p><span class="pill ok">Complete</span></p>
     {:else}
-      <div class="account-drafts">
-        {#each importAccounts as account, index}
-          <article class="account-card">
-            <div class="field grid-2 compact">
-              <div class="field">
-                <label for={`institution-${index}`}>Institution</label>
-                <select
-                  id={`institution-${index}`}
-                  value={account.institutionId}
-                  on:change={(e) => updateInstitution(index, (e.currentTarget as HTMLSelectElement).value)}
-                >
-                  <option value="">Select...</option>
-                  {#each state?.institutionTemplates ?? [] as template}
-                    <option value={template.id}>{template.displayName}</option>
-                  {/each}
-                </select>
-              </div>
-              <div class="field">
-                <label for={`last4-${index}`}>Last 4 (optional)</label>
-                <input
-                  id={`last4-${index}`}
-                  value={account.last4}
-                  placeholder="1234"
-                  on:input={(e) => updateImportAccount(index, { last4: (e.currentTarget as HTMLInputElement).value })}
-                />
-              </div>
-            </div>
-
-            <div class="field grid-2 compact">
-              <div class="field">
-                <label for={`displayName-${index}`}>Account Name</label>
-                <input
-                  id={`displayName-${index}`}
-                  value={account.displayName}
-                  placeholder="Wells Fargo Checking"
-                  on:input={(e) => updateImportAccount(index, { displayName: (e.currentTarget as HTMLInputElement).value })}
-                />
-              </div>
-              <div class="field">
-                <label for={`ledgerAccount-${index}`}>Ledger Account</label>
-                <input
-                  id={`ledgerAccount-${index}`}
-                  value={account.ledgerAccount}
-                  placeholder="Assets:Bank:Wells Fargo:Checking"
-                  on:input={(e) => updateImportAccount(index, { ledgerAccount: (e.currentTarget as HTMLInputElement).value })}
-                />
-              </div>
-            </div>
-            <button class="inline-link" type="button" on:click={() => removeImportAccount(index)}>Remove account</button>
-          </article>
-        {/each}
-      </div>
-      {#if hasInvalidImportAccounts}
-        <p class="secondary-note">Complete each account row or remove it before creating the workspace.</p>
-      {/if}
-    {/if}
-
-    <button class="btn btn-primary" disabled={loading || hasInvalidImportAccounts} on:click={bootstrap}>
-      {loading ? 'Creating...' : 'Create Workspace'}
-    </button>
-
-    {#if !state?.initialized}
-      <p class="secondary-note">
-        Already have a workspace?
+      <div class="actions">
+        <button class="btn btn-primary" type="button" on:click={openCreateWorkspace}>Create new workspace</button>
         <button class="inline-link" type="button" on:click={openExisting}>Use existing workspace</button>
-      </p>
+      </div>
     {/if}
-  </section>
-{/if}
+  </article>
+
+  <article class="view-card">
+    <p class="eyebrow">Step 2</p>
+    <h3>{state?.initialized && !showCreateWorkspace ? 'Workspace ready' : 'Create your workspace'}</h3>
+
+    {#if state?.initialized && !showCreateWorkspace}
+      <p class="workspace-name">{state.workspaceName}</p>
+      <p class="muted workspace-path">{state.workspacePath}</p>
+      <p class="status-row">
+        <span class="pill ok">Ready</span>
+        <span class="pill">{state.journals} years loaded</span>
+        <span class="pill">{state.csvInbox} statements waiting</span>
+      </p>
+      <p class="muted">
+        Workspace creation is complete. The next setup milestone is {state.setup.needsAccounts ? 'adding accounts' : 'bringing in your first statement'}.
+      </p>
+    {:else}
+      <div class="field">
+        <label for="workspaceName">Workspace Name</label>
+        <input id="workspaceName" bind:value={workspaceName} />
+      </div>
+
+      <div class="field">
+        <label for="baseCurrency">Base Currency</label>
+        <input id="baseCurrency" bind:value={baseCurrency} />
+      </div>
+
+      <details class="advanced-panel" bind:open={showWorkspaceAdvanced}>
+        <summary>Advanced workspace settings</summary>
+        <div class="field">
+          <label for="newWorkspacePath">Workspace Path</label>
+          <input id="newWorkspacePath" bind:value={workspacePath} />
+        </div>
+        <div class="field">
+          <label for="startYear">Start Year</label>
+          <input id="startYear" type="number" bind:value={startYear} />
+        </div>
+      </details>
+
+      <button class="btn btn-primary" disabled={loading} on:click={bootstrap}>
+        {loading ? 'Creating...' : 'Create Workspace'}
+      </button>
+      <p class="secondary-note">You can add the actual accounts you want to track after the workspace exists.</p>
+    {/if}
+  </article>
+</section>
 
 {#if state?.initialized}
+  <section class="grid-2 setup-grid">
+    <article class="view-card">
+      <p class="eyebrow">Step 3</p>
+      <h3>Accounts to Track</h3>
+      <p class="muted">Add each real-world account you want to import. One institution can appear multiple times.</p>
+
+      <div class="chips">
+        {#each state.institutionTemplates as template}
+          <button type="button" on:click={() => startNewAccount(template.id)}>Add {template.displayName}</button>
+        {/each}
+        <button type="button" on:click={() => startNewAccount()}>Add account</button>
+      </div>
+
+      {#if state.importAccounts.length === 0}
+        <p class="secondary-note">No accounts added yet. Add at least one account before moving into the first import step.</p>
+      {:else}
+        <div class="account-list">
+          {#each state.importAccounts as account}
+            <article class="configured-account">
+              <div class="configured-account-head">
+                <div>
+                  <strong>{account.displayName}</strong>
+                  <p class="muted small">{account.institutionDisplayName}</p>
+                </div>
+                <button class="inline-link" type="button" on:click={() => editAccount(account)}>Edit</button>
+              </div>
+              <p class="status-row">
+                <span class="pill ok">{state.setup.hasImportedActivity ? 'Tracked' : 'Ready to import'}</span>
+                {#if account.last4}
+                  <span class="pill">••{account.last4}</span>
+                {/if}
+              </p>
+              <details class="advanced-panel">
+                <summary>Advanced account details</summary>
+                <p class="muted small">Destination account: {account.ledgerAccount}</p>
+              </details>
+            </article>
+          {/each}
+        </div>
+      {/if}
+    </article>
+
+    <article class="view-card">
+      <p class="eyebrow">{editingAccountId ? 'Edit Account' : 'Add Account'}</p>
+      <h3>{accountEditorTitle}</h3>
+
+      <div class="field">
+        <label for="institutionId">Institution</label>
+        <select id="institutionId" value={accountDraft.institutionId} on:change={(e) => updateInstitution((e.currentTarget as HTMLSelectElement).value)}>
+          <option value="">Select...</option>
+          {#each state.institutionTemplates as template}
+            <option value={template.id}>{template.displayName}</option>
+          {/each}
+        </select>
+      </div>
+
+      <div class="field grid-2 compact">
+        <div class="field">
+          <label for="displayName">Account Name</label>
+          <input
+            id="displayName"
+            value={accountDraft.displayName}
+            placeholder="Wells Fargo Checking"
+            on:input={(e) => updateAccountDraft({ displayName: (e.currentTarget as HTMLInputElement).value })}
+          />
+        </div>
+        <div class="field">
+          <label for="last4">Last 4 (optional)</label>
+          <input
+            id="last4"
+            value={accountDraft.last4}
+            placeholder="1234"
+            on:input={(e) => updateAccountDraft({ last4: (e.currentTarget as HTMLInputElement).value })}
+          />
+        </div>
+      </div>
+
+      <div class="selection-summary">
+        <p class="selection-label">Import target</p>
+        <p class="selection-value">{effectiveLedgerAccount(accountDraft) || 'Choose an institution and account name first'}</p>
+        <p class="muted">Ledger Flow will keep this technical path behind the scenes unless you need to override it.</p>
+      </div>
+
+      <details class="advanced-panel" bind:open={showAccountAdvanced}>
+        <summary>Advanced account settings</summary>
+        <div class="field">
+          <label for="ledgerAccount">Destination account</label>
+          <input
+            id="ledgerAccount"
+            value={accountDraft.ledgerAccount}
+            placeholder={suggestedLedgerAccount(accountDraft) || 'Assets:Bank:Institution:Account'}
+            on:input={(e) => updateAccountDraft({ ledgerAccount: (e.currentTarget as HTMLInputElement).value })}
+          />
+        </div>
+      </details>
+
+      <div class="actions">
+        <button class="btn btn-primary" disabled={loading || accountDraftInvalid} on:click={saveAccount}>
+          {loading ? 'Saving...' : accountEditorAction}
+        </button>
+        {#if editingAccountId}
+          <button class="btn" type="button" on:click={resetAccountEditor}>Cancel</button>
+        {/if}
+      </div>
+      {#if accountDraftInvalid}
+        <p class="secondary-note">Choose an institution and account name before saving.</p>
+      {/if}
+    </article>
+  </section>
+
+  <section class="view-card import-step-card">
+    <p class="eyebrow">Step 4</p>
+    <h3>First Import</h3>
+
+    {#if state.setup.needsAccounts}
+      <p class="muted">Add at least one account first. Once an account is ready, this step will hand you into the statement import flow.</p>
+    {:else if importAction}
+      <p class="selection-value">{importAction.label}</p>
+      <p class="muted">{importAction.secondary}</p>
+      <div class="actions">
+        <a class="btn btn-primary" href={importAction.href}>{importAction.label}</a>
+        {#if state.setup.needsReview}
+          <a class="btn" href="/">Open Overview</a>
+        {:else if !state.setup.needsFirstImport}
+          <a class="btn" href="/unknowns">Review Categories</a>
+        {/if}
+      </div>
+    {/if}
+  </section>
+
   <section class="view-card secondary-setup-panel">
     <p class="eyebrow">Other Actions</p>
     <div class="choice-links">
       <button class="inline-link" type="button" on:click={openExisting}>Use a different workspace</button>
-      <button class="inline-link" type="button" on:click={openCreate}>Create a new workspace</button>
+      <button class="inline-link" type="button" on:click={openCreateWorkspace}>Create a new workspace</button>
     </div>
   </section>
 {/if}
@@ -334,8 +557,13 @@
   <section class="view-card secondary-setup-panel">
     <p class="eyebrow">Use Existing</p>
     <h3>Select Existing Workspace</h3>
-    <div class="field"><label for="existingWorkspacePath">Workspace Path</label><input id="existingWorkspacePath" bind:value={workspacePath} /></div>
-    <button class="btn" disabled={loading} on:click={selectExisting}>Select Workspace</button>
+    <div class="field">
+      <label for="existingWorkspacePath">Workspace Path</label>
+      <input id="existingWorkspacePath" bind:value={workspacePath} />
+    </div>
+    <button class="btn btn-primary" disabled={loading} on:click={selectExisting}>
+      {loading ? 'Selecting...' : 'Select Workspace'}
+    </button>
     <p class="muted">Path must contain `settings/workspace.toml`.</p>
     <button class="inline-link" type="button" on:click={hideExisting}>Close</button>
   </section>
@@ -346,29 +574,75 @@
     margin: 0.1rem 0 0.8rem;
   }
 
-  .primary-setup-panel {
-    max-width: 840px;
+  .setup-grid {
+    margin-top: 1rem;
   }
 
-  .secondary-setup-panel {
-    max-width: 760px;
+  .progress-strip {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 0.9rem;
+    padding: 1rem;
+  }
+
+  .setup-step {
+    display: grid;
+    gap: 0.25rem;
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 0.85rem;
+    background: rgba(255, 255, 255, 0.74);
+  }
+
+  .setup-step.complete {
+    border-color: rgba(44, 122, 74, 0.2);
+    background: rgba(238, 247, 241, 0.9);
+  }
+
+  .setup-step.current {
+    border-color: rgba(12, 103, 138, 0.28);
+    box-shadow: 0 0 0 1px rgba(12, 103, 138, 0.08);
+  }
+
+  .step-number,
+  .step-label,
+  .step-detail {
+    margin: 0;
+  }
+
+  .step-number {
+    font-family: 'Space Grotesk', sans-serif;
+    font-size: 0.86rem;
+    color: var(--muted-foreground);
+  }
+
+  .step-label {
+    font-weight: 700;
+  }
+
+  .step-detail {
+    color: var(--muted-foreground);
+    font-size: 0.92rem;
   }
 
   .actions {
-    margin-top: 0.8rem;
     display: flex;
     gap: 0.6rem;
     flex-wrap: wrap;
+    align-items: center;
   }
 
-  .compact {
-    gap: 0.8rem;
+  .choice-links {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.9rem 1.2rem;
   }
 
   .chips {
     display: flex;
     gap: 0.5rem;
     flex-wrap: wrap;
+    margin: 0.9rem 0 1rem;
   }
 
   .chips button {
@@ -380,16 +654,74 @@
     font-weight: 600;
   }
 
-  .choice-links {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.9rem 1.2rem;
+  .configured-account,
+  .selection-summary {
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    background: rgba(255, 255, 255, 0.72);
+    padding: 0.9rem;
   }
 
-  .secondary-note,
-  .helper-copy {
-    margin: 0.75rem 0 0;
+  .account-list {
+    display: grid;
+    gap: 0.8rem;
+    margin-top: 1rem;
+  }
+
+  .configured-account-head {
+    display: flex;
+    justify-content: space-between;
+    gap: 1rem;
+    align-items: flex-start;
+  }
+
+  .configured-account-head p,
+  .workspace-name,
+  .workspace-path,
+  .status-row,
+  .secondary-note {
+    margin: 0;
+  }
+
+  .workspace-name {
+    font-family: 'Space Grotesk', sans-serif;
+    font-size: 1.08rem;
+  }
+
+  .workspace-path {
+    margin-top: 0.3rem;
+    word-break: break-word;
+  }
+
+  .status-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.45rem;
+    margin-top: 0.8rem;
+  }
+
+  .selection-label,
+  .selection-value {
+    margin: 0;
+  }
+
+  .selection-label {
+    font-size: 0.82rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
     color: var(--muted-foreground);
+    font-weight: 700;
+  }
+
+  .selection-value {
+    margin-top: 0.3rem;
+    font-family: 'Space Grotesk', sans-serif;
+    font-size: 1.08rem;
+    line-height: 1.25;
+  }
+
+  .small {
+    font-size: 0.86rem;
   }
 
   .inline-link {
@@ -406,33 +738,29 @@
     text-decoration: underline;
   }
 
-  .section-label {
-    margin: 0;
-    font-size: 0.86rem;
-    font-weight: 600;
+  .secondary-note {
+    margin-top: 0.8rem;
+    color: var(--muted-foreground);
   }
 
-  .configured-accounts,
-  .account-drafts {
-    display: grid;
-    gap: 0.8rem;
-    margin: 1rem 0;
+  .import-step-card,
+  .secondary-setup-panel {
+    margin-top: 1rem;
   }
 
-  .configured-account,
-  .account-card {
-    border: 1px solid var(--line);
-    border-radius: 14px;
-    background: rgba(255, 255, 255, 0.72);
-    padding: 0.9rem;
+  .advanced-panel {
+    margin-top: 1rem;
   }
 
-  .configured-account {
-    display: grid;
-    gap: 0.2rem;
+  @media (max-width: 900px) {
+    .progress-strip {
+      grid-template-columns: 1fr 1fr;
+    }
   }
 
-  .small {
-    font-size: 0.86rem;
+  @media (max-width: 640px) {
+    .progress-strip {
+      grid-template-columns: 1fr;
+    }
   }
 </style>

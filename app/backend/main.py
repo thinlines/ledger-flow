@@ -18,6 +18,7 @@ from models import (
     StageApplyRequest,
     UnknownScanRequest,
     UnknownStageRequest,
+    WorkspaceImportAccountUpsertRequest,
     WorkspaceBootstrapRequest,
     WorkspaceSelectRequest,
 )
@@ -120,6 +121,7 @@ def app_state() -> dict:
             "journals": 0,
             "csvInbox": 0,
             "institutionTemplates": list_templates(),
+            "setup": workspace_manager.get_setup_state(None),
         }
 
     journals = list(config.journal_dir.glob("*.journal"))
@@ -145,6 +147,7 @@ def app_state() -> dict:
         "journals": len(journals),
         "csvInbox": len(csvs),
         "institutionTemplates": list_templates(),
+        "setup": workspace_manager.get_setup_state(config),
     }
 
 
@@ -173,6 +176,29 @@ def workspace_select(req: WorkspaceSelectRequest) -> dict:
 
     workspace_manager.set_active_workspace(root)
     return {"ok": True, "workspacePath": str(root)}
+
+
+@app.post("/api/workspace/import-accounts")
+def workspace_import_account_upsert(req: WorkspaceImportAccountUpsertRequest) -> dict:
+    config = _require_workspace_config()
+    try:
+        account_id, account_cfg = workspace_manager.upsert_import_account(
+            config,
+            {
+                "institutionId": req.institutionId,
+                "displayName": req.displayName,
+                "ledgerAccount": req.ledgerAccount,
+                "last4": req.last4,
+            },
+            account_id=req.accountId,
+        )
+    except (OSError, ValueError) as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+    return {
+        "ok": True,
+        "importAccount": _import_account_ui(account_id, account_cfg),
+    }
 
 
 @app.get("/api/import/candidates")
