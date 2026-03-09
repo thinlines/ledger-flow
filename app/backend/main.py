@@ -23,6 +23,7 @@ from models import (
     WorkspaceSelectRequest,
 )
 from services.backup_service import backup_file
+from services.dashboard_service import build_dashboard_overview
 from services.import_index import ImportIndex
 from services.import_service import apply_import, archive_inbox_csv, preview_import, scan_candidates
 from services.institution_registry import canonical_template_id, display_name_for, list_templates
@@ -149,6 +150,12 @@ def app_state() -> dict:
         "institutionTemplates": list_templates(),
         "setup": workspace_manager.get_setup_state(config),
     }
+
+
+@app.get("/api/dashboard/overview")
+def dashboard_overview() -> dict:
+    config = _require_workspace_config()
+    return build_dashboard_overview(config)
 
 
 @app.post("/api/workspace/bootstrap")
