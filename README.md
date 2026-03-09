@@ -42,6 +42,7 @@ Its open plain-text foundation matters for durability and portability, but that 
 
 ## Current Product Shape
 
+- Overview: finance-first dashboard with net worth, tracked balances, six-month cash flow, category movement, recent transactions, and next-action cues
 - Setup: staged first-run flow for create/select workspace, add tracked accounts, and complete the first import
 - Import: shared preview/apply account-linked CSV workflow, available both inside setup and on `/import`
 - Review: reconcile unknown account mappings
@@ -49,3 +50,10 @@ Its open plain-text foundation matters for durability and portability, but that 
 
 These workflows are the current foundation, not the full product identity.
 The app should ultimately feel like a daily finance workspace where import and review are supporting workflows that keep the user's financial picture current.
+
+## UI Direction
+
+- The primary screen should answer: where do I stand, what changed, and what needs attention next.
+- The default UI should show financial outcomes first and operational detail second.
+- Advanced details such as paths, journals, and ledger-account mappings should stay behind setup, diagnostics, or explicit reveals.
+- Each screen should have one dominant next action, with supporting actions kept secondary and sparse.

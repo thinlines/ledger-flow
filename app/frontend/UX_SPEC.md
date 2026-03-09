@@ -6,12 +6,20 @@ The interface is the user's primary interaction surface. The user should feel th
 The system must boot from zero data files; workspace initialization is a first-class GUI workflow.
 The plain-text accounting model is an implementation detail in the default path, not the primary story the UI tells.
 
+## Interface rules
+
+- Lead with financial outcomes, not setup detail or system metadata.
+- Limit each screen to one dominant decision at a time.
+- Keep advanced configuration hidden by default and reachable by explicit reveal.
+- Prefer summaries and action cues over dense diagnostic readouts.
+- Keep technical language out of primary UI copy unless there is no better user-facing term.
+
 ## Information architecture
 
 - `/setup`: first-contact onboarding and workspace readiness checks.
 - `/`: operational home dashboard.
 - `/import`: import inbox, parse preview, conflict-aware apply.
-- `/unknowns`: categorization queue for transactions that still need a category.
+- `/unknowns`: review queue for transactions that still need a category.
 
 ## Screen specs
 
@@ -78,18 +86,35 @@ Purpose:
 - Daily finance command center.
 - The dominant question is: what should I do next?
 
+Current implementation status:
+- Implemented as a finance-first overview dashboard.
+- The primary screen now emphasizes net worth, balances, cash flow, category movement, recent transactions, and action cues.
+- Workspace-path and version details are intentionally absent from the main home screen.
+
 Sections:
-- Hero with state-driven summary and a single dominant CTA.
+- Hero with net-worth emphasis, freshness context, and a single dominant CTA.
 - Financial snapshot cards:
-  - cash and credit summary
-  - net worth summary
-  - current-month income vs expense
+  - tracked balances
+  - current-month cash flow
+  - current-month income
+  - current-month spending
+- Balances section:
+  - tracked account list
+  - account type and masked last4 as supporting context
 - Attention queue:
   - statements waiting to import
   - unresolved review work
-  - recent conflicts or notable changes
+  - setup steps still blocking the dashboard
+- Cash-flow section:
+  - six-month income/spending rows
+  - current-month net indicator
+- Category section:
+  - current month versus previous month by category
+- Recent activity section:
+  - latest transactions
+  - category and account context
 - At most two secondary actions above the fold.
-- Until richer reporting data exists, placeholder states should still speak in finance-first language rather than system health language.
+- If setup is incomplete, the home page should pivot into a staged progress view rather than exposing raw configuration data.
 
 ### 3) Import (`/import`)
 

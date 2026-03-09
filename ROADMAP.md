@@ -7,6 +7,7 @@ It is a planning document, not a strict delivery contract.
 
 The app already has a usable bookkeeping workflow:
 
+- Finance-first overview dashboard with net worth, tracked balances, cash flow, category movement, recent transactions, and action cues
 - Workspace setup and selection
 - Staged setup flow with workspace-first creation, post-bootstrap account setup, and inline first import
 - CSV import with preview, duplicate detection, conflict detection, and safe apply
@@ -29,19 +30,23 @@ That means:
 
 ## Product Direction
 
-The next goal is to make the app feel like a day-to-day personal finance tool without destabilizing the existing import and review flow.
+The current goal is to deepen the app's new dashboard-first posture without destabilizing the existing import and review flow.
 
-Before the dashboard can fully carry that job, first-run setup needs to feel like a guided finance workflow instead of a configuration wall.
-If setup remains form-heavy, the product will still read as a specialist import tool even after dashboard work lands.
+That means:
 
-The main priorities are:
+- setup should continue to get the user from zero to first imported activity with minimal exposed implementation detail
+- the dashboard should remain the daily landing page and answer:
+  - Where do I stand right now?
+  - What needs my attention?
+  - What changed recently?
+- the rest of the product should support that overview instead of pulling users back into configuration detail unnecessarily
 
-- a setup flow that gets the user from zero to first import with less exposed implementation detail
-- a dashboard that helps the user answer:
+## UI Principles
 
-- Where do I stand right now?
-- What needs my attention?
-- What changed recently?
+- Show financial outcomes first, workflow state second, and technical details last.
+- Keep one dominant action above the fold; secondary actions should be sparse and obvious.
+- Use overview screens to summarize, not to explain internals.
+- Hide paths, ledger-account mappings, and other advanced details unless the user explicitly needs them.
 
 Merchant management remains desirable, but it is not an active priority right now.
 
@@ -83,6 +88,12 @@ Expected outcome:
 
 Reposition the current UI so the app reads as a finance workspace before the full dashboard exists.
 
+Current status:
+
+- the app shell, overview copy, and home screen hierarchy are now finance-first instead of status-first
+- workspace-path and version detail no longer dominate the main home screen
+- next actions are surfaced as an attention queue rather than scattered status widgets
+
 Scope:
 
 - Rework navigation, home-page framing, and cross-screen copy around financial tasks and outcomes
@@ -97,6 +108,12 @@ Expected outcome:
 ### 2. Dashboard and Financial Visibility
 
 Build a dashboard that surfaces financial state instead of mostly system state.
+
+Current status:
+
+- `/` now shows net worth, tracked balances, six-month cash flow, category movement, recent transactions, and action cues
+- the home screen is useful even when the user is not actively importing
+- overview data comes from a dedicated dashboard API instead of only app-state counts
 
 Scope:
 
@@ -116,6 +133,19 @@ Expected outcome:
 ### 3. Reporting Foundation
 
 Add the backend support needed to power the dashboard and future reporting screens.
+
+Current status:
+
+- balance summaries for tracked accounts are implemented
+- current-month income/spending and six-month cash flow are implemented
+- category totals for month-over-month comparison are implemented
+- recent transaction query support is implemented through the overview API
+
+Remaining scope:
+
+- richer date-range controls
+- drill-down queries from dashboard cards into filtered activity views
+- more complete reporting for non-import accounts and longer historical analysis
 
 Scope:
 
@@ -181,6 +211,11 @@ Definition of done:
 - Add backend endpoints for balances, category totals, recent transactions, and queue metrics
 - Replace the current home page metrics with financial summaries
 - Add date-range controls where needed, while keeping the default view simple
+
+Current status:
+
+- the overview dashboard, supporting API, and finance-first app-shell framing are implemented
+- remaining work is expansion and drill-down polish, not the core home-screen architecture
 
 Definition of done:
 
