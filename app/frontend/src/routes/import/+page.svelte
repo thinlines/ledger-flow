@@ -88,6 +88,8 @@
     loading = true;
     try {
       preview = await apiPost('/api/import/apply', { stageId: preview.stageId });
+      selectedPath = '';
+      await loadCandidates();
     } catch (e) {
       error = String(e);
     } finally {
@@ -254,6 +256,12 @@
           </p>
           {#if preview.result.backupPath}
             <p class="muted">Backup: {preview.result.backupPath}</p>
+          {/if}
+          {#if preview.result.archivedCsvPath}
+            <p class="muted">Archived source: {preview.result.archivedCsvPath}</p>
+          {/if}
+          {#if preview.result.sourceCsvWarning}
+            <p class="error-text">{preview.result.sourceCsvWarning}</p>
           {/if}
         </div>
       {:else}

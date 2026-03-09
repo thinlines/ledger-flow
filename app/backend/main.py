@@ -21,7 +21,7 @@ from models import (
 )
 from services.backup_service import backup_file
 from services.import_index import ImportIndex
-from services.import_service import apply_import, preview_import, scan_candidates
+from services.import_service import apply_import, archive_inbox_csv, preview_import, scan_candidates
 from services.institution_registry import display_name_for, list_templates
 from services.ledger_runner import CommandError, run_cmd
 from services.stage_store import StageStore
@@ -309,6 +309,19 @@ def import_apply(req: StageApplyRequest) -> dict:
     except CommandError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
 
+    archived_csv_path = None
+    source_csv_warning = None
+    try:
+        archived_csv_path = archive_inbox_csv(
+            config,
+            Path(stage["csvPath"]),
+            stage["year"],
+            stage["institution"],
+            stage.get("sourceFileSha256", ""),
+        )
+    except OSError as e:
+        source_csv_warning = f"Imported successfully, but source CSV could not be archived: {e}"
+
     stage["status"] = "applied"
     stage["result"] = {
         "applied": True,
@@ -317,6 +330,8 @@ def import_apply(req: StageApplyRequest) -> dict:
         "appendedTxnCount": appended_count,
         "skippedDuplicateCount": skipped_duplicate_count,
         "conflicts": conflicts,
+        "archivedCsvPath": archived_csv_path,
+        "sourceCsvWarning": source_csv_warning,
     }
     stages.save(req.stageId, stage)
     return stage

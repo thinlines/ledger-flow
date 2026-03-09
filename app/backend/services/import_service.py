@@ -58,6 +58,35 @@ def scan_candidates(config: AppConfig) -> list[ImportCandidate]:
     return rows
 
 
+def archive_inbox_csv(
+    config: AppConfig,
+    csv_path: Path,
+    year: str,
+    institution: str,
+    source_file_sha256: str,
+) -> str | None:
+    if not csv_path.exists():
+        return None
+
+    source = csv_path.resolve()
+    inbox_dir = config.csv_dir.resolve()
+    if not source.is_relative_to(inbox_dir):
+        return None
+
+    archive_dir = config.imports_dir / "processed" / year / institution
+    archive_dir.mkdir(parents=True, exist_ok=True)
+
+    suffix = source.suffix or ".csv"
+    digest = source_file_sha256[:12] if source_file_sha256 else "imported"
+    dest = archive_dir / f"{source.stem}-{digest}{suffix}"
+    if dest.exists():
+        source.unlink()
+        return str(dest.resolve())
+
+    source.replace(dest)
+    return str(dest.resolve())
+
+
 def _sha256_text(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 

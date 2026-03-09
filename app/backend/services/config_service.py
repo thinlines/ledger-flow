@@ -42,6 +42,10 @@ class AppConfig:
     def opening_bal_dir(self) -> Path:
         return self.root_dir / self.dirs["opening_bal_dir"]
 
+    @property
+    def imports_dir(self) -> Path:
+        return self.root_dir / self.dirs["imports_dir"]
+
 
 def load_config(config_toml: Path) -> AppConfig:
     with config_toml.open("rb") as f:
