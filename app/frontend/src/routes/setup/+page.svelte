@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { apiGet, apiPost } from '$lib/api';
+  import ImportFlow from '$lib/components/ImportFlow.svelte';
 
   type InstitutionTemplate = {
     id: string;
@@ -64,6 +65,7 @@
   let state: AppState | null = null;
   let error = '';
   let loading = false;
+  let importRefreshToken = 0;
 
   let workspacePath = DEFAULT_WORKSPACE_PATH;
   let workspaceName = 'My Books';
@@ -80,7 +82,7 @@
   $: accountEditorTitle = editingAccountId ? 'Update account' : 'Add account';
   $: accountEditorAction = editingAccountId ? 'Save changes' : 'Add account';
   $: currentHero = heroState(state);
-  $: importAction = importStepAction(state);
+  $: importAction = postImportAction(state);
 
   function heroState(appState: AppState | null) {
     if (!appState?.initialized) {
@@ -118,12 +120,9 @@
     };
   }
 
-  function importStepAction(appState: AppState | null) {
-    if (!appState?.initialized || appState.setup.needsAccounts) {
+  function postImportAction(appState: AppState | null) {
+    if (!appState?.initialized || appState.setup.needsAccounts || appState.setup.needsFirstImport) {
       return null;
-    }
-    if (appState.setup.needsFirstImport) {
-      return { href: '/import', label: 'Import your first statement', secondary: 'The current import flow remains the safe path for preview and apply.' };
     }
     if (appState.setup.needsReview) {
       return { href: '/unknowns', label: 'Review categories', secondary: 'Your first import is complete. Resolve the remaining unknown postings next.' };
@@ -198,6 +197,7 @@
 
   async function loadState() {
     state = await apiGet<AppState>('/api/app/state');
+    importRefreshToken += 1;
     applyDefaultViewState();
   }
 
@@ -316,6 +316,10 @@
     } finally {
       loading = false;
     }
+  }
+
+  async function handleImportApplied() {
+    await loadState();
   }
 
   onMount(async () => {
@@ -527,22 +531,34 @@
   <section class="view-card import-step-card">
     <p class="eyebrow">Step 4</p>
     <h3>First Import</h3>
-
-    {#if state.setup.needsAccounts}
-      <p class="muted">Add at least one account first. Once an account is ready, this step will hand you into the statement import flow.</p>
-    {:else if importAction}
-      <p class="selection-value">{importAction.label}</p>
-      <p class="muted">{importAction.secondary}</p>
-      <div class="actions">
-        <a class="btn btn-primary" href={importAction.href}>{importAction.label}</a>
-        {#if state.setup.needsReview}
-          <a class="btn" href="/">Open Overview</a>
-        {:else if !state.setup.needsFirstImport}
-          <a class="btn" href="/unknowns">Review Categories</a>
-        {/if}
-      </div>
-    {/if}
+    <p class="muted">
+      Stay in setup for the first statement. Upload, preview, and apply here, then move straight into review or overview.
+    </p>
   </section>
+
+  {#if state.setup.needsAccounts}
+    <section class="view-card">
+      <p class="muted">Add at least one account first. Once an account is ready, the first import flow will appear here.</p>
+    </section>
+  {:else}
+    <ImportFlow mode="setup" refreshToken={importRefreshToken} onApplied={handleImportApplied} />
+
+    {#if importAction}
+      <section class="view-card import-followup-card">
+        <p class="eyebrow">{state.setup.needsReview ? 'Next Step' : 'Ready'}</p>
+        <h3>{importAction.label}</h3>
+        <p class="muted">{importAction.secondary}</p>
+        <div class="actions">
+          <a class="btn btn-primary" href={importAction.href}>{importAction.label}</a>
+          {#if state.setup.needsReview}
+            <a class="btn" href="/">Open Overview</a>
+          {:else}
+            <a class="btn" href="/import">Import more activity</a>
+          {/if}
+        </div>
+      </section>
+    {/if}
+  {/if}
 
   <section class="view-card secondary-setup-panel">
     <p class="eyebrow">Other Actions</p>
@@ -744,6 +760,7 @@
   }
 
   .import-step-card,
+  .import-followup-card,
   .secondary-setup-panel {
     margin-top: 1rem;
   }
