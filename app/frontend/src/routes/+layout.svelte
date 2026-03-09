@@ -4,8 +4,8 @@
 
 	const navItems = [
 		{ href: '/', label: 'Overview' },
+		{ href: '/unknowns', label: 'Review' },
 		{ href: '/import', label: 'Import' },
-		{ href: '/unknowns', label: 'Categorize' },
 		{ href: '/rules', label: 'Automation' },
 		{ href: '/setup', label: 'Setup' }
 	];
@@ -44,7 +44,7 @@
 
 			<div>
 				<h1>Ledger Flow</h1>
-				<p>Personal finance workspace</p>
+				<p>Money at a glance</p>
 			</div>
 		</div>
 
@@ -63,9 +63,9 @@
 
 <style>
 	.app-shell {
-		max-width: 1180px;
+		max-width: 1240px;
 		margin: 0 auto;
-		padding: 1.4rem 1rem 2rem;
+		padding: 1.4rem 1rem 2.4rem;
 	}
 
 	.topbar {
@@ -73,8 +73,13 @@
 		align-items: center;
 		justify-content: space-between;
 		gap: 1rem;
-		margin-bottom: 1rem;
-		padding: 0.8rem 0.3rem;
+		margin-bottom: 1.15rem;
+		padding: 0.85rem 1rem;
+		border-radius: 1.2rem;
+		background: rgba(255, 255, 255, 0.7);
+		border: 1px solid rgba(10, 61, 89, 0.08);
+		backdrop-filter: blur(18px);
+		box-shadow: 0 12px 24px rgba(17, 35, 52, 0.06);
 	}
 
 	.brand {
@@ -84,15 +89,16 @@
 	}
 
 	.brand-mark {
-		width: 2.2rem;
-		height: 2.2rem;
-		border-radius: 0.7rem;
+		width: 2.5rem;
+		height: 2.5rem;
+		border-radius: 0.85rem;
 		display: grid;
 		place-items: center;
 		font-family: 'Space Grotesk', sans-serif;
 		font-weight: 700;
-		background: linear-gradient(140deg, var(--brand), #3d9ac8);
+		background: linear-gradient(140deg, #0f5f88, #2aa37a);
 		color: #fff;
+		box-shadow: 0 10px 24px rgba(15, 95, 136, 0.22);
 	}
 
 	h1 {
@@ -110,33 +116,34 @@
 
 	nav {
 		display: flex;
-		gap: 0.45rem;
+		gap: 0.5rem;
 		flex-wrap: wrap;
 	}
 
 	nav a {
 		text-decoration: none;
 		color: var(--brand-strong);
-		font-weight: 600;
-		padding: 0.45rem 0.7rem;
+		font-weight: 700;
+		padding: 0.5rem 0.8rem;
 		border-radius: 999px;
-		border: 1px solid transparent;
+		border: 1px solid rgba(10, 61, 89, 0.06);
+		background: rgba(255, 255, 255, 0.58);
 	}
 
 	nav a:hover {
-		border-color: #bdd4e6;
-		background: #f4f9ff;
+		border-color: rgba(15, 95, 136, 0.18);
+		background: rgba(244, 249, 255, 0.95);
 	}
 
 	nav a.active {
 		color: #fff;
-		background: linear-gradient(130deg, #0f5f88, #0a3d59);
-		box-shadow: 0 6px 14px rgba(15, 95, 136, 0.25);
+		background: linear-gradient(130deg, #0f5f88, #0c7b59);
+		box-shadow: 0 10px 22px rgba(15, 95, 136, 0.22);
 	}
 
 	.content {
 		display: grid;
-		gap: 1rem;
+		gap: 1.1rem;
 	}
 
 	@media (max-width: 900px) {
