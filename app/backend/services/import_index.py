@@ -9,6 +9,7 @@ from pathlib import Path
 @dataclass(frozen=True)
 class ImportIndex:
     db_path: Path
+    table_name: str = "imported_transactions_v2"
 
     def _connect(self) -> sqlite3.Connection:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -20,9 +21,9 @@ class ImportIndex:
     def ensure_schema(self) -> None:
         with self._connect() as conn:
             conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS imported_transactions (
-                    institution TEXT NOT NULL,
+                f"""
+                CREATE TABLE IF NOT EXISTS {self.table_name} (
+                    import_account_id TEXT NOT NULL,
                     source_identity TEXT NOT NULL,
                     source_payload_hash TEXT,
                     journal_path TEXT NOT NULL,
@@ -30,27 +31,27 @@ class ImportIndex:
                     source_file_sha256 TEXT,
                     first_seen_at TEXT NOT NULL,
                     last_seen_at TEXT NOT NULL,
-                    PRIMARY KEY (institution, source_identity)
+                    PRIMARY KEY (import_account_id, source_identity)
                 )
                 """
             )
 
-    def get_identity_map(self, institution: str) -> dict[str, str | None]:
+    def get_identity_map(self, import_account_id: str) -> dict[str, str | None]:
         self.ensure_schema()
         with self._connect() as conn:
             rows = conn.execute(
-                """
+                f"""
                 SELECT source_identity, source_payload_hash
-                FROM imported_transactions
-                WHERE institution = ?
+                FROM {self.table_name}
+                WHERE import_account_id = ?
                 """,
-                (institution,),
+                (import_account_id,),
             ).fetchall()
         return {identity: payload_hash for identity, payload_hash in rows}
 
     def upsert_transactions(
         self,
-        institution: str,
+        import_account_id: str,
         year: str,
         journal_path: Path,
         source_file_sha256: str,
@@ -63,9 +64,9 @@ class ImportIndex:
         with self._connect() as conn:
             for txn in txns:
                 conn.execute(
-                    """
-                    INSERT INTO imported_transactions (
-                        institution,
+                    f"""
+                    INSERT INTO {self.table_name} (
+                        import_account_id,
                         source_identity,
                         source_payload_hash,
                         journal_path,
@@ -74,7 +75,7 @@ class ImportIndex:
                         first_seen_at,
                         last_seen_at
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(institution, source_identity)
+                    ON CONFLICT(import_account_id, source_identity)
                     DO UPDATE SET
                         source_payload_hash = excluded.source_payload_hash,
                         journal_path = excluded.journal_path,
@@ -83,7 +84,7 @@ class ImportIndex:
                         last_seen_at = excluded.last_seen_at
                     """,
                     (
-                        institution,
+                        import_account_id,
                         txn["sourceIdentity"],
                         txn.get("sourcePayloadHash"),
                         str(journal_path),

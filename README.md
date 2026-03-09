@@ -43,7 +43,7 @@ Its open plain-text foundation matters for durability and portability, but that 
 ## Current Product Shape
 
 - Setup: create/select workspace
-- Import: preview and apply institution CSV imports
+- Import: preview and apply account-linked CSV imports
 - Review: reconcile unknown account mappings
 
 These workflows are the current foundation, not the full product identity.

@@ -8,8 +8,8 @@ class InstitutionTemplate:
     id: str
     display_name: str
     parser: str
-    account: str
     csv_date_format: str
+    suggested_ledger_prefix: str
     aliases: tuple[str, ...] = ()
     head: int | None = None
     tail: int | None = None
@@ -19,7 +19,6 @@ class InstitutionTemplate:
         payload: dict[str, str | int] = {
             "display_name": self.display_name,
             "parser": self.parser,
-            "account": self.account,
             "CSV_date_format": self.csv_date_format,
         }
         if self.head is not None:
@@ -31,7 +30,11 @@ class InstitutionTemplate:
         return payload
 
     def as_ui(self) -> dict:
-        return {"id": self.id, "displayName": self.display_name}
+        return {
+            "id": self.id,
+            "displayName": self.display_name,
+            "suggestedLedgerPrefix": self.suggested_ledger_prefix,
+        }
 
 
 _REGISTRY: dict[str, InstitutionTemplate] = {
@@ -39,24 +42,24 @@ _REGISTRY: dict[str, InstitutionTemplate] = {
         id="wells_fargo",
         display_name="Wells Fargo",
         parser="wfchk",
-        account="Assets:Bank:Wells Fargo",
         csv_date_format="%m/%d/%Y",
+        suggested_ledger_prefix="Assets:Bank:Wells Fargo",
         aliases=("wfchk", "wfsav", "wfcc", "wells-fargo", "wellsfargo"),
     ),
     "charles_schwab": InstitutionTemplate(
         id="charles_schwab",
         display_name="Charles Schwab",
         parser="schwab",
-        account="Assets:Investments:Schwab",
         csv_date_format="%m/%d/%Y",
+        suggested_ledger_prefix="Assets:Investments:Schwab",
         aliases=("schwab",),
     ),
     "icbc": InstitutionTemplate(
         id="icbc",
         display_name="Industrial and Commercial Bank of China",
         parser="icbc",
-        account="Assets:Bank:ICBC",
         csv_date_format="%Y-%m-%d",
+        suggested_ledger_prefix="Assets:Bank:ICBC",
         aliases=("icbc",),
         head=7,
         tail=2,
@@ -65,8 +68,8 @@ _REGISTRY: dict[str, InstitutionTemplate] = {
         id="alipay",
         display_name="Alipay",
         parser="alipay",
-        account="Assets:Alipay",
         csv_date_format="%Y-%m-%d",
+        suggested_ledger_prefix="Assets:Alipay",
         aliases=("alipay",),
         head=13,
         tail=1,
@@ -76,8 +79,8 @@ _REGISTRY: dict[str, InstitutionTemplate] = {
         id="bank_of_beijing",
         display_name="Bank of Beijing",
         parser="bjb",
-        account="Assets:Bank:BJB",
         csv_date_format="%Y/%m/%d",
+        suggested_ledger_prefix="Assets:Bank:BJB",
         aliases=("bjb", "beijing-bank", "bank-of-beijing"),
         head=1,
         tail=0,

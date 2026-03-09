@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 from pathlib import Path
+import re
+from uuid import uuid4
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -22,7 +24,7 @@ from models import (
 from services.backup_service import backup_file
 from services.import_index import ImportIndex
 from services.import_service import apply_import, archive_inbox_csv, preview_import, scan_candidates
-from services.institution_registry import display_name_for, list_templates
+from services.institution_registry import canonical_template_id, display_name_for, list_templates
 from services.ledger_runner import CommandError, run_cmd
 from services.stage_store import StageStore
 from services.rules_service import (
@@ -48,6 +50,26 @@ ROOT_DIR = Path(__file__).resolve().parents[2]
 stages = StageStore(ROOT_DIR)
 import_index = ImportIndex(ROOT_DIR / ".workflow" / "state.db")
 workspace_manager = WorkspaceManager(ROOT_DIR)
+
+
+def _sanitize_filename_stem(name: str) -> str:
+    safe = re.sub(r"[^A-Za-z0-9._-]+", "-", name).strip("-._")
+    return safe or "statement"
+
+
+def _import_account_ui(account_id: str, account_cfg: dict) -> dict:
+    institution_id = canonical_template_id(account_cfg.get("institution")) or account_cfg.get("institution")
+    institution_display_name = (
+        display_name_for(institution_id, fallback=str(institution_id)) if institution_id else "Unknown institution"
+    )
+    return {
+        "id": account_id,
+        "displayName": account_cfg.get("display_name", account_id),
+        "institutionId": institution_id,
+        "institutionDisplayName": institution_display_name,
+        "ledgerAccount": account_cfg.get("ledger_account", ""),
+        "last4": account_cfg.get("last4"),
+    }
 
 
 @asynccontextmanager
@@ -94,6 +116,7 @@ def app_state() -> dict:
             "workspacePath": None,
             "workspaceName": None,
             "institutions": [],
+            "importAccounts": [],
             "journals": 0,
             "csvInbox": 0,
             "institutionTemplates": list_templates(),
@@ -101,14 +124,24 @@ def app_state() -> dict:
 
     journals = list(config.journal_dir.glob("*.journal"))
     csvs = list(config.csv_dir.glob("*.csv"))
+    import_accounts = [
+        _import_account_ui(account_id, account_cfg)
+        for account_id, account_cfg in sorted(config.import_accounts.items(), key=lambda x: x[0])
+    ]
+    institutions: dict[str, dict] = {}
+    for account in import_accounts:
+        institution_id = account["institutionId"]
+        if institution_id and institution_id not in institutions:
+            institutions[institution_id] = {
+                "id": institution_id,
+                "displayName": account["institutionDisplayName"],
+            }
     return {
         "initialized": True,
         "workspacePath": str(config.root_dir.resolve()),
         "workspaceName": config.name,
-        "institutions": [
-            {"id": inst_id, "displayName": display_name_for(inst_id, fallback=inst_cfg.get("display_name"))}
-            for inst_id, inst_cfg in sorted(config.institutions.items(), key=lambda x: x[0])
-        ],
+        "institutions": list(institutions.values()),
+        "importAccounts": import_accounts,
         "journals": len(journals),
         "csvInbox": len(csvs),
         "institutionTemplates": list_templates(),
@@ -123,9 +156,9 @@ def workspace_bootstrap(req: WorkspaceBootstrapRequest) -> dict:
             workspace_name=req.workspaceName,
             base_currency=req.baseCurrency,
             start_year=req.startYear,
-            institutions=req.institutions,
+            import_accounts=[account.model_dump() for account in req.importAccounts],
         )
-    except OSError as e:
+    except (OSError, ValueError) as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
 
     return {"ok": True, "workspacePath": str(root)}
@@ -148,28 +181,27 @@ def import_candidates() -> dict:
     rows = []
     for c in scan_candidates(config):
         row = c.__dict__.copy()
-        inst_id = row.get("detected_institution")
-        row["detected_institution_display_name"] = (
-            display_name_for(inst_id) if inst_id else None
+        account_id = row.get("detected_import_account_id")
+        account_cfg = config.import_accounts.get(account_id or "")
+        row["detected_import_account_display_name"] = (
+            account_cfg.get("display_name") if account_cfg else None
         )
+        inst_id = row.get("detected_institution_id")
+        row["detected_institution_display_name"] = display_name_for(inst_id) if inst_id else None
         rows.append(row)
 
-    institutions = [
-        {
-            "id": inst_id,
-            "displayName": display_name_for(inst_id, fallback=inst_cfg.get("display_name")),
-            "defaultAccount": inst_cfg.get("account", ""),
-        }
-        for inst_id, inst_cfg in sorted(config.institutions.items(), key=lambda x: x[0])
+    import_accounts = [
+        _import_account_ui(account_id, account_cfg)
+        for account_id, account_cfg in sorted(config.import_accounts.items(), key=lambda x: x[0])
     ]
-    return {"candidates": rows, "institutions": institutions}
+    return {"candidates": rows, "importAccounts": import_accounts}
 
 
 @app.post("/api/import/upload")
 async def import_upload(
     file: UploadFile = File(...),
     year: str = Form(...),
-    institution: str = Form(...),
+    importAccountId: str = Form(...),
 ) -> dict:
     config = _require_workspace_config()
 
@@ -177,10 +209,11 @@ async def import_upload(
         raise HTTPException(status_code=400, detail="No file selected")
     if not file.filename.lower().endswith(".csv"):
         raise HTTPException(status_code=400, detail="Only CSV files are supported")
-    if institution not in config.institutions:
-        raise HTTPException(status_code=400, detail="Unknown institution selected")
+    if importAccountId not in config.import_accounts:
+        raise HTTPException(status_code=400, detail="Unknown import account selected")
 
-    safe_name = f"{year}-{institution}.csv"
+    original_stem = _sanitize_filename_stem(Path(file.filename).stem)
+    safe_name = f"{year}__{importAccountId}__{original_stem}-{uuid4().hex[:8]}.csv"
     dest = config.csv_dir / safe_name
     dest.parent.mkdir(parents=True, exist_ok=True)
 
@@ -269,8 +302,7 @@ def import_preview(req: ImportPreviewRequest) -> dict:
             config,
             Path(req.csvPath),
             req.year,
-            req.institution,
-            destination_account=req.destinationAccount,
+            req.importAccountId,
         )
     except (FileNotFoundError, ValueError, CommandError) as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
@@ -280,7 +312,7 @@ def import_preview(req: ImportPreviewRequest) -> dict:
         "status": "ready",
         "csvPath": req.csvPath,
         "year": req.year,
-        "institution": req.institution,
+        "importAccountId": req.importAccountId,
         **data,
     }
     stage_id = stages.create(payload)
@@ -316,7 +348,7 @@ def import_apply(req: StageApplyRequest) -> dict:
             config,
             Path(stage["csvPath"]),
             stage["year"],
-            stage["institution"],
+            stage["importAccountId"],
             stage.get("sourceFileSha256", ""),
         )
     except OSError as e:

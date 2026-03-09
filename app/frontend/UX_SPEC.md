@@ -18,35 +18,63 @@ The plain-text accounting model is an implementation detail in the default path,
 ### 1) Setup (`/setup`)
 
 Purpose:
-- Get a new user from zero to first successful import preview.
+- Get a new user from zero to first useful financial activity, not just a completed config form.
+- Default to creating a new workspace; connecting an existing one is secondary.
+- Keep the first import tightly connected to setup so momentum is not lost.
+
+Structure:
+- Resumable checklist or staged flow, not one long form.
+- Clear progress indicator with 4 core steps:
+  - Welcome
+  - Workspace
+  - Accounts
+  - First Import
 
 Sections:
-- Welcome panel with a single primary CTA.
-- Workspace bootstrap form:
-  - workspace path
+- Welcome panel with a single primary CTA and short explanation of what happens next.
+- Workspace basics:
   - workspace name
   - base currency
-  - start year
-  - optional institution templates
+  - advanced reveal for workspace path and start year
+- Accounts to track:
+  - institution
+  - account display name
+  - optional last4
+  - advanced reveal for destination ledger account
+- First import:
+  - upload or choose statement
+  - choose target account if needed
+  - preview import
+  - apply import
 - Existing workspace selector:
+  - available through a secondary reveal or alternate path
   - select an existing workspace path containing `settings/workspace.toml`
-- Active workspace status summary:
-  - institutions configured
-  - years loaded
-  - statements waiting
+- Completion summary:
+  - accounts configured
+  - statements imported
+  - items needing review
 
 Primary actions:
 - `Create Workspace` for first-time initialization.
-- `Select Workspace` to attach an existing workspace.
-- `Go to Import` and `Go to Unknowns` when ready.
+- `Continue` between setup steps when state is sufficient.
+- `Preview Import` and `Apply Import` without leaving setup.
+- `Open Overview` and `Review Categories` once setup is complete.
+
+Behavior:
+- Hide file-path and ledger-account details by default.
+- Auto-suggest destination account paths from the chosen institution/account name.
+- Permit creating the workspace before all accounts are entered.
+- Prefer account name as the primary label; institution is supporting context.
+- If unknowns remain after first import, setup should direct the user into review with clear counts.
 
 ### 2) Home (`/`)
 
 Purpose:
 - Daily finance command center.
+- The dominant question is: what should I do next?
 
 Sections:
-- Hero with concise summary and primary actions.
+- Hero with state-driven summary and a single dominant CTA.
 - Financial snapshot cards:
   - cash and credit summary
   - net worth summary
@@ -55,17 +83,17 @@ Sections:
   - statements waiting to import
   - unresolved review work
   - recent conflicts or notable changes
-- Quick links to import, categorization, and drill-down reporting.
+- At most two secondary actions above the fold.
 - Until richer reporting data exists, placeholder states should still speak in finance-first language rather than system health language.
 
 ### 3) Import (`/import`)
 
 Purpose:
-- Safely import institution CSVs with idempotent outcomes.
+- Safely import account-linked CSVs with idempotent outcomes.
 
 Sections:
 - Candidate inbox table/card list.
-- Import configuration card (selected statement, year, institution).
+- Import configuration card (selected statement, year, import account).
 - Preview result card:
   - New / Duplicate / Conflict counts
   - sample rendered transactions
@@ -78,6 +106,7 @@ Behavior:
 - Candidate click pre-fills settings.
 - Preview required before apply.
 - Apply button disabled during in-flight operation.
+- Import account selection is the primary choice; institution is supporting context.
 - Manual path editing exists only as an advanced fallback, not the primary workflow.
 
 ### 4) Unknowns (`/unknowns`)

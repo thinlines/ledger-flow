@@ -19,11 +19,18 @@ def _make_config(workspace: Path) -> AppConfig:
             "opening_bal_dir": "opening",
             "imports_dir": "imports",
         },
-        institutions={
-            "wfchk": {
-                "display_name": "Wells Fargo Checking",
-                "account": "Assets:Bank:Checking",
+        institution_templates={
+            "wells_fargo": {
+                "display_name": "Wells Fargo",
+                "parser": "wfchk",
                 "CSV_date_format": "%Y/%m/%d",
+            }
+        },
+        import_accounts={
+            "wf_checking": {
+                "display_name": "Wells Fargo Checking",
+                "institution": "wells_fargo",
+                "ledger_account": "Assets:Bank:Checking",
             }
         },
         payee_aliases="payee_aliases.csv",
@@ -32,7 +39,7 @@ def _make_config(workspace: Path) -> AppConfig:
 
 def test_apply_import_can_archive_inbox_csv_after_success(tmp_path: Path) -> None:
     config = _make_config(tmp_path / "workspace")
-    inbox_csv = config.csv_dir / "2026-wfchk.csv"
+    inbox_csv = config.csv_dir / "2026__wf_checking__statement.csv"
     original_csv = "date,amount\n2026-03-01,-7.50\n"
     inbox_csv.write_text(original_csv, encoding="utf-8")
 
@@ -56,7 +63,7 @@ def test_apply_import_can_archive_inbox_csv_after_success(tmp_path: Path) -> Non
                 "payee": "Coffee Shop",
             }
         ],
-        "institution": "wfchk",
+        "importAccountId": "wf_checking",
         "year": "2026",
         "sourceFileSha256": "abc123def4567890",
     }
@@ -66,7 +73,7 @@ def test_apply_import_can_archive_inbox_csv_after_success(tmp_path: Path) -> Non
         config,
         inbox_csv,
         year="2026",
-        institution="wfchk",
+        import_account_id="wf_checking",
         source_file_sha256="abc123def4567890",
     )
 
@@ -81,7 +88,7 @@ def test_apply_import_can_archive_inbox_csv_after_success(tmp_path: Path) -> Non
     assert archived_csv.exists()
     assert archived_csv.read_text(encoding="utf-8") == original_csv
     assert not inbox_csv.exists()
-    assert archived_csv.parent == config.imports_dir / "processed" / "2026" / "wfchk"
+    assert archived_csv.parent == config.imports_dir / "processed" / "2026" / "wf_checking"
 
 
 def test_archive_inbox_csv_leaves_external_files_untouched(tmp_path: Path) -> None:
@@ -94,7 +101,7 @@ def test_archive_inbox_csv_leaves_external_files_untouched(tmp_path: Path) -> No
         config,
         external_csv,
         year="2026",
-        institution="wfchk",
+        import_account_id="wf_checking",
         source_file_sha256="abc123def4567890",
     )
 

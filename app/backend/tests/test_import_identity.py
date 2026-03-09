@@ -8,7 +8,7 @@ def test_parse_transaction_builds_stable_identity() -> None:
             "    Assets:Wells Fargo Checking  $-7.50",
             "    Expenses:Unknown",
         ],
-        institution="wfchk",
+        import_account_id="wf_checking",
         institution_account="Assets:Wells Fargo Checking",
     )
     assert txn["sourceIdentity"]
@@ -33,7 +33,14 @@ def test_annotated_raw_txn_adds_import_metadata() -> None:
         "sourceIdentity": "identity123",
         "sourcePayloadHash": "payload123",
     }
-    out = _annotated_raw_txn(txn, source_file_sha256="filehash")
+    out = _annotated_raw_txn(
+        txn,
+        source_file_sha256="filehash",
+        import_account_id="wf_checking",
+        institution_template_id="wells_fargo",
+    )
+    assert "; import_account_id: wf_checking" in out
+    assert "; institution_template: wells_fargo" in out
     assert "; source_identity: identity123" in out
     assert "; source_payload_hash: payload123" in out
     assert "; source_file_sha256: filehash" in out

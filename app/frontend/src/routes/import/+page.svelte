@@ -6,27 +6,40 @@
     file_name: string;
     abs_path: string;
     detected_year: string | null;
-    detected_institution: string | null;
+    detected_import_account_id: string | null;
+    detected_import_account_display_name: string | null;
     detected_institution_display_name: string | null;
-    is_configured_institution: boolean;
+    is_configured_import_account: boolean;
   };
-  type InstitutionOption = { id: string; displayName: string; defaultAccount?: string };
+
+  type ImportAccountOption = {
+    id: string;
+    displayName: string;
+    institutionDisplayName: string;
+    ledgerAccount: string;
+    last4?: string | null;
+  };
 
   let initialized = false;
   let candidates: Candidate[] = [];
-  let institutions: InstitutionOption[] = [];
+  let importAccounts: ImportAccountOption[] = [];
   let selectedPath = '';
   let year = String(new Date().getFullYear());
-  let institution = '';
-  let destinationAccount = '';
+  let importAccountId = '';
   let selectedFile: File | null = null;
   let preview: any = null;
   let error = '';
   let loading = false;
 
+  $: selectedImportAccount = importAccounts.find((account) => account.id === importAccountId) ?? null;
+
   function pathLabel(path: string): string {
     const parts = path.split('/').filter(Boolean);
     return parts.at(-1) ?? path;
+  }
+
+  function accountLabel(account: ImportAccountOption): string {
+    return account.last4 ? `${account.displayName} ••${account.last4}` : account.displayName;
   }
 
   async function loadCandidates() {
@@ -35,23 +48,29 @@
       initialized = state.initialized;
       if (!initialized) return;
 
-      const data = await apiGet<{ candidates: Candidate[]; institutions: InstitutionOption[] }>('/api/import/candidates');
+      const data = await apiGet<{ candidates: Candidate[]; importAccounts: ImportAccountOption[] }>('/api/import/candidates');
       candidates = data.candidates;
-      institutions = data.institutions;
+      importAccounts = data.importAccounts;
+      if (!importAccountId && importAccounts.length === 1) {
+        importAccountId = importAccounts[0].id;
+      }
+      if (importAccountId && !importAccounts.some((account) => account.id === importAccountId)) {
+        importAccountId = '';
+      }
     } catch (e) {
       error = String(e);
     }
   }
 
   async function uploadFile() {
-    if (!selectedFile || !institution || !year) return;
+    if (!selectedFile || !importAccountId || !year) return;
     loading = true;
     error = '';
     try {
       const form = new FormData();
       form.append('file', selectedFile);
       form.append('year', year);
-      form.append('institution', institution);
+      form.append('importAccountId', importAccountId);
 
       const res = await fetch('/api/import/upload', { method: 'POST', body: form });
       if (!res.ok) {
@@ -77,8 +96,7 @@
       preview = await apiPost('/api/import/preview', {
         csvPath: selectedPath,
         year,
-        institution,
-        destinationAccount: destinationAccount || null
+        importAccountId
       });
     } catch (e) {
       error = String(e);
@@ -102,22 +120,10 @@
     }
   }
 
-  function pickCandidate(c: Candidate) {
-    selectedPath = c.abs_path;
-    year = c.detected_year ?? year;
-    institution = c.detected_institution ?? '';
-    const picked = institutions.find((x) => x.id === institution);
-    if (picked?.defaultAccount) {
-      destinationAccount = picked.defaultAccount;
-    }
-  }
-
-  function onInstitutionChange(id: string) {
-    institution = id;
-    const picked = institutions.find((x) => x.id === id);
-    if (picked?.defaultAccount) {
-      destinationAccount = picked.defaultAccount;
-    }
+  function pickCandidate(candidate: Candidate) {
+    selectedPath = candidate.abs_path;
+    year = candidate.detected_year ?? year;
+    importAccountId = candidate.detected_import_account_id ?? '';
   }
 
   onMount(loadCandidates);
@@ -139,160 +145,193 @@
     <section class="view-card"><p class="error-text">{error}</p></section>
   {/if}
 
-  <section class="grid-2">
-    <article class="view-card">
-      <p class="eyebrow">Step 1</p>
-      <h3>Add a Statement</h3>
-
-      <div class="field grid-2 compact">
-        <div class="field">
-          <label for="uploadInstitution">Institution</label>
-          <select id="uploadInstitution" bind:value={institution} on:change={(e) => onInstitutionChange((e.currentTarget as HTMLSelectElement).value)}>
-            <option value="">Select...</option>
-            {#each institutions as inst}
-              <option value={inst.id}>{inst.displayName}</option>
-            {/each}
-          </select>
-        </div>
-        <div class="field">
-          <label for="uploadYear">Year</label>
-          <input id="uploadYear" bind:value={year} />
-        </div>
-      </div>
-
-      <div class="field">
-        <label for="statementFile">Statement File</label>
-        <input
-          id="statementFile"
-          type="file"
-          accept=".csv,text/csv"
-          on:change={(e) => (selectedFile = (e.currentTarget as HTMLInputElement).files?.[0] ?? null)}
-        />
-      </div>
-
-      <button class="btn btn-primary" disabled={loading || !selectedFile || !institution || !year} on:click={uploadFile}>
-        {loading ? 'Uploading...' : 'Upload Statement'}
-      </button>
-      <p class="muted">Uploaded statements are saved to the inbox and appear below automatically.</p>
-    </article>
-
-    <article class="view-card">
-      <p class="eyebrow">Step 2</p>
-      <h3>Statements Waiting</h3>
-      {#if candidates.length === 0}
-        <p class="muted">No statements are waiting in the inbox.</p>
-      {:else}
-        <div class="list">
-          {#each candidates as c}
-            <button class="row" on:click={() => pickCandidate(c)}>
-              <span>{c.file_name}</span>
-              {#if c.detected_institution_display_name}
-                <span class="muted small">{c.detected_institution_display_name}</span>
-              {/if}
-              {#if c.is_configured_institution}
-                <span class="pill ok">Configured</span>
-              {:else}
-                <span class="pill warn">Needs setup</span>
-              {/if}
-            </button>
-          {/each}
-        </div>
-      {/if}
-    </article>
-
-    <article class="view-card">
-      <p class="eyebrow">Step 3</p>
-      <h3>Review Before Import</h3>
-
-      <div class="selection-summary">
-        <p class="selection-label">Selected statement</p>
-        <p class="selection-value">{selectedPath ? pathLabel(selectedPath) : 'No statement selected yet'}</p>
-        <p class="muted">Choose a statement from the list above or upload a new one.</p>
-      </div>
-
-      <div class="field grid-2 compact">
-        <div class="field">
-          <label for="year">Year</label>
-          <input id="year" bind:value={year} />
-        </div>
-
-        <div class="field">
-          <label for="institution">Institution</label>
-          <select id="institution" bind:value={institution} on:change={(e) => onInstitutionChange((e.currentTarget as HTMLSelectElement).value)}>
-            <option value="">Select...</option>
-            {#each institutions as inst}
-              <option value={inst.id}>{inst.displayName}</option>
-            {/each}
-          </select>
-        </div>
-      </div>
-
-      <div class="field">
-        <label for="destinationAccount">Primary Account</label>
-        <input id="destinationAccount" bind:value={destinationAccount} placeholder="Assets:Bank:Checking" />
-      </div>
-
-      <details class="advanced-panel">
-        <summary>Advanced file selection</summary>
-        <div class="field">
-          <label for="csvPath">Statement Path</label>
-          <input id="csvPath" bind:value={selectedPath} />
-        </div>
-      </details>
-
-      <button class="btn btn-primary" disabled={loading || !selectedPath || !year || !institution} on:click={runPreview}>
-        {loading ? 'Preparing preview...' : 'Preview Import'}
-      </button>
-    </article>
-  </section>
-
-  {#if preview}
+  {#if importAccounts.length === 0}
     <section class="view-card">
-      <p class="eyebrow">Preview Result</p>
-      <h3>Import Preview Ready</h3>
-      <p class="muted">Confirm what will be added before applying the import.</p>
-
-      {#if preview.summary}
-        <div class="summary">
-          <span class="pill ok">New {preview.summary.newCount}</span>
-          <span class="pill">Duplicates {preview.summary.duplicateCount}</span>
-          <span class="pill warn">Conflicts {preview.summary.conflictCount}</span>
-          <span class="pill">Unknown {preview.summary.unknownCount}</span>
-        </div>
-      {/if}
-
-      {#if preview.result}
-        <div class="result">
-          <p><span class="pill ok">Applied</span></p>
-          <p>
-            Added {preview.result.appendedTxnCount} | Skipped duplicates {preview.result.skippedDuplicateCount} |
-            Conflicts {preview.result.conflicts?.length ?? 0}
-          </p>
-          {#if preview.result.sourceCsvWarning}
-            <p class="error-text">{preview.result.sourceCsvWarning}</p>
-          {/if}
-        </div>
-      {:else}
-        <button class="btn btn-primary" disabled={loading} on:click={applyStage}>Apply Import</button>
-      {/if}
-
-      <details class="advanced-panel">
-        <summary>Technical details</summary>
-        <p class="muted">Import stage: {preview.stageId}</p>
-        <p class="muted">Destination file: {preview.targetJournalPath}</p>
-        {#if preview.result?.backupPath}
-          <p class="muted">Backup: {preview.result.backupPath}</p>
-        {/if}
-        {#if preview.result?.archivedCsvPath}
-          <p class="muted">Archived source: {preview.result.archivedCsvPath}</p>
-        {/if}
-      </details>
-
-      {#if preview.preview?.length}
-        <h4>Sample Transactions</h4>
-        <pre>{preview.preview.slice(0, 8).join('\n\n')}</pre>
-      {/if}
+      <p class="error-text">No import accounts are configured for this workspace yet.</p>
+      <a class="btn btn-primary" href="/setup">Configure Accounts</a>
     </section>
+  {:else}
+    <section class="grid-2">
+      <article class="view-card">
+        <p class="eyebrow">Step 1</p>
+        <h3>Add a Statement</h3>
+
+        <div class="field grid-2 compact">
+          <div class="field">
+            <label for="uploadImportAccount">Account</label>
+            <select id="uploadImportAccount" bind:value={importAccountId}>
+              <option value="">Select...</option>
+              {#each importAccounts as account}
+                <option value={account.id}>{accountLabel(account)}</option>
+              {/each}
+            </select>
+          </div>
+          <div class="field">
+            <label for="uploadYear">Year</label>
+            <input id="uploadYear" bind:value={year} />
+          </div>
+        </div>
+
+        <div class="field">
+          <label for="statementFile">Statement File</label>
+          <input
+            id="statementFile"
+            type="file"
+            accept=".csv,text/csv"
+            on:change={(e) => (selectedFile = (e.currentTarget as HTMLInputElement).files?.[0] ?? null)}
+          />
+        </div>
+
+        {#if selectedImportAccount}
+          <div class="selection-summary">
+            <p class="selection-label">Selected account</p>
+            <p class="selection-value">{accountLabel(selectedImportAccount)}</p>
+            <p class="muted">{selectedImportAccount.institutionDisplayName}</p>
+            <p class="muted small">Imports into {selectedImportAccount.ledgerAccount}</p>
+          </div>
+        {/if}
+
+        <button class="btn btn-primary" disabled={loading || !selectedFile || !importAccountId || !year} on:click={uploadFile}>
+          {loading ? 'Uploading...' : 'Upload Statement'}
+        </button>
+        <p class="muted">Uploaded statements are saved to the inbox and appear below automatically.</p>
+      </article>
+
+      <article class="view-card">
+        <p class="eyebrow">Step 2</p>
+        <h3>Statements Waiting</h3>
+        {#if candidates.length === 0}
+          <p class="muted">No statements are waiting in the inbox.</p>
+        {:else}
+          <div class="list">
+            {#each candidates as candidate}
+              <button class="row" on:click={() => pickCandidate(candidate)}>
+                <div class="row-main">
+                  <span>{candidate.file_name}</span>
+                  {#if candidate.detected_import_account_display_name}
+                    <span class="muted small">{candidate.detected_import_account_display_name}</span>
+                  {/if}
+                  {#if candidate.detected_institution_display_name}
+                    <span class="muted small">{candidate.detected_institution_display_name}</span>
+                  {/if}
+                </div>
+                {#if candidate.is_configured_import_account}
+                  <span class="pill ok">Configured</span>
+                {:else}
+                  <span class="pill warn">Needs setup</span>
+                {/if}
+              </button>
+            {/each}
+          </div>
+        {/if}
+      </article>
+
+      <article class="view-card">
+        <p class="eyebrow">Step 3</p>
+        <h3>Review Before Import</h3>
+
+        <div class="selection-summary">
+          <p class="selection-label">Selected statement</p>
+          <p class="selection-value">{selectedPath ? pathLabel(selectedPath) : 'No statement selected yet'}</p>
+          <p class="muted">Choose a statement from the list above or upload a new one.</p>
+        </div>
+
+        <div class="field grid-2 compact">
+          <div class="field">
+            <label for="year">Year</label>
+            <input id="year" bind:value={year} />
+          </div>
+
+          <div class="field">
+            <label for="importAccountId">Account</label>
+            <select id="importAccountId" bind:value={importAccountId}>
+              <option value="">Select...</option>
+              {#each importAccounts as account}
+                <option value={account.id}>{accountLabel(account)}</option>
+              {/each}
+            </select>
+          </div>
+        </div>
+
+        {#if selectedImportAccount}
+          <div class="selection-summary">
+            <p class="selection-label">Import target</p>
+            <p class="selection-value">{accountLabel(selectedImportAccount)}</p>
+            <p class="muted">{selectedImportAccount.institutionDisplayName}</p>
+            <p class="muted small">Ledger account: {selectedImportAccount.ledgerAccount}</p>
+          </div>
+        {/if}
+
+        <details class="advanced-panel">
+          <summary>Advanced file selection</summary>
+          <div class="field">
+            <label for="csvPath">Statement Path</label>
+            <input id="csvPath" bind:value={selectedPath} />
+          </div>
+        </details>
+
+        <button class="btn btn-primary" disabled={loading || !selectedPath || !year || !importAccountId} on:click={runPreview}>
+          {loading ? 'Preparing preview...' : 'Preview Import'}
+        </button>
+      </article>
+    </section>
+
+    {#if preview}
+      <section class="view-card">
+        <p class="eyebrow">Preview Result</p>
+        <h3>Import Preview Ready</h3>
+        <p class="muted">Confirm what will be added before applying the import.</p>
+
+        {#if preview.importAccountDisplayName}
+          <div class="selection-summary">
+            <p class="selection-label">Import account</p>
+            <p class="selection-value">{preview.importAccountDisplayName}</p>
+            <p class="muted">Ledger account: {preview.destinationAccount}</p>
+          </div>
+        {/if}
+
+        {#if preview.summary}
+          <div class="summary">
+            <span class="pill ok">New {preview.summary.newCount}</span>
+            <span class="pill">Duplicates {preview.summary.duplicateCount}</span>
+            <span class="pill warn">Conflicts {preview.summary.conflictCount}</span>
+            <span class="pill">Unknown {preview.summary.unknownCount}</span>
+          </div>
+        {/if}
+
+        {#if preview.result}
+          <div class="result">
+            <p><span class="pill ok">Applied</span></p>
+            <p>
+              Added {preview.result.appendedTxnCount} | Skipped duplicates {preview.result.skippedDuplicateCount} |
+              Conflicts {preview.result.conflicts?.length ?? 0}
+            </p>
+            {#if preview.result.sourceCsvWarning}
+              <p class="error-text">{preview.result.sourceCsvWarning}</p>
+            {/if}
+          </div>
+        {:else}
+          <button class="btn btn-primary" disabled={loading} on:click={applyStage}>Apply Import</button>
+        {/if}
+
+        <details class="advanced-panel">
+          <summary>Technical details</summary>
+          <p class="muted">Import stage: {preview.stageId}</p>
+          <p class="muted">Destination file: {preview.targetJournalPath}</p>
+          {#if preview.result?.backupPath}
+            <p class="muted">Backup: {preview.result.backupPath}</p>
+          {/if}
+          {#if preview.result?.archivedCsvPath}
+            <p class="muted">Archived source: {preview.result.archivedCsvPath}</p>
+          {/if}
+        </details>
+
+        {#if preview.preview?.length}
+          <h4>Sample Transactions</h4>
+          <pre>{preview.preview.slice(0, 8).join('\n\n')}</pre>
+        {/if}
+      </section>
+    {/if}
   {/if}
 {/if}
 
@@ -317,6 +356,7 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
+    gap: 1rem;
     border: 1px solid var(--line);
     background: var(--card-2);
     border-radius: 10px;
@@ -324,6 +364,11 @@
     cursor: pointer;
     text-align: left;
     width: 100%;
+  }
+
+  .row-main {
+    display: grid;
+    gap: 0.1rem;
   }
 
   .summary {
@@ -370,7 +415,6 @@
   }
 
   .small {
-    margin-left: 0.5rem;
     font-size: 0.8rem;
   }
 

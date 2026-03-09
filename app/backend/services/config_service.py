@@ -15,7 +15,8 @@ class AppConfig:
     config_toml: Path
     workspace: dict
     dirs: dict
-    institutions: dict
+    institution_templates: dict
+    import_accounts: dict
     payee_aliases: str
 
     @property
@@ -56,6 +57,7 @@ def load_config(config_toml: Path) -> AppConfig:
         config_toml=config_toml,
         workspace=raw.get("workspace", {}),
         dirs=raw["dirs"],
-        institutions=raw.get("institutions", {}),
+        institution_templates=raw.get("institution_templates", {}),
+        import_accounts=raw.get("import_accounts", {}),
         payee_aliases=raw.get("payee_aliases", "payee_aliases.csv"),
     )

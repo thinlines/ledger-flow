@@ -23,11 +23,11 @@ def _load_create_bank_csv() -> Callable:
     return module.create_bank_csv
 
 
-def normalize_csv_to_intermediate(config: AppConfig, csv_path: Path, institution: str) -> str:
-    if institution not in config.institutions:
-        raise ValueError(f"Unknown institution: {institution}")
+def normalize_csv_to_intermediate(config: AppConfig, csv_path: Path, institution_template_id: str) -> str:
+    if institution_template_id not in config.institution_templates:
+        raise ValueError(f"Unknown institution template: {institution_template_id}")
 
-    inst_cfg = config.institutions[institution]
+    inst_cfg = config.institution_templates[institution_template_id]
     head = int(inst_cfg.get("head", 0))
     tail_cfg = inst_cfg.get("tail", 0)
     tail = int(tail_cfg) if tail_cfg else 0
@@ -43,13 +43,13 @@ def normalize_csv_to_intermediate(config: AppConfig, csv_path: Path, institution
 
     create_cfg = {
         "institutions": {
-            institution: {
-                "parser": inst_cfg.get("parser", institution),
+            institution_template_id: {
+                "parser": inst_cfg.get("parser", institution_template_id),
             }
         }
     }
 
-    bank_csv = create_bank_csv(institution, sliced, create_cfg)
+    bank_csv = create_bank_csv(institution_template_id, sliced, create_cfg)
     reader = bank_csv.reader()
 
     output_rows = []

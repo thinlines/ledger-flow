@@ -17,15 +17,21 @@
     csvInbox?: number;
   };
 
+  type ActionLink = {
+    href: string;
+    label: string;
+  };
+
   let health: Health | null = null;
   let state: AppState | null = null;
   let error = '';
   let healthWarning = '';
 
-  let nextActionTitle = 'Start with setup';
-  let nextActionCopy = 'Create a workspace so the app can manage your books through the UI.';
-  let nextActionHref = '/setup';
-  let nextActionLabel = 'Open setup';
+  let heroEyebrow = 'Get Started';
+  let heroTitle = 'Create your workspace';
+  let heroCopy = 'Start by creating a workspace so Ledger Flow can manage your finances through the app.';
+  let primaryAction: ActionLink = { href: '/setup', label: 'Create workspace' };
+  let secondaryActions: ActionLink[] = [{ href: '/setup#existing', label: 'Use existing workspace' }];
 
   $: inboxCount = state?.csvInbox ?? 0;
   $: journalCount = state?.journals ?? 0;
@@ -33,25 +39,32 @@
 
   $: {
     if (!state?.initialized) {
-      nextActionTitle = 'Start with setup';
-      nextActionCopy = 'Create a workspace so Ledger Flow can manage your finances from the app.';
-      nextActionHref = '/setup';
-      nextActionLabel = 'Open setup';
+      heroEyebrow = 'Get Started';
+      heroTitle = 'Create your workspace';
+      heroCopy = 'Start with a new workspace. If you already have one, connect it instead.';
+      primaryAction = { href: '/setup', label: 'Create workspace' };
+      secondaryActions = [{ href: '/setup#existing', label: 'Use existing workspace' }];
     } else if (inboxCount > 0) {
-      nextActionTitle = 'Import the latest statement activity';
-      nextActionCopy = 'Statements are already waiting. Preview them, confirm what is new, and keep the picture current.';
-      nextActionHref = '/import';
-      nextActionLabel = 'Open import';
+      heroEyebrow = 'Import';
+      heroTitle = inboxCount === 1 ? 'One statement is waiting' : `${inboxCount} statements are waiting`;
+      heroCopy = 'Bring in the latest activity first. After that, review any categories that still need attention.';
+      primaryAction = { href: '/import', label: 'Import statements' };
+      secondaryActions = [{ href: '/unknowns', label: 'Review categories' }];
     } else if (journalCount === 0) {
-      nextActionTitle = 'Bring in your first statement';
-      nextActionCopy = 'Your workspace is ready, but there is no history loaded yet. Start with an import to populate the dashboard.';
-      nextActionHref = '/import';
-      nextActionLabel = 'Import activity';
+      heroEyebrow = 'First Import';
+      heroTitle = 'Bring in your first statement';
+      heroCopy = 'Your workspace is ready. Import a statement to start building account history and make the app useful day to day.';
+      primaryAction = { href: '/import', label: 'Import activity' };
+      secondaryActions = [{ href: '/setup', label: 'Review setup' }];
     } else {
-      nextActionTitle = 'Keep categorization sharp';
-      nextActionCopy = 'Review uncategorized activity and save repeat decisions as reusable automation rules.';
-      nextActionHref = '/unknowns';
-      nextActionLabel = 'Open categorization';
+      heroEyebrow = 'Review';
+      heroTitle = 'Keep recent activity clean';
+      heroCopy = 'Nothing is waiting to import. Review uncategorized activity and save repeat decisions as automation rules.';
+      primaryAction = { href: '/unknowns', label: 'Review categories' };
+      secondaryActions = [
+        { href: '/import', label: 'Import activity' },
+        { href: '/rules', label: 'Automation rules' }
+      ];
     }
   }
 
@@ -63,6 +76,8 @@
       return;
     }
 
+    if (!state?.initialized) return;
+
     try {
       health = await apiGet<Health>('/api/health');
     } catch (_e) {
@@ -72,26 +87,14 @@
 </script>
 
 <section class="view-card hero home-hero">
-  <p class="eyebrow">Overview</p>
-  <h2 class="page-title page-title-xl">Keep your finances current</h2>
-  <p class="subtitle hero-subtitle">
-    A clean daily workspace for imports, categorization, and ongoing financial upkeep.
-  </p>
+  <p class="eyebrow">{heroEyebrow}</p>
+  <h2 class="page-title page-title-xl">{heroTitle}</h2>
+  <p class="subtitle hero-subtitle">{heroCopy}</p>
   <div class="hero-actions">
-    {#if state?.initialized}
-      <a class="btn btn-primary" href={nextActionHref}>{nextActionLabel}</a>
-      {#if nextActionHref !== '/import'}
-        <a class="btn btn-subtle" href="/import">Import</a>
-      {/if}
-      {#if nextActionHref !== '/unknowns'}
-        <a class="btn btn-subtle" href="/unknowns">Categorize</a>
-      {/if}
-      {#if nextActionHref !== '/rules'}
-        <a class="btn btn-subtle" href="/rules">Automation</a>
-      {/if}
-    {:else}
-      <a class="btn btn-primary" href="/setup">Create Workspace</a>
-    {/if}
+    <a class="btn btn-primary" href={primaryAction.href}>{primaryAction.label}</a>
+    {#each secondaryActions as action}
+      <a class="text-link" href={action.href}>{action.label}</a>
+    {/each}
   </div>
 </section>
 
@@ -119,63 +122,26 @@
       </article>
     </section>
 
-    <section class="home-grid">
-      <article class="view-card primary-panel">
-        <p class="eyebrow">Next Up</p>
-        <h3 class="primary-title">{nextActionTitle}</h3>
-        <p class="primary-copy">{nextActionCopy}</p>
-        <a class="btn btn-primary" href={nextActionHref}>{nextActionLabel}</a>
-      </article>
+    <section class="view-card workspace-strip">
+      <div>
+        <p class="eyebrow">Workspace</p>
+        <p class="workspace-name">{state.workspaceName}</p>
+        <p class="workspace-path">{state.workspacePath}</p>
+      </div>
 
-      <article class="view-card secondary-panel">
-        <p class="eyebrow">Workflows</p>
-        <nav class="link-list" aria-label="Home workflows">
-          <a class="link-row" href="/import">
-            <span>Import activity</span>
-            <small>Bring in the latest statements</small>
-          </a>
-          <a class="link-row" href="/unknowns">
-            <span>Review categories</span>
-            <small>Resolve uncategorized transactions</small>
-          </a>
-          <a class="link-row" href="/rules">
-            <span>Automation rules</span>
-            <small>Save repeat decisions once</small>
-          </a>
-        </nav>
-
-        <div class="workspace-meta">
-          <p class="workspace-name">{state.workspaceName}</p>
-          <p class="workspace-path">{state.workspacePath}</p>
-          <div class="workspace-pills">
-            <span class="pill ok">Ready</span>
-            {#if health}
-              <span class="pill ok">Connected</span>
-            {:else if healthWarning}
-              <span class="pill warn">{healthWarning}</span>
-            {/if}
-          </div>
-        </div>
-      </article>
+      <div class="workspace-pills">
+        <span class="pill ok">Ready</span>
+        {#if health}
+          <span class="pill ok">Connected</span>
+        {:else if healthWarning}
+          <span class="pill warn">{healthWarning}</span>
+        {/if}
+      </div>
     </section>
   {:else}
-    <section class="home-grid">
-      <article class="view-card primary-panel">
-        <p class="eyebrow">Get Started</p>
-        <h3 class="primary-title">Create your workspace once</h3>
-        <p class="primary-copy">
-          Setup should feel like using a modern finance app, not assembling folders by hand. The UI handles the structure for you.
-        </p>
-        <a class="btn btn-primary" href="/setup">Open setup</a>
-      </article>
-
-      <article class="view-card secondary-panel">
-        <p class="eyebrow">Principle</p>
-        <p class="workspace-name">Open underneath when needed</p>
-        <p class="workspace-path">
-          The plain-text model is still valuable for portability and control, but it should remain optional knowledge for most users.
-        </p>
-      </article>
+    <section class="view-card minimal-note">
+      <p class="minimal-title">The default path is simple: create a workspace, import a statement, then review any missing categories.</p>
+      <p class="workspace-path">The plain-text foundation stays behind the scenes unless you want to engage with it.</p>
     </section>
   {/if}
 {/if}
@@ -189,7 +155,8 @@
     margin-top: 1rem;
     display: flex;
     flex-wrap: wrap;
-    gap: 0.6rem;
+    gap: 0.8rem 1rem;
+    align-items: center;
   }
 
   .page-title-xl {
@@ -204,16 +171,21 @@
     line-height: 1.6;
   }
 
-  .btn-subtle {
-    background: rgba(255, 255, 255, 0.62);
-    border-color: rgba(15, 95, 136, 0.12);
+  .text-link {
+    color: var(--brand-strong);
+    text-decoration: none;
+    font-weight: 700;
+  }
+
+  .text-link:hover {
+    text-decoration: underline;
   }
 
   .stat-strip {
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 0;
-    padding: 0.35rem 0;
+    padding: 0.3rem 0;
   }
 
   .stat {
@@ -245,71 +217,11 @@
     color: var(--muted-foreground);
   }
 
-  .home-grid {
-    display: grid;
-    grid-template-columns: minmax(0, 1.35fr) minmax(280px, 0.85fr);
+  .workspace-strip {
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
     gap: 1rem;
-    align-items: start;
-  }
-
-  .primary-panel {
-    padding: 1.35rem 1.4rem;
-  }
-
-  .primary-title {
-    margin: 0;
-    font-family: 'Space Grotesk', sans-serif;
-    font-size: 1.7rem;
-    line-height: 1.05;
-    max-width: 14ch;
-  }
-
-  .primary-copy {
-    margin: 0.75rem 0 1.2rem;
-    color: var(--muted-foreground);
-    line-height: 1.65;
-    max-width: 38rem;
-  }
-
-  .secondary-panel {
-    display: grid;
-    gap: 1.2rem;
-  }
-
-  .link-list {
-    display: grid;
-  }
-
-  .link-row {
-    display: grid;
-    gap: 0.18rem;
-    text-decoration: none;
-    color: var(--foreground);
-    padding: 0.9rem 0;
-    border-top: 1px solid rgba(15, 95, 136, 0.08);
-  }
-
-  .link-row:first-child {
-    border-top: 0;
-    padding-top: 0.2rem;
-  }
-
-  .link-row span {
-    font-weight: 700;
-  }
-
-  .link-row small {
-    color: var(--muted-foreground);
-    font-size: 0.9rem;
-  }
-
-  .link-row:hover span {
-    color: var(--brand-strong);
-  }
-
-  .workspace-meta {
-    border-top: 1px solid rgba(15, 95, 136, 0.08);
-    padding-top: 1rem;
   }
 
   .workspace-name {
@@ -326,16 +238,26 @@
     word-break: break-word;
   }
 
+  .minimal-note {
+    padding: 1.2rem 1.4rem;
+  }
+
+  .minimal-title {
+    margin: 0;
+    font-family: 'Space Grotesk', sans-serif;
+    font-size: 1.2rem;
+    line-height: 1.25;
+    max-width: 38rem;
+  }
+
   .workspace-pills {
     display: flex;
     flex-wrap: wrap;
     gap: 0.45rem;
-    margin-top: 0.9rem;
   }
 
   @media (max-width: 900px) {
-    .stat-strip,
-    .home-grid {
+    .stat-strip {
       grid-template-columns: 1fr;
     }
 
@@ -346,6 +268,11 @@
 
     .page-title-xl {
       max-width: none;
+    }
+
+    .workspace-strip {
+      flex-direction: column;
+      align-items: flex-start;
     }
   }
 </style>

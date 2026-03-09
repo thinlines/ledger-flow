@@ -6,8 +6,7 @@ from pydantic import BaseModel, Field
 class ImportPreviewRequest(BaseModel):
     csvPath: str
     year: str = Field(pattern=r"^\d{4}$")
-    institution: str
-    destinationAccount: str | None = None
+    importAccountId: str
 
 
 class StageApplyRequest(BaseModel):
@@ -70,12 +69,19 @@ class CreateAccountRequest(BaseModel):
     accountType: str | None = None
 
 
+class WorkspaceImportAccountRequest(BaseModel):
+    institutionId: str = Field(min_length=1)
+    displayName: str = Field(min_length=1)
+    ledgerAccount: str = Field(min_length=1)
+    last4: str | None = None
+
+
 class WorkspaceBootstrapRequest(BaseModel):
     workspacePath: str
     workspaceName: str = "My Books"
     baseCurrency: str = "USD"
     startYear: int
-    institutions: list[str] = []
+    importAccounts: list[WorkspaceImportAccountRequest] = []
 
 
 class WorkspaceSelectRequest(BaseModel):
