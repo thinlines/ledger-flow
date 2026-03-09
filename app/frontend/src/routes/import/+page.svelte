@@ -24,6 +24,11 @@
   let error = '';
   let loading = false;
 
+  function pathLabel(path: string): string {
+    const parts = path.split('/').filter(Boolean);
+    return parts.at(-1) ?? path;
+  }
+
   async function loadCandidates() {
     try {
       const state = await apiGet<{ initialized: boolean }>('/api/app/state');
@@ -119,9 +124,9 @@
 </script>
 
 <section class="view-card hero">
-  <p class="eyebrow">Import Center</p>
-  <h2 class="page-title">Preview and Import Transactions</h2>
-  <p class="subtitle">Upload a statement, preview match results, and apply only net-new transactions.</p>
+  <p class="eyebrow">Import</p>
+  <h2 class="page-title">Bring in new statement activity</h2>
+  <p class="subtitle">Upload a statement, confirm the preview, and add only transactions that are actually new.</p>
 </section>
 
 {#if !initialized}
@@ -137,7 +142,7 @@
   <section class="grid-2">
     <article class="view-card">
       <p class="eyebrow">Step 1</p>
-      <h3>Upload Statement File</h3>
+      <h3>Add a Statement</h3>
 
       <div class="field grid-2 compact">
         <div class="field">
@@ -156,7 +161,7 @@
       </div>
 
       <div class="field">
-        <label for="statementFile">CSV File</label>
+        <label for="statementFile">Statement File</label>
         <input
           id="statementFile"
           type="file"
@@ -166,16 +171,16 @@
       </div>
 
       <button class="btn btn-primary" disabled={loading || !selectedFile || !institution || !year} on:click={uploadFile}>
-        {loading ? 'Uploading...' : 'Upload File'}
+        {loading ? 'Uploading...' : 'Upload Statement'}
       </button>
-      <p class="muted">Uploaded files are saved to your workspace inbox and auto-detected below.</p>
+      <p class="muted">Uploaded statements are saved to the inbox and appear below automatically.</p>
     </article>
 
     <article class="view-card">
       <p class="eyebrow">Step 2</p>
-      <h3>Detected CSV Files</h3>
+      <h3>Statements Waiting</h3>
       {#if candidates.length === 0}
-        <p class="muted">No CSV files found in workspace inbox.</p>
+        <p class="muted">No statements are waiting in the inbox.</p>
       {:else}
         <div class="list">
           {#each candidates as c}
@@ -197,11 +202,12 @@
 
     <article class="view-card">
       <p class="eyebrow">Step 3</p>
-      <h3>Import Preview Inputs</h3>
+      <h3>Review Before Import</h3>
 
-      <div class="field">
-        <label for="csvPath">CSV Path</label>
-        <input id="csvPath" bind:value={selectedPath} />
+      <div class="selection-summary">
+        <p class="selection-label">Selected statement</p>
+        <p class="selection-value">{selectedPath ? pathLabel(selectedPath) : 'No statement selected yet'}</p>
+        <p class="muted">Choose a statement from the list above or upload a new one.</p>
       </div>
 
       <div class="field grid-2 compact">
@@ -222,9 +228,17 @@
       </div>
 
       <div class="field">
-        <label for="destinationAccount">Destination Account</label>
+        <label for="destinationAccount">Primary Account</label>
         <input id="destinationAccount" bind:value={destinationAccount} placeholder="Assets:Bank:Checking" />
       </div>
+
+      <details class="advanced-panel">
+        <summary>Advanced file selection</summary>
+        <div class="field">
+          <label for="csvPath">Statement Path</label>
+          <input id="csvPath" bind:value={selectedPath} />
+        </div>
+      </details>
 
       <button class="btn btn-primary" disabled={loading || !selectedPath || !year || !institution} on:click={runPreview}>
         {loading ? 'Preparing preview...' : 'Preview Import'}
@@ -235,8 +249,8 @@
   {#if preview}
     <section class="view-card">
       <p class="eyebrow">Preview Result</p>
-      <h3>Stage {preview.stageId}</h3>
-      <p class="muted">Target journal: {preview.targetJournalPath}</p>
+      <h3>Import Preview Ready</h3>
+      <p class="muted">Confirm what will be added before applying the import.</p>
 
       {#if preview.summary}
         <div class="summary">
@@ -251,15 +265,9 @@
         <div class="result">
           <p><span class="pill ok">Applied</span></p>
           <p>
-            Appended {preview.result.appendedTxnCount} | Skipped duplicates {preview.result.skippedDuplicateCount} |
+            Added {preview.result.appendedTxnCount} | Skipped duplicates {preview.result.skippedDuplicateCount} |
             Conflicts {preview.result.conflicts?.length ?? 0}
           </p>
-          {#if preview.result.backupPath}
-            <p class="muted">Backup: {preview.result.backupPath}</p>
-          {/if}
-          {#if preview.result.archivedCsvPath}
-            <p class="muted">Archived source: {preview.result.archivedCsvPath}</p>
-          {/if}
           {#if preview.result.sourceCsvWarning}
             <p class="error-text">{preview.result.sourceCsvWarning}</p>
           {/if}
@@ -267,6 +275,18 @@
       {:else}
         <button class="btn btn-primary" disabled={loading} on:click={applyStage}>Apply Import</button>
       {/if}
+
+      <details class="advanced-panel">
+        <summary>Technical details</summary>
+        <p class="muted">Import stage: {preview.stageId}</p>
+        <p class="muted">Destination file: {preview.targetJournalPath}</p>
+        {#if preview.result?.backupPath}
+          <p class="muted">Backup: {preview.result.backupPath}</p>
+        {/if}
+        {#if preview.result?.archivedCsvPath}
+          <p class="muted">Archived source: {preview.result.archivedCsvPath}</p>
+        {/if}
+      </details>
 
       {#if preview.preview?.length}
         <h4>Sample Transactions</h4>
@@ -311,6 +331,42 @@
     gap: 0.45rem;
     flex-wrap: wrap;
     margin-bottom: 0.8rem;
+  }
+
+  .selection-summary {
+    border: 1px solid rgba(15, 95, 136, 0.12);
+    background: rgba(255, 255, 255, 0.65);
+    border-radius: 12px;
+    padding: 0.8rem;
+    margin-bottom: 0.9rem;
+  }
+
+  .selection-label {
+    margin: 0 0 0.2rem;
+    font-size: 0.82rem;
+    font-weight: 700;
+    color: var(--muted-foreground);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+  }
+
+  .selection-value {
+    margin: 0 0 0.25rem;
+    font-weight: 700;
+  }
+
+  .advanced-panel {
+    margin: 0.9rem 0 0;
+    border: 1px solid rgba(15, 95, 136, 0.12);
+    border-radius: 12px;
+    background: rgba(255, 255, 255, 0.7);
+    padding: 0.8rem;
+  }
+
+  .advanced-panel summary {
+    cursor: pointer;
+    font-weight: 700;
+    color: var(--brand-strong);
   }
 
   .small {

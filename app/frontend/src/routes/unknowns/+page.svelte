@@ -72,6 +72,11 @@
   let createAccountContext: { mode: 'rule' | 'group'; groupKey: string | null } = { mode: 'rule', groupKey: null };
   let statusFilter: 'all' | 'matched' | 'needs' = 'all';
 
+  function pathLabel(path: string): string {
+    const parts = path.split('/').filter(Boolean);
+    return parts.at(-1) ?? path;
+  }
+
   function inferAccountType(accountName: string): string {
     const prefix = accountName.split(':', 1)[0]?.trim().toLowerCase() || '';
     if (prefix === 'assets') return 'Asset';
@@ -427,9 +432,9 @@
 </script>
 
 <section class="view-card hero">
-  <p class="eyebrow">Review Queue</p>
-  <h2 class="page-title">Review and Categorize Transactions</h2>
-  <p class="subtitle">See unknown transactions line-by-line, choose categories quickly, and apply updates safely.</p>
+  <p class="eyebrow">Categorization</p>
+  <h2 class="page-title">Review uncategorized activity</h2>
+  <p class="subtitle">Fill in missing categories, save repeat decisions as rules, and keep recent activity clean.</p>
 </section>
 
 {#if !initialized}
@@ -443,12 +448,12 @@
   {/if}
 
   <section class="view-card">
-    <p class="eyebrow">Scan Input</p>
-    <h3>Choose Journal</h3>
+    <p class="eyebrow">Review Scope</p>
+    <h3>Choose Activity to Review</h3>
 
-    <div class="field grid-2 compact">
+    <div class="field compact">
       <div class="field">
-        <label for="journalSelect">Detected Journals</label>
+        <label for="journalSelect">Available Years</label>
         <select id="journalSelect" bind:value={journalPath}>
           <option value="">Select...</option>
           {#each journals as j}
@@ -456,23 +461,32 @@
           {/each}
         </select>
       </div>
-
-      <div class="field">
-        <label for="journalPath">Journal Path</label>
-        <input id="journalPath" bind:value={journalPath} placeholder="/abs/path/to/journal" />
-      </div>
     </div>
 
-    <button class="btn btn-primary" disabled={loading || !journalPath} on:click={scan}>Scan Unknowns</button>
+    {#if journalPath}
+      <p class="muted">Selected file: {pathLabel(journalPath)}</p>
+    {/if}
+
+    <details class="advanced-panel">
+      <summary>Advanced file selection</summary>
+      <div class="field">
+        <label for="journalPath">Custom Journal Path</label>
+        <input id="journalPath" bind:value={journalPath} placeholder="/abs/path/to/journal" />
+      </div>
+    </details>
+
+    <button class="btn btn-primary" disabled={loading || !journalPath} on:click={scan}>
+      {loading ? 'Scanning...' : 'Find Transactions to Review'}
+    </button>
   </section>
 
   {#if stage}
     <section class="view-card">
       <p class="eyebrow">Review</p>
-      <h3>Transactions To Review</h3>
+      <h3>Transactions Needing Attention</h3>
 
       {#if (stage.groups?.length ?? 0) === 0}
-        <p><span class="pill ok">No unknown postings found</span></p>
+        <p><span class="pill ok">No uncategorized transactions found</span></p>
       {/if}
 
       <div class="filters">
@@ -496,10 +510,9 @@
               <th>Payee</th>
               <th>Amount</th>
               <th>From/To</th>
-              <th>Current</th>
-              <th>Match To</th>
-              <th>Rule</th>
-              <th>Rule ID</th>
+              <th>Current Category</th>
+              <th>Category</th>
+              <th>Automation</th>
             </tr>
           </thead>
           <tbody>
@@ -527,10 +540,9 @@
                 </td>
                 <td>
                   <button class="btn" on:click={() => openRuleModal(r.groupKey)}>
-                    {r.hasExistingRule ? 'Edit Rule...' : 'Make Rule...'}
+                    {r.hasExistingRule ? 'Edit Rule...' : 'Create Rule...'}
                   </button>
                 </td>
-                <td>{r.matchedRuleId ?? '-'}</td>
               </tr>
             {/each}
           </tbody>
@@ -538,7 +550,7 @@
       </div>
 
       {#if stage.summary}
-        <p class="muted">Staged updates: {stage.summary.txnUpdates}</p>
+        <p class="muted">Estimated updates: {stage.summary.txnUpdates}</p>
       {/if}
 
       {#if stage.result}
@@ -553,10 +565,10 @@
           </ul>
         {/if}
       {:else}
-        <p class="muted">Review Update Count previews the number of lines that will change. Apply to Journal writes those changes.</p>
+        <p class="muted">Preview Changes estimates how many transactions will be updated. Apply Changes writes those updates safely.</p>
         <div class="actions">
-          <button class="btn" disabled={loading} on:click={stageMappings}>Review Update Count</button>
-          <button class="btn btn-primary" disabled={loading} on:click={applyMappings}>Apply to Journal</button>
+          <button class="btn" disabled={loading} on:click={stageMappings}>Preview Changes</button>
+          <button class="btn btn-primary" disabled={loading} on:click={applyMappings}>Apply Changes</button>
         </div>
       {/if}
     </section>
@@ -572,8 +584,8 @@
     on:click={(e) => ((e.target as HTMLElement) === (e.currentTarget as HTMLElement) ? (showRuleModal = false) : undefined)}
     on:keydown={(e) => (e.key === 'Escape' ? (showRuleModal = false) : undefined)}
   >
-    <div class="modal rule-modal" role="dialog" tabindex="-1" aria-modal="true" aria-label="Make Rule">
-      <h3>{ruleMode === 'edit' ? 'Edit Rule' : 'Make Rule'}</h3>
+    <div class="modal rule-modal" role="dialog" tabindex="-1" aria-modal="true" aria-label="Automation Rule">
+      <h3>{ruleMode === 'edit' ? 'Edit Rule' : 'Create Rule'}</h3>
       <p class="muted">
         {ruleMode === 'edit'
           ? 'Update the reusable rule that matched this transaction group.'
@@ -582,11 +594,6 @@
       <p class="rule-modal-meta">
         <strong>Source payee:</strong> {ruleSourcePayee}
       </p>
-      {#if ruleId}
-        <p class="rule-modal-meta">
-          <strong>Rule ID:</strong> {ruleId}
-        </p>
-      {/if}
       <RuleEditor
         bind:conditions={ruleConditions}
         bind:actions={ruleActions}
@@ -662,6 +669,20 @@
   .compact {
     gap: 0.8rem;
     margin: 0.3rem 0 0.8rem;
+  }
+
+  .advanced-panel {
+    margin: 0 0 0.9rem;
+    border: 1px solid rgba(15, 95, 136, 0.12);
+    border-radius: 12px;
+    background: rgba(255, 255, 255, 0.7);
+    padding: 0.8rem;
+  }
+
+  .advanced-panel summary {
+    cursor: pointer;
+    font-weight: 700;
+    color: var(--brand-strong);
   }
 
   .filters {

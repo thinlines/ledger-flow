@@ -2,15 +2,16 @@
 
 ## Product intent
 
-The interface is the user's primary interaction surface. The user should feel they are operating a modern finance workspace with clear workflows for setup, import, and review.
+The interface is the user's primary interaction surface. The user should feel they are operating a modern finance workspace with clear workflows for setup, import, review, and daily visibility.
 The system must boot from zero data files; workspace initialization is a first-class GUI workflow.
+The plain-text accounting model is an implementation detail in the default path, not the primary story the UI tells.
 
 ## Information architecture
 
 - `/setup`: first-contact onboarding and workspace readiness checks.
 - `/`: operational home dashboard.
 - `/import`: import inbox, parse preview, conflict-aware apply.
-- `/unknowns`: reconciliation queue for unknown account assignments.
+- `/unknowns`: categorization queue for transactions that still need a category.
 
 ## Screen specs
 
@@ -31,8 +32,8 @@ Sections:
   - select an existing workspace path containing `settings/workspace.toml`
 - Active workspace status summary:
   - institutions configured
-  - journals discovered
-  - inbox files discovered
+  - years loaded
+  - statements waiting
 
 Primary actions:
 - `Create Workspace` for first-time initialization.
@@ -42,16 +43,20 @@ Primary actions:
 ### 2) Home (`/`)
 
 Purpose:
-- Daily command center.
+- Daily finance command center.
 
 Sections:
 - Hero with concise summary and primary actions.
-- Health and workflow status cards:
-  - service health
-  - import queue size
-  - journal coverage
-  - unresolved review queue hint
-- Quick links to Import and Unknowns.
+- Financial snapshot cards:
+  - cash and credit summary
+  - net worth summary
+  - current-month income vs expense
+- Attention queue:
+  - statements waiting to import
+  - unresolved review work
+  - recent conflicts or notable changes
+- Quick links to import, categorization, and drill-down reporting.
+- Until richer reporting data exists, placeholder states should still speak in finance-first language rather than system health language.
 
 ### 3) Import (`/import`)
 
@@ -60,7 +65,7 @@ Purpose:
 
 Sections:
 - Candidate inbox table/card list.
-- Import configuration card (path, year, institution).
+- Import configuration card (selected statement, year, institution).
 - Preview result card:
   - New / Duplicate / Conflict counts
   - sample rendered transactions
@@ -73,14 +78,15 @@ Behavior:
 - Candidate click pre-fills settings.
 - Preview required before apply.
 - Apply button disabled during in-flight operation.
+- Manual path editing exists only as an advanced fallback, not the primary workflow.
 
 ### 4) Unknowns (`/unknowns`)
 
 Purpose:
-- Resolve unknown account mappings quickly.
+- Resolve uncategorized transaction mappings quickly.
 
 Sections:
-- Journal selection input with dropdown suggestions.
+- Detected year/journal selection input with dropdown suggestions.
 - Scan summary card (group count, transaction count).
 - Group cards per payee with inline account assignment.
 - Stage/apply action bar.
@@ -89,6 +95,7 @@ Sections:
 Behavior:
 - Suggested account prefill when available.
 - Stage first, then apply.
+- Detected journals/years are the primary entry point; direct path entry is an advanced fallback.
 
 ## Visual system
 
@@ -109,6 +116,7 @@ Behavior:
 ## Content style
 
 - Outcome-oriented labels: "Preview Import", "Apply", "Resolve".
+- Talk about finances, categories, recent activity, and next steps before talking about files or internals.
 - Avoid implementation details in primary UI copy.
 - Keep technical details available in secondary text/expanders.
 

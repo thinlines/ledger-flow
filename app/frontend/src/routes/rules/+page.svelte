@@ -239,9 +239,9 @@
 </script>
 
 <section class="view-card hero">
-  <p class="eyebrow">Rules</p>
-  <h2 class="page-title">Match Rule Manager</h2>
-  <p class="subtitle">Create Outlook-style conditions and order rules top-to-bottom. First match wins.</p>
+  <p class="eyebrow">Automation</p>
+  <h2 class="page-title">Reusable categorization rules</h2>
+  <p class="subtitle">Save repeat decisions once and let future imports arrive with less cleanup.</p>
 </section>
 
 {#if !initialized}
@@ -255,7 +255,7 @@
   {/if}
 
   <section class="view-card">
-    <p class="eyebrow">Create Rule</p>
+    <p class="eyebrow">New Rule</p>
     <RuleEditor
       bind:conditions={newConditions}
       bind:actions={newActions}

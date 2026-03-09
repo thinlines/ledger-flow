@@ -3,11 +3,11 @@
 	import { page } from '$app/stores';
 
 	const navItems = [
-		{ href: '/setup', label: 'Setup' },
-		{ href: '/', label: 'Home' },
+		{ href: '/', label: 'Overview' },
 		{ href: '/import', label: 'Import' },
-		{ href: '/unknowns', label: 'Review' },
-		{ href: '/rules', label: 'Rules' }
+		{ href: '/unknowns', label: 'Categorize' },
+		{ href: '/rules', label: 'Automation' },
+		{ href: '/setup', label: 'Setup' }
 	];
 
 	function isActive(pathname: string, href: string): boolean {
@@ -44,7 +44,7 @@
 
 			<div>
 				<h1>Ledger Flow</h1>
-				<p>Import and reconciliation workspace</p>
+				<p>Personal finance workspace</p>
 			</div>
 		</div>
 

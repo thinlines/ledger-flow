@@ -84,7 +84,7 @@
 <section class="view-card hero">
   <p class="eyebrow">Setup</p>
   <h2 class="page-title">Initialize Your Financial Workspace</h2>
-  <p class="subtitle">Create or select a workspace to start importing and reconciling transactions.</p>
+  <p class="subtitle">Create or select a workspace for your finances. The app handles the underlying structure for you.</p>
 </section>
 
 {#if error}
@@ -98,12 +98,13 @@
     <p class="muted">{state.workspacePath}</p>
     <p>
       <span class="pill ok">{state.institutions.length} institutions</span>
-      <span class="pill">{state.journals} journals</span>
-      <span class="pill">{state.csvInbox} inbox files</span>
+      <span class="pill">{state.journals} years loaded</span>
+      <span class="pill">{state.csvInbox} statements waiting</span>
     </p>
     <div class="actions">
-      <a class="btn btn-primary" href="/import">Open Import</a>
-      <a class="btn" href="/unknowns">Open Review</a>
+      <a class="btn btn-primary" href="/">Open Overview</a>
+      <a class="btn" href="/import">Import Activity</a>
+      <a class="btn" href="/unknowns">Review Categories</a>
     </div>
   </section>
 {/if}
@@ -111,7 +112,7 @@
 <section class="grid-2">
   <article class="view-card">
     <p class="eyebrow">Create New</p>
-    <h3>Bootstrap Workspace</h3>
+    <h3>Create a New Workspace</h3>
 
     <div class="field"><label for="newWorkspacePath">Workspace Path</label><input id="newWorkspacePath" bind:value={workspacePath} /></div>
     <div class="field"><label for="workspaceName">Workspace Name</label><input id="workspaceName" bind:value={workspaceName} /></div>
