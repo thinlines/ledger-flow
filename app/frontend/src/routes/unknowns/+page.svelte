@@ -208,6 +208,21 @@
     return first === last ? first : `${first} - ${last}`;
   }
 
+  function groupActivityMeta(group: UnknownGroup): string {
+    if (group.txns.length === 1) {
+      return groupDateRange(group);
+    }
+    return `${groupDateRange(group)} • ${group.txns.length} transactions`;
+  }
+
+  function primaryAmount(group: UnknownGroup): string {
+    return group.txns[0]?.amount || '-';
+  }
+
+  function extraTransactionCount(group: UnknownGroup): number {
+    return Math.max(0, group.txns.length - 1);
+  }
+
   function sourceAccountPrimary(group: UnknownGroup): string {
     return group.sourceAccountLabel?.trim() || group.sourceLedgerAccount?.trim() || 'Manual entry';
   }
@@ -217,14 +232,6 @@
     if (!ledgerAccount) return null;
     if (ledgerAccount === sourceAccountPrimary(group)) return null;
     return ledgerAccount;
-  }
-
-  function previewTransactions(group: UnknownGroup): TxnRow[] {
-    return group.txns.slice(0, 3);
-  }
-
-  function remainingTransactionCount(group: UnknownGroup): number {
-    return Math.max(0, group.txns.length - previewTransactions(group).length);
   }
 
   function groupLabel(group: UnknownGroup): string {
@@ -601,110 +608,75 @@
           <p class="muted">No review groups match the current filter.</p>
         </section>
       {:else}
-        <section class="group-list">
-          <div class="desktop-review-header" aria-hidden="true">
+        <section class="review-list">
+          <div class="review-list-header" aria-hidden="true">
             <span>Status</span>
             <span>Activity</span>
-            <span>From account</span>
+            <span>Amount</span>
             <span>Category</span>
             <span>Automation</span>
           </div>
           {#each visibleGroups() as group}
-            <article class="view-card group-card" class:group-ready={groupStatus(group) === 'ready'} class:group-needs={groupStatus(group) === 'needs'}>
-              <div class="group-grid">
-                <div class="group-status-panel">
-                  <p class="group-status-label">
+            <article class="view-card review-row" class:row-ready={groupStatus(group) === 'ready'} class:row-needs={groupStatus(group) === 'needs'}>
+              <div class="review-row-status">
+                <p class="status-copy">
+                  <span class="status-dot" aria-hidden="true"></span>
+                  <span>
                     {#if groupStatus(group) === 'ready'}
-                      Ready to apply
+                      Ready
                     {:else}
                       Needs category
                     {/if}
-                  </p>
-                  <p class="group-status-meta">
-                    {group.txns.length} {group.txns.length === 1 ? 'txn' : 'txns'}
-                  </p>
-                </div>
-
-                <div class="group-card-copy">
-                  <div class="group-title-row">
-                    <h4>{group.payeeDisplay}</h4>
-                  </div>
-                  <p class="group-meta">
-                    {group.txns.length} {group.txns.length === 1 ? 'transaction' : 'transactions'} • {groupDateRange(group)}
-                  </p>
-                  <div class="transaction-peek">
-                    {#each previewTransactions(group) as txn}
-                      <span class="peek-pill">{formatShortDate(txn.date)} · {txn.amount || '-'}</span>
-                    {/each}
-                    {#if remainingTransactionCount(group) > 0}
-                      <span class="peek-pill muted-pill">+{remainingTransactionCount(group)} more</span>
-                    {/if}
-                  </div>
-                  <div class="group-supporting-pills">
-                    {#if group.matchedRuleId}
-                      <span class="pill ok">Rule suggestion</span>
-                    {/if}
-                    {#if group.importAccountDisplayName}
-                      <span class="pill">{group.importAccountDisplayName}</span>
-                    {/if}
-                  </div>
-                </div>
-
-                <div class="assignment-side source-side">
-                  <p class="assignment-label">From account</p>
-                  <p class="assignment-value">{sourceAccountPrimary(group)}</p>
-                  {#if sourceAccountSecondary(group)}
-                    <p class="muted assignment-subvalue">{sourceAccountSecondary(group)}</p>
-                  {/if}
-                </div>
-
-                <div class="assignment-side category-side">
-                  <p class="assignment-label">Category</p>
-                  <AccountCombobox
-                    accounts={accounts}
-                    value={effectiveAccountFor(group)}
-                    placeholder="Choose category..."
-                    onChange={(account) => setAccountForGroup(group.groupKey, account)}
-                    onCreate={(seed) => void openCreateAccountForGroup(group.groupKey, seed)}
-                  />
-                  <div class="assignment-notes">
-                    {#if group.suggestedAccount}
-                      <span class="pill">{group.matchedRuleId ? 'Filled from rule' : 'Suggested'}</span>
-                    {/if}
-                  </div>
-                </div>
-
-                <div class="group-actions">
-                  <button class="btn" on:click={() => openRuleModal(group.groupKey)}>
-                    {group.matchedRuleId ? 'Edit rule' : 'Save as rule'}
-                  </button>
-                  <p class="muted action-note">
-                    {#if group.matchedRuleId}
-                      Refine the existing payee rule.
-                    {:else}
-                      Save this category for future imports.
-                    {/if}
-                  </p>
-                </div>
+                  </span>
+                </p>
+                {#if group.matchedRuleId}
+                  <p class="row-note">Rule suggestion</p>
+                {/if}
               </div>
 
-              <details class="group-details">
-                <summary>{group.txns.length === 1 ? 'Show transaction details' : `Show ${group.txns.length} transaction details`}</summary>
-                <div class="transaction-list">
-                  {#each group.txns as txn}
-                    <div class="transaction-item">
-                      <div class="transaction-copy">
-                        <p class="transaction-date">{formatShortDate(txn.date)}</p>
-                        {#if txn.counterpartyAccount}
-                          <p class="muted transaction-meta">{txn.counterpartyAccount}</p>
-                        {/if}
-                        <p class="transaction-line">{txn.line.trim()}</p>
-                      </div>
-                      <p class="transaction-amount">{txn.amount || '-'}</p>
-                    </div>
-                  {/each}
+              <div class="review-row-activity">
+                <div class="group-title-row">
+                  <h4>{group.payeeDisplay}</h4>
                 </div>
-              </details>
+                <p class="group-meta">{groupActivityMeta(group)}</p>
+                <p class="assignment-value">{sourceAccountPrimary(group)}</p>
+                {#if sourceAccountSecondary(group)}
+                  <p class="muted assignment-subvalue">{sourceAccountSecondary(group)}</p>
+                {/if}
+              </div>
+
+              <div class="review-row-amount">
+                <p class="amount-value">{primaryAmount(group)}</p>
+                {#if extraTransactionCount(group) > 0}
+                  <p class="row-note">
+                    +{extraTransactionCount(group)} more {extraTransactionCount(group) === 1 ? 'txn' : 'txns'}
+                  </p>
+                {/if}
+              </div>
+
+              <div class="review-row-category">
+                <AccountCombobox
+                  accounts={accounts}
+                  value={effectiveAccountFor(group)}
+                  placeholder="Choose category..."
+                  onChange={(account) => setAccountForGroup(group.groupKey, account)}
+                  onCreate={(seed) => void openCreateAccountForGroup(group.groupKey, seed)}
+                />
+                {#if group.suggestedAccount}
+                  <p class="row-note">
+                    {group.matchedRuleId ? 'Suggested by rule' : 'Suggested'}
+                  </p>
+                {/if}
+              </div>
+
+              <div class="review-row-actions">
+                <button class="btn" on:click={() => openRuleModal(group.groupKey)}>
+                  {group.matchedRuleId ? 'Edit rule' : 'Save rule'}
+                </button>
+                {#if group.importAccountDisplayName}
+                  <p class="row-note">{group.importAccountDisplayName}</p>
+                {/if}
+              </div>
             </article>
           {/each}
         </section>
@@ -836,7 +808,7 @@
 
   .review-summary-card,
   .result-card,
-  .group-card {
+  .review-row {
     display: grid;
     gap: 1rem;
   }
@@ -849,8 +821,7 @@
     flex-wrap: wrap;
   }
 
-  .review-summary-pills,
-  .assignment-notes {
+  .review-summary-pills {
     display: flex;
     gap: 0.45rem;
     flex-wrap: wrap;
@@ -873,9 +844,8 @@
 
   .review-hint,
   .group-meta,
-  .action-note,
-  .transaction-date,
-  .transaction-amount {
+  .row-note,
+  .amount-value {
     margin: 0;
   }
 
@@ -890,133 +860,81 @@
     flex-wrap: wrap;
   }
 
-  .group-list {
+  .review-list {
     display: grid;
-    gap: 1rem;
+    gap: 0.75rem;
     margin-top: 1rem;
   }
 
-  .desktop-review-header {
+  .review-list-header {
     display: none;
   }
 
-  .group-card {
+  .review-row {
+    display: grid;
+    gap: 0.9rem;
     border-color: rgba(10, 61, 89, 0.12);
   }
 
-  .group-ready {
+  .row-ready {
     border-color: rgba(12, 123, 89, 0.24);
+    background: linear-gradient(90deg, rgba(237, 249, 244, 0.9), rgba(255, 255, 255, 0.86) 22%);
   }
 
-  .group-needs {
+  .row-needs {
     border-color: rgba(218, 169, 79, 0.28);
+    background: linear-gradient(90deg, rgba(255, 247, 234, 0.95), rgba(255, 255, 255, 0.86) 22%);
   }
 
-  .group-grid {
-    display: grid;
-    gap: 1rem;
-  }
-
-  .group-card-copy {
+  .review-row-status,
+  .review-row-activity,
+  .review-row-amount,
+  .review-row-category,
+  .review-row-actions {
     min-width: 0;
   }
 
-  .group-status-panel {
-    display: grid;
-    gap: 0.2rem;
-    padding: 0.85rem 0.9rem;
-    border-radius: 14px;
-    border: 1px solid rgba(10, 61, 89, 0.08);
-    background: rgba(250, 251, 252, 0.85);
-  }
-
-  .group-ready .group-status-panel {
-    background: rgba(237, 249, 244, 0.95);
-    border-color: #9ad6be;
-  }
-
-  .group-needs .group-status-panel {
-    background: rgba(255, 247, 234, 0.96);
-    border-color: #f3cf96;
-  }
-
-  .group-status-label {
+  .status-copy {
+    display: flex;
+    align-items: center;
+    gap: 0.55rem;
     margin: 0;
+    color: var(--brand-strong);
     font-size: 0.95rem;
     font-weight: 800;
-    color: var(--brand-strong);
   }
 
-  .group-status-meta {
-    margin: 0;
-    color: var(--muted-foreground);
-    font-size: 0.82rem;
-    font-weight: 600;
+  .status-dot {
+    width: 0.72rem;
+    height: 0.72rem;
+    border-radius: 999px;
+    background: #d49b3b;
+    box-shadow: 0 0 0 4px rgba(212, 155, 59, 0.14);
+    flex-shrink: 0;
+  }
+
+  .row-ready .status-dot {
+    background: #0c7b59;
+    box-shadow: 0 0 0 4px rgba(12, 123, 89, 0.14);
   }
 
   .group-title-row {
     display: flex;
     align-items: center;
-    gap: 0.65rem;
-    flex-wrap: wrap;
   }
 
   .group-title-row h4 {
     margin: 0;
-    font-size: 1.08rem;
+    font-size: 1.03rem;
   }
 
   .group-meta {
     color: var(--muted-foreground);
-  }
-
-  .transaction-peek {
-    display: flex;
-    gap: 0.45rem;
-    flex-wrap: wrap;
-    margin-top: 0.6rem;
-  }
-
-  .group-supporting-pills {
-    display: flex;
-    gap: 0.45rem;
-    flex-wrap: wrap;
-    margin-top: 0.75rem;
-  }
-
-  .peek-pill {
-    display: inline-flex;
-    align-items: center;
-    padding: 0.28rem 0.55rem;
-    border-radius: 999px;
-    border: 1px solid rgba(10, 61, 89, 0.1);
-    background: rgba(255, 255, 255, 0.8);
-    color: var(--brand-strong);
-    font-size: 0.82rem;
-    font-weight: 600;
-  }
-
-  .muted-pill {
-    color: var(--muted-foreground);
-    border-style: dashed;
-  }
-
-  .assignment-side,
-  .transaction-copy {
-    min-width: 0;
-  }
-
-  .assignment-label {
-    margin: 0 0 0.35rem;
-    color: var(--muted-foreground);
-    font-size: 0.76rem;
-    font-weight: 700;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
+    margin-top: 0.15rem;
   }
 
   .assignment-value {
-    margin: 0;
+    margin: 0.5rem 0 0;
     font-weight: 700;
     color: var(--brand-strong);
   }
@@ -1026,62 +944,28 @@
     font-size: 0.9rem;
   }
 
-  .category-side {
+  .review-row-amount {
     display: grid;
-    gap: 0.55rem;
+    align-content: start;
+    gap: 0.18rem;
   }
 
-  .group-actions {
+  .amount-value {
+    color: var(--brand-strong);
+    font-weight: 800;
+  }
+
+  .row-note {
+    color: var(--muted-foreground);
+    font-size: 0.84rem;
+  }
+
+  .review-row-category,
+  .review-row-actions {
     display: grid;
-    gap: 0.55rem;
+    gap: 0.45rem;
     justify-items: start;
     align-content: center;
-  }
-
-  .group-details {
-    border-top: 1px solid rgba(10, 61, 89, 0.08);
-    padding-top: 0.9rem;
-  }
-
-  .group-details summary {
-    cursor: pointer;
-    font-weight: 700;
-    color: var(--brand-strong);
-  }
-
-  .transaction-list {
-    display: grid;
-    gap: 0.7rem;
-    margin-top: 0.8rem;
-  }
-
-  .transaction-item {
-    display: flex;
-    justify-content: space-between;
-    gap: 1rem;
-    padding: 0.8rem 0.9rem;
-    border-radius: 12px;
-    border: 1px solid rgba(10, 61, 89, 0.08);
-    background: rgba(255, 255, 255, 0.72);
-  }
-
-  .transaction-meta {
-    margin: 0.2rem 0 0;
-    font-size: 0.88rem;
-  }
-
-  .transaction-line {
-    margin: 0.35rem 0 0;
-    color: var(--muted-foreground);
-    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-    font-size: 0.81rem;
-    overflow-wrap: anywhere;
-  }
-
-  .transaction-amount {
-    font-weight: 700;
-    white-space: nowrap;
-    color: var(--brand-strong);
   }
 
   .warning-list {
@@ -1121,9 +1005,9 @@
   }
 
   @media (min-width: 921px) {
-    .desktop-review-header {
+    .review-list-header {
       display: grid;
-      grid-template-columns: 10rem minmax(13rem, 1.2fr) minmax(12rem, 1fr) minmax(16rem, 1.3fr) minmax(11rem, 0.8fr);
+      grid-template-columns: 9rem minmax(15rem, 1.7fr) 7rem minmax(16rem, 1.35fr) 10rem;
       gap: 1rem;
       padding: 0 0.75rem;
       color: var(--muted-foreground);
@@ -1133,25 +1017,15 @@
       text-transform: uppercase;
     }
 
-    .group-card {
-      padding: 0.9rem 1rem;
-    }
-
-    .group-grid {
-      grid-template-columns: 10rem minmax(13rem, 1.2fr) minmax(12rem, 1fr) minmax(16rem, 1.3fr) minmax(11rem, 0.8fr);
+    .review-row {
+      grid-template-columns: 9rem minmax(15rem, 1.7fr) 7rem minmax(16rem, 1.35fr) 10rem;
       align-items: start;
+      padding: 0.85rem 1rem;
     }
 
-    .assignment-label {
-      font-size: 0.7rem;
-    }
-
-    .group-actions {
-      padding-top: 1.4rem;
-    }
-
-    .group-details {
-      margin-top: 0.25rem;
+    .review-row-amount {
+      justify-items: end;
+      text-align: right;
     }
   }
 
@@ -1170,13 +1044,8 @@
   }
 
   @media (max-width: 680px) {
-    .review-summary-head,
-    .transaction-item {
+    .review-summary-head {
       flex-direction: column;
-    }
-
-    .transaction-amount {
-      white-space: normal;
     }
   }
 </style>
