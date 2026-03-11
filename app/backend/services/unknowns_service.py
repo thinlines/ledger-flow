@@ -7,7 +7,9 @@ from pathlib import Path
 from .rules_service import extract_set_account, find_matching_rule
 
 ACCOUNT_LINE_RE = re.compile(r"^(\s+)([^\s].*?)(\s{2,}|\t+)(.*)$")
+ACCOUNT_ONLY_RE = re.compile(r"^(\s+)([^\s].*?)\s*$")
 HEADER_RE = re.compile(r"^(\d{4}[-/]\d{2}[-/]\d{2})(?:\s+[*!])?(?:\s+\([^)]+\))?\s*(.*)$")
+META_RE = re.compile(r"^\s*;\s*([^:]+):\s*(.*)$")
 TXN_START_RE = re.compile(r"^\d{4}[-/]\d{2}[-/]\d{2}")
 
 
@@ -55,22 +57,56 @@ def _parse_postings(lines: list[str], start: int, end: int) -> list[dict]:
     for i in range(start + 1, end):
         line = lines[i]
         m = ACCOUNT_LINE_RE.match(line)
+        if m:
+            postings.append(
+                {
+                    "lineNo": i + 1,
+                    "indent": m.group(1),
+                    "account": m.group(2).strip(),
+                    "sep": m.group(3),
+                    "amount": m.group(4).strip(),
+                    "line": line,
+                }
+            )
+            continue
+
+        if line.lstrip().startswith(";"):
+            continue
+
+        m = ACCOUNT_ONLY_RE.match(line)
         if not m:
             continue
+
         postings.append(
             {
                 "lineNo": i + 1,
                 "indent": m.group(1),
                 "account": m.group(2).strip(),
-                "sep": m.group(3),
-                "amount": m.group(4).strip(),
+                "sep": "",
+                "amount": "",
                 "line": line,
             }
         )
     return postings
 
 
-def scan_unknowns(journal_path: Path, rules: list[dict]) -> dict:
+def _parse_metadata(lines: list[str], start: int, end: int) -> dict[str, str]:
+    metadata: dict[str, str] = {}
+    for i in range(start + 1, end):
+        mm = META_RE.match(lines[i])
+        if mm:
+            metadata[mm.group(1).strip().lower()] = mm.group(2).strip()
+    return metadata
+
+
+def _group_key(payee: str, import_account_id: str | None) -> str:
+    key = payee.lower()
+    if import_account_id:
+        return f"{key}::{import_account_id.lower()}"
+    return key
+
+
+def scan_unknowns(journal_path: Path, rules: list[dict], import_accounts: dict[str, dict] | None = None) -> dict:
     lines = journal_path.read_text(encoding="utf-8").splitlines()
     grouped: dict[str, dict] = defaultdict(lambda: {"txns": []})
 
@@ -84,6 +120,7 @@ def scan_unknowns(journal_path: Path, rules: list[dict]) -> dict:
             current_date = ""
             current_payee = "(no payee)"
 
+        metadata = _parse_metadata(lines, start, end)
         postings = _parse_postings(lines, start, end)
         unknown_postings = [p for p in postings if "Unknown" in p["account"]]
         if not unknown_postings:
@@ -95,11 +132,24 @@ def scan_unknowns(journal_path: Path, rules: list[dict]) -> dict:
                 counterparty = p["account"]
                 break
 
-        key = current_payee.lower()
+        import_account_id = metadata.get("import_account_id") or None
+        import_account_cfg = (import_accounts or {}).get(import_account_id or "", {})
+        import_account_display_name = None
+        import_ledger_account = None
+        if import_account_id:
+            import_account_display_name = str(import_account_cfg.get("display_name", import_account_id))
+            import_ledger_account = str(import_account_cfg.get("ledger_account", "")).strip() or None
+
+        key = _group_key(current_payee, import_account_id)
         matched = find_matching_rule({"payee": current_payee}, rules)
         group = grouped[key]
         group["groupKey"] = key
         group["payeeDisplay"] = current_payee
+        group["importAccountId"] = import_account_id
+        group["importAccountDisplayName"] = import_account_display_name
+        group["importLedgerAccount"] = import_ledger_account
+        group["sourceAccountLabel"] = import_account_display_name or counterparty or None
+        group["sourceLedgerAccount"] = import_ledger_account or counterparty or None
         group["suggestedAccount"] = extract_set_account(matched) if matched else None
         group["matchedRuleId"] = matched["id"] if matched else None
         group["matchedRulePattern"] = matched["conditions"][0]["value"] if matched else None

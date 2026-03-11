@@ -411,7 +411,7 @@ def unknown_scan(req: UnknownScanRequest) -> dict:
 
     accounts_dat = config.init_dir / "10-accounts.dat"
     rule_path = ensure_rules_store(config.init_dir, accounts_dat)
-    data = scan_unknowns(journal_path, load_rules(rule_path))
+    data = scan_unknowns(journal_path, load_rules(rule_path), config.import_accounts)
     payload = {
         "kind": "unknowns",
         "status": "ready",

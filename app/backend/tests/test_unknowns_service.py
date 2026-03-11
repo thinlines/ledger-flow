@@ -46,6 +46,43 @@ account Expenses:Eating Out
     assert len(group["txns"]) == 2
     assert group["suggestedAccount"] == "Expenses:Eating Out"
     assert group["matchedRuleId"] == "r1"
+    assert group["sourceAccountLabel"] == "Assets:Wells Fargo Checking"
+    assert group["sourceLedgerAccount"] == "Assets:Wells Fargo Checking"
+
+
+def test_scan_unknowns_splits_groups_by_import_account(tmp_path: Path) -> None:
+    journal = tmp_path / "sample.journal"
+    journal.write_text(
+        """
+2026/02/01 Coffee Shop
+    ; import_account_id: checking
+    Expenses:Unknown  $5.00
+    Assets:Bank:Checking
+
+2026/02/02 Coffee Shop
+    ; import_account_id: visa
+    Expenses:Unknown  $7.00
+    Liabilities:Cards:Visa
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    result = scan_unknowns(
+        journal,
+        [],
+        {
+            "checking": {"display_name": "Primary Checking", "ledger_account": "Assets:Bank:Checking"},
+            "visa": {"display_name": "Travel Visa", "ledger_account": "Liabilities:Cards:Visa"},
+        },
+    )
+
+    assert len(result["groups"]) == 2
+    groups = {group["groupKey"]: group for group in result["groups"]}
+    assert groups["coffee shop::checking"]["sourceAccountLabel"] == "Primary Checking"
+    assert groups["coffee shop::checking"]["sourceLedgerAccount"] == "Assets:Bank:Checking"
+    assert groups["coffee shop::visa"]["sourceAccountLabel"] == "Travel Visa"
+    assert groups["coffee shop::visa"]["sourceLedgerAccount"] == "Liabilities:Cards:Visa"
 
 
 def test_apply_unknown_mappings_updates_journal_only(tmp_path: Path) -> None:
