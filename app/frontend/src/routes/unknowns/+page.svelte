@@ -160,26 +160,58 @@
     return (mappings[group.groupKey] || '').trim();
   }
 
+  type ReviewRow = {
+    rowId: string;
+    groupKey: string;
+    payeeDisplay: string;
+    date: string;
+    amount: string;
+    sourceAccount: string;
+    status: 'ready' | 'needs';
+    matchedRuleId: string | null;
+  };
+
   function groupStatus(group: UnknownGroup): 'ready' | 'needs' {
     return effectiveAccountFor(group) ? 'ready' : 'needs';
   }
 
-  function visibleGroups(): UnknownGroup[] {
-    const groups = stage?.groups ?? [];
-    if (statusFilter === 'all') return groups;
-    return groups.filter((group) => groupStatus(group) === statusFilter);
+  function reviewRows(): ReviewRow[] {
+    const rows: ReviewRow[] = [];
+
+    for (const group of stage?.groups ?? []) {
+      for (const txn of group.txns) {
+        rows.push({
+          rowId: txn.txnId,
+          groupKey: group.groupKey,
+          payeeDisplay: group.payeeDisplay,
+          date: txn.date,
+          amount: txn.amount || '-',
+          sourceAccount: sourceAccountPrimary(group),
+          status: groupStatus(group),
+          matchedRuleId: group.matchedRuleId || null
+        });
+      }
+    }
+
+    return rows;
   }
 
-  function totalTransactionCount(groups: UnknownGroup[] = stage?.groups ?? []): number {
-    return groups.reduce((total, group) => total + group.txns.length, 0);
+  function visibleRows(): ReviewRow[] {
+    const rows = reviewRows();
+    if (statusFilter === 'all') return rows;
+    return rows.filter((row) => row.status === statusFilter);
   }
 
-  function readyGroupCount(): number {
-    return (stage?.groups ?? []).filter((group) => groupStatus(group) === 'ready').length;
+  function totalTransactionCount(rows: ReviewRow[] = reviewRows()): number {
+    return rows.length;
   }
 
-  function needsGroupCount(): number {
-    return (stage?.groups ?? []).filter((group) => groupStatus(group) === 'needs').length;
+  function readyTransactionCount(): number {
+    return reviewRows().filter((row) => row.status === 'ready').length;
+  }
+
+  function needsTransactionCount(): number {
+    return reviewRows().filter((row) => row.status === 'needs').length;
   }
 
   function parseJournalDate(value: string): number | null {
@@ -195,43 +227,8 @@
     return new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric' }).format(new Date(timestamp));
   }
 
-  function groupDateRange(group: UnknownGroup): string {
-    const validDates = group.txns
-      .map((txn) => ({ raw: txn.date, timestamp: parseJournalDate(txn.date) }))
-      .filter((item) => item.timestamp !== null) as Array<{ raw: string; timestamp: number }>;
-
-    if (!validDates.length) return group.txns[0]?.date || '-';
-
-    const sorted = validDates.sort((left, right) => left.timestamp - right.timestamp);
-    const first = formatShortDate(sorted[0].raw);
-    const last = formatShortDate(sorted[sorted.length - 1].raw);
-    return first === last ? first : `${first} - ${last}`;
-  }
-
-  function groupActivityMeta(group: UnknownGroup): string {
-    if (group.txns.length === 1) {
-      return groupDateRange(group);
-    }
-    return `${groupDateRange(group)} • ${group.txns.length} transactions`;
-  }
-
-  function primaryAmount(group: UnknownGroup): string {
-    return group.txns[0]?.amount || '-';
-  }
-
-  function extraTransactionCount(group: UnknownGroup): number {
-    return Math.max(0, group.txns.length - 1);
-  }
-
   function sourceAccountPrimary(group: UnknownGroup): string {
     return group.sourceAccountLabel?.trim() || group.sourceLedgerAccount?.trim() || 'Manual entry';
-  }
-
-  function sourceAccountSecondary(group: UnknownGroup): string | null {
-    const ledgerAccount = group.sourceLedgerAccount?.trim();
-    if (!ledgerAccount) return null;
-    if (ledgerAccount === sourceAccountPrimary(group)) return null;
-    return ledgerAccount;
   }
 
   function groupLabel(group: UnknownGroup): string {
@@ -537,16 +534,16 @@
       <div class="review-summary-head">
         <div>
           <p class="eyebrow">Review Queue</p>
-          <h3>{(stage.groups?.length ?? 0) === 0 ? 'Nothing left to categorize' : 'Review by payee and source account'}</h3>
+          <h3>{(stage.groups?.length ?? 0) === 0 ? 'Nothing left to categorize' : 'Review uncategorized transactions'}</h3>
           <p class="muted">
             {(stage.groups?.length ?? 0) === 0
               ? `No uncategorized transactions were found in ${pathLabel(journalPath)}.`
-              : `${stage.groups.length} groups across ${totalTransactionCount()} transactions in ${pathLabel(journalPath)}.`}
+              : `${totalTransactionCount()} transactions in ${pathLabel(journalPath)}.`}
           </p>
         </div>
         <div class="review-summary-pills">
-          <span class="pill warn">{needsGroupCount()} need category</span>
-          <span class="pill ok">{readyGroupCount()} ready</span>
+          <span class="pill warn">{needsTransactionCount()} need category</span>
+          <span class="pill ok">{readyTransactionCount()} ready</span>
           <span class="pill">{totalTransactionCount()} transactions</span>
         </div>
       </div>
@@ -569,14 +566,14 @@
             <div class="review-actions">
               <p class="muted review-hint">
                 {#if stage.summary}
-                  {stage.summary.groupCount ?? readyGroupCount()} groups staged. Estimated updates: {stage.summary.txnUpdates}.
+                  Estimated updates: {stage.summary.txnUpdates} transactions.
                 {:else}
                   Assign categories inline, preview the update count, then apply the changes.
                 {/if}
               </p>
               <div class="actions">
-                <button class="btn" disabled={loading || readyGroupCount() === 0} on:click={stageMappings}>Preview Changes</button>
-                <button class="btn btn-primary" disabled={loading || readyGroupCount() === 0} on:click={applyMappings}>
+                <button class="btn" disabled={loading || readyTransactionCount() === 0} on:click={stageMappings}>Preview Changes</button>
+                <button class="btn btn-primary" disabled={loading || readyTransactionCount() === 0} on:click={applyMappings}>
                   Apply Changes
                 </button>
               </div>
@@ -603,7 +600,7 @@
     {/if}
 
     {#if (stage.groups?.length ?? 0) > 0}
-      {#if visibleGroups().length === 0}
+      {#if visibleRows().length === 0}
         <section class="view-card">
           <p class="muted">No review groups match the current filter.</p>
         </section>
@@ -616,66 +613,50 @@
             <span>Category</span>
             <span>Automation</span>
           </div>
-          {#each visibleGroups() as group}
-            <article class="view-card review-row" class:row-ready={groupStatus(group) === 'ready'} class:row-needs={groupStatus(group) === 'needs'}>
+          {#each visibleRows() as row}
+            <article class="view-card review-row" class:row-ready={row.status === 'ready'} class:row-needs={row.status === 'needs'}>
               <div class="review-row-status">
                 <p class="status-copy">
                   <span class="status-dot" aria-hidden="true"></span>
                   <span>
-                    {#if groupStatus(group) === 'ready'}
+                    {#if row.status === 'ready'}
                       Ready
                     {:else}
                       Needs category
                     {/if}
                   </span>
                 </p>
-                {#if group.matchedRuleId}
+                {#if row.matchedRuleId}
                   <p class="row-note">Rule suggestion</p>
                 {/if}
               </div>
 
               <div class="review-row-activity">
                 <div class="group-title-row">
-                  <h4>{group.payeeDisplay}</h4>
+                  <h4>{row.payeeDisplay}</h4>
                 </div>
-                <p class="group-meta">{groupActivityMeta(group)}</p>
-                <p class="assignment-value">{sourceAccountPrimary(group)}</p>
-                {#if sourceAccountSecondary(group)}
-                  <p class="muted assignment-subvalue">{sourceAccountSecondary(group)}</p>
-                {/if}
+                <p class="group-meta">{formatShortDate(row.date)}</p>
+                <p class="assignment-value">{row.sourceAccount}</p>
               </div>
 
               <div class="review-row-amount">
-                <p class="amount-value">{primaryAmount(group)}</p>
-                {#if extraTransactionCount(group) > 0}
-                  <p class="row-note">
-                    +{extraTransactionCount(group)} more {extraTransactionCount(group) === 1 ? 'txn' : 'txns'}
-                  </p>
-                {/if}
+                <p class="amount-value">{row.amount}</p>
               </div>
 
               <div class="review-row-category">
                 <AccountCombobox
                   accounts={accounts}
-                  value={effectiveAccountFor(group)}
+                  value={mappings[row.groupKey] || ''}
                   placeholder="Choose category..."
-                  onChange={(account) => setAccountForGroup(group.groupKey, account)}
-                  onCreate={(seed) => void openCreateAccountForGroup(group.groupKey, seed)}
+                  onChange={(account) => setAccountForGroup(row.groupKey, account)}
+                  onCreate={(seed) => void openCreateAccountForGroup(row.groupKey, seed)}
                 />
-                {#if group.suggestedAccount}
-                  <p class="row-note">
-                    {group.matchedRuleId ? 'Suggested by rule' : 'Suggested'}
-                  </p>
-                {/if}
               </div>
 
               <div class="review-row-actions">
-                <button class="btn" on:click={() => openRuleModal(group.groupKey)}>
-                  {group.matchedRuleId ? 'Edit rule' : 'Save rule'}
+                <button class="btn" on:click={() => openRuleModal(row.groupKey)}>
+                  {row.matchedRuleId ? 'Edit rule' : 'Save rule'}
                 </button>
-                {#if group.importAccountDisplayName}
-                  <p class="row-note">{group.importAccountDisplayName}</p>
-                {/if}
               </div>
             </article>
           {/each}
@@ -810,7 +791,7 @@
   .result-card,
   .review-row {
     display: grid;
-    gap: 1rem;
+    gap: 0.85rem;
   }
 
   .review-summary-head {
@@ -862,7 +843,7 @@
 
   .review-list {
     display: grid;
-    gap: 0.75rem;
+    gap: 0.55rem;
     margin-top: 1rem;
   }
 
@@ -872,7 +853,7 @@
 
   .review-row {
     display: grid;
-    gap: 0.9rem;
+    gap: 0.75rem;
     border-color: rgba(10, 61, 89, 0.12);
   }
 
@@ -897,25 +878,25 @@
   .status-copy {
     display: flex;
     align-items: center;
-    gap: 0.55rem;
+    gap: 0.45rem;
     margin: 0;
     color: var(--brand-strong);
-    font-size: 0.95rem;
+    font-size: 0.88rem;
     font-weight: 800;
   }
 
   .status-dot {
-    width: 0.72rem;
-    height: 0.72rem;
+    width: 0.58rem;
+    height: 0.58rem;
     border-radius: 999px;
     background: #d49b3b;
-    box-shadow: 0 0 0 4px rgba(212, 155, 59, 0.14);
+    box-shadow: 0 0 0 3px rgba(212, 155, 59, 0.14);
     flex-shrink: 0;
   }
 
   .row-ready .status-dot {
     background: #0c7b59;
-    box-shadow: 0 0 0 4px rgba(12, 123, 89, 0.14);
+    box-shadow: 0 0 0 3px rgba(12, 123, 89, 0.14);
   }
 
   .group-title-row {
@@ -925,22 +906,19 @@
 
   .group-title-row h4 {
     margin: 0;
-    font-size: 1.03rem;
+    font-size: 0.98rem;
   }
 
   .group-meta {
     color: var(--muted-foreground);
-    margin-top: 0.15rem;
+    margin-top: 0.1rem;
+    font-size: 0.84rem;
   }
 
   .assignment-value {
-    margin: 0.5rem 0 0;
-    font-weight: 700;
+    margin: 0.3rem 0 0;
+    font-weight: 600;
     color: var(--brand-strong);
-  }
-
-  .assignment-subvalue {
-    margin: 0.2rem 0 0;
     font-size: 0.9rem;
   }
 
@@ -953,11 +931,12 @@
   .amount-value {
     color: var(--brand-strong);
     font-weight: 800;
+    font-size: 0.94rem;
   }
 
   .row-note {
     color: var(--muted-foreground);
-    font-size: 0.84rem;
+    font-size: 0.79rem;
   }
 
   .review-row-category,
@@ -1020,7 +999,7 @@
     .review-row {
       grid-template-columns: 9rem minmax(15rem, 1.7fr) 7rem minmax(16rem, 1.35fr) 10rem;
       align-items: start;
-      padding: 0.85rem 1rem;
+      padding: 0.7rem 0.9rem;
     }
 
     .review-row-amount {
@@ -1040,6 +1019,10 @@
 
     .review-hint {
       text-align: left;
+    }
+
+    .review-row {
+      padding: 0.85rem 0.9rem;
     }
   }
 
