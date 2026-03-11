@@ -91,15 +91,15 @@
       {:else}
         <button class="joiner-pill" type="button" on:click={() => toggleJoiner(i)}>{condition.joiner.toUpperCase()}</button>
       {/if}
-      <select bind:value={condition.field}>
+      <select class="condition-field-select" bind:value={condition.field}>
         <option value="payee">Payee</option>
       </select>
-      <select bind:value={condition.operator}>
+      <select class="condition-operator-select" bind:value={condition.operator}>
         <option value="exact">is exactly</option>
         <option value="contains">contains</option>
       </select>
-      <input bind:value={condition.value} placeholder="abc123" />
-      <button class="btn" on:click={() => removeCondition(i)} disabled={conditions.length <= 1}>Remove</button>
+      <input class="condition-value-input" bind:value={condition.value} placeholder="abc123" />
+      <button class="btn row-button" on:click={() => removeCondition(i)} disabled={conditions.length <= 1}>Remove</button>
     </div>
   {/each}
   <button class="btn" on:click={addCondition}>Add Condition...</button>
@@ -121,22 +121,46 @@
   <p class="muted">{actionsTitle}</p>
   {#each extraActions() as item}
     <div class="action-row">
-      <select value={item.action.type} on:change={(e) => setActionType(item.index, (e.currentTarget as HTMLSelectElement).value as RuleAction['type'])}>
+      <select
+        class="action-type-select"
+        value={item.action.type}
+        on:change={(e) => setActionType(item.index, (e.currentTarget as HTMLSelectElement).value as RuleAction['type'])}
+      >
         <option value="add_tag">Add tag</option>
         <option value="set_kv">Set key/value</option>
         <option value="append_comment">Append comment</option>
       </select>
       {#if item.action.type === 'add_tag'}
-        <input value={item.action.tag ?? ''} placeholder="reimbursable" on:input={(e) => setActionField(item.index, 'tag', (e.currentTarget as HTMLInputElement).value)} />
+        <input
+          class="action-input"
+          value={item.action.tag ?? ''}
+          placeholder="reimbursable"
+          on:input={(e) => setActionField(item.index, 'tag', (e.currentTarget as HTMLInputElement).value)}
+        />
         <span class="action-spacer" aria-hidden="true"></span>
       {:else if item.action.type === 'set_kv'}
-        <input value={item.action.key ?? ''} placeholder="project" on:input={(e) => setActionField(item.index, 'key', (e.currentTarget as HTMLInputElement).value)} />
-        <input value={item.action.value ?? ''} placeholder="client-x" on:input={(e) => setActionField(item.index, 'value', (e.currentTarget as HTMLInputElement).value)} />
+        <input
+          class="action-input"
+          value={item.action.key ?? ''}
+          placeholder="project"
+          on:input={(e) => setActionField(item.index, 'key', (e.currentTarget as HTMLInputElement).value)}
+        />
+        <input
+          class="action-input"
+          value={item.action.value ?? ''}
+          placeholder="client-x"
+          on:input={(e) => setActionField(item.index, 'value', (e.currentTarget as HTMLInputElement).value)}
+        />
       {:else}
-        <input value={item.action.text ?? ''} placeholder="auto-note text" on:input={(e) => setActionField(item.index, 'text', (e.currentTarget as HTMLInputElement).value)} />
+        <input
+          class="action-input"
+          value={item.action.text ?? ''}
+          placeholder="auto-note text"
+          on:input={(e) => setActionField(item.index, 'text', (e.currentTarget as HTMLInputElement).value)}
+        />
         <span class="action-spacer" aria-hidden="true"></span>
       {/if}
-      <button class="btn" on:click={() => removeAction(item.index)}>Remove</button>
+      <button class="btn row-button" on:click={() => removeAction(item.index)}>Remove</button>
     </div>
   {/each}
   <button class="btn" on:click={addAction}>Add Action...</button>
@@ -151,9 +175,30 @@
 
   .condition-row {
     display: grid;
-    grid-template-columns: 4.2rem 10rem 9rem 1fr auto;
+    grid-template-columns: max-content max-content max-content minmax(20rem, 1fr) auto;
     gap: 0.45rem;
     align-items: center;
+    min-width: 0;
+  }
+
+  .condition-row select,
+  .condition-row input,
+  .action-row select,
+  .action-row input {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .condition-field-select {
+    min-width: 6.5rem;
+  }
+
+  .condition-operator-select {
+    min-width: 8rem;
+  }
+
+  .condition-value-input {
+    min-width: 20rem;
   }
 
   .joiner-spacer {
@@ -183,9 +228,14 @@
 
   .action-row {
     display: grid;
-    grid-template-columns: 10rem 1fr 1fr auto;
+    grid-template-columns: max-content minmax(12rem, 1fr) minmax(12rem, 1fr) auto;
     gap: 0.45rem;
     align-items: center;
+    min-width: 0;
+  }
+
+  .action-type-select {
+    min-width: 10rem;
   }
 
   .action-spacer {
@@ -193,10 +243,18 @@
     width: 100%;
   }
 
+  .row-button {
+    white-space: nowrap;
+  }
+
   @media (max-width: 760px) {
     .condition-row,
     .action-row {
       grid-template-columns: 1fr;
+    }
+
+    .condition-value-input {
+      min-width: 0;
     }
   }
 </style>

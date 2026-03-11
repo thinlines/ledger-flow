@@ -77,6 +77,8 @@
   let ruleError = '';
   let ruleGroupKey: string | null = null;
   let ruleSourcePayee = '';
+  let ruleSourceAccount = '';
+  let ruleSourceTxnCount = 0;
   let ruleId: string | null = null;
   let ruleEnabled = true;
   let ruleConditions: RuleCondition[] = createDefaultRuleConditions();
@@ -327,6 +329,8 @@
 
     ruleGroupKey = group.groupKey;
     ruleSourcePayee = group.payeeDisplay;
+    ruleSourceAccount = sourceAccountPrimary(group);
+    ruleSourceTxnCount = group.txns.length;
     ruleMode = matchedRule ? 'edit' : 'create';
     ruleId = matchedRule?.id ?? null;
     ruleEnabled = matchedRule?.enabled ?? true;
@@ -682,9 +686,20 @@
           ? 'Update the reusable rule that matched this transaction group.'
           : 'Create a reusable rule from this transaction group.'}
       </p>
-      <p class="rule-modal-meta">
-        <strong>Source payee:</strong> {ruleSourcePayee}
-      </p>
+      <div class="rule-context-grid">
+        <section class="rule-context-card">
+          <p class="eyebrow">Transaction Payee</p>
+          <p class="rule-context-payee" title={ruleSourcePayee}>{ruleSourcePayee}</p>
+          <p class="rule-context-support">
+            {ruleSourceTxnCount} {ruleSourceTxnCount === 1 ? 'transaction' : 'transactions'} from {ruleSourceAccount}
+          </p>
+        </section>
+
+        <section class="rule-context-card rule-context-card-secondary">
+          <p class="eyebrow">Selected Category</p>
+          <p class="rule-context-account">{extractSetAccount(ruleActions) || 'Choose a category below'}</p>
+        </section>
+      </div>
       <RuleEditor
         bind:conditions={ruleConditions}
         bind:actions={ruleActions}
@@ -971,16 +986,62 @@
     border-radius: 14px;
     box-shadow: var(--shadow);
     padding: 1rem;
+    max-height: calc(100vh - 2rem);
+    overflow: auto;
   }
 
   .rule-modal {
-    width: min(760px, 100%);
+    width: min(1040px, 100%);
+    display: grid;
+    gap: 0.9rem;
   }
 
-  .rule-modal-meta {
-    margin: 0 0 0.7rem;
-    color: var(--muted);
-    font-size: 0.92rem;
+  .rule-context-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);
+    gap: 0.75rem;
+  }
+
+  .rule-context-card {
+    min-width: 0;
+    border: 1px solid rgba(15, 95, 136, 0.12);
+    border-radius: 12px;
+    background: rgba(239, 248, 254, 0.72);
+    padding: 0.85rem 0.95rem;
+  }
+
+  .rule-context-card-secondary {
+    background: rgba(255, 248, 235, 0.72);
+    border-color: rgba(218, 169, 79, 0.2);
+  }
+
+  .rule-context-payee,
+  .rule-context-account,
+  .rule-context-support {
+    margin: 0;
+  }
+
+  .rule-context-payee,
+  .rule-context-account {
+    color: var(--brand-strong);
+    font-weight: 800;
+    overflow-wrap: anywhere;
+  }
+
+  .rule-context-payee {
+    font-size: 1rem;
+    margin-top: 0.15rem;
+  }
+
+  .rule-context-account {
+    font-size: 0.95rem;
+    margin-top: 0.15rem;
+  }
+
+  .rule-context-support {
+    color: var(--muted-foreground);
+    font-size: 0.86rem;
+    margin-top: 0.35rem;
   }
 
   @media (min-width: 921px) {
@@ -1029,6 +1090,10 @@
   @media (max-width: 680px) {
     .review-summary-head {
       flex-direction: column;
+    }
+
+    .rule-context-grid {
+      grid-template-columns: 1fr;
     }
   }
 </style>
