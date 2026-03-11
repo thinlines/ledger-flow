@@ -61,6 +61,12 @@
     updatedAt: string;
   };
 
+  type ExistingRuleCandidate = {
+    rule: Rule;
+    summary: string;
+    score: number;
+  };
+
   let initialized = false;
   let journalPath = '';
   let journals: Array<{ fileName: string; absPath: string }> = [];
@@ -83,6 +89,8 @@
   let ruleEnabled = true;
   let ruleConditions: RuleCondition[] = createDefaultRuleConditions();
   let ruleActions: RuleAction[] = createDefaultRuleActions();
+  let selectedRuleAccount = '';
+  let existingRuleCandidates: ExistingRuleCandidate[] = [];
 
   let showCreateAccountModal = false;
   let newAccountName = '';
@@ -91,6 +99,10 @@
   let newAccountInputEl: HTMLInputElement | null = null;
   let createAccountContext: { mode: 'rule' | 'group'; groupKey: string | null } = { mode: 'rule', groupKey: null };
   let statusFilter: 'all' | 'ready' | 'needs' = 'all';
+
+  $: selectedRuleAccount = extractSetAccount(ruleActions).trim();
+  $: existingRuleCandidates =
+    ruleMode === 'create' ? findExistingRulesForAccount(selectedRuleAccount, ruleSourcePayee, ruleId) : [];
 
   function pathLabel(path: string): string {
     const parts = path.split('/').filter(Boolean);
@@ -310,6 +322,84 @@
     ruleActions = nextActions;
   }
 
+  function loadRuleIntoEditor(rule: Rule | null, fallbackAccount: string, sourcePayee: string) {
+    ruleMode = rule ? 'edit' : 'create';
+    ruleId = rule?.id ?? null;
+    ruleEnabled = rule?.enabled ?? true;
+    ruleConditions = rule
+      ? rule.conditions.map((condition) => ({ ...condition }))
+      : createDefaultRuleConditions(sourcePayee);
+    ruleActions = rule ? ensureSetAccountAction(rule.actions, fallbackAccount) : createDefaultRuleActions(fallbackAccount);
+    ruleError = '';
+  }
+
+  function summarizeRuleCondition(rule: Rule): string {
+    const payeeConditions = sanitizedConditions(rule.conditions).filter((condition) => condition.field === 'payee');
+    if (!payeeConditions.length) return 'Existing payee rule';
+
+    const [firstCondition, ...rest] = payeeConditions;
+    const operatorLabel = firstCondition.operator === 'contains' ? 'contains' : 'is exactly';
+    const extraConditionCount = rest.length;
+    const extraLabel =
+      extraConditionCount > 0 ? ` + ${extraConditionCount} more condition${extraConditionCount === 1 ? '' : 's'}` : '';
+    return `Payee ${operatorLabel} "${firstCondition.value}"${extraLabel}`;
+  }
+
+  function scoreRuleForPayee(rule: Rule, payee: string): number {
+    const normalizedPayee = payee.trim().toLowerCase();
+    if (!normalizedPayee) return 0;
+
+    return sanitizedConditions(rule.conditions)
+      .filter((condition) => condition.field === 'payee')
+      .reduce((bestScore, condition) => {
+        const candidateValue = condition.value.trim().toLowerCase();
+        if (!candidateValue) return bestScore;
+        if (condition.operator === 'exact' && candidateValue === normalizedPayee) return Math.max(bestScore, 4);
+        if (normalizedPayee.includes(candidateValue) || candidateValue.includes(normalizedPayee)) {
+          return Math.max(bestScore, condition.operator === 'contains' ? 3 : 2);
+        }
+        return bestScore;
+      }, 0);
+  }
+
+  function findExistingRulesForAccount(account: string, payee: string, excludedRuleId: string | null): ExistingRuleCandidate[] {
+    if (!account) return [];
+
+    return rules
+      .filter((rule) => rule.id !== excludedRuleId && extractSetAccount(rule.actions) === account)
+      .map((rule) => ({
+        rule,
+        summary: summarizeRuleCondition(rule),
+        score: scoreRuleForPayee(rule, payee)
+      }))
+      .sort((left, right) => {
+        if (right.score !== left.score) return right.score - left.score;
+        if (left.rule.position !== right.rule.position) return left.rule.position - right.rule.position;
+        return left.rule.id.localeCompare(right.rule.id);
+      });
+  }
+
+  async function openExistingRuleCandidate(ruleIdToEdit: string) {
+    let existingRule = rules.find((candidate) => candidate.id === ruleIdToEdit) ?? null;
+    if (!existingRule) {
+      try {
+        const refreshedRules = await loadRules();
+        existingRule = refreshedRules.find((candidate) => candidate.id === ruleIdToEdit) ?? null;
+      } catch (e) {
+        ruleError = String(e);
+        return;
+      }
+    }
+
+    if (!existingRule) {
+      ruleError = `Rule ${ruleIdToEdit} could not be loaded.`;
+      return;
+    }
+
+    const fallbackAccount = selectedRuleAccount || extractSetAccount(existingRule.actions);
+    loadRuleIntoEditor(existingRule, fallbackAccount, ruleSourcePayee);
+  }
+
   async function openRuleModal(groupKey: string) {
     const group = stage?.groups.find((candidate) => candidate.groupKey === groupKey);
     if (!group) return;
@@ -331,16 +421,7 @@
     ruleSourcePayee = group.payeeDisplay;
     ruleSourceAccount = sourceAccountPrimary(group);
     ruleSourceTxnCount = group.txns.length;
-    ruleMode = matchedRule ? 'edit' : 'create';
-    ruleId = matchedRule?.id ?? null;
-    ruleEnabled = matchedRule?.enabled ?? true;
-    ruleConditions = matchedRule
-      ? matchedRule.conditions.map((condition) => ({ ...condition }))
-      : createDefaultRuleConditions(group.payeeDisplay);
-    ruleActions = matchedRule
-      ? ensureSetAccountAction(matchedRule.actions, fallbackAccount)
-      : createDefaultRuleActions(fallbackAccount);
-    ruleError = '';
+    loadRuleIntoEditor(matchedRule, fallbackAccount, group.payeeDisplay);
     showRuleModal = true;
     await tick();
   }
@@ -700,6 +781,45 @@
           <p class="rule-context-account">{extractSetAccount(ruleActions) || 'Choose a category below'}</p>
         </section>
       </div>
+      {#if existingRuleCandidates.length}
+        <section class="existing-rule-callout" role="status" aria-live="polite">
+          <div class="existing-rule-copy">
+            <p class="eyebrow">Possible Duplicate</p>
+            <p class="existing-rule-title">
+              {#if existingRuleCandidates.length === 1}
+                A saved rule already maps to {selectedRuleAccount}.
+              {:else}
+                {existingRuleCandidates.length} saved rules already map to {selectedRuleAccount}.
+              {/if}
+            </p>
+            <p class="muted">
+              If {ruleSourcePayee} should be covered by one of those rules, edit it instead of creating a new one.
+            </p>
+          </div>
+
+          <div class="existing-rule-list">
+            {#each existingRuleCandidates.slice(0, 3) as candidate (candidate.rule.id)}
+              <div class="existing-rule-item">
+                <div class="existing-rule-item-copy">
+                  <p class="existing-rule-summary">{candidate.summary}</p>
+                  <p class="existing-rule-meta">
+                    Rule {candidate.rule.id}{candidate.rule.enabled ? '' : ' · Disabled'}
+                  </p>
+                </div>
+                <button class="btn" type="button" on:click={() => void openExistingRuleCandidate(candidate.rule.id)}>
+                  Edit rule
+                </button>
+              </div>
+            {/each}
+
+            {#if existingRuleCandidates.length > 3}
+              <p class="existing-rule-more">
+                Showing 3 of {existingRuleCandidates.length} rules that already map to {selectedRuleAccount}.
+              </p>
+            {/if}
+          </div>
+        </section>
+      {/if}
       <RuleEditor
         bind:conditions={ruleConditions}
         bind:actions={ruleActions}
@@ -1044,6 +1164,65 @@
     margin-top: 0.35rem;
   }
 
+  .existing-rule-callout {
+    display: grid;
+    gap: 0.8rem;
+    border: 1px solid rgba(218, 169, 79, 0.26);
+    border-radius: 12px;
+    background: rgba(255, 247, 234, 0.92);
+    padding: 0.9rem 0.95rem;
+  }
+
+  .existing-rule-copy,
+  .existing-rule-title,
+  .existing-rule-summary,
+  .existing-rule-meta,
+  .existing-rule-more {
+    margin: 0;
+  }
+
+  .existing-rule-title {
+    color: var(--brand-strong);
+    font-size: 0.96rem;
+    font-weight: 800;
+    margin-top: 0.15rem;
+  }
+
+  .existing-rule-list {
+    display: grid;
+    gap: 0.65rem;
+  }
+
+  .existing-rule-item {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 0.75rem;
+    align-items: center;
+    border-top: 1px solid rgba(218, 169, 79, 0.18);
+    padding-top: 0.65rem;
+  }
+
+  .existing-rule-item:first-child {
+    border-top: 0;
+    padding-top: 0;
+  }
+
+  .existing-rule-item-copy {
+    min-width: 0;
+  }
+
+  .existing-rule-summary {
+    color: var(--brand-strong);
+    font-weight: 700;
+    overflow-wrap: anywhere;
+  }
+
+  .existing-rule-meta,
+  .existing-rule-more {
+    color: var(--muted-foreground);
+    font-size: 0.84rem;
+  }
+
   @media (min-width: 921px) {
     .review-list-header {
       display: grid;
@@ -1093,6 +1272,10 @@
     }
 
     .rule-context-grid {
+      grid-template-columns: 1fr;
+    }
+
+    .existing-rule-item {
       grid-template-columns: 1fr;
     }
   }
