@@ -602,17 +602,32 @@
         </section>
       {:else}
         <section class="group-list">
+          <div class="desktop-review-header" aria-hidden="true">
+            <span>Status</span>
+            <span>Activity</span>
+            <span>From account</span>
+            <span>Category</span>
+            <span>Automation</span>
+          </div>
           {#each visibleGroups() as group}
             <article class="view-card group-card" class:group-ready={groupStatus(group) === 'ready'} class:group-needs={groupStatus(group) === 'needs'}>
-              <div class="group-card-head">
+              <div class="group-grid">
+                <div class="group-status-panel">
+                  <p class="group-status-label">
+                    {#if groupStatus(group) === 'ready'}
+                      Ready to apply
+                    {:else}
+                      Needs category
+                    {/if}
+                  </p>
+                  <p class="group-status-meta">
+                    {group.txns.length} {group.txns.length === 1 ? 'txn' : 'txns'}
+                  </p>
+                </div>
+
                 <div class="group-card-copy">
                   <div class="group-title-row">
                     <h4>{group.payeeDisplay}</h4>
-                    {#if groupStatus(group) === 'ready'}
-                      <span class="pill ok">Ready to apply</span>
-                    {:else}
-                      <span class="pill warn">Needs category</span>
-                    {/if}
                   </div>
                   <p class="group-meta">
                     {group.txns.length} {group.txns.length === 1 ? 'transaction' : 'transactions'} • {groupDateRange(group)}
@@ -625,19 +640,16 @@
                       <span class="peek-pill muted-pill">+{remainingTransactionCount(group)} more</span>
                     {/if}
                   </div>
+                  <div class="group-supporting-pills">
+                    {#if group.matchedRuleId}
+                      <span class="pill ok">Rule suggestion</span>
+                    {/if}
+                    {#if group.importAccountDisplayName}
+                      <span class="pill">{group.importAccountDisplayName}</span>
+                    {/if}
+                  </div>
                 </div>
 
-                <div class="rule-badge-stack">
-                  {#if group.matchedRuleId}
-                    <span class="pill ok">Rule suggestion</span>
-                  {/if}
-                  {#if group.importAccountDisplayName}
-                    <span class="pill">{group.importAccountDisplayName}</span>
-                  {/if}
-                </div>
-              </div>
-
-              <div class="assignment-row">
                 <div class="assignment-side source-side">
                   <p class="assignment-label">From account</p>
                   <p class="assignment-value">{sourceAccountPrimary(group)}</p>
@@ -645,8 +657,6 @@
                     <p class="muted assignment-subvalue">{sourceAccountSecondary(group)}</p>
                   {/if}
                 </div>
-
-                <div class="assignment-arrow" aria-hidden="true">→</div>
 
                 <div class="assignment-side category-side">
                   <p class="assignment-label">Category</p>
@@ -840,7 +850,6 @@
   }
 
   .review-summary-pills,
-  .rule-badge-stack,
   .assignment-notes {
     display: flex;
     gap: 0.45rem;
@@ -887,27 +896,62 @@
     margin-top: 1rem;
   }
 
+  .desktop-review-header {
+    display: none;
+  }
+
   .group-card {
     border-color: rgba(10, 61, 89, 0.12);
   }
 
   .group-ready {
-    border-color: rgba(12, 123, 89, 0.22);
+    border-color: rgba(12, 123, 89, 0.24);
   }
 
   .group-needs {
-    border-color: rgba(218, 169, 79, 0.24);
+    border-color: rgba(218, 169, 79, 0.28);
   }
 
-  .group-card-head {
-    display: flex;
-    justify-content: space-between;
+  .group-grid {
+    display: grid;
     gap: 1rem;
-    align-items: flex-start;
   }
 
   .group-card-copy {
     min-width: 0;
+  }
+
+  .group-status-panel {
+    display: grid;
+    gap: 0.2rem;
+    padding: 0.85rem 0.9rem;
+    border-radius: 14px;
+    border: 1px solid rgba(10, 61, 89, 0.08);
+    background: rgba(250, 251, 252, 0.85);
+  }
+
+  .group-ready .group-status-panel {
+    background: rgba(237, 249, 244, 0.95);
+    border-color: #9ad6be;
+  }
+
+  .group-needs .group-status-panel {
+    background: rgba(255, 247, 234, 0.96);
+    border-color: #f3cf96;
+  }
+
+  .group-status-label {
+    margin: 0;
+    font-size: 0.95rem;
+    font-weight: 800;
+    color: var(--brand-strong);
+  }
+
+  .group-status-meta {
+    margin: 0;
+    color: var(--muted-foreground);
+    font-size: 0.82rem;
+    font-weight: 600;
   }
 
   .group-title-row {
@@ -933,6 +977,13 @@
     margin-top: 0.6rem;
   }
 
+  .group-supporting-pills {
+    display: flex;
+    gap: 0.45rem;
+    flex-wrap: wrap;
+    margin-top: 0.75rem;
+  }
+
   .peek-pill {
     display: inline-flex;
     align-items: center;
@@ -948,17 +999,6 @@
   .muted-pill {
     color: var(--muted-foreground);
     border-style: dashed;
-  }
-
-  .assignment-row {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) auto minmax(0, 1.3fr) minmax(12rem, 0.85fr);
-    gap: 1rem;
-    align-items: center;
-    border: 1px solid rgba(10, 61, 89, 0.08);
-    border-radius: 16px;
-    background: linear-gradient(145deg, rgba(255, 255, 255, 0.92), rgba(241, 248, 255, 0.86));
-    padding: 1rem;
   }
 
   .assignment-side,
@@ -984,12 +1024,6 @@
   .assignment-subvalue {
     margin: 0.2rem 0 0;
     font-size: 0.9rem;
-  }
-
-  .assignment-arrow {
-    color: var(--brand-strong);
-    font-size: 1.35rem;
-    font-weight: 700;
   }
 
   .category-side {
@@ -1086,9 +1120,43 @@
     font-size: 0.92rem;
   }
 
+  @media (min-width: 921px) {
+    .desktop-review-header {
+      display: grid;
+      grid-template-columns: 10rem minmax(13rem, 1.2fr) minmax(12rem, 1fr) minmax(16rem, 1.3fr) minmax(11rem, 0.8fr);
+      gap: 1rem;
+      padding: 0 0.75rem;
+      color: var(--muted-foreground);
+      font-size: 0.78rem;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .group-card {
+      padding: 0.9rem 1rem;
+    }
+
+    .group-grid {
+      grid-template-columns: 10rem minmax(13rem, 1.2fr) minmax(12rem, 1fr) minmax(16rem, 1.3fr) minmax(11rem, 0.8fr);
+      align-items: start;
+    }
+
+    .assignment-label {
+      font-size: 0.7rem;
+    }
+
+    .group-actions {
+      padding-top: 1.4rem;
+    }
+
+    .group-details {
+      margin-top: 0.25rem;
+    }
+  }
+
   @media (max-width: 920px) {
-    .review-toolbar,
-    .group-card-head {
+    .review-toolbar {
       flex-direction: column;
     }
 
@@ -1098,15 +1166,6 @@
 
     .review-hint {
       text-align: left;
-    }
-
-    .assignment-row {
-      grid-template-columns: 1fr;
-    }
-
-    .assignment-arrow {
-      transform: rotate(90deg);
-      justify-self: start;
     }
   }
 
