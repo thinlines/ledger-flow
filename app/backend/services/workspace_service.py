@@ -11,6 +11,30 @@ from .institution_registry import get_template
 from .opening_balance_service import opening_balance_index, write_opening_balance
 
 TXN_START_RE = re.compile(r"^\d{4}[-/]\d{2}[-/]\d{2}")
+JOURNAL_INCLUDE_LINES = (
+    "include ../rules/10-accounts.dat",
+    "include ../rules/12-tags.dat",
+    "include ../rules/13-commodities.dat",
+)
+
+
+def ensure_journal_includes(journal_path: Path) -> None:
+    existing_lines = journal_path.read_text(encoding="utf-8").splitlines() if journal_path.exists() else []
+    include_set = set(JOURNAL_INCLUDE_LINES)
+    filtered_lines = [line for line in existing_lines if line.strip() not in include_set]
+
+    normalized_lines: list[str] = [*JOURNAL_INCLUDE_LINES]
+    if filtered_lines:
+        if filtered_lines[0].strip():
+            normalized_lines.append("")
+        normalized_lines.extend(filtered_lines)
+
+    text = "\n".join(normalized_lines).rstrip() + "\n"
+    if journal_path.exists() and journal_path.read_text(encoding="utf-8") == text:
+        return
+
+    journal_path.parent.mkdir(parents=True, exist_ok=True)
+    journal_path.write_text(text, encoding="utf-8")
 
 
 @dataclass(frozen=True)
@@ -580,6 +604,7 @@ class WorkspaceManager:
                 ),
                 encoding="utf-8",
             )
+        ensure_journal_includes(year_journal)
 
         config = load_config(settings / "workspace.toml")
         for raw, normalized_account in normalized_input_rows:

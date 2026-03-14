@@ -2,7 +2,7 @@ from pathlib import Path
 
 from services.config_service import load_config
 from services.import_service import scan_candidates
-from services.workspace_service import WorkspaceManager
+from services.workspace_service import WorkspaceManager, ensure_journal_includes
 
 
 def test_bootstrap_workspace_writes_import_accounts_and_templates(tmp_path: Path) -> None:
@@ -51,6 +51,15 @@ def test_bootstrap_workspace_writes_import_accounts_and_templates(tmp_path: Path
     assert "account Assets:Bank:Wells Fargo:Savings" in content
     assert "account Expenses:Unknown" in content
     assert "account Equity:Opening-Balances" in content
+
+    year_journal = workspace_root / "journals" / "2026.journal"
+    journal_content = year_journal.read_text(encoding="utf-8")
+    assert journal_content.startswith(
+        "include ../rules/10-accounts.dat\n"
+        "include ../rules/12-tags.dat\n"
+        "include ../rules/13-commodities.dat\n"
+    )
+    assert "; Test Books financial journal" in journal_content
 
 
 def test_bootstrap_workspace_without_accounts_reports_setup_progress(tmp_path: Path) -> None:
@@ -439,3 +448,28 @@ def test_upsert_import_account_removes_stale_custom_profile_when_switching_to_su
     assert switched.import_accounts[account_id].get("import_profile_id") in {None, ""}
     assert account_id not in switched.import_profiles
     assert switched.import_accounts[account_id]["institution"] == "wells_fargo"
+
+
+def test_ensure_journal_includes_prepends_standard_include_block(tmp_path: Path) -> None:
+    journal_path = tmp_path / "2026.journal"
+    journal_path.write_text(
+        "; Existing journal\n"
+        "include ../rules/13-commodities.dat\n"
+        "\n"
+        "2026/03/01 Coffee Shop\n"
+        "    Assets:Bank:Checking  $-7.50\n"
+        "    Expenses:Food\n",
+        encoding="utf-8",
+    )
+
+    ensure_journal_includes(journal_path)
+
+    content = journal_path.read_text(encoding="utf-8")
+    assert content.startswith(
+        "include ../rules/10-accounts.dat\n"
+        "include ../rules/12-tags.dat\n"
+        "include ../rules/13-commodities.dat\n\n"
+    )
+    assert content.count("include ../rules/13-commodities.dat") == 1
+    assert "; Existing journal" in content
+    assert "2026/03/01 Coffee Shop" in content

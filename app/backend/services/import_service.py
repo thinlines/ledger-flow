@@ -11,6 +11,7 @@ from .import_index import ImportIndex
 from .import_profile_service import import_source_summary, resolve_import_source
 from .ledger_runner import run_cmd
 from .payee_alias_service import ensure_payee_alias_dat
+from .workspace_service import ensure_journal_includes
 
 
 INBOX_FILE_RE = re.compile(
@@ -299,6 +300,7 @@ def preview_import(
     year_journal = config.journal_dir / f"{year}.journal"
     if not year_journal.exists():
         year_journal.write_text("", encoding="utf-8")
+    ensure_journal_includes(year_journal)
 
     converted_journal = run_cmd(
         [
