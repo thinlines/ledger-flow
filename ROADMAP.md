@@ -296,6 +296,7 @@ These are valid ideas, but they are not current priorities:
 
 - Merchant management UI
 - Expanding the rule language beyond the current limited matching model
+- Declarative CSV import row rules for advanced conditional parsing or categorization, inspired by hledger-style `if` matching, unless they can be introduced without making account setup feel heavy or surprising
 - Full budgeting system
 - Zero-based/envelope budgeting workflow
 - Long-range forecasting and goals
