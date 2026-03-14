@@ -12,6 +12,7 @@ from models import (
     CustomImportAccountUpsertRequest,
     CreateAccountRequest,
     ImportPreviewRequest,
+    ImportUndoRequest,
     PayeeRuleRequest,
     RuleCreateRequest,
     RuleReorderRequest,
@@ -27,6 +28,7 @@ from models import (
 from services.backup_service import backup_file
 from services.custom_csv_service import inspect_csv_bytes
 from services.dashboard_service import build_dashboard_overview
+from services.import_history_service import list_import_history, record_applied_import, undo_import
 from services.import_index import ImportIndex
 from services.import_service import apply_import, archive_inbox_csv, preview_import, scan_candidates
 from services.import_profile_service import import_source_summary
@@ -618,8 +620,28 @@ def import_apply(req: StageApplyRequest) -> dict:
         "archivedCsvPath": archived_csv_path,
         "sourceCsvWarning": source_csv_warning,
     }
+    history_entry = record_applied_import(config, stage)
+    stage["result"]["historyId"] = history_entry["id"]
     stages.save(req.stageId, stage)
     return stage
+
+
+@app.get("/api/import/history")
+def import_history() -> dict:
+    config = _require_workspace_config()
+    return {"history": list_import_history(config)}
+
+
+@app.post("/api/import/undo")
+def import_undo(req: ImportUndoRequest) -> dict:
+    config = _require_workspace_config()
+    try:
+        entry = undo_import(config, req.historyId)
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail="import history entry not found") from e
+    except (FileNotFoundError, OSError, ValueError) as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return {"entry": entry}
 
 
 @app.post("/api/unknowns/scan")

@@ -18,6 +18,10 @@ class StageApplyRequest(BaseModel):
     stageId: str
 
 
+class ImportUndoRequest(BaseModel):
+    historyId: str
+
+
 class UnknownScanRequest(BaseModel):
     journalPath: str
 

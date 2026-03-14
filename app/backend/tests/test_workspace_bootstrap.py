@@ -72,6 +72,8 @@ def test_bootstrap_workspace_writes_import_accounts_and_templates(tmp_path: Path
     assert "commodity $" in commodities_content
     assert "\tformat $1,000.00" in commodities_content
 
+    assert (workspace_root / "imports" / "import-log.ndjson").exists()
+
 
 def test_bootstrap_workspace_without_accounts_reports_setup_progress(tmp_path: Path) -> None:
     manager = WorkspaceManager(tmp_path / "app")

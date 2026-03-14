@@ -43,6 +43,37 @@
     };
   };
 
+  type ImportHistoryEntry = {
+    id: string;
+    status: 'applied' | 'undone';
+    appliedAt: string;
+    importAccountId?: string;
+    importAccountDisplayName?: string;
+    destinationAccount?: string;
+    csvFileName?: string;
+    originalCsvPath?: string | null;
+    archivedCsvPath?: string | null;
+    targetJournalPath?: string;
+    backupPath?: string | null;
+    canUndo: boolean;
+    undoBlockedReason?: string | null;
+    result?: {
+      appendedTxnCount?: number;
+      skippedDuplicateCount?: number;
+      conflicts?: Array<{ warning?: string }>;
+      sourceCsvWarning?: string | null;
+    };
+    summary?: {
+      conflictCount?: number;
+    };
+    undo?: {
+      undoneAt?: string;
+      undoBackupPath?: string | null;
+      restoredInboxCsvPath?: string | null;
+      sourceCsvWarning?: string | null;
+    };
+  };
+
   export let mode: 'standalone' | 'setup' = 'standalone';
   export let refreshToken = 0;
   export let onApplied: ((preview: PreviewResult) => void | Promise<void>) | null = null;
@@ -55,6 +86,8 @@
   let importAccountId = '';
   let selectedFile: File | null = null;
   let preview: PreviewResult | null = null;
+  let historyEntries: ImportHistoryEntry[] = [];
+  let historyMessage = '';
   let error = '';
   let loading = false;
   let hydrated = false;
@@ -63,7 +96,7 @@
   $: selectedImportAccount = importAccounts.find((account) => account.id === importAccountId) ?? null;
   $: if (hydrated && refreshToken !== lastRefreshToken) {
     lastRefreshToken = refreshToken;
-    void loadCandidates();
+    void loadImportData();
   }
 
   function pathLabel(path: string): string {
@@ -71,19 +104,42 @@
     return parts.at(-1) ?? path;
   }
 
+  function optionalPathLabel(path?: string | null, fallback = 'Unknown file'): string {
+    return path ? pathLabel(path) : fallback;
+  }
+
   function accountLabel(account: ImportAccountOption): string {
     return account.last4 ? `${account.displayName} ••${account.last4}` : account.displayName;
   }
 
-  async function loadCandidates() {
+  function formatDateTime(value?: string | null): string {
+    if (!value) return 'Unknown time';
+    const date = new Date(value);
+    return Number.isNaN(date.getTime())
+      ? value
+      : new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(date);
+  }
+
+  async function loadImportData() {
     try {
       const state = await apiGet<{ initialized: boolean }>('/api/app/state');
       initialized = state.initialized;
-      if (!initialized) return;
+      if (!initialized) {
+        candidates = [];
+        importAccounts = [];
+        historyEntries = [];
+        preview = null;
+        return;
+      }
 
-      const data = await apiGet<{ candidates: Candidate[]; importAccounts: ImportAccountOption[] }>('/api/import/candidates');
+      const [candidateData, historyData] = await Promise.all([
+        apiGet<{ candidates: Candidate[]; importAccounts: ImportAccountOption[] }>('/api/import/candidates'),
+        apiGet<{ history: ImportHistoryEntry[] }>('/api/import/history')
+      ]);
+      const data = candidateData;
       candidates = data.candidates;
       importAccounts = data.importAccounts;
+      historyEntries = historyData.history;
       if (!importAccountId && importAccounts.length === 1) {
         importAccountId = importAccounts[0].id;
       }
@@ -99,6 +155,7 @@
     if (!selectedFile || !importAccountId || !year) return;
     loading = true;
     error = '';
+    historyMessage = '';
     preview = null;
     try {
       const form = new FormData();
@@ -114,7 +171,7 @@
       const data = (await res.json()) as { absPath: string };
       selectedPath = data.absPath;
       selectedFile = null;
-      await loadCandidates();
+      await loadImportData();
     } catch (e) {
       error = String(e);
     } finally {
@@ -124,6 +181,7 @@
 
   async function runPreview() {
     error = '';
+    historyMessage = '';
     preview = null;
     loading = true;
     try {
@@ -142,11 +200,12 @@
   async function applyStage() {
     if (!preview?.stageId) return;
     error = '';
+    historyMessage = '';
     loading = true;
     try {
       preview = await apiPost<PreviewResult>('/api/import/apply', { stageId: preview.stageId });
       selectedPath = '';
-      await loadCandidates();
+      await loadImportData();
       if (preview && onApplied) {
         await onApplied(preview);
       }
@@ -164,10 +223,36 @@
     preview = null;
   }
 
+  async function undoHistoryEntry(entry: ImportHistoryEntry) {
+    if (!entry.canUndo) return;
+    const confirmed = window.confirm(
+      `Undo ${entry.csvFileName ?? 'this import'}? This removes the transactions added by this import and creates a recovery backup of the current journal.`
+    );
+    if (!confirmed) return;
+
+    error = '';
+    historyMessage = '';
+    loading = true;
+    try {
+      const data = await apiPost<{ entry: ImportHistoryEntry }>('/api/import/undo', {
+        historyId: entry.id
+      });
+      preview = null;
+      await loadImportData();
+      historyMessage = data.entry.undo?.restoredInboxCsvPath
+        ? 'Import undone, its transactions were removed, and the source statement was restored to the inbox.'
+        : 'Import undone and its transactions were removed.';
+    } catch (e) {
+      error = String(e);
+    } finally {
+      loading = false;
+    }
+  }
+
   onMount(async () => {
     hydrated = true;
     lastRefreshToken = refreshToken;
-    await loadCandidates();
+    await loadImportData();
   });
 </script>
 
@@ -379,6 +464,97 @@
       {/if}
     {/if}
   {/if}
+
+  <section class="view-card import-history-card">
+    <div class="history-header">
+      <div>
+        <p class="eyebrow">Import History</p>
+        <h3>Recent Imports</h3>
+        <p class="muted">Applied imports are logged here. Undo is available for the latest applied import on each journal.</p>
+      </div>
+      {#if historyEntries.length > 0}
+        <p class="muted small">{historyEntries.length} recorded</p>
+      {/if}
+    </div>
+
+    {#if historyMessage}
+      <p class="success-text">{historyMessage}</p>
+    {/if}
+
+    {#if !initialized}
+      <p class="muted">Complete workspace setup to start recording import history.</p>
+    {:else if historyEntries.length === 0}
+      <p class="muted">No imports have been applied yet.</p>
+    {:else}
+      <div class="history-list">
+        {#each historyEntries as entry}
+          <article class="history-row">
+            <div class="history-main">
+              <div class="history-topline">
+                <p class="history-title">{entry.csvFileName ?? optionalPathLabel(entry.originalCsvPath)}</p>
+                <span class={`pill ${entry.status === 'undone' ? 'warn' : 'ok'}`}>
+                  {entry.status === 'undone' ? 'Undone' : 'Applied'}
+                </span>
+              </div>
+
+              <p class="muted small">
+                {formatDateTime(entry.appliedAt)} • {entry.importAccountDisplayName ?? entry.importAccountId} •
+                {optionalPathLabel(entry.targetJournalPath, 'Unknown journal')}
+              </p>
+
+              <div class="summary">
+                <span class="pill ok">Added {entry.result?.appendedTxnCount ?? 0}</span>
+                <span class="pill">Duplicates {entry.result?.skippedDuplicateCount ?? 0}</span>
+                <span class="pill warn">
+                  Conflicts {entry.summary?.conflictCount ?? entry.result?.conflicts?.length ?? 0}
+                </span>
+              </div>
+
+              {#if entry.undo?.undoneAt}
+                <p class="muted small">Undone {formatDateTime(entry.undo.undoneAt)}.</p>
+              {:else if !entry.canUndo && entry.undoBlockedReason}
+                <p class="muted small">{entry.undoBlockedReason}</p>
+              {/if}
+
+              <details class="advanced-panel history-details">
+                <summary>Paths and recovery details</summary>
+                {#if entry.targetJournalPath}
+                  <p class="muted">Journal: {entry.targetJournalPath}</p>
+                {/if}
+                {#if entry.backupPath}
+                  <p class="muted">Import backup: {entry.backupPath}</p>
+                {/if}
+                {#if entry.undo?.undoBackupPath}
+                  <p class="muted">Undo backup: {entry.undo.undoBackupPath}</p>
+                {/if}
+                {#if entry.originalCsvPath}
+                  <p class="muted">Original statement: {entry.originalCsvPath}</p>
+                {/if}
+                {#if entry.archivedCsvPath}
+                  <p class="muted">Archived statement: {entry.archivedCsvPath}</p>
+                {/if}
+                {#if entry.undo?.restoredInboxCsvPath}
+                  <p class="muted">Restored to inbox: {entry.undo.restoredInboxCsvPath}</p>
+                {/if}
+                {#if entry.result?.sourceCsvWarning}
+                  <p class="error-text">{entry.result.sourceCsvWarning}</p>
+                {/if}
+                {#if entry.undo?.sourceCsvWarning}
+                  <p class="error-text">{entry.undo.sourceCsvWarning}</p>
+                {/if}
+              </details>
+            </div>
+
+            <div class="history-actions">
+              <button class="btn" disabled={loading || !entry.canUndo} on:click={() => undoHistoryEntry(entry)}>
+                Undo Import
+              </button>
+            </div>
+          </article>
+        {/each}
+      </div>
+    {/if}
+  </section>
 </div>
 
 <style>
@@ -465,6 +641,58 @@
     color: var(--brand-strong);
   }
 
+  .history-header {
+    display: flex;
+    justify-content: space-between;
+    gap: 1rem;
+    align-items: start;
+  }
+
+  .history-list {
+    display: grid;
+    gap: 0.85rem;
+  }
+
+  .history-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 1rem;
+    border: 1px solid rgba(10, 61, 89, 0.08);
+    border-radius: 14px;
+    padding: 0.9rem;
+    background: rgba(255, 255, 255, 0.7);
+  }
+
+  .history-main {
+    min-width: 0;
+  }
+
+  .history-topline {
+    display: flex;
+    justify-content: space-between;
+    gap: 0.75rem;
+    align-items: center;
+  }
+
+  .history-title {
+    margin: 0;
+    font-weight: 700;
+  }
+
+  .history-actions {
+    display: flex;
+    align-items: start;
+  }
+
+  .history-details {
+    margin-top: 0.7rem;
+  }
+
+  .success-text {
+    color: var(--ok);
+    margin-bottom: 0.9rem;
+  }
+
   .small {
     font-size: 0.8rem;
   }
@@ -477,5 +705,20 @@
     white-space: pre-wrap;
     max-height: 320px;
     overflow: auto;
+  }
+
+  @media (max-width: 900px) {
+    .history-row {
+      grid-template-columns: 1fr;
+    }
+
+    .history-actions {
+      justify-content: start;
+    }
+
+    .history-topline {
+      align-items: start;
+      flex-direction: column;
+    }
   }
 </style>

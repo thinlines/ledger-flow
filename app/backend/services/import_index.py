@@ -94,3 +94,16 @@ class ImportIndex:
                         now,
                     ),
                 )
+
+    def delete_transactions(self, import_account_id: str, source_identities: list[str]) -> None:
+        if not source_identities:
+            return
+        self.ensure_schema()
+        with self._connect() as conn:
+            conn.executemany(
+                f"""
+                DELETE FROM {self.table_name}
+                WHERE import_account_id = ? AND source_identity = ?
+                """,
+                [(import_account_id, source_identity) for source_identity in source_identities],
+            )
