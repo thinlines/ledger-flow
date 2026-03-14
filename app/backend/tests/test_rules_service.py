@@ -1,11 +1,12 @@
 from pathlib import Path
 
 from services.rules_service import (
-    find_matching_rule,
-    ensure_rules_store,
-    load_rules,
     create_rule,
+    ensure_rules_store,
+    find_matching_rule,
+    load_rules,
     reorder_rules,
+    update_rule,
     upsert_payee_rule,
 )
 
@@ -26,6 +27,7 @@ account Expenses:Food
     path = ensure_rules_store(rules_dir, accounts)
     rules = load_rules(path)
     assert len(rules) == 1
+    assert rules[0]["name"] == "Coffee Shop"
     assert rules[0]["conditions"][0]["value"] == "Coffee Shop"
     assert rules[0]["conditions"][0]["operator"] == "exact"
     assert rules[0]["actions"] == [{"type": "set_account", "account": "Expenses:Food"}]
@@ -62,6 +64,7 @@ def test_rule_supports_contains_operator(tmp_path: Path) -> None:
     matched = find_matching_rule({"payee": "My Coffee Shop"}, load_rules(path))
     assert matched is not None
     assert matched["id"] == rule["id"]
+    assert matched["name"] == 'Contains "coffee"'
     assert matched["conditions"][0]["joiner"] == "and"
 
 
@@ -113,3 +116,41 @@ def test_rule_supports_multiple_action_types(tmp_path: Path) -> None:
         {"type": "set_kv", "key": "project", "value": "client-x"},
         {"type": "append_comment", "text": "auto-categorized"},
     ]
+
+
+def test_rule_name_can_be_saved_and_updated(tmp_path: Path) -> None:
+    rules_dir = tmp_path / "rules"
+    rules_dir.mkdir(parents=True, exist_ok=True)
+    accounts = rules_dir / "10-accounts.dat"
+    accounts.write_text("", encoding="utf-8")
+    path = ensure_rules_store(rules_dir, accounts)
+
+    created = create_rule(
+        path,
+        name="Morning coffee",
+        conditions=[{"field": "payee", "operator": "contains", "value": "coffee"}],
+        actions=[{"type": "set_account", "account": "Expenses:Coffee"}],
+        enabled=True,
+    )
+    assert created["name"] == "Morning coffee"
+
+    updated = update_rule(
+        path,
+        created["id"],
+        name="Cafe visits",
+    )
+    assert updated["name"] == "Cafe visits"
+    assert load_rules(path)[0]["name"] == "Cafe visits"
+
+
+def test_rule_name_defaults_from_conditions_when_missing(tmp_path: Path) -> None:
+    rules_dir = tmp_path / "rules"
+    rules_dir.mkdir(parents=True, exist_ok=True)
+    path = rules_dir / "20-match-rules.ndjson"
+    path.write_text(
+        '{"id":"r1","type":"match","conditions":[{"field":"payee","operator":"exact","value":"Coffee Shop"}],"actions":[{"type":"set_account","account":"Expenses:Coffee"}],"enabled":true,"position":1}\n',
+        encoding="utf-8",
+    )
+
+    loaded = load_rules(path)
+    assert loaded[0]["name"] == "Coffee Shop"

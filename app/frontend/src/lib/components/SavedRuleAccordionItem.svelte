@@ -1,17 +1,21 @@
 <script lang="ts">
   import RuleEditor from '$lib/components/RuleEditor.svelte';
   import type { RuleAction, RuleCondition } from '$lib/components/rule-editor-types';
+  import { suggestedRuleName } from '$lib/rules';
 
   export let ruleId = '';
   export let ruleIndex = 0;
   export let ruleCount = 0;
+  export let name = '';
   export let conditions: RuleCondition[] = [];
   export let actions: RuleAction[] = [];
   export let accounts: string[] = [];
+  export let dirty = false;
   export let expanded = false;
   export let loading = false;
   export let onToggle: () => void = () => {};
   export let onSave: () => void | Promise<void> = () => {};
+  export let onNameCommit: () => void | Promise<void> = () => {};
   export let onRemove: () => void | Promise<void> = () => {};
   export let onMoveUp: () => void = () => {};
   export let onMoveDown: () => void = () => {};
@@ -25,6 +29,7 @@
 
   $: conditionSummary = summarizeConditions(conditions);
   $: actionSummary = summarizeActions(actions);
+  $: namePlaceholder = suggestedRuleName(conditions);
 
   function summarizeConditions(items: RuleCondition[]): string {
     const parts = items
@@ -125,7 +130,12 @@
       <button type="button" class="rule-toggle" aria-expanded={expanded} on:click={onToggle}>
         <div class="rule-head">
           <div class="rule-summary-block">
-            <p class="rule-label">Rule {ruleIndex + 1}</p>
+            <div class="rule-title-row">
+              <p class="rule-title">{name || namePlaceholder || 'Untitled rule'}</p>
+              {#if dirty}
+                <span class="dirty-pill">Unsaved changes</span>
+              {/if}
+            </div>
             {#if !expanded}
               <p class="rule-summary" title={conditionSummary}>{conditionSummary}</p>
               <p class="rule-summary muted" title={actionSummary}>{actionSummary}</p>
@@ -140,6 +150,18 @@
 
       {#if expanded}
         <div class="rule-body">
+          <div class="field rule-name-field">
+            <label for={`rule-name-${ruleId}`}>Rule Name</label>
+            <input
+              id={`rule-name-${ruleId}`}
+              bind:value={name}
+              placeholder={namePlaceholder || 'Coffee Shop'}
+              on:change={() => void onNameCommit()}
+              on:keydown={(event) =>
+                event.key === 'Enter' ? ((event.preventDefault(), (event.currentTarget as HTMLInputElement).blur())) : undefined}
+            />
+          </div>
+
           <RuleEditor
             bind:conditions
             bind:actions
@@ -279,16 +301,35 @@
     gap: 0.18rem;
   }
 
-  .rule-label,
+  .rule-title-row {
+    display: flex;
+    gap: 0.5rem;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+
+  .rule-title,
   .rule-summary {
     margin: 0;
   }
 
-  .rule-label {
+  .rule-title {
     font-size: 0.98rem;
     font-weight: 700;
     color: var(--brand-strong);
     line-height: 1.25;
+    overflow-wrap: anywhere;
+  }
+
+  .dirty-pill {
+    border-radius: 999px;
+    background: rgba(255, 244, 220, 0.92);
+    border: 1px solid rgba(218, 169, 79, 0.28);
+    color: #8b5b12;
+    padding: 0.2rem 0.48rem;
+    font-size: 0.73rem;
+    font-weight: 700;
+    line-height: 1.2;
   }
 
   .rule-summary {
@@ -328,6 +369,10 @@
     padding-top: 0.95rem;
     display: grid;
     gap: 0.95rem;
+  }
+
+  .rule-name-field {
+    gap: 0.38rem;
   }
 
   .rule-footer {

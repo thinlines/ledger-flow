@@ -49,6 +49,7 @@ class RuleAction(BaseModel):
 
 
 class RuleCreateRequest(BaseModel):
+    name: str | None = None
     conditions: list[RuleCondition]
     actions: list[RuleAction]
     enabled: bool = True
@@ -59,6 +60,7 @@ class RuleReorderRequest(BaseModel):
 
 
 class RuleUpdateRequest(BaseModel):
+    name: str | None = None
     conditions: list[RuleCondition] | None = None
     actions: list[RuleAction] | None = None
     enabled: bool | None = None

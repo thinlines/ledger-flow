@@ -9,14 +9,19 @@
     createDefaultRuleActions,
     createDefaultRuleConditions,
     ensureSetAccountAction,
+    normalizeActions,
+    normalizeConditions,
     normalizeRule,
+    sanitizedRuleName,
     sanitizedActions,
-    sanitizedConditions
+    sanitizedConditions,
+    suggestedRuleName
   } from '$lib/rules';
 
   type Rule = {
     id: string;
     type: 'match';
+    name: string;
     conditions: RuleCondition[];
     actions: RuleAction[];
     enabled: boolean;
@@ -30,7 +35,10 @@
   let rules: Rule[] = [];
   let accounts: string[] = [];
   let expandedRuleId: string | null = null;
+  let savedRuleSnapshots: Record<string, string> = {};
+  let dirtyRuleCount = 0;
 
+  let newRuleName = '';
   let newConditions: RuleCondition[] = createDefaultRuleConditions();
   let newActions: RuleAction[] = createDefaultRuleActions();
   let dragIndex: number | null = null;
@@ -44,8 +52,19 @@
     ruleId: null
   };
 
-  onMount(async () => {
-    await refresh();
+  onMount(() => {
+    const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+      if (dirtyRuleCount === 0) return;
+      event.preventDefault();
+      event.returnValue = '';
+    };
+
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    void refresh();
+
+    return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+    };
   });
 
   function inferAccountType(accountName: string): string {
@@ -74,6 +93,84 @@
     expandedRuleId = nextRules[0]?.id ?? null;
   }
 
+  function ruleSnapshot(rule: Rule): string {
+    return JSON.stringify({
+      name: rule.name,
+      conditions: normalizeConditions(rule.conditions),
+      actions: normalizeActions(rule.actions),
+      enabled: rule.enabled
+    });
+  }
+
+  function syncRuleSnapshots(nextRules: Rule[]) {
+    savedRuleSnapshots = Object.fromEntries(nextRules.map((rule) => [rule.id, ruleSnapshot(rule)]));
+  }
+
+  function updateRuleSnapshot(rule: Rule) {
+    savedRuleSnapshots = { ...savedRuleSnapshots, [rule.id]: ruleSnapshot(rule) };
+  }
+
+  function isRuleDirty(rule: Rule): boolean {
+    return savedRuleSnapshots[rule.id] !== ruleSnapshot(rule);
+  }
+
+  function hasIncompleteRuleEdits(rule: Rule): boolean {
+    return (
+      normalizeConditions(rule.conditions).length !== sanitizedConditions(rule.conditions).length ||
+      normalizeActions(rule.actions).length !== sanitizedActions(rule.actions).length
+    );
+  }
+
+  function ruleLabel(rule: Rule): string {
+    return rule.name.trim() || suggestedRuleName(rule.conditions) || 'Untitled rule';
+  }
+
+  function replaceRule(nextRule: Rule) {
+    rules = rules.map((rule) => (rule.id === nextRule.id ? nextRule : rule));
+  }
+
+  async function persistRuleChanges(rule: Rule): Promise<Rule> {
+    const cleanedConditions = sanitizedConditions(rule.conditions);
+    const cleanedActions = sanitizedActions(rule.actions);
+    const response = await apiPost<{ rule: Rule }>(`/api/rules/${rule.id}`, {
+      name: sanitizedRuleName(rule.name, cleanedConditions),
+      conditions: cleanedConditions,
+      actions: cleanedActions,
+      enabled: rule.enabled
+    });
+    const savedRule = normalizeRule(response.rule);
+    replaceRule(savedRule);
+    updateRuleSnapshot(savedRule);
+    return savedRule;
+  }
+
+  async function persistDirtyRules(actionLabel: string, excludedRuleIds: string[] = []): Promise<boolean> {
+    const excluded = new Set(excludedRuleIds);
+    const dirtyRules = rules.filter((rule) => !excluded.has(rule.id) && isRuleDirty(rule));
+    if (!dirtyRules.length) return true;
+
+    const invalidRule = dirtyRules.find((rule) => hasIncompleteRuleEdits(rule));
+    if (invalidRule) {
+      expandedRuleId = invalidRule.id;
+      error = `Finish or remove incomplete edits in "${ruleLabel(invalidRule)}" before ${actionLabel}.`;
+      return false;
+    }
+
+    loading = true;
+    error = '';
+    try {
+      for (const rule of dirtyRules) {
+        await persistRuleChanges(rule);
+      }
+      return true;
+    } catch (e) {
+      error = String(e);
+      return false;
+    } finally {
+      loading = false;
+    }
+  }
+
   async function refresh() {
     error = '';
     loading = true;
@@ -88,6 +185,7 @@
       const nextRules = rulesData.rules.map(normalizeRule);
       rules = nextRules;
       syncExpandedRule(nextRules);
+      syncRuleSnapshots(nextRules);
       accounts = accountsData.accounts;
       newActions = ensureSetAccountAction(newActions, accountsData.accounts[0] ?? '');
     } catch (e) {
@@ -98,6 +196,9 @@
   }
 
   async function createRule() {
+    if (loading) return;
+    if (!(await persistDirtyRules('creating a new rule'))) return;
+
     const cleanedConditions = sanitizedConditions(newConditions);
     const cleanedActions = sanitizedActions(newActions);
     if (!cleanedConditions.length || !cleanedActions.length) return;
@@ -105,7 +206,13 @@
     loading = true;
     error = '';
     try {
-      await apiPost('/api/rules', { conditions: cleanedConditions, actions: cleanedActions, enabled: true });
+      await apiPost('/api/rules', {
+        name: sanitizedRuleName(newRuleName, cleanedConditions),
+        conditions: cleanedConditions,
+        actions: cleanedActions,
+        enabled: true
+      });
+      newRuleName = '';
       newConditions = createDefaultRuleConditions();
       newActions = createDefaultRuleActions(accounts[0] ?? '');
       await refresh();
@@ -117,18 +224,43 @@
   }
 
   async function saveRule(rule: Rule) {
-    const cleanedConditions = sanitizedConditions(rule.conditions);
-    const cleanedActions = sanitizedActions(rule.actions);
+    if (loading) return;
+    loading = true;
+    error = '';
+    try {
+      await persistRuleChanges(rule);
+    } catch (e) {
+      error = String(e);
+    } finally {
+      loading = false;
+    }
+  }
+
+  async function saveRuleName(rule: Rule) {
+    const savedSnapshot = savedRuleSnapshots[rule.id];
+    if (!savedSnapshot || loading) return;
+
+    const savedState = JSON.parse(savedSnapshot) as { name: string };
+    if (savedState.name === rule.name) return;
 
     loading = true;
     error = '';
     try {
-      await apiPost(`/api/rules/${rule.id}`, {
-        conditions: cleanedConditions,
-        actions: cleanedActions,
-        enabled: rule.enabled
-      });
-      await refresh();
+      const response = await apiPost<{ rule: Rule }>(`/api/rules/${rule.id}`, { name: rule.name });
+      const savedRule = normalizeRule(response.rule);
+      rules = rules.map((existingRule) =>
+        existingRule.id === rule.id ? { ...existingRule, name: savedRule.name } : existingRule
+      );
+      const nextSnapshot = JSON.parse(savedSnapshot) as {
+        name: string;
+        conditions: RuleCondition[];
+        actions: RuleAction[];
+        enabled: boolean;
+      };
+      savedRuleSnapshots = {
+        ...savedRuleSnapshots,
+        [rule.id]: JSON.stringify({ ...nextSnapshot, name: savedRule.name })
+      };
     } catch (e) {
       error = String(e);
     } finally {
@@ -137,6 +269,9 @@
   }
 
   async function removeRule(ruleId: string) {
+    if (loading) return;
+    if (!(await persistDirtyRules('deleting a rule', [ruleId]))) return;
+
     loading = true;
     error = '';
     try {
@@ -150,6 +285,9 @@
   }
 
   async function persistOrder() {
+    if (loading) return;
+    if (!(await persistDirtyRules('saving the order'))) return;
+
     loading = true;
     error = '';
     try {
@@ -158,11 +296,18 @@
       const nextRules = data.rules.map(normalizeRule);
       rules = nextRules;
       syncExpandedRule(nextRules);
+      syncRuleSnapshots(nextRules);
     } catch (e) {
       error = String(e);
     } finally {
       loading = false;
     }
+  }
+
+  async function reloadRules() {
+    if (loading) return;
+    if (!(await persistDirtyRules('reloading'))) return;
+    await refresh();
   }
 
   function moveRule(index: number, direction: -1 | 1) {
@@ -252,6 +397,8 @@
       loading = false;
     }
   }
+
+  $: dirtyRuleCount = rules.filter((rule) => isRuleDirty(rule)).length;
 </script>
 
 <section class="view-card hero">
@@ -272,6 +419,10 @@
 
   <section class="view-card">
     <p class="eyebrow">New Rule</p>
+    <div class="field">
+      <label for="newRuleName">Rule Name</label>
+      <input id="newRuleName" bind:value={newRuleName} placeholder={suggestedRuleName(newConditions) || 'Coffee Shop'} />
+    </div>
     <RuleEditor
       bind:conditions={newConditions}
       bind:actions={newActions}
@@ -301,8 +452,11 @@
       </div>
       <div class="section-actions">
         <span class="rule-count">{rules.length} {rules.length === 1 ? 'rule' : 'rules'}</span>
+        {#if dirtyRuleCount > 0}
+          <span class="rule-count unsaved-count">{dirtyRuleCount} unsaved {dirtyRuleCount === 1 ? 'edit' : 'edits'}</span>
+        {/if}
         <button class="btn btn-primary" on:click={persistOrder} disabled={loading || rules.length < 2}>Save Order</button>
-        <button class="btn" on:click={refresh} disabled={loading}>Reload</button>
+        <button class="btn" on:click={reloadRules} disabled={loading}>Reload</button>
       </div>
     </div>
 
@@ -318,13 +472,16 @@
             ruleId={rule.id}
             ruleIndex={i}
             ruleCount={rules.length}
+            bind:name={rule.name}
             bind:conditions={rule.conditions}
             bind:actions={rule.actions}
+            dirty={isRuleDirty(rule)}
             {accounts}
             expanded={expandedRuleId === rule.id}
             {loading}
             onToggle={() => toggleRule(rule.id)}
             onSave={() => saveRule(rule)}
+            onNameCommit={() => saveRuleName(rule)}
             onRemove={() => removeRule(rule.id)}
             onMoveUp={() => moveRule(i, -1)}
             onMoveDown={() => moveRule(i, 1)}
@@ -415,6 +572,12 @@
     font-size: 0.82rem;
     font-weight: 700;
     color: var(--muted-foreground);
+  }
+
+  .unsaved-count {
+    background: rgba(255, 244, 220, 0.92);
+    border-color: rgba(218, 169, 79, 0.28);
+    color: #8b5b12;
   }
 
   .rule-list {

@@ -307,6 +307,7 @@ def rules_create(req: RuleCreateRequest) -> dict:
     try:
         rule = create_rule(
             path,
+            name=req.name,
             conditions=[c.model_dump() for c in req.conditions],
             actions=requested_actions,
             enabled=req.enabled,
@@ -528,6 +529,7 @@ def rules_update(rule_id: str, req: RuleUpdateRequest) -> dict:
         rule = update_rule(
             path,
             rule_id,
+            name=req.name,
             conditions=[c.model_dump() for c in req.conditions] if req.conditions is not None else None,
             actions=requested_actions,
             enabled=req.enabled,

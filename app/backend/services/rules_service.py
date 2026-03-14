@@ -21,6 +21,45 @@ def _now_iso() -> str:
     return datetime.now(UTC).replace(microsecond=0).isoformat()
 
 
+def _suggest_rule_name(conditions: list[dict]) -> str:
+    if not conditions:
+        return ""
+
+    first = conditions[0]
+    value = str(first.get("value", "")).strip()
+    if not value:
+        return ""
+
+    if first.get("field") == "payee":
+        if first.get("operator") == "exact":
+            base = value
+        elif first.get("operator") == "contains":
+            base = f'Contains "{value}"'
+        else:
+            base = value
+    else:
+        base = value
+
+    extra_count = len(conditions) - 1
+    if extra_count > 0:
+        base = f"{base} +{extra_count}"
+    return base
+
+
+def _normalize_rule_name(name: str | None, conditions: list[dict], position: int | None = None) -> str:
+    cleaned = (name or "").strip()
+    if cleaned:
+        return cleaned
+
+    suggested = _suggest_rule_name(conditions)
+    if suggested:
+        return suggested
+
+    if position is not None:
+        return f"Rule {position}"
+    return "Untitled rule"
+
+
 def _parse_legacy_payee_rules(accounts_dat: Path) -> list[dict]:
     if not accounts_dat.exists():
         return []
@@ -44,6 +83,7 @@ def _parse_legacy_payee_rules(accounts_dat: Path) -> list[dict]:
             {
                 "id": uuid4().hex[:12],
                 "type": "match",
+                "name": payee,
                 "conditions": [{"field": "payee", "operator": "exact", "value": payee}],
                 "account": account,
                 "enabled": True,
@@ -143,12 +183,15 @@ def _normalize_rules(rules: list[dict]) -> list[dict]:
     now = _now_iso()
     normalized: list[dict] = []
     for idx, rule in enumerate(ordered, start=1):
+        conditions = _normalize_conditions(rule.get("conditions"), pattern=rule.get("pattern"))
+        actions = _normalize_actions(rule.get("actions"), account=str(rule.get("account", "") or ""))
         normalized.append(
             {
                 "id": str(rule.get("id") or uuid4().hex[:12]),
                 "type": "match",
-                "conditions": _normalize_conditions(rule.get("conditions"), pattern=rule.get("pattern")),
-                "actions": _normalize_actions(rule.get("actions"), account=str(rule.get("account", "") or "")),
+                "name": _normalize_rule_name(rule.get("name"), conditions, idx),
+                "conditions": conditions,
+                "actions": actions,
                 "enabled": bool(rule.get("enabled", True)),
                 "position": idx,
                 "createdAt": str(rule.get("createdAt") or now),
@@ -269,6 +312,7 @@ def create_rule(
     path: Path,
     conditions: list[dict],
     *,
+    name: str | None = None,
     actions: list[dict] | None = None,
     enabled: bool = True,
 ) -> dict:
@@ -284,6 +328,7 @@ def create_rule(
     created = {
         "id": uuid4().hex[:12],
         "type": "match",
+        "name": _normalize_rule_name(name, normalized_conditions, len(rules) + 1),
         "conditions": normalized_conditions,
         "actions": normalized_actions,
         "enabled": enabled,
@@ -315,6 +360,7 @@ def update_rule(
     path: Path,
     rule_id: str,
     *,
+    name: str | None = None,
     conditions: list[dict] | None = None,
     actions: list[dict] | None = None,
     enabled: bool | None = None,
@@ -329,6 +375,8 @@ def update_rule(
             if not normalized_conditions:
                 raise ValueError("At least one valid condition is required")
             rule["conditions"] = normalized_conditions
+        if name is not None:
+            rule["name"] = _normalize_rule_name(name, rule["conditions"], int(rule.get("position", 0)) or None)
         if actions is not None:
             normalized_actions = _normalize_actions(actions)
             if not normalized_actions:

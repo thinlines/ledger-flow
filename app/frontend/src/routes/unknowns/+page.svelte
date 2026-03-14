@@ -11,8 +11,10 @@
     extractSetAccount,
     findMatchingRule,
     normalizeRule,
+    sanitizedRuleName,
     sanitizedActions,
-    sanitizedConditions
+    sanitizedConditions,
+    suggestedRuleName
   } from '$lib/rules';
 
   type TxnRow = {
@@ -54,6 +56,7 @@
   type Rule = {
     id: string;
     type: 'match';
+    name: string;
     conditions: RuleCondition[];
     actions: RuleAction[];
     enabled: boolean;
@@ -86,6 +89,7 @@
   let ruleSourceAccount = '';
   let ruleSourceTxnCount = 0;
   let ruleId: string | null = null;
+  let ruleName = '';
   let ruleEnabled = true;
   let ruleConditions: RuleCondition[] = createDefaultRuleConditions();
   let ruleActions: RuleAction[] = createDefaultRuleActions();
@@ -323,12 +327,15 @@
   }
 
   function loadRuleIntoEditor(rule: Rule | null, fallbackAccount: string, sourcePayee: string) {
-    ruleMode = rule ? 'edit' : 'create';
-    ruleId = rule?.id ?? null;
-    ruleEnabled = rule?.enabled ?? true;
-    ruleConditions = rule
+    const nextConditions = rule
       ? rule.conditions.map((condition) => ({ ...condition }))
       : createDefaultRuleConditions(sourcePayee);
+
+    ruleMode = rule ? 'edit' : 'create';
+    ruleId = rule?.id ?? null;
+    ruleName = rule?.name ?? suggestedRuleName(nextConditions);
+    ruleEnabled = rule?.enabled ?? true;
+    ruleConditions = nextConditions;
     ruleActions = rule ? ensureSetAccountAction(rule.actions, fallbackAccount) : createDefaultRuleActions(fallbackAccount);
     ruleError = '';
   }
@@ -375,6 +382,7 @@
       .sort((left, right) => {
         if (right.score !== left.score) return right.score - left.score;
         if (left.rule.position !== right.rule.position) return left.rule.position - right.rule.position;
+        if (left.rule.name !== right.rule.name) return left.rule.name.localeCompare(right.rule.name);
         return left.rule.id.localeCompare(right.rule.id);
       });
   }
@@ -429,6 +437,7 @@
   async function persistRule({ allowCreateAccountModal }: { allowCreateAccountModal: boolean }) {
     const cleanedConditions = sanitizedConditions(ruleConditions);
     const cleanedActions = sanitizedActions(ruleActions);
+    const cleanedName = sanitizedRuleName(ruleName, cleanedConditions);
     const selectedAccount = extractSetAccount(cleanedActions);
 
     if (!cleanedConditions.length) {
@@ -454,6 +463,7 @@
       let savedRule: Rule;
       if (currentRuleId) {
         const response = await apiPost<{ rule: Rule }>(`/api/rules/${currentRuleId}`, {
+          name: cleanedName,
           conditions: cleanedConditions,
           actions: cleanedActions,
           enabled: ruleEnabled
@@ -461,6 +471,7 @@
         savedRule = normalizeRule(response.rule);
       } else {
         const response = await apiPost<{ rule: Rule }>('/api/rules', {
+          name: cleanedName,
           conditions: cleanedConditions,
           actions: cleanedActions,
           enabled: true
@@ -475,6 +486,7 @@
           : [...rules, savedRule];
       rules = nextRules;
       ruleId = savedRule.id;
+      ruleName = savedRule.name;
       ruleEnabled = savedRule.enabled;
       ruleMode = 'edit';
       syncGroupsFromRules(nextRules);
@@ -781,6 +793,10 @@
           <p class="rule-context-account">{extractSetAccount(ruleActions) || 'Choose a category below'}</p>
         </section>
       </div>
+      <div class="field rule-name-field">
+        <label for="ruleName">Rule Name</label>
+        <input id="ruleName" bind:value={ruleName} placeholder={suggestedRuleName(ruleConditions) || 'Coffee Shop'} />
+      </div>
       {#if existingRuleCandidates.length}
         <section class="existing-rule-callout" role="status" aria-live="polite">
           <div class="existing-rule-copy">
@@ -803,7 +819,7 @@
                 <div class="existing-rule-item-copy">
                   <p class="existing-rule-summary">{candidate.summary}</p>
                   <p class="existing-rule-meta">
-                    Rule {candidate.rule.id}{candidate.rule.enabled ? '' : ' · Disabled'}
+                    {candidate.rule.name}{candidate.rule.enabled ? '' : ' · Disabled'}
                   </p>
                 </div>
                 <button class="btn" type="button" on:click={() => void openExistingRuleCandidate(candidate.rule.id)}>
@@ -1120,6 +1136,10 @@
     display: grid;
     grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);
     gap: 0.75rem;
+  }
+
+  .rule-name-field {
+    max-width: 32rem;
   }
 
   .rule-context-card {

@@ -1,9 +1,16 @@
 import type { RuleAction, RuleCondition } from '$lib/components/rule-editor-types';
 
 export type EditableRule = {
+  name?: string | null;
   conditions: RuleCondition[];
   actions: RuleAction[];
   enabled?: boolean;
+};
+
+export type NormalizedRule<T extends EditableRule> = Omit<T, 'name' | 'conditions' | 'actions'> & {
+  name: string;
+  conditions: RuleCondition[];
+  actions: RuleAction[];
 };
 
 export function createDefaultRuleConditions(payee = ''): RuleCondition[] {
@@ -12,6 +19,30 @@ export function createDefaultRuleConditions(payee = ''): RuleCondition[] {
 
 export function createDefaultRuleActions(account = ''): RuleAction[] {
   return [{ type: 'set_account', account }];
+}
+
+export function suggestedRuleName(conditions: RuleCondition[]): string {
+  const normalized = sanitizedConditions(conditions);
+  const [first, ...rest] = normalized;
+  if (!first) return '';
+
+  const value = first.value.trim();
+  if (!value) return '';
+
+  let base = value;
+  if (first.operator === 'contains') {
+    base = `Contains "${value}"`;
+  }
+
+  if (rest.length > 0) {
+    return `${base} +${rest.length}`;
+  }
+  return base;
+}
+
+export function normalizeRuleName(name: string | null | undefined, conditions: RuleCondition[]): string {
+  const cleaned = (name ?? '').trim();
+  return cleaned || suggestedRuleName(conditions) || 'Untitled rule';
 }
 
 export function normalizeConditions(conditions: RuleCondition[]): RuleCondition[] {
@@ -27,12 +58,19 @@ export function normalizeActions(actions: RuleAction[]): RuleAction[] {
   return [...(actions || [])].map((action) => ({ ...action }));
 }
 
-export function normalizeRule<T extends EditableRule>(rule: T): T {
+export function normalizeRule<T extends EditableRule>(rule: T): NormalizedRule<T> {
+  const conditions = normalizeConditions(rule.conditions);
+  const actions = normalizeActions(rule.actions);
   return {
     ...rule,
-    conditions: normalizeConditions(rule.conditions),
-    actions: normalizeActions(rule.actions)
+    name: normalizeRuleName(rule.name, conditions),
+    conditions,
+    actions
   };
+}
+
+export function sanitizedRuleName(name: string | null | undefined, conditions: RuleCondition[]): string {
+  return normalizeRuleName(name, conditions);
 }
 
 export function ensureSetAccountAction(actions: RuleAction[], fallbackAccount: string): RuleAction[] {
