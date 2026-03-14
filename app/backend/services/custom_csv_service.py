@@ -12,6 +12,7 @@ from dateutil import parser as date_parser
 INTERMEDIATE_FIELDNAMES = ["date", "code", "description", "amount", "total", "note", "symbol", "price"]
 DEFAULT_ENCODINGS = ("utf-8-sig", "utf-8", "cp1252", "latin-1", "gb18030")
 SUPPORTED_DELIMITERS = [",", ";", "\t", "|"]
+CURRENCY_SYMBOLS = {"$", "€", "£", "¥"}
 
 
 def normalize_custom_profile(raw: dict, *, default_currency: str, default_display_name: str) -> dict:
@@ -302,4 +303,6 @@ def _normalize_money(raw_value: str, currency: str, *, positive_only: bool, nega
 
     rendered = format(amount, "f")
     sign = "-" if is_negative else ""
+    if currency in CURRENCY_SYMBOLS:
+        return f"{currency}{sign}{rendered}"
     return f"{sign}{rendered} {currency}"

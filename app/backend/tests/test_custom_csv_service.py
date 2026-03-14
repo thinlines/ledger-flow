@@ -48,12 +48,12 @@ def test_normalize_custom_csv_to_intermediate_handles_signed_amounts(tmp_path: P
             "balance_column": "Balance",
             "code_column": None,
             "note_column": None,
-            "currency": "USD",
+            "currency": "$",
         },
     )
 
-    assert "2026/03/04,,Payroll,2000.00 USD,1000.00 USD" in out
-    assert "2026/03/05,,Coffee Shop,-7.50 USD,992.50 USD" in out
+    assert "2026/03/04,,Payroll,$2000.00,$1000.00" in out
+    assert "2026/03/05,,Coffee Shop,$-7.50,$992.50" in out
 
 
 def test_normalize_csv_to_intermediate_uses_account_profile_for_custom_accounts(tmp_path: Path) -> None:
@@ -103,12 +103,12 @@ def test_normalize_csv_to_intermediate_uses_account_profile_for_custom_accounts(
                 "amount_mode": "debit_credit",
                 "debit_column": "Debit",
                 "credit_column": "Credit",
-                "currency": "USD",
+                "currency": "$",
             }
         },
     )
 
     out = normalize_csv_to_intermediate(config, csv_path, config.import_accounts["capital_one"])
 
-    assert "2026/03/04,,Refund,12.00 USD" in out
-    assert "2026/03/05,,Coffee Shop,-7.50 USD" in out
+    assert "2026/03/04,,Refund,$12.00" in out
+    assert "2026/03/05,,Coffee Shop,$-7.50" in out
