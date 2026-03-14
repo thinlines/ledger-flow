@@ -16,6 +16,7 @@ from models import (
     RuleReorderRequest,
     RuleUpdateRequest,
     StageApplyRequest,
+    TrackedAccountUpsertRequest,
     UnknownScanRequest,
     UnknownStageRequest,
     WorkspaceImportAccountUpsertRequest,
@@ -28,6 +29,7 @@ from services.import_index import ImportIndex
 from services.import_service import apply_import, archive_inbox_csv, preview_import, scan_candidates
 from services.institution_registry import canonical_template_id, display_name_for, list_templates
 from services.ledger_runner import CommandError, run_cmd
+from services.opening_balance_service import opening_balance_index
 from services.stage_store import StageStore
 from services.rules_service import (
     create_rule,
@@ -71,6 +73,57 @@ def _import_account_ui(account_id: str, account_cfg: dict) -> dict:
         "institutionDisplayName": institution_display_name,
         "ledgerAccount": account_cfg.get("ledger_account", ""),
         "last4": account_cfg.get("last4"),
+    }
+
+
+def _account_kind(account: str) -> str:
+    prefix = account.split(":", 1)[0].strip().lower()
+    if prefix == "assets":
+        return "asset"
+    if prefix in {"liabilities", "liability"}:
+        return "liability"
+    if prefix in {"expenses", "expense"}:
+        return "expense"
+    if prefix in {"income", "revenue"}:
+        return "income"
+    if prefix in {"equity", "capital"}:
+        return "equity"
+    return "other"
+
+
+def _tracked_account_ui(
+    config,
+    account_id: str,
+    account_cfg: dict,
+    opening_by_id: dict,
+    opening_by_ledger: dict,
+) -> dict:
+    import_account_id = str(account_cfg.get("import_account_id") or "").strip() or None
+    linked_import_cfg = config.import_accounts.get(import_account_id or "", {}) if import_account_id else {}
+    institution_id = (
+        canonical_template_id(account_cfg.get("institution"))
+        or canonical_template_id(linked_import_cfg.get("institution"))
+        or account_cfg.get("institution")
+        or linked_import_cfg.get("institution")
+    )
+    institution_display_name = display_name_for(institution_id, fallback=str(institution_id)) if institution_id else None
+    opening_entry = opening_by_id.get(account_id)
+    ledger_account = str(account_cfg.get("ledger_account", "")).strip()
+    if opening_entry is None and ledger_account:
+        opening_entry = opening_by_ledger.get(ledger_account)
+
+    return {
+        "id": account_id,
+        "displayName": account_cfg.get("display_name", account_id),
+        "ledgerAccount": ledger_account,
+        "kind": _account_kind(ledger_account),
+        "institutionId": institution_id,
+        "institutionDisplayName": institution_display_name,
+        "last4": account_cfg.get("last4"),
+        "importAccountId": import_account_id,
+        "importConfigured": bool(import_account_id),
+        "openingBalance": str(opening_entry.amount) if opening_entry is not None else None,
+        "openingBalanceDate": opening_entry.date if opening_entry is not None else None,
     }
 
 
@@ -119,6 +172,7 @@ def app_state() -> dict:
             "workspaceName": None,
             "institutions": [],
             "importAccounts": [],
+            "trackedAccounts": [],
             "journals": 0,
             "csvInbox": 0,
             "institutionTemplates": list_templates(),
@@ -139,12 +193,18 @@ def app_state() -> dict:
                 "id": institution_id,
                 "displayName": account["institutionDisplayName"],
             }
+    opening_by_id, opening_by_ledger = opening_balance_index(config)
+    tracked_accounts = [
+        _tracked_account_ui(config, account_id, account_cfg, opening_by_id, opening_by_ledger)
+        for account_id, account_cfg in sorted(config.tracked_accounts.items(), key=lambda x: x[0])
+    ]
     return {
         "initialized": True,
         "workspacePath": str(config.root_dir.resolve()),
         "workspaceName": config.name,
         "institutions": list(institutions.values()),
         "importAccounts": import_accounts,
+        "trackedAccounts": tracked_accounts,
         "journals": len(journals),
         "csvInbox": len(csvs),
         "institutionTemplates": list_templates(),
@@ -198,13 +258,72 @@ def workspace_import_account_upsert(req: WorkspaceImportAccountUpsertRequest) ->
                 "last4": req.last4,
             },
             account_id=req.accountId,
+            opening_balance=req.openingBalance,
+            opening_balance_date=req.openingBalanceDate,
         )
     except (OSError, ValueError) as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
 
+    refreshed = _require_workspace_config()
+    opening_by_id, opening_by_ledger = opening_balance_index(refreshed)
+    tracked_account_id = str(account_cfg.get("tracked_account_id") or account_id)
     return {
         "ok": True,
         "importAccount": _import_account_ui(account_id, account_cfg),
+        "trackedAccount": _tracked_account_ui(
+            refreshed,
+            tracked_account_id,
+            refreshed.tracked_accounts.get(tracked_account_id, {}),
+            opening_by_id,
+            opening_by_ledger,
+        ),
+    }
+
+
+@app.get("/api/tracked-accounts")
+def tracked_accounts_list() -> dict:
+    config = _require_workspace_config()
+    opening_by_id, opening_by_ledger = opening_balance_index(config)
+    rows = [
+        _tracked_account_ui(config, account_id, account_cfg, opening_by_id, opening_by_ledger)
+        for account_id, account_cfg in sorted(
+            config.tracked_accounts.items(),
+            key=lambda item: str(item[1].get("display_name", item[0])),
+        )
+    ]
+    return {"trackedAccounts": rows, "institutionTemplates": list_templates()}
+
+
+@app.post("/api/tracked-accounts")
+def tracked_account_upsert(req: TrackedAccountUpsertRequest) -> dict:
+    config = _require_workspace_config()
+    try:
+        account_id, account_cfg = workspace_manager.upsert_tracked_account(
+            config,
+            {
+                "displayName": req.displayName,
+                "ledgerAccount": req.ledgerAccount,
+                "institutionId": req.institutionId,
+                "last4": req.last4,
+            },
+            account_id=req.accountId,
+            opening_balance=req.openingBalance,
+            opening_balance_date=req.openingBalanceDate,
+        )
+    except (OSError, ValueError) as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+    refreshed = _require_workspace_config()
+    opening_by_id, opening_by_ledger = opening_balance_index(refreshed)
+    return {
+        "ok": True,
+        "trackedAccount": _tracked_account_ui(
+            refreshed,
+            account_id,
+            refreshed.tracked_accounts.get(account_id, account_cfg),
+            opening_by_id,
+            opening_by_ledger,
+        ),
     }
 
 

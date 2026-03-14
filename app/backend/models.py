@@ -3,6 +3,9 @@ from __future__ import annotations
 from pydantic import BaseModel, Field
 
 
+DATE_PATTERN = r"^\d{4}-\d{2}-\d{2}$"
+
+
 class ImportPreviewRequest(BaseModel):
     csvPath: str
     year: str = Field(pattern=r"^\d{4}$")
@@ -76,6 +79,8 @@ class WorkspaceImportAccountRequest(BaseModel):
     displayName: str = Field(min_length=1)
     ledgerAccount: str | None = None
     last4: str | None = None
+    openingBalance: str | None = None
+    openingBalanceDate: str | None = Field(default=None, pattern=DATE_PATTERN)
 
 
 class WorkspaceBootstrapRequest(BaseModel):
@@ -92,3 +97,13 @@ class WorkspaceSelectRequest(BaseModel):
 
 class WorkspaceImportAccountUpsertRequest(WorkspaceImportAccountRequest):
     accountId: str | None = None
+
+
+class TrackedAccountUpsertRequest(BaseModel):
+    accountId: str | None = None
+    displayName: str = Field(min_length=1)
+    ledgerAccount: str = Field(min_length=1)
+    institutionId: str | None = None
+    last4: str | None = None
+    openingBalance: str | None = None
+    openingBalanceDate: str | None = Field(default=None, pattern=DATE_PATTERN)

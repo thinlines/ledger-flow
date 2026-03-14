@@ -8,6 +8,7 @@ from pathlib import Path
 import re
 
 from .config_service import AppConfig
+from .opening_balance_service import opening_balance_index
 
 
 TXN_START_RE = re.compile(r"^\d{4}[-/]\d{2}[-/]\d{2}")
@@ -177,7 +178,15 @@ def _load_transactions(config: AppConfig) -> list[ParsedTransaction]:
 def _primary_posting(transaction: ParsedTransaction, config: AppConfig) -> Posting | None:
     import_account_id = transaction.metadata.get("import_account_id")
     if import_account_id and import_account_id in config.import_accounts:
-        tracked_account = str(config.import_accounts[import_account_id].get("ledger_account", "")).strip()
+        linked_tracked_account_id = (
+            str(config.import_accounts[import_account_id].get("tracked_account_id", "")).strip() or import_account_id
+        )
+        tracked_account = str(
+            config.tracked_accounts.get(linked_tracked_account_id, {}).get(
+                "ledger_account",
+                config.import_accounts[import_account_id].get("ledger_account", ""),
+            )
+        ).strip()
         if tracked_account:
             for posting in transaction.postings:
                 if posting.account == tracked_account:
@@ -185,7 +194,7 @@ def _primary_posting(transaction: ParsedTransaction, config: AppConfig) -> Posti
 
     tracked_accounts = {
         str(account_cfg.get("ledger_account", "")).strip()
-        for account_cfg in config.import_accounts.values()
+        for account_cfg in config.tracked_accounts.values()
     }
     for posting in transaction.postings:
         if posting.account in tracked_accounts:
@@ -201,7 +210,7 @@ def _primary_account_display(posting: Posting | None, config: AppConfig) -> tupl
     if posting is None:
         return ("Unassigned account", None)
 
-    for account_id, account_cfg in config.import_accounts.items():
+    for account_id, account_cfg in config.tracked_accounts.items():
         ledger_account = str(account_cfg.get("ledger_account", "")).strip()
         if ledger_account == posting.account:
             return (str(account_cfg.get("display_name", account_id)), account_id)
@@ -225,12 +234,16 @@ def _transaction_category(transaction: ParsedTransaction) -> tuple[str, bool]:
 def build_dashboard_overview(config: AppConfig, *, today: date | None = None) -> dict:
     current_day = today or date.today()
     transactions = _load_transactions(config)
+    _, opening_by_ledger_account = opening_balance_index(config)
     account_balances: defaultdict[str, Decimal] = defaultdict(lambda: Decimal("0"))
     monthly_income: defaultdict[str, Decimal] = defaultdict(lambda: Decimal("0"))
     monthly_spending: defaultdict[str, Decimal] = defaultdict(lambda: Decimal("0"))
     category_spending: defaultdict[tuple[str, str], Decimal] = defaultdict(lambda: Decimal("0"))
     unknown_transaction_count = 0
     recent_rows: list[dict] = []
+
+    for entry in opening_by_ledger_account.values():
+        account_balances[entry.ledger_account] += entry.amount
 
     for transaction in transactions:
         month = _month_key(transaction.posted_on)
@@ -274,7 +287,10 @@ def build_dashboard_overview(config: AppConfig, *, today: date | None = None) ->
 
     balances = []
     tracked_total = Decimal("0")
-    for account_id, account_cfg in sorted(config.import_accounts.items(), key=lambda item: str(item[1].get("display_name", item[0]))):
+    for account_id, account_cfg in sorted(
+        config.tracked_accounts.items(),
+        key=lambda item: str(item[1].get("display_name", item[0])),
+    ):
         ledger_account = str(account_cfg.get("ledger_account", "")).strip()
         balance = account_balances.get(ledger_account, Decimal("0"))
         tracked_total += balance
@@ -287,6 +303,7 @@ def build_dashboard_overview(config: AppConfig, *, today: date | None = None) ->
                 "last4": account_cfg.get("last4"),
                 "kind": _account_kind(ledger_account),
                 "balance": _amount_to_number(balance),
+                "importConfigured": bool(account_cfg.get("import_account_id")),
             }
         )
 

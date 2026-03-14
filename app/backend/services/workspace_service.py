@@ -7,6 +7,7 @@ from pathlib import Path
 
 from .config_service import AppConfig, load_config
 from .institution_registry import get_template
+from .opening_balance_service import opening_balance_index, write_opening_balance
 
 TXN_START_RE = re.compile(r"^\d{4}[-/]\d{2}[-/]\d{2}")
 
@@ -222,6 +223,53 @@ class WorkspaceManager:
             template,
         )
 
+    def _normalize_tracked_account(
+        self,
+        raw: dict,
+        used_account_ids: set[str],
+        existing_account_id: str | None = None,
+    ) -> dict:
+        display_name = str(raw.get("displayName", "")).strip()
+        if not display_name:
+            raise ValueError("Tracked account display name is required")
+
+        ledger_account = str(raw.get("ledgerAccount", "")).strip()
+        if not ledger_account or ":" not in ledger_account:
+            raise ValueError("Tracked account ledger account is required")
+
+        institution_id = str(raw.get("institutionId", "")).strip() or None
+        if institution_id and get_template(institution_id) is None:
+            raise ValueError(f"Unknown institution template: {institution_id}")
+
+        last4 = str(raw.get("last4", "")).strip() or None
+
+        base_id = self._slugify(display_name)
+        if last4:
+            base_id = f"{base_id}_{self._slugify(last4)}"
+
+        return {
+            "id": existing_account_id or self._unique_account_id(base_id, used_account_ids),
+            "display_name": display_name,
+            "ledger_account": ledger_account,
+            "institution": institution_id,
+            "last4": last4,
+            "import_account_id": raw.get("importAccountId"),
+        }
+
+    def _tracked_account_from_import_account(
+        self,
+        tracked_account_id: str,
+        import_account_id: str,
+        account_cfg: dict,
+    ) -> dict:
+        return {
+            "display_name": account_cfg.get("display_name", tracked_account_id),
+            "ledger_account": account_cfg.get("ledger_account", ""),
+            "institution": account_cfg.get("institution"),
+            "last4": account_cfg.get("last4"),
+            "import_account_id": import_account_id,
+        }
+
     def _write_workspace_config(
         self,
         config_toml: Path,
@@ -230,6 +278,7 @@ class WorkspaceManager:
         workspace: dict,
         dirs: dict,
         institution_templates: dict[str, dict],
+        tracked_accounts: dict[str, dict],
         import_accounts: dict[str, dict],
     ) -> None:
         cfg_lines = [
@@ -255,20 +304,38 @@ class WorkspaceManager:
                 cfg_lines.append(f"{key} = {self._toml_value(value)}")
             cfg_lines.append("")
 
+        for account_id, account_cfg in sorted(tracked_accounts.items(), key=lambda item: item[0]):
+            cfg_lines.append(f"[tracked_accounts.{account_id}]")
+            cfg_lines.append(f"display_name = {json.dumps(str(account_cfg.get('display_name', account_id)))}")
+            cfg_lines.append(f"ledger_account = {json.dumps(str(account_cfg.get('ledger_account', '')))}")
+            institution = str(account_cfg.get("institution") or "").strip()
+            if institution:
+                cfg_lines.append(f"institution = {json.dumps(institution)}")
+            last4 = str(account_cfg.get("last4") or "").strip()
+            if last4:
+                cfg_lines.append(f"last4 = {json.dumps(last4)}")
+            import_account_id = str(account_cfg.get("import_account_id") or "").strip()
+            if import_account_id:
+                cfg_lines.append(f"import_account_id = {json.dumps(import_account_id)}")
+            cfg_lines.append("")
+
         for account_id, account_cfg in sorted(import_accounts.items(), key=lambda item: item[0]):
             cfg_lines.append(f"[import_accounts.{account_id}]")
             cfg_lines.append(f"display_name = {json.dumps(str(account_cfg.get('display_name', account_id)))}")
-            cfg_lines.append(f"institution = {json.dumps(str(account_cfg.get('institution', '')))}")
+            cfg_lines.append(f"institution = {json.dumps(str(account_cfg.get('institution') or ''))}")
             cfg_lines.append(f"ledger_account = {json.dumps(str(account_cfg.get('ledger_account', '')))}")
-            last4 = str(account_cfg.get("last4", "")).strip()
+            last4 = str(account_cfg.get("last4") or "").strip()
             if last4:
                 cfg_lines.append(f"last4 = {json.dumps(last4)}")
+            tracked_account_id = str(account_cfg.get("tracked_account_id") or "").strip()
+            if tracked_account_id:
+                cfg_lines.append(f"tracked_account_id = {json.dumps(tracked_account_id)}")
             cfg_lines.append("")
 
         config_toml.parent.mkdir(parents=True, exist_ok=True)
         config_toml.write_text("\n".join(cfg_lines).rstrip() + "\n", encoding="utf-8")
 
-    def _ensure_seeded_accounts(self, accounts_dat: Path, import_accounts: list[dict]) -> None:
+    def _ensure_seeded_accounts(self, accounts_dat: Path, tracked_accounts: list[dict]) -> None:
         lines = accounts_dat.read_text(encoding="utf-8").splitlines() if accounts_dat.exists() else []
         known_accounts = {
             line[len("account "):].strip()
@@ -286,7 +353,7 @@ class WorkspaceManager:
             known_accounts.add(account_name)
             changed = True
 
-        for account in import_accounts:
+        for account in tracked_accounts:
             ledger_account = str(account.get("ledger_account", "")).strip()
             if not ledger_account or ledger_account in known_accounts:
                 continue
@@ -294,10 +361,37 @@ class WorkspaceManager:
 
         if "Expenses:Unknown" not in known_accounts:
             append_account("Expenses:Unknown", "Expense")
+        if "Equity:Opening-Balances" not in known_accounts:
+            append_account("Equity:Opening-Balances", "Equity")
 
         if changed:
             accounts_dat.parent.mkdir(parents=True, exist_ok=True)
             accounts_dat.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
+
+    def _sync_opening_balance(
+        self,
+        config: AppConfig,
+        tracked_account_id: str,
+        ledger_account: str,
+        opening_balance: str | None = None,
+        opening_balance_date: str | None = None,
+    ) -> None:
+        openings_by_id, _ = opening_balance_index(config)
+        if opening_balance is not None:
+            write_opening_balance(config, tracked_account_id, ledger_account, opening_balance, opening_balance_date)
+            return
+
+        existing = openings_by_id.get(tracked_account_id)
+        if existing is None:
+            return
+
+        write_opening_balance(
+            config,
+            tracked_account_id,
+            ledger_account,
+            str(existing.amount),
+            opening_balance_date or existing.date,
+        )
 
     def bootstrap_workspace(
         self,
@@ -321,6 +415,7 @@ class WorkspaceManager:
         normalized_accounts: dict[str, dict] = {}
         selected_templates: dict[str, dict] = {}
         used_account_ids: set[str] = set()
+        normalized_input_rows: list[tuple[dict, dict]] = []
 
         for raw in import_accounts:
             normalized, template = self._normalize_import_account(raw, used_account_ids)
@@ -329,8 +424,15 @@ class WorkspaceManager:
                 "institution": normalized["institution"],
                 "ledger_account": normalized["ledger_account"],
                 "last4": normalized["last4"],
+                "tracked_account_id": normalized["id"],
             }
             selected_templates[normalized["institution"]] = template.as_config()
+            normalized_input_rows.append((raw, normalized_accounts[normalized["id"]]))
+
+        tracked_accounts = {
+            account_id: self._tracked_account_from_import_account(account_id, account_id, account_cfg)
+            for account_id, account_cfg in normalized_accounts.items()
+        }
 
         self._write_workspace_config(
             settings / "workspace.toml",
@@ -348,6 +450,7 @@ class WorkspaceManager:
                 "imports_dir": "imports",
             },
             institution_templates=selected_templates,
+            tracked_accounts=tracked_accounts,
             import_accounts=normalized_accounts,
         )
 
@@ -362,7 +465,7 @@ class WorkspaceManager:
             match_rules.write_text("", encoding="utf-8")
 
         accounts_dat = rules / "10-accounts.dat"
-        self._ensure_seeded_accounts(accounts_dat, list(normalized_accounts.values()))
+        self._ensure_seeded_accounts(accounts_dat, list(tracked_accounts.values()))
 
         tags_dat = rules / "12-tags.dat"
         if not tags_dat.exists():
@@ -388,6 +491,19 @@ class WorkspaceManager:
                 encoding="utf-8",
             )
 
+        config = load_config(settings / "workspace.toml")
+        for raw, normalized_account in normalized_input_rows:
+            opening_balance = raw.get("openingBalance")
+            if opening_balance is None:
+                continue
+            write_opening_balance(
+                config,
+                str(normalized_account.get("tracked_account_id", "")),
+                str(normalized_account.get("ledger_account", "")),
+                str(opening_balance),
+                str(raw.get("openingBalanceDate", "") or ""),
+            )
+
         self.set_active_workspace(root)
         return root
 
@@ -396,12 +512,19 @@ class WorkspaceManager:
         config: AppConfig,
         account: dict,
         account_id: str | None = None,
+        *,
+        opening_balance: str | None = None,
+        opening_balance_date: str | None = None,
     ) -> tuple[str, dict]:
         existing_accounts = {
             key: dict(value)
             for key, value in config.import_accounts.items()
         }
-        used_account_ids = set(existing_accounts)
+        existing_tracked_accounts = {
+            key: dict(value)
+            for key, value in config.tracked_accounts.items()
+        }
+        used_account_ids = set(existing_accounts) | set(existing_tracked_accounts)
 
         if account_id:
             if account_id not in existing_accounts:
@@ -414,13 +537,22 @@ class WorkspaceManager:
             existing_import_accounts=existing_accounts,
             existing_account_id=account_id,
         )
+        tracked_account_id = str(
+            existing_accounts.get(account_id or normalized["id"], {}).get("tracked_account_id", "")
+        ).strip() or normalized["id"]
 
         existing_accounts[normalized["id"]] = {
             "display_name": normalized["display_name"],
             "institution": normalized["institution"],
             "ledger_account": normalized["ledger_account"],
             "last4": normalized["last4"],
+            "tracked_account_id": tracked_account_id,
         }
+        existing_tracked_accounts[tracked_account_id] = self._tracked_account_from_import_account(
+            tracked_account_id,
+            normalized["id"],
+            existing_accounts[normalized["id"]],
+        )
 
         institution_templates = {
             key: dict(value)
@@ -434,8 +566,76 @@ class WorkspaceManager:
             workspace=dict(config.workspace),
             dirs=dict(config.dirs),
             institution_templates=institution_templates,
+            tracked_accounts=existing_tracked_accounts,
             import_accounts=existing_accounts,
         )
-        self._ensure_seeded_accounts(config.init_dir / "10-accounts.dat", list(existing_accounts.values()))
+        refreshed = load_config(config.config_toml)
+        self._ensure_seeded_accounts(config.init_dir / "10-accounts.dat", list(existing_tracked_accounts.values()))
+        self._sync_opening_balance(
+            refreshed,
+            tracked_account_id,
+            existing_accounts[normalized["id"]]["ledger_account"],
+            opening_balance=opening_balance,
+            opening_balance_date=opening_balance_date,
+        )
 
         return normalized["id"], existing_accounts[normalized["id"]]
+
+    def upsert_tracked_account(
+        self,
+        config: AppConfig,
+        account: dict,
+        account_id: str | None = None,
+        *,
+        opening_balance: str | None = None,
+        opening_balance_date: str | None = None,
+    ) -> tuple[str, dict]:
+        existing_tracked_accounts = {
+            key: dict(value)
+            for key, value in config.tracked_accounts.items()
+        }
+        used_account_ids = set(existing_tracked_accounts) | set(config.import_accounts)
+
+        if account_id:
+            if account_id not in existing_tracked_accounts:
+                raise ValueError(f"Unknown tracked account: {account_id}")
+            if existing_tracked_accounts[account_id].get("import_account_id"):
+                raise ValueError("Import-enabled accounts must be edited through import account flow")
+            used_account_ids.discard(account_id)
+
+        normalized = self._normalize_tracked_account(
+            account,
+            used_account_ids,
+            existing_account_id=account_id,
+        )
+
+        existing_tracked_accounts[normalized["id"]] = {
+            "display_name": normalized["display_name"],
+            "ledger_account": normalized["ledger_account"],
+            "institution": normalized["institution"],
+            "last4": normalized["last4"],
+            "import_account_id": None,
+        }
+
+        self._write_workspace_config(
+            config.config_toml,
+            payee_aliases=config.payee_aliases,
+            workspace=dict(config.workspace),
+            dirs=dict(config.dirs),
+            institution_templates=dict(config.institution_templates),
+            tracked_accounts=existing_tracked_accounts,
+            import_accounts={
+                key: dict(value)
+                for key, value in config.import_accounts.items()
+            },
+        )
+        refreshed = load_config(config.config_toml)
+        self._ensure_seeded_accounts(config.init_dir / "10-accounts.dat", list(existing_tracked_accounts.values()))
+        self._sync_opening_balance(
+            refreshed,
+            normalized["id"],
+            normalized["ledger_account"],
+            opening_balance=opening_balance,
+            opening_balance_date=opening_balance_date,
+        )
+        return normalized["id"], existing_tracked_accounts[normalized["id"]]

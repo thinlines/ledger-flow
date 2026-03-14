@@ -40,12 +40,30 @@ def _make_config(workspace: Path) -> AppConfig:
                 "institution": "wells_fargo",
                 "ledger_account": "Assets:Bank:Checking",
                 "last4": "1234",
+                "tracked_account_id": "checking",
             },
             "visa": {
                 "display_name": "Visa Signature",
                 "institution": "visa",
                 "ledger_account": "Liabilities:Cards:Visa",
                 "last4": "5678",
+                "tracked_account_id": "visa",
+            },
+        },
+        tracked_accounts={
+            "checking": {
+                "display_name": "Wells Fargo Checking",
+                "institution": "wells_fargo",
+                "ledger_account": "Assets:Bank:Checking",
+                "last4": "1234",
+                "import_account_id": "checking",
+            },
+            "visa": {
+                "display_name": "Visa Signature",
+                "institution": "visa",
+                "ledger_account": "Liabilities:Cards:Visa",
+                "last4": "5678",
+                "import_account_id": "visa",
             },
         },
         payee_aliases="payee_aliases.csv",
@@ -153,4 +171,32 @@ def test_dashboard_overview_handles_empty_journals(tmp_path: Path) -> None:
     assert overview["lastUpdated"] is None
     assert overview["summary"]["netWorth"] == 0.0
     assert overview["balances"][0]["balance"] == 0.0
+    assert overview["recentTransactions"] == []
+
+
+def test_dashboard_overview_includes_opening_balances_without_counting_them_as_activity(tmp_path: Path) -> None:
+    config = _make_config(tmp_path / "workspace")
+    config.tracked_accounts["cash_wallet"] = {
+        "display_name": "Cash Wallet",
+        "ledger_account": "Assets:Cash:Wallet",
+    }
+    (config.opening_bal_dir / "cash_wallet.journal").write_text(
+        """
+2026-01-15 Opening balance
+    ; tracked_account_id: cash_wallet
+    Assets:Cash:Wallet  USD 250.00
+    Equity:Opening-Balances
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    (config.journal_dir / "2026.journal").write_text("", encoding="utf-8")
+
+    overview = build_dashboard_overview(config, today=date(2026, 3, 9))
+
+    balances = {row["id"]: row for row in overview["balances"]}
+    assert balances["cash_wallet"]["balance"] == 250.0
+    assert overview["summary"]["trackedBalanceTotal"] == 250.0
+    assert overview["summary"]["netWorth"] == 250.0
+    assert overview["summary"]["transactionCount"] == 0
     assert overview["recentTransactions"] == []
