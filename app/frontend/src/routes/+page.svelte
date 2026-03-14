@@ -86,6 +86,10 @@
     label: string;
   };
 
+  type PrimaryTask = ActionLink & {
+    note: string;
+  };
+
   type AttentionItem = {
     title: string;
     note: string;
@@ -148,6 +152,51 @@
     return kind.charAt(0).toUpperCase() + kind.slice(1);
   }
 
+  function reviewQueueCount(): number {
+    return dashboard?.summary.unknownTransactionCount ?? 0;
+  }
+
+  function hasReviewQueue(): boolean {
+    return reviewQueueCount() > 0 || Boolean(state?.setup?.needsReview);
+  }
+
+  function statementInboxCount(): number {
+    return state?.csvInbox ?? 0;
+  }
+
+  function reviewQueueTitle(): string {
+    const count = reviewQueueCount();
+    if (count === 1) return '1 transaction needs review';
+    if (count > 1) return `${count} transactions need review`;
+    return 'Review queue still needs attention';
+  }
+
+  function reviewQueueNote(): string {
+    const count = reviewQueueCount();
+    if (count === 1) return 'Next up: review 1 transaction.';
+    if (count > 1) return `Next up: review ${count} transactions.`;
+    return 'Next up: review the remaining queue.';
+  }
+
+  function reviewAttentionNote(): string {
+    const count = reviewQueueCount();
+    if (count > 0) {
+      return 'Clear uncategorized activity so the dashboard reflects cleaner trends.';
+    }
+    return 'Finish the remaining review work so the dashboard reflects cleaner trends.';
+  }
+
+  function statementInboxTitle(): string {
+    const count = statementInboxCount();
+    return count === 1 ? '1 statement waiting' : `${count} statements waiting`;
+  }
+
+  function statementInboxNote(): string {
+    const count = statementInboxCount();
+    if (count === 1) return 'Next up: import 1 waiting statement.';
+    return `Next up: import ${count} waiting statements.`;
+  }
+
   function setupSteps(): SetupStep[] {
     const completed = new Set(state?.setup?.completedSteps ?? []);
     const current = state?.setup?.currentStep ?? 'workspace';
@@ -184,15 +233,47 @@
     ];
   }
 
-  function primaryAction(): ActionLink {
-    if (!state?.initialized) return { href: '/setup', label: 'Create workspace' };
-    if (state.setup?.needsAccounts) return { href: '/setup', label: 'Add accounts' };
-    if (state.setup?.needsFirstImport || !dashboard?.hasData) return { href: '/setup', label: 'Import first statement' };
-    if ((state.csvInbox ?? 0) > 0) return { href: '/import', label: 'Import statements' };
-    if ((dashboard?.summary.unknownTransactionCount ?? 0) > 0 || state.setup?.needsReview) {
-      return { href: '/unknowns', label: 'Review categories' };
+  function primaryTask(): PrimaryTask {
+    if (!state?.initialized) {
+      return {
+        href: '/setup',
+        label: 'Open setup',
+        note: 'Open setup to create a workspace or connect an existing one.'
+      };
     }
-    return { href: '/import', label: 'Import latest activity' };
+    if (state.setup?.needsAccounts) {
+      return {
+        href: '/setup',
+        label: 'Add accounts',
+        note: 'Add the first accounts you want to track.'
+      };
+    }
+    if (state.setup?.needsFirstImport || !dashboard?.hasData) {
+      return {
+        href: '/setup',
+        label: 'Import first statement',
+        note: 'Bring in one statement so balances and recent activity can populate.'
+      };
+    }
+    if (hasReviewQueue()) {
+      return {
+        href: '/unknowns',
+        label: 'Review transactions',
+        note: reviewQueueNote()
+      };
+    }
+    if (statementInboxCount() > 0) {
+      return {
+        href: '/import',
+        label: 'Import statements',
+        note: statementInboxNote()
+      };
+    }
+    return {
+      href: '/import',
+      label: 'Import latest statement',
+      note: 'Nothing needs review right now.'
+    };
   }
 
   function secondaryActions(): ActionLink[] {
@@ -202,7 +283,7 @@
     }
 
     const actions: ActionLink[] = [];
-    if ((dashboard?.summary.unknownTransactionCount ?? 0) > 0 || state.setup?.needsReview) {
+    if (hasReviewQueue()) {
       actions.push({ href: '/rules', label: 'Refine automation' });
     } else {
       actions.push({ href: '/unknowns', label: 'Open review queue' });
@@ -211,12 +292,16 @@
     return actions;
   }
 
+  function recentActivityAction(): ActionLink {
+    if (hasReviewQueue()) return { href: '/unknowns', label: 'Open review queue' };
+    return { href: '/import', label: 'Import more' };
+  }
+
   function attentionItems(): AttentionItem[] {
     if (!state?.initialized) return [];
 
     const items: AttentionItem[] = [];
-    const inboxCount = state.csvInbox ?? 0;
-    const unknownCount = dashboard?.summary.unknownTransactionCount ?? 0;
+    const inboxCount = statementInboxCount();
 
     if (state.setup?.needsAccounts) {
       items.push({
@@ -236,21 +321,21 @@
       });
     }
 
-    if (inboxCount > 0) {
+    if (hasReviewQueue()) {
       items.push({
-        title: inboxCount === 1 ? '1 statement waiting' : `${inboxCount} statements waiting`,
-        note: 'Import the latest files to keep balances and recent activity accurate.',
-        href: '/import',
-        cta: 'Open import'
+        title: reviewQueueTitle(),
+        note: reviewAttentionNote(),
+        href: '/unknowns',
+        cta: 'Review now'
       });
     }
 
-    if (unknownCount > 0 || state.setup?.needsReview) {
+    if (inboxCount > 0) {
       items.push({
-        title: unknownCount === 1 ? '1 transaction needs review' : `${unknownCount} transactions need review`,
-        note: 'Clear uncategorized activity so the dashboard reflects cleaner trends.',
-        href: '/unknowns',
-        cta: 'Review now'
+        title: statementInboxTitle(),
+        note: 'Import the latest files to keep balances and recent activity accurate.',
+        href: '/import',
+        cta: 'Open import'
       });
     }
 
@@ -259,16 +344,17 @@
         title: 'Everything looks current',
         note: 'There is nothing urgent to clean up. Import fresh activity when you are ready.',
         href: '/import',
-        cta: 'Import activity'
+        cta: 'Import latest statement'
       });
     }
 
     return items.slice(0, 3);
   }
 
-  $: activeAction = primaryAction();
+  $: activeTask = primaryTask();
   $: secondary = secondaryActions();
   $: attention = attentionItems();
+  $: recentAction = recentActivityAction();
   $: steps = setupSteps();
   $: cashFlowMax = Math.max(...(dashboard?.cashFlow.series.map((row) => Math.max(row.income, row.spending)) ?? [0]));
   $: categoryMax = Math.max(
@@ -314,7 +400,7 @@
     </div>
 
     <div class="hero-side">
-      <a class="btn btn-primary" href={activeAction.href}>{activeAction.label}</a>
+      <a class="btn btn-primary" href={activeTask.href}>{activeTask.label}</a>
       {#each secondary as action}
         <a class="text-link" href={action.href}>{action.label}</a>
       {/each}
@@ -352,7 +438,7 @@
     </div>
 
     <div class="hero-side">
-      <a class="btn btn-primary" href={activeAction.href}>{activeAction.label}</a>
+      <a class="btn btn-primary" href={activeTask.href}>{activeTask.label}</a>
       {#each secondary as action}
         <a class="text-link" href={action.href}>{action.label}</a>
       {/each}
@@ -382,12 +468,12 @@
       <p class="hero-label">Net worth</p>
       <p class="subtitle hero-subtitle">
         Updated through {formatDate(dashboard.lastUpdated)}. {dashboard.summary.transactionCount} transactions are
-        loaded into the workspace, and {attention[0]?.title.toLowerCase()}.
+        loaded into the workspace. {activeTask.note}
       </p>
     </div>
 
     <div class="hero-side hero-side-compact">
-      <a class="btn btn-primary" href={activeAction.href}>{activeAction.label}</a>
+      <a class="btn btn-primary" href={activeTask.href}>{activeTask.label}</a>
       {#each secondary as action}
         <a class="text-link" href={action.href}>{action.label}</a>
       {/each}
@@ -550,7 +636,7 @@
           <p class="eyebrow">Recent activity</p>
           <h3>Latest transactions</h3>
         </div>
-        <a class="text-link" href="/import">Import more</a>
+        <a class="text-link" href={recentAction.href}>{recentAction.label}</a>
       </div>
 
       <div class="transaction-list">
