@@ -116,7 +116,7 @@
     return {
       eyebrow: 'Workspace Ready',
       title: 'Setup is complete',
-      copy: 'Your finance workspace is ready for everyday use. Add more accounts here or jump back into overview, import, or review.'
+      copy: 'Your finance workspace is ready for everyday use. Use the Accounts screen for ongoing account management, or jump back into overview, import, or review.'
     };
   }
 

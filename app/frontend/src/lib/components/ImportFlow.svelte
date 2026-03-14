@@ -193,7 +193,7 @@
     {#if importAccounts.length === 0}
       <section class="view-card">
         <p class="error-text">No import accounts are configured for this workspace yet.</p>
-        <a class="btn btn-primary" href="/setup">Configure Accounts</a>
+        <a class="btn btn-primary" href="/accounts">Configure Accounts</a>
       </section>
     {:else}
       <section class="grid-2 import-grid">

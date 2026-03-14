@@ -288,7 +288,7 @@
     } else {
       actions.push({ href: '/unknowns', label: 'Open review queue' });
     }
-    actions.push({ href: '/setup', label: 'Manage accounts' });
+    actions.push({ href: '/accounts', label: 'Manage accounts' });
     return actions;
   }
 
@@ -515,7 +515,7 @@
           <p class="eyebrow">Balances</p>
           <h3>Tracked accounts</h3>
         </div>
-        <a class="text-link" href="/setup">Manage accounts</a>
+        <a class="text-link" href="/accounts">Manage accounts</a>
       </div>
 
       <div class="balance-list">
