@@ -277,7 +277,7 @@
       bind:actions={newActions}
       {accounts}
       accountLabel="Category"
-      actionsTitle="Add another action"
+      actionsTitle="Action"
       allowAccountCreate={true}
       onAccountCreate={(seed) => void openCreateAccountForNewRule(seed)}
     />

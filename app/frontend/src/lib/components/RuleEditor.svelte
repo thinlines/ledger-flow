@@ -1,14 +1,17 @@
 <script lang="ts">
+  import { tick } from 'svelte';
   import AccountCombobox from '$lib/components/AccountCombobox.svelte';
   import type { RuleAction, RuleCondition } from '$lib/components/rule-editor-types';
 
   export let conditions: RuleCondition[] = [{ field: 'payee', operator: 'exact', value: '', joiner: 'and' }];
   export let actions: RuleAction[] = [{ type: 'set_account', account: '' }];
   export let accounts: string[] = [];
-  export let accountLabel = 'Then map to account';
-  export let actionsTitle = 'Additional actions';
+  export let accountLabel = 'Category';
+  export let actionsTitle = 'Action';
   export let allowAccountCreate = false;
   export let onAccountCreate: ((seed: string) => void) | null = null;
+
+  let actionTypeRefs: Array<HTMLSelectElement | null> = [];
 
   function normalizeConditions(items: RuleCondition[]): RuleCondition[] {
     return items.map((c, i) => ({
@@ -55,12 +58,11 @@
     return { type, tag: '' };
   }
 
-  function extraActions(): Array<{ action: RuleAction; index: number }> {
-    return actions.map((action, index) => ({ action, index })).filter((item) => item.action.type !== 'set_account');
-  }
-
-  function addAction() {
+  async function addAction() {
     actions = [...actions, createExtraAction()];
+    await tick();
+    const lastIndex = actionTypeRefs.length - 1;
+    actionTypeRefs[lastIndex]?.focus();
   }
 
   function removeAction(index: number) {
@@ -81,6 +83,8 @@
   function handleAccountCreate(seed: string) {
     onAccountCreate?.(seed);
   }
+
+  $: extraItems = actions.map((action, index) => ({ action, index })).filter((item) => item.action.type !== 'set_account');
 </script>
 
 <section class="editor-section">
@@ -106,72 +110,76 @@
         </button>
       </div>
     {/each}
-    <button class="section-link" type="button" on:click={addCondition}>Add another condition</button>
+    <button class="section-link" type="button" on:click|stopPropagation={addCondition}>Add another condition</button>
   </div>
-</section>
-
-<section class="editor-section">
-  <p class="section-title">{accountLabel}</p>
-  <AccountCombobox
-    {accounts}
-    value={getAccount()}
-    placeholder="Choose a category"
-    allowCreate={allowAccountCreate}
-    onChange={setAccount}
-    onCreate={handleAccountCreate}
-  />
 </section>
 
 <section class="editor-section editor-section-tight">
   <p class="section-title">{actionsTitle}</p>
-  <div class="actions-block">
-    {#each extraActions() as item}
-      <div class="action-row">
-        <select
-          class="action-type-select"
-          value={item.action.type}
-          on:change={(e) => setActionType(item.index, (e.currentTarget as HTMLSelectElement).value as RuleAction['type'])}
-        >
-          <option value="add_tag">Add tag</option>
-          <option value="set_kv">Set key/value</option>
-          <option value="append_comment">Append comment</option>
-        </select>
-        {#if item.action.type === 'add_tag'}
-          <input
-            class="action-input"
-            value={item.action.tag ?? ''}
-            placeholder="reimbursable"
-            on:input={(e) => setActionField(item.index, 'tag', (e.currentTarget as HTMLInputElement).value)}
-          />
-          <span class="action-spacer" aria-hidden="true"></span>
-        {:else if item.action.type === 'set_kv'}
-          <input
-            class="action-input"
-            value={item.action.key ?? ''}
-            placeholder="project"
-            on:input={(e) => setActionField(item.index, 'key', (e.currentTarget as HTMLInputElement).value)}
-          />
-          <input
-            class="action-input"
-            value={item.action.value ?? ''}
-            placeholder="client-x"
-            on:input={(e) => setActionField(item.index, 'value', (e.currentTarget as HTMLInputElement).value)}
-          />
-        {:else}
-          <input
-            class="action-input"
-            value={item.action.text ?? ''}
-            placeholder="Add a note"
-            on:input={(e) => setActionField(item.index, 'text', (e.currentTarget as HTMLInputElement).value)}
-          />
-          <span class="action-spacer" aria-hidden="true"></span>
-        {/if}
-        <button class="btn row-button" type="button" on:click={() => removeAction(item.index)}>Remove</button>
+  <div class="action-stack">
+    <div class="action-primary">
+      <p class="field-label">{accountLabel}</p>
+      <AccountCombobox
+        {accounts}
+        value={getAccount()}
+        placeholder="Choose a category"
+        allowCreate={allowAccountCreate}
+        onChange={setAccount}
+        onCreate={handleAccountCreate}
+      />
+    </div>
+
+    {#if extraItems.length > 0}
+      <div class="actions-block">
+        {#each extraItems as item, rowIndex}
+          <div class="action-row">
+            <select
+              bind:this={actionTypeRefs[rowIndex]}
+              class="action-type-select"
+              value={item.action.type}
+              on:change={(e) => setActionType(item.index, (e.currentTarget as HTMLSelectElement).value as RuleAction['type'])}
+            >
+              <option value="add_tag">Add tag</option>
+              <option value="set_kv">Set key/value</option>
+              <option value="append_comment">Append comment</option>
+            </select>
+            {#if item.action.type === 'add_tag'}
+              <input
+                class="action-input"
+                value={item.action.tag ?? ''}
+                placeholder="reimbursable"
+                on:input={(e) => setActionField(item.index, 'tag', (e.currentTarget as HTMLInputElement).value)}
+              />
+              <span class="action-spacer" aria-hidden="true"></span>
+            {:else if item.action.type === 'set_kv'}
+              <input
+                class="action-input"
+                value={item.action.key ?? ''}
+                placeholder="project"
+                on:input={(e) => setActionField(item.index, 'key', (e.currentTarget as HTMLInputElement).value)}
+              />
+              <input
+                class="action-input"
+                value={item.action.value ?? ''}
+                placeholder="client-x"
+                on:input={(e) => setActionField(item.index, 'value', (e.currentTarget as HTMLInputElement).value)}
+              />
+            {:else}
+              <input
+                class="action-input"
+                value={item.action.text ?? ''}
+                placeholder="Add a note"
+                on:input={(e) => setActionField(item.index, 'text', (e.currentTarget as HTMLInputElement).value)}
+              />
+              <span class="action-spacer" aria-hidden="true"></span>
+            {/if}
+            <button class="btn row-button" type="button" on:click={() => removeAction(item.index)}>Remove</button>
+          </div>
+        {/each}
       </div>
-    {/each}
-    <button class="section-link" type="button" on:click={addAction}>
-      {extraActions().length === 0 ? 'Add another action' : 'Add another extra'}
-    </button>
+    {/if}
+
+    <button class="section-link" type="button" on:click|stopPropagation={() => void addAction()}>Add another action</button>
   </div>
 </section>
 
@@ -197,6 +205,23 @@
     font-weight: 700;
     letter-spacing: 0.08em;
     text-transform: uppercase;
+    color: var(--muted-foreground);
+  }
+
+  .action-stack {
+    display: grid;
+    gap: 0.75rem;
+  }
+
+  .action-primary {
+    display: grid;
+    gap: 0.45rem;
+  }
+
+  .field-label {
+    margin: 0;
+    font-size: 0.92rem;
+    font-weight: 600;
     color: var(--muted-foreground);
   }
 

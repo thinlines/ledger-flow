@@ -145,7 +145,7 @@
             bind:actions
             {accounts}
             accountLabel="Category"
-            actionsTitle="Add an action"
+            actionsTitle="Action"
             allowAccountCreate={true}
             onAccountCreate={(seed) => void onAccountCreate(seed)}
           />
