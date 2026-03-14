@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .config_service import AppConfig, load_config
+from .custom_csv_service import normalize_custom_profile
 from .institution_registry import get_template
 from .opening_balance_service import opening_balance_index, write_opening_balance
 
@@ -223,6 +224,82 @@ class WorkspaceManager:
             template,
         )
 
+    def _normalize_custom_import_profile(
+        self,
+        raw: dict,
+        *,
+        default_currency: str,
+        default_display_name: str,
+    ) -> dict:
+        profile_raw = raw.get("customProfile") or {}
+        if not profile_raw:
+            raise ValueError("Custom import accounts require a CSV profile")
+
+        return normalize_custom_profile(
+            {
+                "display_name": profile_raw.get("displayName"),
+                "encoding": profile_raw.get("encoding"),
+                "delimiter": profile_raw.get("delimiter"),
+                "skip_rows": profile_raw.get("skipRows"),
+                "skip_footer_rows": profile_raw.get("skipFooterRows"),
+                "reverse_order": profile_raw.get("reverseOrder", True),
+                "date_column": profile_raw.get("dateColumn"),
+                "date_format": profile_raw.get("dateFormat"),
+                "description_column": profile_raw.get("descriptionColumn"),
+                "secondary_description_column": profile_raw.get("secondaryDescriptionColumn"),
+                "amount_mode": profile_raw.get("amountMode"),
+                "amount_column": profile_raw.get("amountColumn"),
+                "debit_column": profile_raw.get("debitColumn"),
+                "credit_column": profile_raw.get("creditColumn"),
+                "balance_column": profile_raw.get("balanceColumn"),
+                "code_column": profile_raw.get("codeColumn"),
+                "note_column": profile_raw.get("noteColumn"),
+                "currency": profile_raw.get("currency"),
+            },
+            default_currency=default_currency,
+            default_display_name=default_display_name,
+        )
+
+    def _normalize_custom_import_account(
+        self,
+        raw: dict,
+        used_account_ids: set[str],
+        *,
+        default_currency: str,
+        existing_account_id: str | None = None,
+    ) -> tuple[dict, dict]:
+        display_name = str(raw.get("displayName", "")).strip()
+        if not display_name:
+            raise ValueError("Import account display name is required")
+
+        ledger_account = str(raw.get("ledgerAccount", "")).strip()
+        if not ledger_account or ":" not in ledger_account:
+            raise ValueError("Custom import accounts require a ledger account")
+
+        last4 = str(raw.get("last4", "")).strip() or None
+        base_id = self._slugify(display_name)
+        if last4:
+            base_id = f"{base_id}_{self._slugify(last4)}"
+
+        account_id = existing_account_id or self._unique_account_id(base_id, used_account_ids)
+        profile = self._normalize_custom_import_profile(
+            raw,
+            default_currency=default_currency,
+            default_display_name=f"{display_name} CSV",
+        )
+
+        return (
+            {
+                "id": account_id,
+                "display_name": display_name,
+                "institution": None,
+                "ledger_account": ledger_account,
+                "last4": last4,
+                "import_profile_id": account_id,
+            },
+            profile,
+        )
+
     def _normalize_tracked_account(
         self,
         raw: dict,
@@ -278,6 +355,7 @@ class WorkspaceManager:
         workspace: dict,
         dirs: dict,
         institution_templates: dict[str, dict],
+        import_profiles: dict[str, dict],
         tracked_accounts: dict[str, dict],
         import_accounts: dict[str, dict],
     ) -> None:
@@ -301,6 +379,14 @@ class WorkspaceManager:
         for template_id, template_cfg in sorted(institution_templates.items(), key=lambda item: item[0]):
             cfg_lines.append(f"[institution_templates.{template_id}]")
             for key, value in template_cfg.items():
+                cfg_lines.append(f"{key} = {self._toml_value(value)}")
+            cfg_lines.append("")
+
+        for profile_id, profile_cfg in sorted(import_profiles.items(), key=lambda item: item[0]):
+            cfg_lines.append(f"[import_profiles.{profile_id}]")
+            for key, value in profile_cfg.items():
+                if value is None:
+                    continue
                 cfg_lines.append(f"{key} = {self._toml_value(value)}")
             cfg_lines.append("")
 
@@ -330,6 +416,9 @@ class WorkspaceManager:
             tracked_account_id = str(account_cfg.get("tracked_account_id") or "").strip()
             if tracked_account_id:
                 cfg_lines.append(f"tracked_account_id = {json.dumps(tracked_account_id)}")
+            import_profile_id = str(account_cfg.get("import_profile_id") or "").strip()
+            if import_profile_id:
+                cfg_lines.append(f"import_profile_id = {json.dumps(import_profile_id)}")
             cfg_lines.append("")
 
         config_toml.parent.mkdir(parents=True, exist_ok=True)
@@ -450,6 +539,7 @@ class WorkspaceManager:
                 "imports_dir": "imports",
             },
             institution_templates=selected_templates,
+            import_profiles={},
             tracked_accounts=tracked_accounts,
             import_accounts=normalized_accounts,
         )
@@ -524,6 +614,10 @@ class WorkspaceManager:
             key: dict(value)
             for key, value in config.tracked_accounts.items()
         }
+        existing_import_profiles = {
+            key: dict(value)
+            for key, value in config.import_profiles.items()
+        }
         used_account_ids = set(existing_accounts) | set(existing_tracked_accounts)
 
         if account_id:
@@ -537,9 +631,9 @@ class WorkspaceManager:
             existing_import_accounts=existing_accounts,
             existing_account_id=account_id,
         )
-        tracked_account_id = str(
-            existing_accounts.get(account_id or normalized["id"], {}).get("tracked_account_id", "")
-        ).strip() or normalized["id"]
+        existing_row = existing_accounts.get(account_id or normalized["id"], {})
+        tracked_account_id = str(existing_row.get("tracked_account_id", "")).strip() or normalized["id"]
+        stale_profile_id = str(existing_row.get("import_profile_id") or "").strip()
 
         existing_accounts[normalized["id"]] = {
             "display_name": normalized["display_name"],
@@ -548,6 +642,8 @@ class WorkspaceManager:
             "last4": normalized["last4"],
             "tracked_account_id": tracked_account_id,
         }
+        if stale_profile_id:
+            existing_import_profiles.pop(stale_profile_id, None)
         existing_tracked_accounts[tracked_account_id] = self._tracked_account_from_import_account(
             tracked_account_id,
             normalized["id"],
@@ -566,6 +662,87 @@ class WorkspaceManager:
             workspace=dict(config.workspace),
             dirs=dict(config.dirs),
             institution_templates=institution_templates,
+            import_profiles=existing_import_profiles,
+            tracked_accounts=existing_tracked_accounts,
+            import_accounts=existing_accounts,
+        )
+        refreshed = load_config(config.config_toml)
+        self._ensure_seeded_accounts(config.init_dir / "10-accounts.dat", list(existing_tracked_accounts.values()))
+        self._sync_opening_balance(
+            refreshed,
+            tracked_account_id,
+            existing_accounts[normalized["id"]]["ledger_account"],
+            opening_balance=opening_balance,
+            opening_balance_date=opening_balance_date,
+        )
+
+        return normalized["id"], existing_accounts[normalized["id"]]
+
+    def upsert_custom_import_account(
+        self,
+        config: AppConfig,
+        account: dict,
+        account_id: str | None = None,
+        *,
+        opening_balance: str | None = None,
+        opening_balance_date: str | None = None,
+    ) -> tuple[str, dict]:
+        existing_accounts = {
+            key: dict(value)
+            for key, value in config.import_accounts.items()
+        }
+        existing_tracked_accounts = {
+            key: dict(value)
+            for key, value in config.tracked_accounts.items()
+        }
+        existing_import_profiles = {
+            key: dict(value)
+            for key, value in config.import_profiles.items()
+        }
+        used_account_ids = set(existing_accounts) | set(existing_tracked_accounts)
+
+        if account_id:
+            if account_id not in existing_accounts:
+                raise ValueError(f"Unknown import account: {account_id}")
+            used_account_ids.discard(account_id)
+
+        normalized, profile = self._normalize_custom_import_account(
+            account,
+            used_account_ids,
+            default_currency=str(config.workspace.get("base_currency", "USD")),
+            existing_account_id=account_id,
+        )
+        tracked_account_id = str(
+            existing_accounts.get(account_id or normalized["id"], {}).get("tracked_account_id", "")
+        ).strip() or normalized["id"]
+        stale_profile_id = str(
+            existing_accounts.get(account_id or normalized["id"], {}).get("import_profile_id", "")
+        ).strip()
+        if stale_profile_id and stale_profile_id != normalized["import_profile_id"]:
+            existing_import_profiles.pop(stale_profile_id, None)
+
+        existing_accounts[normalized["id"]] = {
+            "display_name": normalized["display_name"],
+            "institution": None,
+            "ledger_account": normalized["ledger_account"],
+            "last4": normalized["last4"],
+            "tracked_account_id": tracked_account_id,
+            "import_profile_id": normalized["import_profile_id"],
+        }
+        existing_import_profiles[normalized["import_profile_id"]] = profile
+        existing_tracked_accounts[tracked_account_id] = self._tracked_account_from_import_account(
+            tracked_account_id,
+            normalized["id"],
+            existing_accounts[normalized["id"]],
+        )
+
+        self._write_workspace_config(
+            config.config_toml,
+            payee_aliases=config.payee_aliases,
+            workspace=dict(config.workspace),
+            dirs=dict(config.dirs),
+            institution_templates=dict(config.institution_templates),
+            import_profiles=existing_import_profiles,
             tracked_accounts=existing_tracked_accounts,
             import_accounts=existing_accounts,
         )
@@ -623,6 +800,7 @@ class WorkspaceManager:
             workspace=dict(config.workspace),
             dirs=dict(config.dirs),
             institution_templates=dict(config.institution_templates),
+            import_profiles=dict(config.import_profiles),
             tracked_accounts=existing_tracked_accounts,
             import_accounts={
                 key: dict(value)

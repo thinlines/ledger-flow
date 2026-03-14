@@ -8,7 +8,7 @@ from pathlib import Path
 from .config_service import AppConfig
 from .csv_normalizer import normalize_csv_to_intermediate
 from .import_index import ImportIndex
-from .institution_registry import canonical_template_id
+from .import_profile_service import import_source_summary, resolve_import_source
 from .ledger_runner import run_cmd
 from .payee_alias_service import ensure_payee_alias_dat
 
@@ -49,7 +49,7 @@ def scan_candidates(config: AppConfig) -> list[ImportCandidate]:
         account_cfg = config.import_accounts.get(detected_import_account_id or "")
         detected_institution_id = None
         if account_cfg:
-            detected_institution_id = canonical_template_id(account_cfg.get("institution")) or account_cfg.get("institution")
+            detected_institution_id = import_source_summary(config, account_cfg).get("institution_id")
         rows.append(
             ImportCandidate(
                 file_name=csv_path.name,
@@ -277,16 +277,16 @@ def preview_import(
         raise FileNotFoundError(str(csv_path))
 
     account_cfg = config.import_accounts[import_account_id]
-    institution_template_id = str(account_cfg.get("institution", "")).strip()
-    if institution_template_id not in config.institution_templates:
-        raise ValueError(f"Unknown institution template: {institution_template_id}")
-
-    institution_cfg = config.institution_templates[institution_template_id]
+    source = resolve_import_source(config, account_cfg)
     account = str(account_cfg["ledger_account"])
-    date_fmt = institution_cfg["CSV_date_format"]
+    date_fmt = (
+        str(source["profile"].get("CSV_date_format") or "%Y/%m/%d")
+        if source["mode"] == "institution"
+        else "%Y/%m/%d"
+    )
 
     ensure_payee_alias_dat(config)
-    converted_csv = normalize_csv_to_intermediate(config, csv_path, institution_template_id)
+    converted_csv = normalize_csv_to_intermediate(config, csv_path, account_cfg)
 
     year_journal = config.journal_dir / f"{year}.journal"
     if not year_journal.exists():
@@ -323,7 +323,7 @@ def preview_import(
             txn,
             source_file_sha256,
             import_account_id,
-            institution_template_id,
+            str(source.get("institution_id") or source.get("profile_id") or "custom_csv"),
         )
         txns.append(txn)
 
@@ -336,7 +336,9 @@ def preview_import(
         "importAccountId": import_account_id,
         "destinationAccount": account,
         "importAccountDisplayName": account_cfg.get("display_name", import_account_id),
-        "institutionTemplateId": institution_template_id,
+        "institutionTemplateId": source.get("institution_id"),
+        "importMode": source["mode"],
+        "importSourceDisplayName": source.get("display_name"),
         "summary": {
             "count": len(txns),
             "unknownCount": converted_journal.count("Expenses:Unknown"),

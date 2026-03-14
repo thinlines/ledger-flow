@@ -9,6 +9,7 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 
 from models import (
+    CustomImportAccountUpsertRequest,
     CreateAccountRequest,
     ImportPreviewRequest,
     PayeeRuleRequest,
@@ -24,9 +25,11 @@ from models import (
     WorkspaceSelectRequest,
 )
 from services.backup_service import backup_file
+from services.custom_csv_service import inspect_csv_bytes
 from services.dashboard_service import build_dashboard_overview
 from services.import_index import ImportIndex
 from services.import_service import apply_import, archive_inbox_csv, preview_import, scan_candidates
+from services.import_profile_service import import_source_summary
 from services.institution_registry import canonical_template_id, display_name_for, list_templates
 from services.ledger_runner import CommandError, run_cmd
 from services.opening_balance_service import opening_balance_index
@@ -61,18 +64,43 @@ def _sanitize_filename_stem(name: str) -> str:
     return safe or "statement"
 
 
-def _import_account_ui(account_id: str, account_cfg: dict) -> dict:
-    institution_id = canonical_template_id(account_cfg.get("institution")) or account_cfg.get("institution")
-    institution_display_name = (
-        display_name_for(institution_id, fallback=str(institution_id)) if institution_id else "Unknown institution"
-    )
+def _custom_profile_ui(profile_cfg: dict | None) -> dict | None:
+    if not profile_cfg:
+        return None
+    return {
+        "displayName": profile_cfg.get("display_name"),
+        "encoding": profile_cfg.get("encoding"),
+        "delimiter": profile_cfg.get("delimiter"),
+        "skipRows": profile_cfg.get("skip_rows", 0),
+        "skipFooterRows": profile_cfg.get("skip_footer_rows", 0),
+        "reverseOrder": profile_cfg.get("reverse_order", True),
+        "dateColumn": profile_cfg.get("date_column"),
+        "dateFormat": profile_cfg.get("date_format"),
+        "descriptionColumn": profile_cfg.get("description_column"),
+        "secondaryDescriptionColumn": profile_cfg.get("secondary_description_column"),
+        "amountMode": profile_cfg.get("amount_mode"),
+        "amountColumn": profile_cfg.get("amount_column"),
+        "debitColumn": profile_cfg.get("debit_column"),
+        "creditColumn": profile_cfg.get("credit_column"),
+        "balanceColumn": profile_cfg.get("balance_column"),
+        "codeColumn": profile_cfg.get("code_column"),
+        "noteColumn": profile_cfg.get("note_column"),
+        "currency": profile_cfg.get("currency"),
+    }
+
+
+def _import_account_ui(config, account_id: str, account_cfg: dict) -> dict:
+    source = import_source_summary(config, account_cfg)
     return {
         "id": account_id,
         "displayName": account_cfg.get("display_name", account_id),
-        "institutionId": institution_id,
-        "institutionDisplayName": institution_display_name,
+        "institutionId": source.get("institution_id"),
+        "institutionDisplayName": source.get("display_name") or "Custom CSV",
         "ledgerAccount": account_cfg.get("ledger_account", ""),
         "last4": account_cfg.get("last4"),
+        "importMode": source["mode"],
+        "importProfileId": source.get("profile_id"),
+        "importProfile": _custom_profile_ui(source.get("profile")) if source["mode"] == "custom" else None,
     }
 
 
@@ -100,13 +128,17 @@ def _tracked_account_ui(
 ) -> dict:
     import_account_id = str(account_cfg.get("import_account_id") or "").strip() or None
     linked_import_cfg = config.import_accounts.get(import_account_id or "", {}) if import_account_id else {}
+    source = import_source_summary(config, linked_import_cfg) if linked_import_cfg else None
     institution_id = (
         canonical_template_id(account_cfg.get("institution"))
-        or canonical_template_id(linked_import_cfg.get("institution"))
+        or (source.get("institution_id") if source else None)
         or account_cfg.get("institution")
-        or linked_import_cfg.get("institution")
     )
-    institution_display_name = display_name_for(institution_id, fallback=str(institution_id)) if institution_id else None
+    institution_display_name = (
+        display_name_for(institution_id, fallback=str(institution_id))
+        if institution_id
+        else (source.get("display_name") if source else None)
+    )
     opening_entry = opening_by_id.get(account_id)
     ledger_account = str(account_cfg.get("ledger_account", "")).strip()
     if opening_entry is None and ledger_account:
@@ -122,6 +154,9 @@ def _tracked_account_ui(
         "last4": account_cfg.get("last4"),
         "importAccountId": import_account_id,
         "importConfigured": bool(import_account_id),
+        "importMode": source["mode"] if source else None,
+        "importProfileId": source.get("profile_id") if source else None,
+        "importProfile": _custom_profile_ui(source.get("profile")) if source and source["mode"] == "custom" else None,
         "openingBalance": str(opening_entry.amount) if opening_entry is not None else None,
         "openingBalanceDate": opening_entry.date if opening_entry is not None else None,
     }
@@ -182,7 +217,7 @@ def app_state() -> dict:
     journals = list(config.journal_dir.glob("*.journal"))
     csvs = list(config.csv_dir.glob("*.csv"))
     import_accounts = [
-        _import_account_ui(account_id, account_cfg)
+        _import_account_ui(config, account_id, account_cfg)
         for account_id, account_cfg in sorted(config.import_accounts.items(), key=lambda x: x[0])
     ]
     institutions: dict[str, dict] = {}
@@ -269,7 +304,42 @@ def workspace_import_account_upsert(req: WorkspaceImportAccountUpsertRequest) ->
     tracked_account_id = str(account_cfg.get("tracked_account_id") or account_id)
     return {
         "ok": True,
-        "importAccount": _import_account_ui(account_id, account_cfg),
+        "importAccount": _import_account_ui(refreshed, account_id, account_cfg),
+        "trackedAccount": _tracked_account_ui(
+            refreshed,
+            tracked_account_id,
+            refreshed.tracked_accounts.get(tracked_account_id, {}),
+            opening_by_id,
+            opening_by_ledger,
+        ),
+    }
+
+
+@app.post("/api/workspace/custom-import-accounts")
+def workspace_custom_import_account_upsert(req: CustomImportAccountUpsertRequest) -> dict:
+    config = _require_workspace_config()
+    try:
+        account_id, account_cfg = workspace_manager.upsert_custom_import_account(
+            config,
+            {
+                "displayName": req.displayName,
+                "ledgerAccount": req.ledgerAccount,
+                "last4": req.last4,
+                "customProfile": req.customProfile.model_dump(),
+            },
+            account_id=req.accountId,
+            opening_balance=req.openingBalance,
+            opening_balance_date=req.openingBalanceDate,
+        )
+    except (OSError, ValueError) as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+    refreshed = _require_workspace_config()
+    opening_by_id, opening_by_ledger = opening_balance_index(refreshed)
+    tracked_account_id = str(account_cfg.get("tracked_account_id") or account_id)
+    return {
+        "ok": True,
+        "importAccount": _import_account_ui(refreshed, account_id, account_cfg),
         "trackedAccount": _tracked_account_ui(
             refreshed,
             tracked_account_id,
@@ -338,15 +408,45 @@ def import_candidates() -> dict:
         row["detected_import_account_display_name"] = (
             account_cfg.get("display_name") if account_cfg else None
         )
-        inst_id = row.get("detected_institution_id")
-        row["detected_institution_display_name"] = display_name_for(inst_id) if inst_id else None
+        row["detected_institution_display_name"] = (
+            import_source_summary(config, account_cfg).get("display_name") if account_cfg else None
+        )
         rows.append(row)
 
     import_accounts = [
-        _import_account_ui(account_id, account_cfg)
+        _import_account_ui(config, account_id, account_cfg)
         for account_id, account_cfg in sorted(config.import_accounts.items(), key=lambda x: x[0])
     ]
     return {"candidates": rows, "importAccounts": import_accounts}
+
+
+@app.post("/api/import/custom-profile/inspect")
+async def import_custom_profile_inspect(
+    file: UploadFile = File(...),
+    encoding: str | None = Form(default=None),
+    delimiter: str | None = Form(default=None),
+    skipRows: int = Form(default=0),
+    skipFooterRows: int = Form(default=0),
+) -> dict:
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="No file selected")
+    if not file.filename.lower().endswith(".csv"):
+        raise HTTPException(status_code=400, detail="Only CSV files are supported")
+
+    content = await file.read()
+    if not content:
+        raise HTTPException(status_code=400, detail="Uploaded file is empty")
+
+    try:
+        return inspect_csv_bytes(
+            content,
+            encoding=encoding or None,
+            delimiter=delimiter or None,
+            skip_rows=skipRows,
+            skip_footer_rows=skipFooterRows,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
 
 
 @app.post("/api/import/upload")

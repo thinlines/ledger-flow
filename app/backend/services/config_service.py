@@ -77,6 +77,7 @@ class AppConfig:
     institution_templates: dict
     import_accounts: dict
     tracked_accounts: dict = field(default_factory=dict)
+    import_profiles: dict = field(default_factory=dict)
     payee_aliases: str = "payee_aliases.csv"
 
     @property
@@ -128,5 +129,6 @@ def load_config(config_toml: Path) -> AppConfig:
         institution_templates=raw.get("institution_templates", {}),
         import_accounts=import_accounts,
         tracked_accounts=tracked_accounts,
+        import_profiles=raw.get("import_profiles", {}),
         payee_aliases=raw.get("payee_aliases", "payee_aliases.csv"),
     )

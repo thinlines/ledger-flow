@@ -7,7 +7,9 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Callable
 
+from .custom_csv_service import normalize_custom_csv_to_intermediate
 from .config_service import AppConfig
+from .import_profile_service import resolve_import_source
 
 
 @lru_cache(maxsize=1)
@@ -23,10 +25,12 @@ def _load_create_bank_csv() -> Callable:
     return module.create_bank_csv
 
 
-def normalize_csv_to_intermediate(config: AppConfig, csv_path: Path, institution_template_id: str) -> str:
-    if institution_template_id not in config.institution_templates:
-        raise ValueError(f"Unknown institution template: {institution_template_id}")
+def normalize_csv_to_intermediate(config: AppConfig, csv_path: Path, account_cfg: dict) -> str:
+    source = resolve_import_source(config, account_cfg)
+    if source["mode"] == "custom":
+        return normalize_custom_csv_to_intermediate(csv_path, source["profile"])
 
+    institution_template_id = str(source["institution_id"])
     inst_cfg = config.institution_templates[institution_template_id]
     head = int(inst_cfg.get("head", 0))
     tail_cfg = inst_cfg.get("tail", 0)

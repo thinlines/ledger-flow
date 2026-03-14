@@ -333,3 +333,109 @@ def test_upsert_import_account_keeps_opening_balance_in_sync_with_ledger_account
     updated_opening = opening_file.read_text(encoding="utf-8")
     assert "Assets:Bank:Primary:Checking  USD 1200.00" in updated_opening
     assert "2026-01-01 Opening balance" in updated_opening
+
+
+def test_upsert_custom_import_account_creates_profile_and_links_tracked_account(tmp_path: Path) -> None:
+    manager = WorkspaceManager(tmp_path / "app")
+    workspace_root = tmp_path / "workspace"
+
+    manager.bootstrap_workspace(
+        workspace_path=workspace_root,
+        workspace_name="Test Books",
+        base_currency="USD",
+        start_year=2026,
+        import_accounts=[],
+    )
+
+    config = load_config(workspace_root / "settings" / "workspace.toml")
+    account_id, account_cfg = manager.upsert_custom_import_account(
+        config,
+        {
+            "displayName": "Capital One Card",
+            "ledgerAccount": "Liabilities:Cards:Capital One",
+            "last4": "4242",
+            "customProfile": {
+                "displayName": "Capital One CSV",
+                "encoding": "utf-8",
+                "delimiter": ",",
+                "skipRows": 0,
+                "skipFooterRows": 0,
+                "reverseOrder": True,
+                "dateColumn": "Date",
+                "dateFormat": "%Y-%m-%d",
+                "descriptionColumn": "Description",
+                "amountMode": "debit_credit",
+                "debitColumn": "Debit",
+                "creditColumn": "Credit",
+                "currency": "USD",
+            },
+        },
+        opening_balance="500.00",
+        opening_balance_date="2026-01-01",
+    )
+
+    assert account_id == "capital_one_card_4242"
+    assert account_cfg["import_profile_id"] == account_id
+
+    reloaded = load_config(workspace_root / "settings" / "workspace.toml")
+    assert sorted(reloaded.import_accounts) == [account_id]
+    assert sorted(reloaded.tracked_accounts) == [account_id]
+    assert sorted(reloaded.import_profiles) == [account_id]
+    assert reloaded.import_profiles[account_id]["amount_mode"] == "debit_credit"
+    assert reloaded.tracked_accounts[account_id]["import_account_id"] == account_id
+
+    opening_file = workspace_root / "opening" / f"{account_id}.journal"
+    assert "Liabilities:Cards:Capital One  USD 500.00" in opening_file.read_text(encoding="utf-8")
+
+
+def test_upsert_import_account_removes_stale_custom_profile_when_switching_to_supported_template(tmp_path: Path) -> None:
+    manager = WorkspaceManager(tmp_path / "app")
+    workspace_root = tmp_path / "workspace"
+
+    manager.bootstrap_workspace(
+        workspace_path=workspace_root,
+        workspace_name="Test Books",
+        base_currency="USD",
+        start_year=2026,
+        import_accounts=[],
+    )
+
+    config = load_config(workspace_root / "settings" / "workspace.toml")
+    account_id, _ = manager.upsert_custom_import_account(
+        config,
+        {
+            "displayName": "Checking",
+            "ledgerAccount": "Assets:Bank:Checking",
+            "customProfile": {
+                "displayName": "Checking CSV",
+                "encoding": "utf-8",
+                "delimiter": ",",
+                "skipRows": 0,
+                "skipFooterRows": 0,
+                "reverseOrder": True,
+                "dateColumn": "Date",
+                "dateFormat": "%Y-%m-%d",
+                "descriptionColumn": "Description",
+                "amountMode": "signed",
+                "amountColumn": "Amount",
+                "currency": "USD",
+            },
+        },
+    )
+
+    reloaded = load_config(workspace_root / "settings" / "workspace.toml")
+    manager.upsert_import_account(
+        reloaded,
+        {
+            "institutionId": "wells_fargo",
+            "displayName": "Checking",
+            "ledgerAccount": "Assets:Bank:Checking",
+        },
+        account_id=account_id,
+    )
+
+    switched = load_config(workspace_root / "settings" / "workspace.toml")
+    assert account_id in switched.import_accounts
+    assert switched.import_accounts[account_id].get("import_profile_id") in {None, ""}
+    assert account_id not in switched.import_profiles
+    assert switched.import_accounts[account_id]["institution"] == "wells_fargo"

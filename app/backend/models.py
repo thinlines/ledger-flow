@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 
@@ -97,6 +99,37 @@ class WorkspaceSelectRequest(BaseModel):
 
 class WorkspaceImportAccountUpsertRequest(WorkspaceImportAccountRequest):
     accountId: str | None = None
+
+
+class CustomCsvProfileRequest(BaseModel):
+    displayName: str | None = None
+    encoding: str = "utf-8"
+    delimiter: str = ","
+    skipRows: int = 0
+    skipFooterRows: int = 0
+    reverseOrder: bool = True
+    dateColumn: str = Field(min_length=1)
+    dateFormat: str | None = None
+    descriptionColumn: str = Field(min_length=1)
+    secondaryDescriptionColumn: str | None = None
+    amountMode: Literal["signed", "debit_credit"] = "signed"
+    amountColumn: str | None = None
+    debitColumn: str | None = None
+    creditColumn: str | None = None
+    balanceColumn: str | None = None
+    codeColumn: str | None = None
+    noteColumn: str | None = None
+    currency: str = "USD"
+
+
+class CustomImportAccountUpsertRequest(BaseModel):
+    accountId: str | None = None
+    displayName: str = Field(min_length=1)
+    ledgerAccount: str = Field(min_length=1)
+    last4: str | None = None
+    openingBalance: str | None = None
+    openingBalanceDate: str | None = Field(default=None, pattern=DATE_PATTERN)
+    customProfile: CustomCsvProfileRequest
 
 
 class TrackedAccountUpsertRequest(BaseModel):
