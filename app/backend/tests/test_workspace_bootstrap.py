@@ -2,7 +2,11 @@ from pathlib import Path
 
 from services.config_service import load_config
 from services.import_service import scan_candidates
-from services.workspace_service import WorkspaceManager, ensure_journal_includes
+from services.workspace_service import (
+    WorkspaceManager,
+    ensure_journal_includes,
+    ensure_standard_commodities_file,
+)
 
 
 def test_bootstrap_workspace_writes_import_accounts_and_templates(tmp_path: Path) -> None:
@@ -60,6 +64,13 @@ def test_bootstrap_workspace_writes_import_accounts_and_templates(tmp_path: Path
         "include ../rules/13-commodities.dat\n"
     )
     assert "; Test Books financial journal" in journal_content
+
+    commodities_dat = workspace_root / "rules" / "13-commodities.dat"
+    commodities_content = commodities_dat.read_text(encoding="utf-8")
+    assert "commodity USD" in commodities_content
+    assert "\tformat USD1,000.00" in commodities_content
+    assert "commodity $" in commodities_content
+    assert "\tformat $1,000.00" in commodities_content
 
 
 def test_bootstrap_workspace_without_accounts_reports_setup_progress(tmp_path: Path) -> None:
@@ -473,3 +484,19 @@ def test_ensure_journal_includes_prepends_standard_include_block(tmp_path: Path)
     assert content.count("include ../rules/13-commodities.dat") == 1
     assert "; Existing journal" in content
     assert "2026/03/01 Coffee Shop" in content
+
+
+def test_ensure_standard_commodities_file_appends_symbol_format_for_base_currency(tmp_path: Path) -> None:
+    commodities_path = tmp_path / "13-commodities.dat"
+    commodities_path.write_text(
+        "commodity USD\n"
+        "\tformat USD1,000.00\n",
+        encoding="utf-8",
+    )
+
+    ensure_standard_commodities_file(commodities_path, "USD")
+
+    content = commodities_path.read_text(encoding="utf-8")
+    assert content.count("commodity USD") == 1
+    assert "commodity $" in content
+    assert "\tformat $1,000.00" in content

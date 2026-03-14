@@ -11,7 +11,7 @@ from .import_index import ImportIndex
 from .import_profile_service import import_source_summary, resolve_import_source
 from .ledger_runner import run_cmd
 from .payee_alias_service import ensure_payee_alias_dat
-from .workspace_service import ensure_journal_includes
+from .workspace_service import ensure_journal_includes, ensure_standard_commodities_file
 
 
 INBOX_FILE_RE = re.compile(
@@ -295,6 +295,7 @@ def preview_import(
     )
 
     ensure_payee_alias_dat(config)
+    ensure_standard_commodities_file(config.init_dir / "13-commodities.dat", str(config.workspace.get("base_currency", "USD")))
     converted_csv = normalize_csv_to_intermediate(config, csv_path, account_cfg)
 
     year_journal = config.journal_dir / f"{year}.journal"

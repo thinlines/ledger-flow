@@ -16,6 +16,68 @@ JOURNAL_INCLUDE_LINES = (
     "include ../rules/12-tags.dat",
     "include ../rules/13-commodities.dat",
 )
+BASE_CURRENCY_SYMBOLS = {
+    "USD": "$",
+    "EUR": "€",
+    "GBP": "£",
+    "JPY": "¥",
+    "CNY": "¥",
+}
+
+
+def standard_commodity_blocks(base_currency: str) -> list[tuple[str, list[str]]]:
+    currency = str(base_currency or "USD").strip().upper() or "USD"
+    blocks: list[tuple[str, list[str]]] = [
+        (
+            currency,
+            [
+                f"commodity {currency}",
+                f"\tformat {currency}1,000.00",
+            ],
+        )
+    ]
+    symbol = BASE_CURRENCY_SYMBOLS.get(currency)
+    if symbol:
+        blocks.append(
+            (
+                symbol,
+                [
+                    f"commodity {symbol}",
+                    f"\tformat {symbol}1,000.00",
+                ],
+            )
+        )
+    return blocks
+
+
+def ensure_standard_commodities_file(commodities_path: Path, base_currency: str) -> None:
+    existing_lines = commodities_path.read_text(encoding="utf-8").splitlines() if commodities_path.exists() else []
+    existing_text = "\n".join(existing_lines)
+    blocks_to_append: list[list[str]] = []
+
+    for commodity_name, block_lines in standard_commodity_blocks(base_currency):
+        if f"commodity {commodity_name}" in existing_text:
+            continue
+        blocks_to_append.append(block_lines)
+
+    if not commodities_path.exists() and not blocks_to_append:
+        return
+
+    lines = list(existing_lines)
+    for block_lines in blocks_to_append:
+        if lines and lines[-1].strip():
+            lines.append("")
+        lines.extend(block_lines)
+
+    if not commodities_path.exists() and not lines:
+        return
+
+    text = "\n".join(lines).rstrip() + "\n"
+    if commodities_path.exists() and commodities_path.read_text(encoding="utf-8") == text:
+        return
+
+    commodities_path.parent.mkdir(parents=True, exist_ok=True)
+    commodities_path.write_text(text, encoding="utf-8")
 
 
 def ensure_journal_includes(journal_path: Path) -> None:
@@ -586,11 +648,7 @@ class WorkspaceManager:
             tags_dat.write_text("tag Imported\ntag UUID\n", encoding="utf-8")
 
         commodities_dat = rules / "13-commodities.dat"
-        if not commodities_dat.exists():
-            commodities_dat.write_text(
-                f"commodity {base_currency}\n\tformat {base_currency}1,000.00\n",
-                encoding="utf-8",
-            )
+        ensure_standard_commodities_file(commodities_dat, base_currency)
 
         year_journal = journals / f"{start_year}.journal"
         if not year_journal.exists():
