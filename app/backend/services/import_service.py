@@ -26,6 +26,7 @@ HEADER_RE = re.compile(
 POSTING_RE = re.compile(r"^(\s+)([^\s].*?)(\s{2,}|\t+)(.*)$")
 META_RE = re.compile(r"^\s*;\s*([^:]+):\s*(.*)$")
 IMPORTER_VERSION = "mvp2"
+TRAILING_SYMBOL_COMMODITY_RE = re.compile(r"(?P<amount>-?\d+(?:\.\d+)?)(?:\s+)(?P<symbol>[$€£¥])(?=(?:\s|$))")
 
 
 @dataclass(frozen=True)
@@ -248,7 +249,14 @@ def _annotated_raw_txn(
         metadata_lines.append(f"    ; importer_version: {IMPORTER_VERSION}")
 
     out = [lines[0], *metadata_lines, *lines[1:]]
-    return "\n".join(out).rstrip() + "\n"
+    return _normalize_symbol_commodity_display("\n".join(out).rstrip() + "\n")
+
+
+def _normalize_symbol_commodity_display(text: str) -> str:
+    def repl(match: re.Match[str]) -> str:
+        return f"{match.group('symbol')}{match.group('amount')}"
+
+    return TRAILING_SYMBOL_COMMODITY_RE.sub(repl, text)
 
 
 def _build_existing_map(config: AppConfig, import_account_id: str, target_journal: Path) -> dict[str, str | None]:

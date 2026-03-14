@@ -29,7 +29,11 @@ def test_classify_transaction_new_duplicate_conflict() -> None:
 
 def test_annotated_raw_txn_adds_import_metadata() -> None:
     txn = {
-        "raw": "2026/03/01 Coffee Shop\n    Assets:Wells Fargo Checking  $-7.50\n    Expenses:Unknown\n",
+        "raw": (
+            "2026/03/01 Coffee Shop\n"
+            "    Assets:Wells Fargo Checking  1200.00 $\n"
+            "    Expenses:Unknown  -7.50 $ = 1192.50 $\n"
+        ),
         "sourceIdentity": "identity123",
         "sourcePayloadHash": "payload123",
     }
@@ -45,3 +49,5 @@ def test_annotated_raw_txn_adds_import_metadata() -> None:
     assert "; source_payload_hash: payload123" in out
     assert "; source_file_sha256: filehash" in out
     assert "; importer_version: mvp2" in out
+    assert "Assets:Wells Fargo Checking  $1200.00" in out
+    assert "Expenses:Unknown  $-7.50 = $1192.50" in out
