@@ -1,6 +1,8 @@
 <script lang="ts">
-  import { onMount, tick } from 'svelte';
+  import { onMount } from 'svelte';
+  import CreateAccountModal from '$lib/components/CreateAccountModal.svelte';
   import RuleEditor from '$lib/components/RuleEditor.svelte';
+  import SavedRuleAccordionItem from '$lib/components/SavedRuleAccordionItem.svelte';
   import type { RuleAction, RuleCondition } from '$lib/components/rule-editor-types';
   import { apiDelete, apiGet, apiPost } from '$lib/api';
   import {
@@ -27,6 +29,7 @@
   let loading = false;
   let rules: Rule[] = [];
   let accounts: string[] = [];
+  let expandedRuleId: string | null = null;
 
   let newConditions: RuleCondition[] = createDefaultRuleConditions();
   let newActions: RuleAction[] = createDefaultRuleActions();
@@ -36,7 +39,6 @@
   let newAccountName = '';
   let newAccountType = 'Expense';
   let createAccountError = '';
-  let newAccountInputEl: HTMLInputElement | null = null;
   let createAccountContext: { mode: 'new-rule' | 'existing-rule'; ruleId: string | null } = {
     mode: 'new-rule',
     ruleId: null
@@ -67,6 +69,11 @@
     return nextActions;
   }
 
+  function syncExpandedRule(nextRules: Rule[]) {
+    if (expandedRuleId && nextRules.some((rule) => rule.id === expandedRuleId)) return;
+    expandedRuleId = nextRules[0]?.id ?? null;
+  }
+
   async function refresh() {
     error = '';
     loading = true;
@@ -78,7 +85,9 @@
         apiGet<{ rules: Rule[] }>('/api/rules'),
         apiGet<{ accounts: string[] }>('/api/accounts')
       ]);
-      rules = rulesData.rules.map(normalizeRule);
+      const nextRules = rulesData.rules.map(normalizeRule);
+      rules = nextRules;
+      syncExpandedRule(nextRules);
       accounts = accountsData.accounts;
       newActions = ensureSetAccountAction(newActions, accountsData.accounts[0] ?? '');
     } catch (e) {
@@ -146,7 +155,9 @@
     try {
       const orderedIds = rules.map((r) => r.id);
       const data = await apiPost<{ rules: Rule[] }>('/api/rules/reorder', { orderedIds });
-      rules = data.rules.map(normalizeRule);
+      const nextRules = data.rules.map(normalizeRule);
+      rules = nextRules;
+      syncExpandedRule(nextRules);
     } catch (e) {
       error = String(e);
     } finally {
@@ -166,6 +177,10 @@
     dragIndex = index;
   }
 
+  function onDragEnd() {
+    dragIndex = null;
+  }
+
   function onDrop(index: number) {
     if (dragIndex === null || dragIndex === index) return;
     const reordered = [...rules];
@@ -173,6 +188,10 @@
     reordered.splice(index, 0, moved);
     rules = reordered;
     dragIndex = null;
+  }
+
+  function toggleRule(ruleId: string) {
+    expandedRuleId = expandedRuleId === ruleId ? null : ruleId;
   }
 
   async function openCreateAccountModal(
@@ -184,9 +203,6 @@
     updateInferredTypeFromName();
     createAccountError = '';
     showCreateAccountModal = true;
-    await tick();
-    newAccountInputEl?.focus();
-    newAccountInputEl?.select();
   }
 
   function closeCreateAccountModal() {
@@ -260,6 +276,8 @@
       bind:conditions={newConditions}
       bind:actions={newActions}
       {accounts}
+      accountLabel="Category"
+      actionsTitle="Add another action"
       allowAccountCreate={true}
       onAccountCreate={(seed) => void openCreateAccountForNewRule(seed)}
     />
@@ -274,107 +292,129 @@
     </div>
   </section>
 
-  <section class="view-card">
-    <p class="eyebrow">Evaluation Order</p>
-    <p class="muted">Drag rows or use move buttons. Save Order persists priority.</p>
-    <div class="rule-list">
-      {#each rules as rule, i (rule.id)}
-        <article
-          class="rule-card"
-          draggable="true"
-          on:dragstart={() => onDragStart(i)}
-          on:dragover|preventDefault
-          on:drop={() => onDrop(i)}
-        >
-          <div class="rule-head">
-            <p><strong>#{i + 1}</strong> Rule {rule.id}</p>
-            <p class="muted">Updated: {rule.updatedAt}</p>
-          </div>
+  <section class="view-card saved-rules-card">
+    <div class="section-head">
+      <div class="section-copy">
+        <p class="eyebrow">Saved Rules</p>
+        <h3>Evaluation order</h3>
+        <p class="muted">Use the handle to reorder priority. Expand a rule to edit it.</p>
+      </div>
+      <div class="section-actions">
+        <span class="rule-count">{rules.length} {rules.length === 1 ? 'rule' : 'rules'}</span>
+        <button class="btn btn-primary" on:click={persistOrder} disabled={loading || rules.length < 2}>Save Order</button>
+        <button class="btn" on:click={refresh} disabled={loading}>Reload</button>
+      </div>
+    </div>
 
-          <RuleEditor
+    {#if rules.length === 0}
+      <div class="empty-state">
+        <p class="empty-title">No saved rules yet.</p>
+        <p class="muted">Create a rule above to start automating categorization.</p>
+      </div>
+    {:else}
+      <div class="rule-list">
+        {#each rules as rule, i (rule.id)}
+          <SavedRuleAccordionItem
+            ruleId={rule.id}
+            ruleIndex={i}
+            ruleCount={rules.length}
             bind:conditions={rule.conditions}
             bind:actions={rule.actions}
             {accounts}
-            allowAccountCreate={true}
+            expanded={expandedRuleId === rule.id}
+            {loading}
+            onToggle={() => toggleRule(rule.id)}
+            onSave={() => saveRule(rule)}
+            onRemove={() => removeRule(rule.id)}
+            onMoveUp={() => moveRule(i, -1)}
+            onMoveDown={() => moveRule(i, 1)}
+            onDragStart={() => onDragStart(i)}
+            onDragEnd={onDragEnd}
+            onDrop={() => onDrop(i)}
             onAccountCreate={(seed) => void openCreateAccountForExistingRule(rule.id, seed)}
           />
-
-          <div class="rule-actions">
-            <label class="enabled">
-              <input type="checkbox" bind:checked={rule.enabled} />
-              Enabled
-            </label>
-            <button class="btn" on:click={() => moveRule(i, -1)} disabled={i === 0}>Up</button>
-            <button class="btn" on:click={() => moveRule(i, 1)} disabled={i === rules.length - 1}>Down</button>
-            <button class="btn btn-primary" on:click={() => saveRule(rule)} disabled={loading}>Save</button>
-            <button class="btn" on:click={() => removeRule(rule.id)} disabled={loading}>Delete</button>
-          </div>
-        </article>
-      {/each}
-    </div>
-    <div class="actions">
-      <button class="btn btn-primary" on:click={persistOrder} disabled={loading || rules.length < 2}>Save Order</button>
-      <button class="btn" on:click={refresh} disabled={loading}>Reload</button>
-    </div>
+        {/each}
+      </div>
+    {/if}
   </section>
 {/if}
 
 {#if showCreateAccountModal}
-  <div
-    class="modal-backdrop"
-    role="button"
-    aria-label="Close dialog"
-    tabindex="0"
-    on:click={(e) => ((e.target as HTMLElement) === (e.currentTarget as HTMLElement) ? closeCreateAccountModal() : undefined)}
-    on:keydown={(e) => (e.key === 'Escape' ? closeCreateAccountModal() : undefined)}
-  >
-    <div class="modal" role="dialog" tabindex="-1" aria-modal="true" aria-label="Create Account">
-      <h3>Create New Account</h3>
-      <p class="muted">Enter a fully qualified account name.</p>
-      <div class="field">
-        <label for="newAccountName">Account Name</label>
-        <input
-          id="newAccountName"
-          bind:this={newAccountInputEl}
-          bind:value={newAccountName}
-          placeholder="Assets:Transfers"
-          on:input={updateInferredTypeFromName}
-          on:keydown={(e) => (e.key === 'Enter' ? (e.preventDefault(), createAccountAndContinue()) : undefined)}
-        />
-      </div>
-      <div class="field">
-        <label for="newAccountType">Account Type</label>
-        <select id="newAccountType" bind:value={newAccountType}>
-          <option value="Asset">Asset</option>
-          <option value="Cash">Cash</option>
-          <option value="Liability">Liability</option>
-          <option value="Expense">Expense</option>
-          <option value="Revenue">Revenue</option>
-          <option value="Equity">Equity</option>
-        </select>
-      </div>
-      {#if createAccountError}<p class="error-text">{createAccountError}</p>{/if}
-      <div class="actions">
-        <button class="btn" on:click={closeCreateAccountModal}>Cancel</button>
-        <button class="btn btn-primary" disabled={loading || !newAccountName || !newAccountType} on:click={createAccountAndContinue}>
-          Create Account
-        </button>
-      </div>
-    </div>
-  </div>
+  <CreateAccountModal
+    bind:accountName={newAccountName}
+    bind:accountType={newAccountType}
+    error={createAccountError}
+    {loading}
+    onNameInput={updateInferredTypeFromName}
+    onClose={closeCreateAccountModal}
+    onSubmit={createAccountAndContinue}
+  />
 {/if}
 
 <style>
-  h3 {
-    margin: 0.1rem 0 0.8rem;
+  section.view-card {
+    display: grid;
+    gap: 0.95rem;
   }
 
   .create-actions {
-    margin-top: 0.7rem;
     display: flex;
     gap: 0.6rem;
     align-items: end;
     flex-wrap: wrap;
+  }
+
+  .saved-rules-card {
+    display: grid;
+    gap: 0.95rem;
+  }
+
+  .section-head {
+    display: flex;
+    justify-content: space-between;
+    gap: 1rem;
+    align-items: start;
+    flex-wrap: wrap;
+    padding-bottom: 0.1rem;
+    border-bottom: 1px solid rgba(10, 61, 89, 0.08);
+  }
+
+  .section-copy {
+    display: grid;
+    gap: 0.28rem;
+  }
+
+  .section-copy h3,
+  .section-copy p {
+    margin: 0;
+  }
+
+  .section-copy h3 {
+    font-size: 1.22rem;
+    line-height: 1.2;
+  }
+
+  .section-copy .muted {
+    max-width: 40rem;
+    font-size: 0.96rem;
+  }
+
+  .section-actions {
+    display: flex;
+    gap: 0.6rem;
+    align-items: center;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+
+  .rule-count {
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.65);
+    border: 1px solid rgba(10, 61, 89, 0.08);
+    padding: 0.38rem 0.72rem;
+    font-size: 0.82rem;
+    font-weight: 700;
+    color: var(--muted-foreground);
   }
 
   .rule-list {
@@ -382,63 +422,25 @@
     gap: 0.75rem;
   }
 
-  .rule-card {
-    border: 1px solid var(--line);
-    border-radius: 12px;
-    background: #fdfefe;
-    padding: 0.7rem;
-    display: grid;
-    gap: 0.6rem;
+  .empty-state {
+    border: 1px dashed rgba(10, 61, 89, 0.14);
+    border-radius: 14px;
+    padding: 1rem;
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.72), rgba(247, 251, 255, 0.56));
   }
 
-  .rule-head {
-    display: flex;
-    justify-content: space-between;
-    align-items: baseline;
-    gap: 0.6rem;
-    flex-wrap: wrap;
-  }
-
-  .rule-head p {
+  .empty-state p {
     margin: 0;
   }
 
-  .rule-actions {
-    display: flex;
-    gap: 0.45rem;
-    flex-wrap: wrap;
-    align-items: end;
+  .empty-title {
+    font-weight: 700;
+    margin-bottom: 0.25rem;
   }
 
-  .enabled {
-    display: inline-flex;
-    gap: 0.3rem;
-    align-items: center;
-    font-weight: 600;
-  }
-
-  .actions {
-    display: flex;
-    gap: 0.6rem;
-    flex-wrap: wrap;
-  }
-
-  .modal-backdrop {
-    position: fixed;
-    inset: 0;
-    background: rgba(10, 20, 30, 0.35);
-    display: grid;
-    place-items: center;
-    padding: 1rem;
-    z-index: 30;
-  }
-
-  .modal {
-    width: min(620px, 100%);
-    background: #fff;
-    border: 1px solid var(--line);
-    border-radius: 14px;
-    box-shadow: var(--shadow);
-    padding: 1rem;
+  @media (max-width: 760px) {
+    .section-actions {
+      justify-content: flex-start;
+    }
   }
 </style>

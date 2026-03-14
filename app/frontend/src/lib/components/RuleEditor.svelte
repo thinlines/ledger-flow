@@ -83,100 +83,132 @@
   }
 </script>
 
-<div class="conditions-block">
-  {#each conditions as condition, i}
-    <div class="condition-row">
-      {#if i === 0}
-        <span class="joiner-spacer" aria-hidden="true"></span>
-      {:else}
-        <button class="joiner-pill" type="button" on:click={() => toggleJoiner(i)}>{condition.joiner.toUpperCase()}</button>
-      {/if}
-      <select class="condition-field-select" bind:value={condition.field}>
-        <option value="payee">Payee</option>
-      </select>
-      <select class="condition-operator-select" bind:value={condition.operator}>
-        <option value="exact">is exactly</option>
-        <option value="contains">contains</option>
-      </select>
-      <input class="condition-value-input" bind:value={condition.value} placeholder="abc123" />
-      <button class="btn row-button" on:click={() => removeCondition(i)} disabled={conditions.length <= 1}>Remove</button>
-    </div>
-  {/each}
-  <button class="btn" on:click={addCondition}>Add Condition...</button>
-</div>
+<section class="editor-section">
+  <p class="section-title">Match</p>
+  <div class="conditions-block">
+    {#each conditions as condition, i}
+      <div class="condition-row">
+        {#if i === 0}
+          <span class="joiner-spacer" aria-hidden="true"></span>
+        {:else}
+          <button class="joiner-pill" type="button" on:click={() => toggleJoiner(i)}>{condition.joiner.toUpperCase()}</button>
+        {/if}
+        <select class="condition-field-select" bind:value={condition.field}>
+          <option value="payee">Payee</option>
+        </select>
+        <select class="condition-operator-select" bind:value={condition.operator}>
+          <option value="exact">is exactly</option>
+          <option value="contains">contains</option>
+        </select>
+        <input class="condition-value-input" bind:value={condition.value} placeholder="Type a payee or keyword" />
+        <button class="btn row-button" type="button" on:click={() => removeCondition(i)} disabled={conditions.length <= 1}>
+          Remove
+        </button>
+      </div>
+    {/each}
+    <button class="section-link" type="button" on:click={addCondition}>Add another condition</button>
+  </div>
+</section>
 
-<div class="field">
-  <p class="muted">{accountLabel}</p>
+<section class="editor-section">
+  <p class="section-title">{accountLabel}</p>
   <AccountCombobox
     {accounts}
     value={getAccount()}
-    placeholder="Select account..."
+    placeholder="Choose a category"
     allowCreate={allowAccountCreate}
     onChange={setAccount}
     onCreate={handleAccountCreate}
   />
-</div>
+</section>
 
-<div class="actions-block">
-  <p class="muted">{actionsTitle}</p>
-  {#each extraActions() as item}
-    <div class="action-row">
-      <select
-        class="action-type-select"
-        value={item.action.type}
-        on:change={(e) => setActionType(item.index, (e.currentTarget as HTMLSelectElement).value as RuleAction['type'])}
-      >
-        <option value="add_tag">Add tag</option>
-        <option value="set_kv">Set key/value</option>
-        <option value="append_comment">Append comment</option>
-      </select>
-      {#if item.action.type === 'add_tag'}
-        <input
-          class="action-input"
-          value={item.action.tag ?? ''}
-          placeholder="reimbursable"
-          on:input={(e) => setActionField(item.index, 'tag', (e.currentTarget as HTMLInputElement).value)}
-        />
-        <span class="action-spacer" aria-hidden="true"></span>
-      {:else if item.action.type === 'set_kv'}
-        <input
-          class="action-input"
-          value={item.action.key ?? ''}
-          placeholder="project"
-          on:input={(e) => setActionField(item.index, 'key', (e.currentTarget as HTMLInputElement).value)}
-        />
-        <input
-          class="action-input"
-          value={item.action.value ?? ''}
-          placeholder="client-x"
-          on:input={(e) => setActionField(item.index, 'value', (e.currentTarget as HTMLInputElement).value)}
-        />
-      {:else}
-        <input
-          class="action-input"
-          value={item.action.text ?? ''}
-          placeholder="auto-note text"
-          on:input={(e) => setActionField(item.index, 'text', (e.currentTarget as HTMLInputElement).value)}
-        />
-        <span class="action-spacer" aria-hidden="true"></span>
-      {/if}
-      <button class="btn row-button" on:click={() => removeAction(item.index)}>Remove</button>
-    </div>
-  {/each}
-  <button class="btn" on:click={addAction}>Add Action...</button>
-</div>
+<section class="editor-section editor-section-tight">
+  <p class="section-title">{actionsTitle}</p>
+  <div class="actions-block">
+    {#each extraActions() as item}
+      <div class="action-row">
+        <select
+          class="action-type-select"
+          value={item.action.type}
+          on:change={(e) => setActionType(item.index, (e.currentTarget as HTMLSelectElement).value as RuleAction['type'])}
+        >
+          <option value="add_tag">Add tag</option>
+          <option value="set_kv">Set key/value</option>
+          <option value="append_comment">Append comment</option>
+        </select>
+        {#if item.action.type === 'add_tag'}
+          <input
+            class="action-input"
+            value={item.action.tag ?? ''}
+            placeholder="reimbursable"
+            on:input={(e) => setActionField(item.index, 'tag', (e.currentTarget as HTMLInputElement).value)}
+          />
+          <span class="action-spacer" aria-hidden="true"></span>
+        {:else if item.action.type === 'set_kv'}
+          <input
+            class="action-input"
+            value={item.action.key ?? ''}
+            placeholder="project"
+            on:input={(e) => setActionField(item.index, 'key', (e.currentTarget as HTMLInputElement).value)}
+          />
+          <input
+            class="action-input"
+            value={item.action.value ?? ''}
+            placeholder="client-x"
+            on:input={(e) => setActionField(item.index, 'value', (e.currentTarget as HTMLInputElement).value)}
+          />
+        {:else}
+          <input
+            class="action-input"
+            value={item.action.text ?? ''}
+            placeholder="Add a note"
+            on:input={(e) => setActionField(item.index, 'text', (e.currentTarget as HTMLInputElement).value)}
+          />
+          <span class="action-spacer" aria-hidden="true"></span>
+        {/if}
+        <button class="btn row-button" type="button" on:click={() => removeAction(item.index)}>Remove</button>
+      </div>
+    {/each}
+    <button class="section-link" type="button" on:click={addAction}>
+      {extraActions().length === 0 ? 'Add another action' : 'Add another extra'}
+    </button>
+  </div>
+</section>
 
 <style>
+  .editor-section {
+    display: grid;
+    gap: 0.55rem;
+    margin-bottom: 1rem;
+  }
+
+  .editor-section-tight {
+    margin-bottom: 0;
+  }
+
+  .editor-section + .editor-section {
+    padding-top: 0.95rem;
+    border-top: 1px solid rgba(10, 61, 89, 0.07);
+  }
+
+  .section-title {
+    margin: 0;
+    font-size: 0.8rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--muted-foreground);
+  }
+
   .conditions-block {
     display: grid;
-    gap: 0.45rem;
-    margin-bottom: 0.8rem;
+    gap: 0.55rem;
   }
 
   .condition-row {
     display: grid;
     grid-template-columns: max-content max-content max-content minmax(20rem, 1fr) auto;
-    gap: 0.45rem;
+    gap: 0.5rem;
     align-items: center;
     min-width: 0;
   }
@@ -207,12 +239,12 @@
   }
 
   .joiner-pill {
-    border: 1px solid var(--line);
-    background: #eef6f4;
+    border: 1px solid rgba(10, 61, 89, 0.1);
+    background: rgba(238, 246, 244, 0.8);
     border-radius: 999px;
     font-weight: 700;
     letter-spacing: 0.02em;
-    padding: 0.25rem 0.5rem;
+    padding: 0.28rem 0.52rem;
     cursor: pointer;
   }
 
@@ -222,14 +254,13 @@
 
   .actions-block {
     display: grid;
-    gap: 0.45rem;
-    margin-top: 0.5rem;
+    gap: 0.55rem;
   }
 
   .action-row {
     display: grid;
     grid-template-columns: max-content minmax(12rem, 1fr) minmax(12rem, 1fr) auto;
-    gap: 0.45rem;
+    gap: 0.5rem;
     align-items: center;
     min-width: 0;
   }
@@ -245,6 +276,38 @@
 
   .row-button {
     white-space: nowrap;
+    padding: 0.55rem 0.76rem;
+    background: transparent;
+    border-color: rgba(10, 61, 89, 0.08);
+    color: var(--muted-foreground);
+    box-shadow: none;
+    font-size: 0.92rem;
+    font-weight: 600;
+  }
+
+  .row-button:hover {
+    background: rgba(10, 61, 89, 0.04);
+    color: var(--brand-strong);
+  }
+
+  .section-link {
+    width: fit-content;
+    border: 0;
+    background: transparent;
+    padding: 0.15rem 0;
+    color: var(--brand-strong);
+    font-weight: 700;
+    font-size: 0.95rem;
+    cursor: pointer;
+  }
+
+  .section-link:hover {
+    color: #0c7b59;
+  }
+
+  .section-link:focus-visible {
+    outline: 2px solid rgba(15, 95, 136, 0.35);
+    outline-offset: 4px;
   }
 
   @media (max-width: 760px) {
