@@ -51,7 +51,8 @@
   }
 
   function addCondition() {
-    conditions = [...conditions, { field: 'payee', operator: 'contains', value: '', joiner: 'and' }];
+    const previousJoiner = conditions.at(-1)?.joiner ?? 'and';
+    conditions = [...conditions, { field: 'payee', operator: 'contains', value: '', joiner: previousJoiner }];
   }
 
   function removeCondition(index: number) {
