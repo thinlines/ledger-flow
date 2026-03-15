@@ -226,3 +226,33 @@ def test_create_account_respects_explicit_account_type(tmp_path: Path) -> None:
     assert added is True
     assert warning is None
     assert "; type: Cash" in accounts.read_text(encoding="utf-8")
+
+
+def test_create_account_writes_description_metadata(tmp_path: Path) -> None:
+    accounts = tmp_path / "10-accounts.dat"
+    accounts.write_text("", encoding="utf-8")
+
+    added, warning = create_account(
+        accounts,
+        "Assets:Bank:Savings",
+        description="Emergency fund",
+    )
+
+    assert added is True
+    assert warning is None
+    assert "; description: Emergency fund" in accounts.read_text(encoding="utf-8")
+
+
+def test_create_account_omits_blank_description_metadata(tmp_path: Path) -> None:
+    accounts = tmp_path / "10-accounts.dat"
+    accounts.write_text("", encoding="utf-8")
+
+    added, warning = create_account(
+        accounts,
+        "Assets:Bank:Checking",
+        description=" \n  ",
+    )
+
+    assert added is True
+    assert warning is None
+    assert "; description:" not in accounts.read_text(encoding="utf-8")

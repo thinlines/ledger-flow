@@ -291,7 +291,12 @@ def _infer_account_type(account: str) -> str:
     return "Other"
 
 
-def create_account(accounts_dat: Path, account: str, account_type: str | None = None) -> tuple[bool, str | None]:
+def create_account(
+    accounts_dat: Path,
+    account: str,
+    account_type: str | None = None,
+    description: str | None = None,
+) -> tuple[bool, str | None]:
     account_clean = account.strip()
     if not account_clean:
         raise ValueError("Account is required")
@@ -303,6 +308,7 @@ def create_account(accounts_dat: Path, account: str, account_type: str | None = 
         return False, None
 
     account_type_clean = (account_type or "").strip() or _infer_account_type(account_clean)
+    description_clean = re.sub(r"\s*[\r\n]+\s*", " ", description or "").strip()
     if accounts_dat.exists():
         lines = accounts_dat.read_text(encoding="utf-8").splitlines()
     else:
@@ -311,5 +317,7 @@ def create_account(accounts_dat: Path, account: str, account_type: str | None = 
         lines.append("")
     lines.append(f"account {account_clean}")
     lines.append(f"    ; type: {account_type_clean}")
+    if description_clean:
+        lines.append(f"    ; description: {description_clean}")
     accounts_dat.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return True, None

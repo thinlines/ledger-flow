@@ -88,6 +88,7 @@ class RuleHistoryApplyRequest(BaseModel):
 class CreateAccountRequest(BaseModel):
     account: str
     accountType: str | None = None
+    description: str | None = None
 
 
 class WorkspaceImportAccountRequest(BaseModel):
