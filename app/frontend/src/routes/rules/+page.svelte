@@ -1,6 +1,7 @@
 <script lang="ts">
   import { goto } from '$app/navigation';
-  import { onMount } from 'svelte';
+  import { page } from '$app/stores';
+  import { onMount, tick } from 'svelte';
   import CreateAccountModal from '$lib/components/CreateAccountModal.svelte';
   import RuleEditor from '$lib/components/RuleEditor.svelte';
   import SavedRuleAccordionItem from '$lib/components/SavedRuleAccordionItem.svelte';
@@ -35,6 +36,15 @@
     absPath: string;
   };
 
+  type HistoryApplyNotice = {
+    ruleId: string;
+    ruleName: string;
+    updatedTxnCount: number;
+    journalLabel: string;
+    backupLabel: string;
+    warningCount: number;
+  };
+
   let initialized = false;
   let error = '';
   let loading = false;
@@ -63,6 +73,17 @@
   let historyJournalPath = '';
   let historyError = '';
   let historyLoading = false;
+  let historyApplyNotice: HistoryApplyNotice | null = null;
+
+  const historyApplyNoticeKeys = [
+    'historyApplied',
+    'historyRuleId',
+    'historyRuleName',
+    'historyUpdated',
+    'historyJournal',
+    'historyBackup',
+    'historyWarnings'
+  ];
 
   onMount(() => {
     const handleBeforeUnload = (event: BeforeUnloadEvent) => {
@@ -72,7 +93,16 @@
     };
 
     window.addEventListener('beforeunload', handleBeforeUnload);
-    void refresh();
+    historyApplyNotice = readHistoryApplyNoticeFromRoute();
+    if (historyApplyNotice?.ruleId) {
+      expandedRuleId = historyApplyNotice.ruleId;
+      void clearHistoryApplyNoticeFromRoute();
+    }
+    void refresh().then(async () => {
+      if (historyApplyNotice?.ruleId) {
+        await focusRuleCard(historyApplyNotice.ruleId);
+      }
+    });
 
     return () => {
       window.removeEventListener('beforeunload', handleBeforeUnload);
@@ -96,6 +126,53 @@
   function pathLabel(path: string): string {
     const parts = path.split('/').filter(Boolean);
     return parts.at(-1) ?? path;
+  }
+
+  function ruleCardDomId(ruleId: string): string {
+    return `saved-rule-${ruleId}`;
+  }
+
+  function parseIntegerParam(value: string | null): number {
+    const parsed = Number.parseInt(value ?? '', 10);
+    return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
+  }
+
+  function readHistoryApplyNoticeFromRoute(): HistoryApplyNotice | null {
+    if ($page.url.searchParams.get('historyApplied') !== '1') return null;
+
+    const ruleId = ($page.url.searchParams.get('historyRuleId') ?? '').trim();
+    if (!ruleId) return null;
+
+    return {
+      ruleId,
+      ruleName: ($page.url.searchParams.get('historyRuleName') ?? '').trim(),
+      updatedTxnCount: parseIntegerParam($page.url.searchParams.get('historyUpdated')),
+      journalLabel: ($page.url.searchParams.get('historyJournal') ?? '').trim(),
+      backupLabel: ($page.url.searchParams.get('historyBackup') ?? '').trim(),
+      warningCount: parseIntegerParam($page.url.searchParams.get('historyWarnings'))
+    };
+  }
+
+  async function clearHistoryApplyNoticeFromRoute() {
+    const params = new URLSearchParams($page.url.searchParams);
+    let changed = false;
+    for (const key of historyApplyNoticeKeys) {
+      if (!params.has(key)) continue;
+      params.delete(key);
+      changed = true;
+    }
+    if (!changed) return;
+    const nextQuery = params.toString();
+    await goto(nextQuery ? `/rules?${nextQuery}` : '/rules', { replaceState: true, noScroll: true, keepFocus: true });
+  }
+
+  async function focusRuleCard(ruleId: string) {
+    await tick();
+    document.getElementById(ruleCardDomId(ruleId))?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  }
+
+  function dismissHistoryApplyNotice() {
+    historyApplyNotice = null;
   }
 
   function setActionsAccount(actions: RuleAction[], account: string): RuleAction[] {
@@ -493,6 +570,34 @@
     <section class="view-card"><p class="error-text">{error}</p></section>
   {/if}
 
+  {#if historyApplyNotice}
+    <section class="view-card history-apply-notice" aria-live="polite">
+      <div class="history-apply-copy">
+        <p class="eyebrow">History Updated</p>
+        <h3>
+          {historyApplyNotice.ruleName
+            ? `"${historyApplyNotice.ruleName}" updated past transactions`
+            : 'Historical transaction updates applied'}
+        </h3>
+        <p class="muted">
+          Updated {historyApplyNotice.updatedTxnCount} previous
+          {historyApplyNotice.updatedTxnCount === 1 ? ' transaction' : ' transactions'}
+          {historyApplyNotice.journalLabel ? ` in ${historyApplyNotice.journalLabel}` : ''}.
+          {historyApplyNotice.backupLabel ? ` Backup: ${historyApplyNotice.backupLabel}.` : ''}
+        </p>
+        {#if historyApplyNotice.warningCount > 0}
+          <p class="muted">
+            {historyApplyNotice.warningCount} warning{historyApplyNotice.warningCount === 1 ? '' : 's'}
+            {historyApplyNotice.warningCount === 1 ? ' was' : ' were'} skipped during rewrite.
+          </p>
+        {/if}
+      </div>
+      <div class="history-apply-actions">
+        <button class="btn" type="button" on:click={dismissHistoryApplyNotice}>Dismiss</button>
+      </div>
+    </section>
+  {/if}
+
   <section class="view-card">
     <p class="eyebrow">New Rule</p>
     <div class="field">
@@ -554,6 +659,7 @@
             dirty={isRuleDirty(rule)}
             {accounts}
             expanded={expandedRuleId === rule.id}
+            highlighted={historyApplyNotice?.ruleId === rule.id}
             {loading}
             onToggle={() => toggleRule(rule.id)}
             onSave={() => saveRule(rule)}
@@ -648,6 +754,31 @@
   section.view-card {
     display: grid;
     gap: 0.95rem;
+  }
+
+  .history-apply-notice {
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: start;
+    border: 1px solid rgba(12, 123, 89, 0.2);
+    background:
+      radial-gradient(circle at top right, rgba(191, 237, 221, 0.45), transparent 36%),
+      linear-gradient(180deg, rgba(247, 255, 250, 0.96), rgba(237, 248, 242, 0.9));
+  }
+
+  .history-apply-copy {
+    display: grid;
+    gap: 0.28rem;
+  }
+
+  .history-apply-copy h3,
+  .history-apply-copy p {
+    margin: 0;
+  }
+
+  .history-apply-actions {
+    display: flex;
+    justify-content: flex-end;
+    align-items: start;
   }
 
   .create-actions {
@@ -792,6 +923,14 @@
   }
 
   @media (max-width: 760px) {
+    .history-apply-notice {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    .history-apply-actions {
+      justify-content: flex-start;
+    }
+
     .section-actions {
       justify-content: flex-start;
     }

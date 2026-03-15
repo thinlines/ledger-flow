@@ -156,6 +156,45 @@
     return parts.at(-1) ?? path;
   }
 
+  function buildHistoryApplyRedirect(stageToRedirect: RuleHistoryStage): string {
+    const params = new URLSearchParams();
+    params.set('historyApplied', '1');
+    params.set('historyRuleId', stageToRedirect.ruleId);
+    params.set('historyUpdated', String(stageToRedirect.result?.updatedTxnCount ?? 0));
+
+    const ruleName = stageToRedirect.ruleName?.trim() ?? '';
+    if (ruleName) {
+      params.set('historyRuleName', ruleName);
+    }
+
+    const journalLabel = stageToRedirect.journalPath ? pathLabel(stageToRedirect.journalPath) : '';
+    if (journalLabel) {
+      params.set('historyJournal', journalLabel);
+    }
+
+    const backupLabel = stageToRedirect.result?.backupPath ? pathLabel(stageToRedirect.result.backupPath) : '';
+    if (backupLabel) {
+      params.set('historyBackup', backupLabel);
+    }
+
+    const warningCount = stageToRedirect.result?.warnings?.length ?? 0;
+    if (warningCount > 0) {
+      params.set('historyWarnings', String(warningCount));
+    }
+
+    return `/rules?${params.toString()}`;
+  }
+
+  async function finalizeHistoryApply(stageToRedirect: RuleHistoryStage) {
+    const stageId = stageToRedirect.stageId;
+    try {
+      await apiDelete(`/api/stages/${encodeURIComponent(stageId)}`);
+    } catch {
+      // Ignore cleanup failures once the rewrite succeeded.
+    }
+    await goto(buildHistoryApplyRedirect(stageToRedirect), { replaceState: true, noScroll: true, keepFocus: true });
+  }
+
   function inferAccountType(accountName: string): string {
     const prefix = accountName.split(':', 1)[0]?.trim().toLowerCase() || '';
     if (prefix === 'assets') return 'Asset';
@@ -179,7 +218,12 @@
   async function loadStageFromRoute(stageId: string) {
     const loaded = await apiGet<UnknownStage | RuleHistoryStage>(`/api/stages/${encodeURIComponent(stageId)}`);
     if ((loaded as RuleHistoryStage).kind === 'rule_history') {
-      historyStage = loaded as RuleHistoryStage;
+      const loadedHistoryStage = loaded as RuleHistoryStage;
+      if (loadedHistoryStage.result) {
+        await finalizeHistoryApply(loadedHistoryStage);
+        return;
+      }
+      historyStage = loadedHistoryStage;
       stage = null;
       journalPath = historyStage.journalPath;
       historySelectedCandidateIds =
@@ -482,14 +526,18 @@
     loading = true;
     error = '';
     try {
-      historyStage = await apiPost<RuleHistoryStage>('/api/rules/history/apply', {
+      const appliedHistoryStage = await apiPost<RuleHistoryStage>('/api/rules/history/apply', {
         stageId: historyStage.stageId,
         selectedCandidateIds: historySelectedCandidateIds
       });
+      historyStage = appliedHistoryStage;
       historySelectedCandidateIds =
-        historyStage.selectedCandidateIds?.length
-          ? [...historyStage.selectedCandidateIds]
+        appliedHistoryStage.selectedCandidateIds?.length
+          ? [...appliedHistoryStage.selectedCandidateIds]
           : [...historySelectedCandidateIds];
+      if (appliedHistoryStage.result) {
+        await finalizeHistoryApply(appliedHistoryStage);
+      }
     } catch (e) {
       error = String(e);
     } finally {

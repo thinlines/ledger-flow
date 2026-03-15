@@ -12,6 +12,7 @@
   export let accounts: string[] = [];
   export let dirty = false;
   export let expanded = false;
+  export let highlighted = false;
   export let loading = false;
   export let onToggle: () => void = () => {};
   export let onSave: () => void | Promise<void> = () => {};
@@ -109,8 +110,10 @@
 </script>
 
 <article
+  id={`saved-rule-${ruleId}`}
   class="rule-card"
   class:rule-card-expanded={expanded}
+  class:rule-card-highlighted={highlighted}
   class:rule-card-drop-target={isDragOver}
   on:dragenter={handleDragEnter}
   on:dragleave={handleDragLeave}
@@ -141,6 +144,9 @@
           <div class="rule-summary-block">
             <div class="rule-title-row">
               <p class="rule-title">{name || namePlaceholder || 'Untitled rule'}</p>
+              {#if highlighted}
+                <span class="highlight-pill">History updated</span>
+              {/if}
               {#if dirty}
                 <span class="dirty-pill">Unsaved changes</span>
               {/if}
@@ -223,6 +229,13 @@
     border-color: rgba(15, 95, 136, 0.18);
     background: #ffffff;
     box-shadow: 0 12px 26px rgba(10, 61, 89, 0.06);
+  }
+
+  .rule-card-highlighted {
+    border-color: rgba(12, 123, 89, 0.34);
+    box-shadow:
+      0 0 0 3px rgba(12, 123, 89, 0.08),
+      0 12px 26px rgba(10, 61, 89, 0.06);
   }
 
   .rule-card-drop-target {
@@ -338,6 +351,17 @@
     background: rgba(255, 244, 220, 0.92);
     border: 1px solid rgba(218, 169, 79, 0.28);
     color: #8b5b12;
+    padding: 0.2rem 0.48rem;
+    font-size: 0.73rem;
+    font-weight: 700;
+    line-height: 1.2;
+  }
+
+  .highlight-pill {
+    border-radius: 999px;
+    background: rgba(230, 247, 239, 0.96);
+    border: 1px solid rgba(12, 123, 89, 0.2);
+    color: #0a6a50;
     padding: 0.2rem 0.48rem;
     font-size: 0.73rem;
     font-weight: 700;
