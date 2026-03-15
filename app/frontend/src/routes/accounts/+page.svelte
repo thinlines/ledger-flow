@@ -80,6 +80,24 @@
     }).format(value);
   }
 
+  function formatStoredAmount(value: string | null | undefined): string {
+    if (!value) return 'Not set';
+    const numeric = Number(value);
+    if (Number.isNaN(numeric)) return value;
+    return formatCurrency(numeric);
+  }
+
+  function shortDate(value: string | null | undefined): string {
+    if (!value) return 'No date';
+    const parsed = new Date(`${value}T12:00:00`);
+    if (Number.isNaN(parsed.getTime())) return value;
+    return new Intl.DateTimeFormat(undefined, {
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric'
+    }).format(parsed);
+  }
+
   function currentBalance(accountId: string): number | null {
     return dashboardBalances[accountId] ?? null;
   }
@@ -93,6 +111,25 @@
     if (account.importMode !== 'custom' || !account.importProfile) return '';
     const amountMode = account.importProfile.amountMode === 'debit_credit' ? 'Debit / credit' : 'Signed amount';
     return `${account.importProfile.displayName || 'Custom profile'} · ${amountMode}`;
+  }
+
+  function importSetupTitle(account: TrackedAccount): string {
+    if (!account.importConfigured) return 'Manual tracking';
+    if (account.importMode === 'custom') return account.importProfile?.displayName || 'Custom CSV';
+    return 'Institution import';
+  }
+
+  function importSetupNote(account: TrackedAccount): string {
+    if (!account.importConfigured) return 'No automated import attached.';
+    if (account.importMode === 'custom') {
+      const amountMode = account.importProfile?.amountMode === 'debit_credit' ? 'Debit / credit mapping' : 'Signed amount mapping';
+      return account.importAccountId ? `${account.importAccountId} · ${amountMode}` : amountMode;
+    }
+    return account.importAccountId || 'Connected through a supported institution.';
+  }
+
+  function hasAdvancedDetails(account: TrackedAccount): boolean {
+    return account.importMode === 'custom' && Boolean(account.importProfile);
   }
 
   async function load() {
@@ -208,52 +245,84 @@
       <div class="account-list">
         {#each trackedAccounts as account}
           <article class="account-card">
-            <div class="account-card-head">
-              <div>
-                <h4>{account.displayName}</h4>
-                <p class="muted">{account.institutionDisplayName || 'Manual account'}</p>
-              </div>
-              <div class="account-card-actions">
-                <a class="inline-link" href={`/transactions?accountId=${account.id}`}>Transactions</a>
-                <a class="inline-link" href={`/accounts/configure?accountId=${account.id}`}>Edit</a>
-              </div>
-            </div>
-
-            <div class="pill-row">
-              <span class:ok={account.importConfigured} class="pill">{modeLabel(account)}</span>
-              <span class="pill">{titleCase(account.kind)}</span>
-              {#if account.last4}
-                <span class="pill">••{account.last4}</span>
-              {/if}
-            </div>
-
-            <div class="account-metrics">
-              <div>
+            <div class="account-card-main">
+              <div class="account-balance-panel">
                 <p class="metric-label">Current balance</p>
-                <p class="metric-value">{formatCurrency(currentBalance(account.id))}</p>
-              </div>
-              <div>
-                <p class="metric-label">Opening balance</p>
-                <p class="metric-value">
-                  {account.openingBalance ? `${account.openingBalance} · ${account.openingBalanceDate || 'No date'}` : 'Not set'}
+                <p
+                  class:positive={(currentBalance(account.id) ?? 0) > 0}
+                  class:negative={(currentBalance(account.id) ?? 0) < 0}
+                  class="account-balance-value"
+                >
+                  {formatCurrency(currentBalance(account.id))}
+                </p>
+                <p class="account-balance-note">
+                  {#if account.openingBalance}
+                    Started at {formatStoredAmount(account.openingBalance)}
+                    {#if account.openingBalanceDate}
+                      on {shortDate(account.openingBalanceDate)}
+                    {/if}
+                  {:else}
+                    Opening balance not set yet.
+                  {/if}
                 </p>
               </div>
+
+              <div class="account-card-content">
+                <div class="account-card-head">
+                  <div class="account-title-group">
+                    <h4>{account.displayName}</h4>
+                    <p class="muted">{account.institutionDisplayName || 'Manual account'}</p>
+                  </div>
+                  <div class="account-card-actions">
+                    <a class="inline-link" href={`/transactions?accountId=${account.id}`}>Transactions</a>
+                    <a class="inline-link" href={`/accounts/configure?accountId=${account.id}`}>Edit</a>
+                  </div>
+                </div>
+
+                <div class="pill-row">
+                  <span class:ok={account.importConfigured} class="pill">{modeLabel(account)}</span>
+                  <span class="pill">{titleCase(account.kind)}</span>
+                  {#if account.last4}
+                    <span class="pill">••{account.last4}</span>
+                  {/if}
+                </div>
+
+                <dl class="account-meta-grid">
+                  <div class="account-meta-item">
+                    <dt>Opening balance</dt>
+                    <dd>{account.openingBalance ? formatStoredAmount(account.openingBalance) : 'Not set'}</dd>
+                    <span class="account-meta-note">
+                      {account.openingBalanceDate ? shortDate(account.openingBalanceDate) : 'Add a starting date in setup.'}
+                    </span>
+                  </div>
+
+                  <div class="account-meta-item">
+                    <dt>Ledger account</dt>
+                    <dd>{account.ledgerAccount}</dd>
+                    <span class="account-meta-note">
+                      {account.importConfigured ? 'Ready for imported activity.' : 'Used for manual balance tracking.'}
+                    </span>
+                  </div>
+
+                  <div class="account-meta-item">
+                    <dt>Import setup</dt>
+                    <dd>{importSetupTitle(account)}</dd>
+                    <span class="account-meta-note">{importSetupNote(account)}</span>
+                  </div>
+                </dl>
+              </div>
             </div>
 
-            <details class="advanced-panel">
-              <summary>Account details</summary>
-              <p class="muted small">Ledger account: {account.ledgerAccount}</p>
-              {#if account.importAccountId}
-                <p class="muted small">Import configuration: {account.importAccountId}</p>
-              {/if}
-              {#if account.importMode === 'custom' && account.importProfile}
+            {#if hasAdvancedDetails(account)}
+              <details class="advanced-panel">
+                <summary>Import mapping details</summary>
                 <p class="muted small">{customProfileSummary(account)}</p>
-                <p class="muted small">Currency symbol: {account.importProfile.currency || '$'}</p>
-                <p class="muted small">Date column: {account.importProfile.dateColumn || 'Not set'}</p>
-                <p class="muted small">Description column: {account.importProfile.descriptionColumn || 'Not set'}</p>
-                <p class="muted small">Code column: {account.importProfile.codeColumn || 'Not set'}</p>
-              {/if}
-            </details>
+                <p class="muted small">Currency symbol: {account.importProfile?.currency || '$'}</p>
+                <p class="muted small">Date column: {account.importProfile?.dateColumn || 'Not set'}</p>
+                <p class="muted small">Description column: {account.importProfile?.descriptionColumn || 'Not set'}</p>
+                <p class="muted small">Code column: {account.importProfile?.codeColumn || 'Not set'}</p>
+              </details>
+            {/if}
           </article>
         {/each}
       </div>
@@ -326,19 +395,68 @@
     border: 1px solid rgba(10, 61, 89, 0.08);
     border-radius: 1rem;
     background: rgba(255, 255, 255, 0.64);
-    padding: 0.9rem;
+    padding: 1rem;
+    display: grid;
+    gap: 0.95rem;
+  }
+
+  .account-card-main {
+    display: grid;
+    grid-template-columns: minmax(17rem, 20rem) minmax(0, 1fr);
+    gap: 1rem;
+    align-items: start;
+  }
+
+  .account-balance-panel {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 0.4rem;
+    min-height: 100%;
+    padding: 1rem;
+    border-radius: 1rem;
+    border: 1px solid rgba(15, 95, 136, 0.12);
+    background: linear-gradient(160deg, rgba(244, 249, 255, 0.96), rgba(239, 248, 244, 0.9));
+  }
+
+  .account-balance-value {
+    margin: 0;
+    font-family: 'Space Grotesk', sans-serif;
+    font-size: clamp(2rem, 3vw, 2.7rem);
+    line-height: 0.96;
+  }
+
+  .account-balance-note {
+    margin: 0;
+    max-width: 28ch;
+    color: var(--muted-foreground);
+    font-size: 0.92rem;
+  }
+
+  .account-card-content {
+    display: grid;
+    gap: 0.9rem;
+    min-width: 0;
   }
 
   .account-card-head {
     display: flex;
     align-items: flex-start;
     justify-content: space-between;
-    gap: 1rem;
+    gap: 0.9rem;
+  }
+
+  .account-title-group {
+    min-width: 0;
+  }
+
+  .account-title-group p {
+    margin: 0.3rem 0 0;
   }
 
   .account-card-actions {
     display: flex;
-    gap: 0.75rem;
+    gap: 0.55rem;
     flex-wrap: wrap;
     justify-content: flex-end;
   }
@@ -347,7 +465,7 @@
     display: flex;
     gap: 0.45rem;
     flex-wrap: wrap;
-    margin: 0.8rem 0;
+    margin: 0;
   }
 
   .pill.ok {
@@ -355,23 +473,50 @@
     color: var(--ok);
   }
 
-  .account-metrics {
+  .account-meta-grid {
     display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 0.8rem;
-    margin-bottom: 0.75rem;
+    margin: 0;
+  }
+
+  .account-meta-item {
+    margin: 0;
+    padding: 0.85rem 0.9rem;
+    border-radius: 0.95rem;
+    border: 1px solid rgba(10, 61, 89, 0.08);
+    background: rgba(255, 255, 255, 0.7);
+  }
+
+  .account-meta-item dt {
+    margin: 0 0 0.35rem;
+    font-size: 0.76rem;
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    color: var(--muted-foreground);
+    font-weight: 700;
+  }
+
+  .account-meta-item dd {
+    margin: 0;
+    font-weight: 700;
+    overflow-wrap: anywhere;
+  }
+
+  .account-meta-note {
+    display: block;
+    margin-top: 0.3rem;
+    color: var(--muted-foreground);
+    font-size: 0.86rem;
+    overflow-wrap: anywhere;
   }
 
   .metric-label {
-    margin: 0 0 0.2rem;
+    margin: 0;
     font-size: 0.8rem;
     color: var(--muted-foreground);
     text-transform: uppercase;
-    letter-spacing: 0.05em;
-  }
-
-  .metric-value {
-    margin: 0;
+    letter-spacing: 0.08em;
     font-weight: 700;
   }
 
@@ -390,22 +535,64 @@
 
   .muted {
     color: var(--muted-foreground);
+    margin: 0;
   }
 
   .small {
     font-size: 0.84rem;
   }
 
-  .inline-link,
   .text-link {
     color: var(--brand-strong);
     text-decoration: none;
     font-weight: 700;
   }
 
+  .inline-link {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.48rem 0.8rem;
+    border-radius: 999px;
+    border: 1px solid rgba(10, 61, 89, 0.12);
+    background: rgba(255, 255, 255, 0.94);
+    color: var(--brand-strong);
+    text-decoration: none;
+    font-weight: 700;
+    box-shadow: 0 8px 18px rgba(17, 35, 52, 0.04);
+  }
+
   .inline-link:hover,
   .text-link:hover {
     text-decoration: underline;
+  }
+
+  .inline-link:hover {
+    text-decoration: none;
+    background: #f7fbff;
+    border-color: rgba(15, 95, 136, 0.18);
+  }
+
+  .advanced-panel {
+    border-top: 1px solid rgba(10, 61, 89, 0.08);
+    padding-top: 0.9rem;
+  }
+
+  .advanced-panel summary {
+    cursor: pointer;
+    font-weight: 700;
+    color: var(--brand-strong);
+  }
+
+  .advanced-panel p + p {
+    margin-top: 0.35rem;
+  }
+
+  .positive {
+    color: var(--ok);
+  }
+
+  .negative {
+    color: var(--bad);
   }
 
   @media (max-width: 980px) {
@@ -415,7 +602,8 @@
     }
 
     .hero-stats,
-    .account-metrics {
+    .account-meta-grid,
+    .account-card-main {
       grid-template-columns: 1fr;
     }
 
@@ -425,6 +613,10 @@
 
     .account-card-actions {
       justify-content: flex-start;
+    }
+
+    .account-balance-note {
+      max-width: none;
     }
   }
 </style>
