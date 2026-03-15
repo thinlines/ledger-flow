@@ -13,6 +13,9 @@ export type NormalizedRule<T extends EditableRule> = Omit<T, 'name' | 'condition
   actions: RuleAction[];
 };
 
+const PAYEE_OPERATORS = new Set<RuleCondition['operator']>(['exact', 'contains']);
+const DATE_OPERATORS = new Set<RuleCondition['operator']>(['on_or_after', 'before', 'between']);
+
 export function createDefaultRuleConditions(payee = ''): RuleCondition[] {
   return [{ field: 'payee', operator: 'exact', value: payee, joiner: 'and' }];
 }
@@ -30,8 +33,18 @@ export function suggestedRuleName(conditions: RuleCondition[]): string {
   if (!value) return '';
 
   let base = value;
-  if (first.operator === 'contains') {
-    base = `Contains "${value}"`;
+  if (first.field === 'payee') {
+    if (first.operator === 'contains') {
+      base = `Contains "${value}"`;
+    }
+  } else if (first.field === 'date') {
+    if (first.operator === 'on_or_after') {
+      base = `On or after ${value}`;
+    } else if (first.operator === 'before') {
+      base = `Before ${value}`;
+    } else if (first.operator === 'between') {
+      base = first.secondaryValue?.trim() ? `${value} to ${first.secondaryValue.trim()}` : value;
+    }
   }
 
   if (rest.length > 0) {
@@ -46,12 +59,20 @@ export function normalizeRuleName(name: string | null | undefined, conditions: R
 }
 
 export function normalizeConditions(conditions: RuleCondition[]): RuleCondition[] {
-  return (conditions || []).map((condition, index) => ({
-    field: condition.field ?? 'payee',
-    operator: condition.operator ?? 'exact',
-    value: condition.value ?? '',
-    joiner: index === 0 ? 'and' : (condition.joiner ?? 'and')
-  }));
+  return (conditions || []).map((condition, index) => {
+    const field = condition.field === 'date' ? 'date' : 'payee';
+    const operator =
+      field === 'date'
+        ? DATE_OPERATORS.has(condition.operator) ? condition.operator : 'on_or_after'
+        : PAYEE_OPERATORS.has(condition.operator) ? condition.operator : 'exact';
+    return {
+      field,
+      operator,
+      value: condition.value ?? '',
+      secondaryValue: condition.secondaryValue ?? '',
+      joiner: index === 0 ? 'and' : (condition.joiner ?? 'and')
+    };
+  });
 }
 
 export function normalizeActions(actions: RuleAction[]): RuleAction[] {
@@ -81,8 +102,28 @@ export function ensureSetAccountAction(actions: RuleAction[], fallbackAccount: s
 
 export function sanitizedConditions(conditions: RuleCondition[]): RuleCondition[] {
   return normalizeConditions(conditions)
-    .map((condition) => ({ ...condition, value: condition.value.trim() }))
-    .filter((condition) => condition.value.length > 0)
+    .map((condition) => {
+      if (condition.field === 'date') {
+        return {
+          ...condition,
+          value: normalizeDateValue(condition.value),
+          secondaryValue: normalizeDateValue(condition.secondaryValue ?? '')
+        };
+      }
+      return {
+        ...condition,
+        value: condition.value.trim(),
+        secondaryValue: ''
+      };
+    })
+    .filter((condition) => {
+      if (condition.field === 'date') {
+        if (!condition.value) return false;
+        if (condition.operator === 'between') return Boolean(condition.secondaryValue);
+        return true;
+      }
+      return condition.value.length > 0;
+    })
     .map((condition, index) => ({ ...condition, joiner: index === 0 ? 'and' : condition.joiner }));
 }
 
@@ -112,11 +153,24 @@ export function extractSetAccount(actions: RuleAction[]): string {
 }
 
 function matchesCondition(condition: RuleCondition, context: Record<string, string>): boolean {
-  const expected = condition.value.trim().toLowerCase();
-  const actual = (context[condition.field] ?? '').trim().toLowerCase();
+  if (condition.field === 'payee') {
+    const expected = condition.value.trim().toLowerCase();
+    const actual = (context.payee ?? '').trim().toLowerCase();
+    if (condition.operator === 'exact') return actual === expected;
+    if (condition.operator === 'contains') return actual.includes(expected);
+    return false;
+  }
 
-  if (condition.operator === 'exact') return actual === expected;
-  if (condition.operator === 'contains') return actual.includes(expected);
+  const actualDate = normalizeDateValue(context.date ?? '');
+  const expectedDate = normalizeDateValue(condition.value);
+  if (!actualDate || !expectedDate) return false;
+  if (condition.operator === 'on_or_after') return actualDate >= expectedDate;
+  if (condition.operator === 'before') return actualDate < expectedDate;
+  if (condition.operator === 'between') {
+    const secondaryDate = normalizeDateValue(condition.secondaryValue ?? '');
+    if (!secondaryDate) return false;
+    return actualDate >= expectedDate && actualDate <= secondaryDate;
+  }
   return false;
 }
 
@@ -146,4 +200,12 @@ export function findMatchingRule<T extends Pick<EditableRule, 'conditions' | 'en
     if (ruleMatches(rule, context)) return rule;
   }
   return null;
+}
+
+function normalizeDateValue(value: string): string {
+  const normalized = value.trim().replace(/\//g, '-');
+  if (!normalized) return '';
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(normalized)) return '';
+  const parsed = new Date(`${normalized}T00:00:00`);
+  return Number.isNaN(parsed.getTime()) ? '' : normalized;
 }

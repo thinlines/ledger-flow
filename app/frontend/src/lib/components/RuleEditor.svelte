@@ -13,13 +13,27 @@
 
   let actionTypeRefs: Array<HTMLSelectElement | null> = [];
 
+  function defaultOperatorForField(field: RuleCondition['field']): RuleCondition['operator'] {
+    return field === 'date' ? 'on_or_after' : 'exact';
+  }
+
+  function normalizeCondition(condition: RuleCondition, index: number): RuleCondition {
+    const field = condition.field === 'date' ? 'date' : 'payee';
+    const validOperator =
+      field === 'date'
+        ? ['on_or_after', 'before', 'between'].includes(condition.operator)
+        : ['exact', 'contains'].includes(condition.operator);
+    return {
+      field,
+      operator: validOperator ? condition.operator : defaultOperatorForField(field),
+      value: condition.value ?? '',
+      secondaryValue: condition.secondaryValue ?? '',
+      joiner: index === 0 ? 'and' : (condition.joiner ?? 'and')
+    };
+  }
+
   function normalizeConditions(items: RuleCondition[]): RuleCondition[] {
-    return items.map((c, i) => ({
-      field: c.field ?? 'payee',
-      operator: c.operator ?? 'exact',
-      value: c.value ?? '',
-      joiner: i === 0 ? 'and' : (c.joiner ?? 'and')
-    }));
+    return items.map((condition, index) => normalizeCondition(condition, index));
   }
 
   function getAccount(): string {
@@ -50,6 +64,28 @@
     conditions = conditions.map((condition, i) =>
       i === index ? { ...condition, joiner: condition.joiner === 'and' ? 'or' : 'and' } : condition
     );
+  }
+
+  function setConditionField(index: number, field: RuleCondition['field']) {
+    const nextField = field === 'date' ? 'date' : 'payee';
+    conditions[index] = {
+      ...normalizeCondition(conditions[index], index),
+      field: nextField,
+      operator: defaultOperatorForField(nextField),
+      value: '',
+      secondaryValue: ''
+    };
+    conditions = [...conditions];
+  }
+
+  function setConditionOperator(index: number, operator: RuleCondition['operator']) {
+    const current = normalizeCondition(conditions[index], index);
+    conditions[index] = {
+      ...current,
+      operator,
+      secondaryValue: operator === 'between' ? current.secondaryValue ?? '' : ''
+    };
+    conditions = [...conditions];
   }
 
   function createExtraAction(type: RuleAction['type'] = 'add_tag'): RuleAction {
@@ -97,14 +133,31 @@
         {:else}
           <button class="joiner-pill" type="button" on:click={() => toggleJoiner(i)}>{condition.joiner.toUpperCase()}</button>
         {/if}
-        <select class="condition-field-select" bind:value={condition.field}>
+        <select class="condition-field-select" value={condition.field} on:change={(e) => setConditionField(i, (e.currentTarget as HTMLSelectElement).value as RuleCondition['field'])}>
           <option value="payee">Payee</option>
+          <option value="date">Date</option>
         </select>
-        <select class="condition-operator-select" bind:value={condition.operator}>
-          <option value="exact">is exactly</option>
-          <option value="contains">contains</option>
+        <select class="condition-operator-select" value={condition.operator} on:change={(e) => setConditionOperator(i, (e.currentTarget as HTMLSelectElement).value as RuleCondition['operator'])}>
+          {#if condition.field === 'date'}
+            <option value="on_or_after">is on or after</option>
+            <option value="between">is between</option>
+            <option value="before">is before</option>
+          {:else}
+            <option value="exact">is exactly</option>
+            <option value="contains">contains</option>
+          {/if}
         </select>
-        <input class="condition-value-input" bind:value={condition.value} placeholder="Type a payee or keyword" />
+        <div class="condition-values">
+          {#if condition.field === 'date'}
+            <input class="condition-value-input" type="date" bind:value={condition.value} />
+            {#if condition.operator === 'between'}
+              <span class="condition-date-divider">and</span>
+              <input class="condition-value-input" type="date" bind:value={condition.secondaryValue} />
+            {/if}
+          {:else}
+            <input class="condition-value-input" bind:value={condition.value} placeholder="Type a payee or keyword" />
+          {/if}
+        </div>
         <button class="btn row-button" type="button" on:click={() => removeCondition(i)} disabled={conditions.length <= 1}>
           Remove
         </button>
@@ -244,6 +297,19 @@
   .action-row input {
     width: 100%;
     min-width: 0;
+  }
+
+  .condition-values {
+    display: flex;
+    gap: 0.45rem;
+    align-items: center;
+    min-width: 0;
+  }
+
+  .condition-date-divider {
+    flex-shrink: 0;
+    font-size: 0.85rem;
+    color: var(--muted-foreground);
   }
 
   .condition-field-select {

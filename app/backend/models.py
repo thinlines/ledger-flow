@@ -45,6 +45,7 @@ class RuleCondition(BaseModel):
     field: str
     operator: str
     value: str
+    secondaryValue: str | None = None
     joiner: str | None = None
 
 
@@ -73,6 +74,15 @@ class RuleUpdateRequest(BaseModel):
     conditions: list[RuleCondition] | None = None
     actions: list[RuleAction] | None = None
     enabled: bool | None = None
+
+
+class RuleHistoryScanRequest(BaseModel):
+    journalPath: str
+
+
+class RuleHistoryApplyRequest(BaseModel):
+    stageId: str
+    selectedCandidateIds: list[str]
 
 
 class CreateAccountRequest(BaseModel):

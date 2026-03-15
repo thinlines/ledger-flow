@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
+from datetime import UTC, date as calendar_date, datetime
 from pathlib import Path
 from uuid import uuid4
 
 
 RULES_FILE = "20-match-rules.ndjson"
-ALLOWED_FIELDS = {"payee"}
-ALLOWED_OPERATORS = {"exact", "contains"}
+ALLOWED_FIELDS = {"payee", "date"}
+FIELD_OPERATORS = {
+    "payee": {"exact", "contains"},
+    "date": {"on_or_after", "before", "between"},
+}
 ALLOWED_JOINERS = {"and", "or"}
 ALLOWED_ACTION_TYPES = {"set_account", "add_tag", "set_kv", "append_comment"}
 
@@ -35,6 +38,16 @@ def _suggest_rule_name(conditions: list[dict]) -> str:
             base = value
         elif first.get("operator") == "contains":
             base = f'Contains "{value}"'
+        else:
+            base = value
+    elif first.get("field") == "date":
+        if first.get("operator") == "on_or_after":
+            base = f"On or after {value}"
+        elif first.get("operator") == "before":
+            base = f"Before {value}"
+        elif first.get("operator") == "between":
+            end_value = str(first.get("secondaryValue", "")).strip()
+            base = f"{value} to {end_value}" if end_value else value
         else:
             base = value
     else:
@@ -95,6 +108,16 @@ def _parse_legacy_payee_rules(accounts_dat: Path) -> list[dict]:
     return out
 
 
+def _normalize_date_value(value: str) -> str | None:
+    cleaned = value.strip()
+    if not cleaned:
+        return None
+    try:
+        return calendar_date.fromisoformat(cleaned.replace("/", "-")).isoformat()
+    except ValueError:
+        return None
+
+
 def _normalize_conditions(raw_conditions: list[dict] | None, pattern: str | None = None) -> list[dict]:
     if raw_conditions is None:
         fallback = (pattern or "").strip()
@@ -107,19 +130,43 @@ def _normalize_conditions(raw_conditions: list[dict] | None, pattern: str | None
         field = str(c.get("field", "")).strip().lower()
         operator = str(c.get("operator", "")).strip().lower()
         value = str(c.get("value", "")).strip()
+        secondary_value = str(c.get("secondaryValue", "")).strip()
         joiner = str(c.get("joiner", "and")).strip().lower()
-        if field not in ALLOWED_FIELDS or operator not in ALLOWED_OPERATORS or not value:
+        if field not in ALLOWED_FIELDS or operator not in FIELD_OPERATORS.get(field, set()):
             continue
+
+        normalized_value = value
+        normalized_secondary_value = None
+        if field == "date":
+            normalized_value = _normalize_date_value(value) or ""
+            if operator == "between":
+                normalized_secondary_value = _normalize_date_value(secondary_value)
+                if (
+                    not normalized_value
+                    or not normalized_secondary_value
+                ):
+                    continue
+                if normalized_value > normalized_secondary_value:
+                    normalized_value, normalized_secondary_value = (
+                        normalized_secondary_value,
+                        normalized_value,
+                    )
+            elif not normalized_value:
+                continue
+        elif not value:
+            continue
+
         if joiner not in ALLOWED_JOINERS:
             joiner = "and"
-        normalized.append(
-            {
-                "field": field,
-                "operator": operator,
-                "value": value,
-                "joiner": "and" if not normalized else joiner,
-            }
-        )
+        item = {
+            "field": field,
+            "operator": operator,
+            "value": normalized_value,
+            "joiner": "and" if not normalized else joiner,
+        }
+        if normalized_secondary_value:
+            item["secondaryValue"] = normalized_secondary_value
+        normalized.append(item)
     return normalized
 
 
@@ -234,13 +281,32 @@ def ensure_rules_store(rules_dir: Path, accounts_dat: Path) -> Path:
 def _matches_condition(condition: dict, context: dict[str, str]) -> bool:
     field = condition["field"]
     operator = condition["operator"]
-    expected = condition["value"].strip().lower()
-    actual = context.get(field, "").strip().lower()
+    expected = condition["value"].strip()
+    actual = context.get(field, "").strip()
 
-    if operator == "exact":
-        return actual == expected
-    if operator == "contains":
-        return expected in actual
+    if field == "payee":
+        expected_lower = expected.lower()
+        actual_lower = actual.lower()
+        if operator == "exact":
+            return actual_lower == expected_lower
+        if operator == "contains":
+            return expected_lower in actual_lower
+        return False
+
+    if field == "date":
+        actual_date = _normalize_date_value(actual)
+        expected_date = _normalize_date_value(expected)
+        if not actual_date or not expected_date:
+            return False
+        if operator == "on_or_after":
+            return actual_date >= expected_date
+        if operator == "before":
+            return actual_date < expected_date
+        if operator == "between":
+            secondary_value = _normalize_date_value(str(condition.get("secondaryValue", "")))
+            if not secondary_value:
+                return False
+            return expected_date <= actual_date <= secondary_value
     return False
 
 

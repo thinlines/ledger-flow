@@ -1,7 +1,8 @@
 export type RuleCondition = {
-  field: 'payee';
-  operator: 'exact' | 'contains';
+  field: 'payee' | 'date';
+  operator: 'exact' | 'contains' | 'on_or_after' | 'before' | 'between';
   value: string;
+  secondaryValue?: string;
   joiner: 'and' | 'or';
 };
 

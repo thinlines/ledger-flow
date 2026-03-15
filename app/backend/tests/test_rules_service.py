@@ -90,6 +90,43 @@ def test_rule_supports_or_joiner(tmp_path: Path) -> None:
     assert matched["id"] == rule["id"]
 
 
+def test_rule_supports_date_conditions(tmp_path: Path) -> None:
+    rules_dir = tmp_path / "rules"
+    rules_dir.mkdir(parents=True, exist_ok=True)
+    accounts = rules_dir / "10-accounts.dat"
+    accounts.write_text("", encoding="utf-8")
+    path = ensure_rules_store(rules_dir, accounts)
+
+    rule = create_rule(
+        path,
+        conditions=[
+            {"field": "payee", "operator": "contains", "value": "coffee"},
+            {
+                "field": "date",
+                "operator": "between",
+                "value": "2026-01-01",
+                "secondaryValue": "2026-12-31",
+                "joiner": "and",
+            },
+        ],
+        actions=[{"type": "set_account", "account": "Expenses:Coffee"}],
+        enabled=True,
+    )
+
+    matched = find_matching_rule(
+        {"payee": "Neighborhood Coffee Shop", "date": "2026-06-15"},
+        load_rules(path),
+    )
+    assert matched is not None
+    assert matched["id"] == rule["id"]
+
+    not_matched = find_matching_rule(
+        {"payee": "Neighborhood Coffee Shop", "date": "2025-12-31"},
+        load_rules(path),
+    )
+    assert not_matched is None
+
+
 def test_rule_supports_multiple_action_types(tmp_path: Path) -> None:
     rules_dir = tmp_path / "rules"
     rules_dir.mkdir(parents=True, exist_ok=True)

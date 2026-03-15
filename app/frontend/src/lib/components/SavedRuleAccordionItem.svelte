@@ -17,6 +17,7 @@
   export let onSave: () => void | Promise<void> = () => {};
   export let onNameCommit: () => void | Promise<void> = () => {};
   export let onRemove: () => void | Promise<void> = () => {};
+  export let onApplyHistory: () => void | Promise<void> = () => {};
   export let onMoveUp: () => void = () => {};
   export let onMoveDown: () => void = () => {};
   export let onDragStart: () => void = () => {};
@@ -37,6 +38,14 @@
         const value = condition.value.trim();
         if (!value) return '';
         const joiner = index === 0 ? '' : `${(condition.joiner ?? 'and').toUpperCase()} `;
+        if (condition.field === 'date') {
+          if (condition.operator === 'on_or_after') return `${joiner}Date is on or after ${value}`;
+          if (condition.operator === 'before') return `${joiner}Date is before ${value}`;
+          if (condition.operator === 'between' && condition.secondaryValue?.trim()) {
+            return `${joiner}Date is between ${value} and ${condition.secondaryValue.trim()}`;
+          }
+          return `${joiner}Date is ${value}`;
+        }
         const operator = condition.operator === 'contains' ? 'contains' : 'is';
         return `${joiner}Payee ${operator} "${value}"`;
       })
@@ -177,6 +186,9 @@
               <button class="btn utility-btn" on:click={() => onMoveUp()} disabled={ruleIndex === 0}>Move Earlier</button>
               <button class="btn utility-btn" on:click={() => onMoveDown()} disabled={ruleIndex === ruleCount - 1}>
                 Move Later
+              </button>
+              <button class="btn utility-btn" on:click={() => void onApplyHistory()} disabled={loading}>
+                Apply to Past Transactions
               </button>
             </div>
 
