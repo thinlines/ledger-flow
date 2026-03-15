@@ -103,6 +103,8 @@
   let newAccountInputEl: HTMLInputElement | null = null;
   let createAccountContext: { mode: 'rule' | 'group'; groupKey: string | null } = { mode: 'rule', groupKey: null };
   let statusFilter: 'all' | 'ready' | 'needs' = 'all';
+  let lastApplyResult: UnknownStage['result'] = null;
+  let lastAppliedGroups: UnknownGroup[] = [];
 
   $: selectedRuleAccount = extractSetAccount(ruleActions).trim();
   $: existingRuleCandidates =
@@ -159,14 +161,12 @@
   async function scan() {
     error = '';
     stage = null;
+    statusFilter = 'all';
+    lastApplyResult = null;
+    lastAppliedGroups = [];
     loading = true;
     try {
-      const data = await apiPost<UnknownStage>('/api/unknowns/scan', { journalPath });
-      stage = data;
-      mappings = {};
-      for (const g of data.groups ?? []) {
-        if (g.suggestedAccount) mappings[g.groupKey] = g.suggestedAccount;
-      }
+      await refreshUnknownStage({ preserveApplyResult: false, resetFilter: false });
     } catch (e) {
       error = String(e);
     } finally {
@@ -189,14 +189,29 @@
     matchedRuleId: string | null;
   };
 
+  let reviewRowsData: ReviewRow[] = [];
+  let filteredReviewRows: ReviewRow[] = [];
+  let totalReviewTransactions = 0;
+  let readyReviewTransactions = 0;
+  let needsReviewTransactions = 0;
+  let mappedGroupCount = 0;
+
+  $: reviewRowsData = buildReviewRows(stage?.groups ?? []);
+  $: filteredReviewRows =
+    statusFilter === 'all' ? reviewRowsData : reviewRowsData.filter((row) => row.status === statusFilter);
+  $: totalReviewTransactions = reviewRowsData.length;
+  $: readyReviewTransactions = reviewRowsData.filter((row) => row.status === 'ready').length;
+  $: needsReviewTransactions = reviewRowsData.filter((row) => row.status === 'needs').length;
+  $: mappedGroupCount = (stage?.groups ?? []).filter((group) => effectiveAccountFor(group)).length;
+
   function groupStatus(group: UnknownGroup): 'ready' | 'needs' {
     return effectiveAccountFor(group) ? 'ready' : 'needs';
   }
 
-  function reviewRows(): ReviewRow[] {
+  function buildReviewRows(groups: UnknownGroup[]): ReviewRow[] {
     const rows: ReviewRow[] = [];
 
-    for (const group of stage?.groups ?? []) {
+    for (const group of groups) {
       for (const txn of group.txns) {
         rows.push({
           rowId: txn.txnId,
@@ -214,22 +229,40 @@
     return rows;
   }
 
-  function visibleRows(): ReviewRow[] {
-    const rows = reviewRows();
-    if (statusFilter === 'all') return rows;
-    return rows.filter((row) => row.status === statusFilter);
+  function stageMappingPayload(currentMappings: Record<string, string>) {
+    return Object.entries(currentMappings)
+      .filter(([, value]) => value && value.trim().length > 0)
+      .map(([groupKey, chosenAccount]) => ({ groupKey, chosenAccount }));
   }
 
-  function totalTransactionCount(rows: ReviewRow[] = reviewRows()): number {
-    return rows.length;
+  function clearApplyFeedback() {
+    lastApplyResult = null;
+    lastAppliedGroups = [];
   }
 
-  function readyTransactionCount(): number {
-    return reviewRows().filter((row) => row.status === 'ready').length;
+  function hydrateStage(nextStage: UnknownStage, { resetFilter }: { resetFilter: boolean }) {
+    stage = nextStage;
+    if (resetFilter) statusFilter = 'all';
+    mappings = {};
+    for (const group of nextStage.groups ?? []) {
+      if (group.suggestedAccount) mappings[group.groupKey] = group.suggestedAccount;
+    }
   }
 
-  function needsTransactionCount(): number {
-    return reviewRows().filter((row) => row.status === 'needs').length;
+  async function refreshUnknownStage({
+    preserveApplyResult,
+    resetFilter
+  }: {
+    preserveApplyResult: boolean;
+    resetFilter: boolean;
+  }) {
+    const data = await apiPost<UnknownStage>('/api/unknowns/scan', { journalPath });
+    if (!preserveApplyResult) {
+      lastApplyResult = null;
+      lastAppliedGroups = [];
+    }
+    hydrateStage(data, { resetFilter });
+    return data;
   }
 
   function parseJournalDate(value: string): number | null {
@@ -257,13 +290,16 @@
   }
 
   function warningGroupLabel(groupKey: string): string {
-    const group = stage?.groups.find((candidate) => candidate.groupKey === groupKey);
+    const group =
+      stage?.groups.find((candidate) => candidate.groupKey === groupKey) ??
+      lastAppliedGroups.find((candidate) => candidate.groupKey === groupKey);
     return group ? groupLabel(group) : groupKey;
   }
 
   function syncGroupsFromRules(nextRules: Rule[]) {
     if (!stage) return;
 
+    clearApplyFeedback();
     const nextMappings = { ...mappings };
     for (const group of stage.groups ?? []) {
       const previousSuggested = (group.suggestedAccount ?? '').trim();
@@ -285,33 +321,24 @@
     stage = { ...stage, groups: [...stage.groups] };
   }
 
-  async function stageMappings() {
-    if (!stage?.stageId) return;
-    loading = true;
-    error = '';
-    try {
-      const payload = Object.entries(mappings)
-        .filter(([, value]) => value && value.trim().length > 0)
-        .map(([groupKey, chosenAccount]) => ({ groupKey, chosenAccount }));
-      stage = await apiPost<UnknownStage>('/api/unknowns/stage-mappings', { stageId: stage.stageId, mappings: payload });
-    } catch (e) {
-      error = String(e);
-    } finally {
-      loading = false;
-    }
-  }
-
   async function applyMappings() {
     if (!stage?.stageId) return;
     loading = true;
     error = '';
     try {
       const stageId = stage.stageId;
-      const payload = Object.entries(mappings)
-        .filter(([, value]) => value && value.trim().length > 0)
-        .map(([groupKey, chosenAccount]) => ({ groupKey, chosenAccount }));
-      stage = await apiPost<UnknownStage>('/api/unknowns/stage-mappings', { stageId, mappings: payload });
-      stage = await apiPost<UnknownStage>('/api/unknowns/apply', { stageId });
+      const payload = stageMappingPayload(mappings);
+      await apiPost<UnknownStage>('/api/unknowns/stage-mappings', { stageId, mappings: payload });
+      const appliedStage = await apiPost<UnknownStage>('/api/unknowns/apply', { stageId });
+      lastApplyResult = appliedStage.result ?? null;
+      lastAppliedGroups = appliedStage.groups ?? [];
+
+      try {
+        await refreshUnknownStage({ preserveApplyResult: true, resetFilter: false });
+      } catch (refreshError) {
+        stage = appliedStage;
+        error = `Changes were applied, but the review queue could not be refreshed: ${String(refreshError)}`;
+      }
     } catch (e) {
       error = String(e);
     } finally {
@@ -509,6 +536,8 @@
   }
 
   function setAccountForGroup(groupKey: string, account: string) {
+    if ((mappings[groupKey] || '') === account) return;
+    clearApplyFeedback();
     mappings = { ...mappings, [groupKey]: account };
   }
 
@@ -559,7 +588,7 @@
 
       if (createAccountContext.mode === 'group') {
         if (createAccountContext.groupKey) {
-          mappings = { ...mappings, [createAccountContext.groupKey]: newAccountName };
+          setAccountForGroup(createAccountContext.groupKey, newAccountName);
         }
         showCreateAccountModal = false;
         return;
@@ -621,7 +650,7 @@
       </div>
     </details>
 
-    <button class="btn btn-primary" disabled={loading || !journalPath} on:click={scan}>
+    <button class="btn btn-primary" type="button" disabled={loading || !journalPath} on:click={scan}>
       {loading ? 'Scanning...' : 'Find Transactions to Review'}
     </button>
   </section>
@@ -635,26 +664,36 @@
           <p class="muted">
             {(stage.groups?.length ?? 0) === 0
               ? `No uncategorized transactions were found in ${pathLabel(journalPath)}.`
-              : `${totalTransactionCount()} transactions in ${pathLabel(journalPath)}.`}
+              : `${totalReviewTransactions} transactions in ${pathLabel(journalPath)}.`}
           </p>
         </div>
         <div class="review-summary-pills">
-          <span class="pill warn">{needsTransactionCount()} need category</span>
-          <span class="pill ok">{readyTransactionCount()} ready</span>
-          <span class="pill">{totalTransactionCount()} transactions</span>
+          <span class="pill warn">{needsReviewTransactions} need category</span>
+          <span class="pill ok">{readyReviewTransactions} ready</span>
+          <span class="pill">{totalReviewTransactions} transactions</span>
         </div>
       </div>
 
       {#if (stage.groups?.length ?? 0) > 0}
         <div class="review-toolbar">
           <div class="filters">
-            <button class="btn" class:active-filter={statusFilter === 'needs'} on:click={() => (statusFilter = 'needs')}>
+            <button
+              class="btn"
+              type="button"
+              class:active-filter={statusFilter === 'needs'}
+              on:click={() => (statusFilter = 'needs')}
+            >
               Needs category
             </button>
-            <button class="btn" class:active-filter={statusFilter === 'ready'} on:click={() => (statusFilter = 'ready')}>
+            <button
+              class="btn"
+              type="button"
+              class:active-filter={statusFilter === 'ready'}
+              on:click={() => (statusFilter = 'ready')}
+            >
               Ready
             </button>
-            <button class="btn" class:active-filter={statusFilter === 'all'} on:click={() => (statusFilter = 'all')}>
+            <button class="btn" type="button" class:active-filter={statusFilter === 'all'} on:click={() => (statusFilter = 'all')}>
               All
             </button>
           </div>
@@ -662,16 +701,13 @@
           {#if !stage.result}
             <div class="review-actions">
               <p class="muted review-hint">
-                {#if stage.summary}
-                  Estimated updates: {stage.summary.txnUpdates} transactions.
-                {:else}
-                  Assign categories inline, preview the update count, then apply the changes.
-                {/if}
+                Assignments preview automatically. Applying writes {readyReviewTransactions} categorized
+                {readyReviewTransactions === 1 ? ' transaction' : ' transactions'} from {mappedGroupCount}
+                {mappedGroupCount === 1 ? ' payee group' : ' payee groups'} back to {pathLabel(journalPath)}.
               </p>
               <div class="actions">
-                <button class="btn" disabled={loading || readyTransactionCount() === 0} on:click={stageMappings}>Preview Changes</button>
-                <button class="btn btn-primary" disabled={loading || readyTransactionCount() === 0} on:click={applyMappings}>
-                  Apply Changes
+                <button class="btn btn-primary" type="button" disabled={loading || readyReviewTransactions === 0} on:click={applyMappings}>
+                  Apply {readyReviewTransactions} {readyReviewTransactions === 1 ? 'Change' : 'Changes'}
                 </button>
               </div>
             </div>
@@ -680,15 +716,15 @@
       {/if}
     </section>
 
-    {#if stage.result}
+    {#if lastApplyResult}
       <section class="view-card result-card">
         <p class="eyebrow">Result</p>
         <h3>Changes applied</h3>
-        <p class="muted">Updated transactions: {stage.result.updatedTxnCount}</p>
-        {#if stage.result.warnings?.length}
+        <p class="muted">Updated transactions: {lastApplyResult.updatedTxnCount}</p>
+        {#if lastApplyResult.warnings?.length}
           <h4>Warnings</h4>
           <ul class="warning-list">
-            {#each stage.result.warnings as w}
+            {#each lastApplyResult.warnings as w}
               <li>{warningGroupLabel(w.groupKey)}: {w.warning}</li>
             {/each}
           </ul>
@@ -697,7 +733,7 @@
     {/if}
 
     {#if (stage.groups?.length ?? 0) > 0}
-      {#if visibleRows().length === 0}
+      {#if filteredReviewRows.length === 0}
         <section class="view-card">
           <p class="muted">No review groups match the current filter.</p>
         </section>
@@ -710,7 +746,7 @@
             <span>Category</span>
             <span>Automation</span>
           </div>
-          {#each visibleRows() as row}
+          {#each filteredReviewRows as row (row.rowId)}
             <article class="view-card review-row" class:row-ready={row.status === 'ready'} class:row-needs={row.status === 'needs'}>
               <div class="review-row-status">
                 <p class="status-copy">
@@ -751,7 +787,7 @@
               </div>
 
               <div class="review-row-actions">
-                <button class="btn" on:click={() => openRuleModal(row.groupKey)}>
+                <button class="btn" type="button" on:click={() => openRuleModal(row.groupKey)}>
                   {row.matchedRuleId ? 'Edit rule' : 'Save rule'}
                 </button>
               </div>
@@ -845,9 +881,10 @@
       />
       {#if ruleError}<p class="error-text">{ruleError}</p>{/if}
       <div class="actions">
-        <button class="btn" on:click={() => (showRuleModal = false)}>Cancel</button>
+        <button class="btn" type="button" on:click={() => (showRuleModal = false)}>Cancel</button>
         <button
           class="btn btn-primary"
+          type="button"
           disabled={loading || !sanitizedConditions(ruleConditions).length || !extractSetAccount(ruleActions)}
           on:click={saveRule}
         >
@@ -894,8 +931,13 @@
       </div>
       {#if createAccountError}<p class="error-text">{createAccountError}</p>{/if}
       <div class="actions">
-        <button class="btn" on:click={closeCreateAccountModal}>Cancel</button>
-        <button class="btn btn-primary" disabled={loading || !newAccountName || !newAccountType} on:click={createAccountAndContinue}>
+        <button class="btn" type="button" on:click={closeCreateAccountModal}>Cancel</button>
+        <button
+          class="btn btn-primary"
+          type="button"
+          disabled={loading || !newAccountName || !newAccountType}
+          on:click={createAccountAndContinue}
+        >
           {createAccountContext.mode === 'rule' ? 'Create Account and Save Rule' : 'Create Account'}
         </button>
       </div>
