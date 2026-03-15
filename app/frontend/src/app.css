@@ -236,7 +236,7 @@ body {
   font-weight: 600;
 }
 
-input,
+input:not([type='checkbox']):not([type='radio']),
 select,
 textarea {
   width: 100%;
@@ -247,11 +247,21 @@ textarea {
   background: #fff;
 }
 
-input:focus,
+input:not([type='checkbox']):not([type='radio']):focus,
 select:focus,
 textarea:focus {
   outline: 2px solid rgba(15, 95, 136, 0.24);
   border-color: var(--brand);
+}
+
+input[type='checkbox'],
+input[type='radio'] {
+  width: 1rem;
+  height: 1rem;
+  margin: 0;
+  padding: 0;
+  flex: 0 0 auto;
+  accent-color: var(--brand);
 }
 
 .pill {
