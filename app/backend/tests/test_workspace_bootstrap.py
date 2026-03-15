@@ -1,6 +1,9 @@
 from pathlib import Path
 
+from services.account_register_service import build_account_register
 from services.config_service import load_config
+from services.import_index import ImportIndex
+from services.import_service import _classify_transaction, _parse_transaction
 from services.import_service import scan_candidates
 from services.workspace_service import (
     WorkspaceManager,
@@ -357,6 +360,99 @@ def test_upsert_import_account_keeps_opening_balance_in_sync_with_ledger_account
     assert "2026-01-01 Opening balance" in updated_opening
 
 
+def test_upsert_import_account_rewrites_existing_journal_postings_to_new_ledger_account(tmp_path: Path) -> None:
+    manager = WorkspaceManager(tmp_path / "app")
+    workspace_root = tmp_path / "workspace"
+
+    manager.bootstrap_workspace(
+        workspace_path=workspace_root,
+        workspace_name="Test Books",
+        base_currency="USD",
+        start_year=2026,
+        import_accounts=[
+            {
+                "institutionId": "wells_fargo",
+                "displayName": "Wells Fargo Checking",
+                "ledgerAccount": "Assets:Bank:Checking",
+                "last4": "1234",
+            }
+        ],
+    )
+
+    config = load_config(workspace_root / "settings" / "workspace.toml")
+    account_id = next(iter(config.import_accounts))
+    journal_path = workspace_root / "journals" / "2026.journal"
+    original_txn = _parse_transaction(
+        [
+            "2026/03/01 Coffee Shop",
+            "    Assets:Bank:Checking  $-7.50",
+            "    Expenses:Food",
+        ],
+        import_account_id=account_id,
+        institution_account="Assets:Bank:Checking",
+    )
+    journal_path.write_text(
+        "2026/03/01 Coffee Shop\n"
+        f"    ; import_account_id: {account_id}\n"
+        f"    ; source_identity: {original_txn['sourceIdentity']}\n"
+        f"    ; source_payload_hash: {original_txn['sourcePayloadHash']}\n"
+        "    ; source_file_sha256: source-file-1\n"
+        "    Assets:Bank:Checking  $-7.50\n"
+        "    Expenses:Food\n",
+        encoding="utf-8",
+    )
+    ImportIndex(workspace_root / ".workflow" / "state.db").upsert_transactions(
+        import_account_id=account_id,
+        year="2026",
+        journal_path=journal_path,
+        source_file_sha256="source-file-1",
+        txns=[
+            {
+                "sourceIdentity": original_txn["sourceIdentity"],
+                "sourcePayloadHash": original_txn["sourcePayloadHash"],
+            }
+        ],
+    )
+
+    manager.upsert_import_account(
+        config,
+        {
+            "institutionId": "wells_fargo",
+            "displayName": "Primary Checking",
+            "ledgerAccount": "Assets:Bank:Primary:Checking",
+            "last4": "1234",
+        },
+        account_id=account_id,
+    )
+
+    updated_journal = journal_path.read_text(encoding="utf-8")
+    assert "Assets:Bank:Primary:Checking  $-7.50" in updated_journal
+    assert "Assets:Bank:Checking  $-7.50" not in updated_journal
+
+    reloaded = load_config(workspace_root / "settings" / "workspace.toml")
+    reparsed_txn = _parse_transaction(
+        [
+            "2026/03/01 Coffee Shop",
+            "    Assets:Bank:Primary:Checking  $-7.50",
+            "    Expenses:Food",
+        ],
+        import_account_id=account_id,
+        institution_account="Assets:Bank:Primary:Checking",
+    )
+    assert (
+        _classify_transaction(
+            reparsed_txn,
+            ImportIndex(workspace_root / ".workflow" / "state.db").get_identity_map(account_id),
+        )
+        == "duplicate"
+    )
+    assert f"; source_payload_hash: {reparsed_txn['sourcePayloadHash']}" in updated_journal
+
+    register = build_account_register(reloaded, account_id)
+    assert register["transactionCount"] == 1
+    assert register["currentBalance"] == -7.5
+
+
 def test_upsert_custom_import_account_creates_profile_and_links_tracked_account(tmp_path: Path) -> None:
     manager = WorkspaceManager(tmp_path / "app")
     workspace_root = tmp_path / "workspace"
@@ -410,6 +506,75 @@ def test_upsert_custom_import_account_creates_profile_and_links_tracked_account(
     assert "Liabilities:Cards:Capital One  USD 500.00" in opening_file.read_text(encoding="utf-8")
 
 
+def test_upsert_custom_import_account_rewrites_existing_journal_postings_to_new_ledger_account(tmp_path: Path) -> None:
+    manager = WorkspaceManager(tmp_path / "app")
+    workspace_root = tmp_path / "workspace"
+    profile = {
+        "displayName": "Capital One CSV",
+        "encoding": "utf-8",
+        "delimiter": ",",
+        "skipRows": 0,
+        "skipFooterRows": 0,
+        "reverseOrder": True,
+        "dateColumn": "Date",
+        "dateFormat": "%Y-%m-%d",
+        "descriptionColumn": "Description",
+        "amountMode": "debit_credit",
+        "debitColumn": "Debit",
+        "creditColumn": "Credit",
+        "currency": "USD",
+    }
+
+    manager.bootstrap_workspace(
+        workspace_path=workspace_root,
+        workspace_name="Test Books",
+        base_currency="USD",
+        start_year=2026,
+        import_accounts=[],
+    )
+
+    config = load_config(workspace_root / "settings" / "workspace.toml")
+    account_id, _ = manager.upsert_custom_import_account(
+        config,
+        {
+            "displayName": "Capital One Card",
+            "ledgerAccount": "Liabilities:Cards:Capital One",
+            "last4": "4242",
+            "customProfile": profile,
+        },
+    )
+
+    journal_path = workspace_root / "journals" / "2026.journal"
+    journal_path.write_text(
+        "2026/03/04 Online Shop\n"
+        f"    ; import_account_id: {account_id}\n"
+        "    Liabilities:Cards:Capital One  $-83.21\n"
+        "    Expenses:Shopping\n",
+        encoding="utf-8",
+    )
+
+    updated_config = load_config(workspace_root / "settings" / "workspace.toml")
+    manager.upsert_custom_import_account(
+        updated_config,
+        {
+            "displayName": "Capital One Card",
+            "ledgerAccount": "Liabilities:Cards:Capital One:Travel",
+            "last4": "4242",
+            "customProfile": profile,
+        },
+        account_id=account_id,
+    )
+
+    updated_journal = journal_path.read_text(encoding="utf-8")
+    assert "Liabilities:Cards:Capital One:Travel  $-83.21" in updated_journal
+    assert "Liabilities:Cards:Capital One  $-83.21" not in updated_journal
+
+    reloaded = load_config(workspace_root / "settings" / "workspace.toml")
+    register = build_account_register(reloaded, account_id)
+    assert register["transactionCount"] == 1
+    assert register["currentBalance"] == -83.21
+
+
 def test_upsert_import_account_removes_stale_custom_profile_when_switching_to_supported_template(tmp_path: Path) -> None:
     manager = WorkspaceManager(tmp_path / "app")
     workspace_root = tmp_path / "workspace"
@@ -461,6 +626,55 @@ def test_upsert_import_account_removes_stale_custom_profile_when_switching_to_su
     assert switched.import_accounts[account_id].get("import_profile_id") in {None, ""}
     assert account_id not in switched.import_profiles
     assert switched.import_accounts[account_id]["institution"] == "wells_fargo"
+
+
+def test_upsert_tracked_account_rewrites_existing_journal_postings_to_new_ledger_account(tmp_path: Path) -> None:
+    manager = WorkspaceManager(tmp_path / "app")
+    workspace_root = tmp_path / "workspace"
+
+    manager.bootstrap_workspace(
+        workspace_path=workspace_root,
+        workspace_name="Test Books",
+        base_currency="USD",
+        start_year=2026,
+        import_accounts=[],
+    )
+
+    config = load_config(workspace_root / "settings" / "workspace.toml")
+    account_id, _ = manager.upsert_tracked_account(
+        config,
+        {
+            "displayName": "Cash Wallet",
+            "ledgerAccount": "Assets:Cash:Wallet",
+        },
+    )
+
+    journal_path = workspace_root / "journals" / "2026.journal"
+    journal_path.write_text(
+        "2026/03/01 ATM Withdrawal\n"
+        "    Assets:Cash:Wallet  $-20.00\n"
+        "    Expenses:Cash\n",
+        encoding="utf-8",
+    )
+
+    updated_config = load_config(workspace_root / "settings" / "workspace.toml")
+    manager.upsert_tracked_account(
+        updated_config,
+        {
+            "displayName": "Cash Wallet",
+            "ledgerAccount": "Assets:Cash:Primary:Wallet",
+        },
+        account_id=account_id,
+    )
+
+    updated_journal = journal_path.read_text(encoding="utf-8")
+    assert "Assets:Cash:Primary:Wallet  $-20.00" in updated_journal
+    assert "Assets:Cash:Wallet  $-20.00" not in updated_journal
+
+    reloaded = load_config(workspace_root / "settings" / "workspace.toml")
+    register = build_account_register(reloaded, account_id)
+    assert register["transactionCount"] == 1
+    assert register["currentBalance"] == -20.0
 
 
 def test_ensure_journal_includes_prepends_standard_include_block(tmp_path: Path) -> None:

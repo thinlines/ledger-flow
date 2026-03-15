@@ -7,10 +7,15 @@ from pathlib import Path
 
 from .config_service import AppConfig, load_config
 from .custom_csv_service import normalize_custom_profile
+from .import_identity_service import source_payload_hash_for_lines
+from .import_index import ImportIndex
 from .institution_registry import get_template
 from .opening_balance_service import opening_balance_index, write_opening_balance
 
 TXN_START_RE = re.compile(r"^\d{4}[-/]\d{2}[-/]\d{2}")
+ACCOUNT_LINE_RE = re.compile(r"^(\s+)([^\s].*?)(\s{2,}|\t+)(.*)$")
+ACCOUNT_ONLY_RE = re.compile(r"^(\s+)([^\s].*?)\s*$")
+META_RE = re.compile(r"^\s*;\s*([^:]+):\s*(.*)$")
 JOURNAL_INCLUDE_LINES = (
     "include ../rules/10-accounts.dat",
     "include ../rules/12-tags.dat",
@@ -97,6 +102,15 @@ def ensure_journal_includes(journal_path: Path) -> None:
 
     journal_path.parent.mkdir(parents=True, exist_ok=True)
     journal_path.write_text(text, encoding="utf-8")
+
+
+def _iter_transaction_ranges(lines: list[str]) -> list[tuple[int, int]]:
+    starts = [i for i, line in enumerate(lines) if TXN_START_RE.match(line)]
+    ranges: list[tuple[int, int]] = []
+    for idx, start in enumerate(starts):
+        end = starts[idx + 1] if idx + 1 < len(starts) else len(lines)
+        ranges.append((start, end))
+    return ranges
 
 
 @dataclass(frozen=True)
@@ -568,6 +582,141 @@ class WorkspaceManager:
             opening_balance_date or existing.date,
         )
 
+    def _rewrite_posting_account(
+        self,
+        line: str,
+        source_ledger_account: str,
+        target_ledger_account: str,
+    ) -> tuple[str, bool]:
+        match = ACCOUNT_LINE_RE.match(line)
+        if match and match.group(2).strip() == source_ledger_account:
+            return (
+                f"{match.group(1)}{target_ledger_account}{match.group(3)}{match.group(4)}",
+                True,
+            )
+
+        match = ACCOUNT_ONLY_RE.match(line)
+        if match and match.group(2).strip() == source_ledger_account:
+            return (f"{match.group(1)}{target_ledger_account}", True)
+
+        return line, False
+
+    def _rewrite_transaction_source_payload_hash(
+        self,
+        txn_lines: list[str],
+        *,
+        import_account_id: str,
+        target_ledger_account: str,
+    ) -> tuple[list[str], dict | None]:
+        metadata: dict[str, str] = {}
+        source_payload_hash_idx: int | None = None
+
+        for idx, line in enumerate(txn_lines[1:], start=1):
+            match = META_RE.match(line)
+            if not match:
+                continue
+            key = match.group(1).strip().lower()
+            value = match.group(2).strip()
+            metadata[key] = value
+            if key == "source_payload_hash":
+                source_payload_hash_idx = idx
+
+        if metadata.get("import_account_id") != import_account_id:
+            return txn_lines, None
+
+        source_identity = metadata.get("source_identity")
+        if not source_identity:
+            return txn_lines, None
+
+        source_payload_hash = source_payload_hash_for_lines(txn_lines, target_ledger_account)
+        updated_lines = list(txn_lines)
+        payload_line = f"    ; source_payload_hash: {source_payload_hash}"
+        if source_payload_hash_idx is None:
+            updated_lines.insert(1, payload_line)
+        else:
+            updated_lines[source_payload_hash_idx] = payload_line
+
+        return (
+            updated_lines,
+            {
+                "sourceIdentity": source_identity,
+                "sourcePayloadHash": source_payload_hash,
+                "sourceFileSha256": metadata.get("source_file_sha256", ""),
+            },
+        )
+
+    def _migrate_journal_postings(
+        self,
+        config: AppConfig,
+        source_ledger_account: str,
+        target_ledger_account: str,
+        *,
+        import_account_id: str | None = None,
+    ) -> None:
+        source = source_ledger_account.strip()
+        target = target_ledger_account.strip()
+        if not source or not target or source == target:
+            return
+
+        db = ImportIndex(config.root_dir / ".workflow" / "state.db") if import_account_id else None
+        for journal_path in sorted(config.journal_dir.glob("*.journal")):
+            if not journal_path.exists():
+                continue
+
+            lines = journal_path.read_text(encoding="utf-8").splitlines()
+            ranges = _iter_transaction_ranges(lines)
+            if not ranges:
+                continue
+
+            updated_lines: list[str] = []
+            migrated_hashes: list[dict] = []
+            changed = False
+            cursor = 0
+            for start, end in ranges:
+                updated_lines.extend(lines[cursor:start])
+                txn_lines = list(lines[start:end])
+                txn_changed = False
+
+                for idx, line in enumerate(txn_lines):
+                    rewritten, replaced = self._rewrite_posting_account(line, source, target)
+                    if not replaced:
+                        continue
+                    txn_lines[idx] = rewritten
+                    txn_changed = True
+
+                if txn_changed and import_account_id:
+                    txn_lines, payload_update = self._rewrite_transaction_source_payload_hash(
+                        txn_lines,
+                        import_account_id=import_account_id,
+                        target_ledger_account=target,
+                    )
+                    if payload_update is not None:
+                        migrated_hashes.append(payload_update)
+
+                updated_lines.extend(txn_lines)
+                changed = changed or txn_changed
+                cursor = end
+
+            updated_lines.extend(lines[cursor:])
+
+            if changed:
+                journal_path.write_text("\n".join(updated_lines).rstrip() + "\n", encoding="utf-8")
+
+            if db is not None and migrated_hashes:
+                grouped_by_source_sha: dict[str, list[dict]] = {}
+                for txn in migrated_hashes:
+                    source_file_sha256 = str(txn.pop("sourceFileSha256", ""))
+                    grouped_by_source_sha.setdefault(source_file_sha256, []).append(txn)
+
+                for source_file_sha256, txns in grouped_by_source_sha.items():
+                    db.upsert_transactions(
+                        import_account_id=import_account_id,
+                        year=journal_path.stem,
+                        journal_path=journal_path,
+                        source_file_sha256=source_file_sha256,
+                        txns=txns,
+                    )
+
     def bootstrap_workspace(
         self,
         workspace_path: Path,
@@ -715,6 +864,7 @@ class WorkspaceManager:
             existing_account_id=account_id,
         )
         existing_row = existing_accounts.get(account_id or normalized["id"], {})
+        previous_ledger_account = str(existing_row.get("ledger_account", "")).strip()
         tracked_account_id = str(existing_row.get("tracked_account_id", "")).strip() or normalized["id"]
         stale_profile_id = str(existing_row.get("import_profile_id") or "").strip()
 
@@ -751,6 +901,12 @@ class WorkspaceManager:
         )
         refreshed = load_config(config.config_toml)
         self._ensure_seeded_accounts(config.init_dir / "10-accounts.dat", list(existing_tracked_accounts.values()))
+        self._migrate_journal_postings(
+            refreshed,
+            previous_ledger_account,
+            existing_accounts[normalized["id"]]["ledger_account"],
+            import_account_id=normalized["id"],
+        )
         self._sync_opening_balance(
             refreshed,
             tracked_account_id,
@@ -795,6 +951,9 @@ class WorkspaceManager:
             default_currency=str(config.workspace.get("base_currency", "USD")),
             existing_account_id=account_id,
         )
+        previous_ledger_account = str(
+            existing_accounts.get(account_id or normalized["id"], {}).get("ledger_account", "")
+        ).strip()
         tracked_account_id = str(
             existing_accounts.get(account_id or normalized["id"], {}).get("tracked_account_id", "")
         ).strip() or normalized["id"]
@@ -831,6 +990,12 @@ class WorkspaceManager:
         )
         refreshed = load_config(config.config_toml)
         self._ensure_seeded_accounts(config.init_dir / "10-accounts.dat", list(existing_tracked_accounts.values()))
+        self._migrate_journal_postings(
+            refreshed,
+            previous_ledger_account,
+            existing_accounts[normalized["id"]]["ledger_account"],
+            import_account_id=normalized["id"],
+        )
         self._sync_opening_balance(
             refreshed,
             tracked_account_id,
@@ -868,6 +1033,9 @@ class WorkspaceManager:
             used_account_ids,
             existing_account_id=account_id,
         )
+        previous_ledger_account = str(
+            existing_tracked_accounts.get(account_id or normalized["id"], {}).get("ledger_account", "")
+        ).strip()
 
         existing_tracked_accounts[normalized["id"]] = {
             "display_name": normalized["display_name"],
@@ -892,6 +1060,11 @@ class WorkspaceManager:
         )
         refreshed = load_config(config.config_toml)
         self._ensure_seeded_accounts(config.init_dir / "10-accounts.dat", list(existing_tracked_accounts.values()))
+        self._migrate_journal_postings(
+            refreshed,
+            previous_ledger_account,
+            normalized["ledger_account"],
+        )
         self._sync_opening_balance(
             refreshed,
             normalized["id"],

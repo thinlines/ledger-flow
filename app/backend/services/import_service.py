@@ -8,6 +8,7 @@ from pathlib import Path
 from .config_service import AppConfig
 from .csv_normalizer import normalize_csv_to_intermediate
 from .import_index import ImportIndex
+from .import_identity_service import source_payload_hash_for_lines
 from .import_profile_service import import_source_summary, resolve_import_source
 from .ledger_runner import run_cmd
 from .payee_alias_service import ensure_payee_alias_dat
@@ -172,7 +173,7 @@ def _parse_transaction(lines: list[str], import_account_id: str, institution_acc
     source_identity = _sha256_text(identity_base)
 
     normalized_body = "\n".join(line.rstrip() for line in lines).strip() + "\n"
-    source_payload_hash = _sha256_text(normalized_body)
+    source_payload_hash = source_payload_hash_for_lines(lines, institution_account)
 
     return {
         "date": date,
@@ -185,7 +186,7 @@ def _parse_transaction(lines: list[str], import_account_id: str, institution_acc
     }
 
 
-def _existing_identity_map_from_journal(target_journal: Path) -> dict[str, str | None]:
+def _existing_identity_map_from_journal(config: AppConfig, target_journal: Path) -> dict[str, str | None]:
     if not target_journal.exists():
         return {}
     text = target_journal.read_text(encoding="utf-8")
@@ -193,6 +194,7 @@ def _existing_identity_map_from_journal(target_journal: Path) -> dict[str, str |
     for lines in _split_transactions(text):
         source_identity = None
         source_payload_hash = None
+        import_account_id = None
         for line in lines[1:]:
             mm = META_RE.match(line)
             if not mm:
@@ -203,7 +205,14 @@ def _existing_identity_map_from_journal(target_journal: Path) -> dict[str, str |
                 source_identity = value
             elif key == "source_payload_hash":
                 source_payload_hash = value
+            elif key == "import_account_id":
+                import_account_id = value
         if source_identity:
+            ledger_account = None
+            if import_account_id:
+                ledger_account = str(config.import_accounts.get(import_account_id, {}).get("ledger_account", "")).strip() or None
+            if ledger_account:
+                source_payload_hash = source_payload_hash_for_lines(lines, ledger_account)
             out[source_identity] = source_payload_hash
     return out
 
@@ -263,13 +272,13 @@ def _normalize_symbol_commodity_display(text: str) -> str:
 def _build_existing_map(config: AppConfig, import_account_id: str, target_journal: Path) -> dict[str, str | None]:
     db = ImportIndex(config.root_dir / ".workflow" / "state.db")
     db_map = db.get_identity_map(import_account_id)
-    journal_map = _existing_identity_map_from_journal(target_journal)
+    journal_map = _existing_identity_map_from_journal(config, target_journal)
 
     merged = dict(db_map)
     for key, payload_hash in journal_map.items():
-        if key not in merged:
+        if payload_hash is not None:
             merged[key] = payload_hash
-        elif merged[key] is None and payload_hash is not None:
+        elif key not in merged:
             merged[key] = payload_hash
     return merged
 
