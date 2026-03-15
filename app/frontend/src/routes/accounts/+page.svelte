@@ -213,7 +213,10 @@
                 <h4>{account.displayName}</h4>
                 <p class="muted">{account.institutionDisplayName || 'Manual account'}</p>
               </div>
-              <a class="inline-link" href={`/accounts/configure?accountId=${account.id}`}>Edit</a>
+              <div class="account-card-actions">
+                <a class="inline-link" href={`/transactions?accountId=${account.id}`}>Transactions</a>
+                <a class="inline-link" href={`/accounts/configure?accountId=${account.id}`}>Edit</a>
+              </div>
             </div>
 
             <div class="pill-row">
@@ -333,6 +336,13 @@
     gap: 1rem;
   }
 
+  .account-card-actions {
+    display: flex;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+
   .pill-row {
     display: flex;
     gap: 0.45rem;
@@ -386,6 +396,18 @@
     font-size: 0.84rem;
   }
 
+  .inline-link,
+  .text-link {
+    color: var(--brand-strong);
+    text-decoration: none;
+    font-weight: 700;
+  }
+
+  .inline-link:hover,
+  .text-link:hover {
+    text-decoration: underline;
+  }
+
   @media (max-width: 980px) {
     .accounts-hero {
       flex-direction: column;
@@ -395,6 +417,14 @@
     .hero-stats,
     .account-metrics {
       grid-template-columns: 1fr;
+    }
+
+    .account-card-head {
+      flex-direction: column;
+    }
+
+    .account-card-actions {
+      justify-content: flex-start;
     }
   }
 </style>

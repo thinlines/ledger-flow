@@ -1,143 +1,22 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from dataclasses import dataclass
 from datetime import date
-from decimal import Decimal, InvalidOperation
-from pathlib import Path
-import re
+from decimal import Decimal
 
-from .config_service import AppConfig
+from .config_service import AppConfig, infer_account_kind
+from .journal_query_service import (
+    ParsedTransaction,
+    Posting,
+    amount_to_number,
+    load_transactions,
+    pretty_account_name,
+)
 from .opening_balance_service import opening_balance_index
 
 
-TXN_START_RE = re.compile(r"^\d{4}[-/]\d{2}[-/]\d{2}")
-HEADER_RE = re.compile(
-    r"^(?P<date>\d{4}[-/]\d{2}[-/]\d{2})"
-    r"(?:\s+[*!])?"
-    r"(?:\s+\([^)]+\))?"
-    r"\s*(?P<payee>.*)$"
-)
-POSTING_RE = re.compile(r"^\s+([^\s].*?)(?:(?:\s{2,}|\t+)(.+))?$")
-META_RE = re.compile(r"^\s*;\s*([^:]+):\s*(.*)$")
-
-
-@dataclass(frozen=True)
-class Posting:
-    account: str
-    amount: Decimal | None
-    inferred: bool = False
-
-
-@dataclass(frozen=True)
-class ParsedTransaction:
-    posted_on: date
-    payee: str
-    postings: list[Posting]
-    metadata: dict[str, str]
-
-
-def _amount_to_number(value: Decimal) -> float:
-    return float(value.quantize(Decimal("0.01")))
-
-
-def _parse_amount(raw: str) -> Decimal | None:
-    compact = re.sub(r"\s+", "", raw)
-    if not compact:
-        return None
-
-    digits = "".join(ch for ch in compact if ch.isdigit() or ch in {".", ","})
-    if not digits:
-        return None
-
-    sign = -1 if "-" in compact else 1
-    try:
-        return Decimal(digits.replace(",", "")) * sign
-    except InvalidOperation:
-        return None
-
-
-def _split_transactions(journal_text: str) -> list[list[str]]:
-    transactions: list[list[str]] = []
-    current: list[str] = []
-    for raw in journal_text.splitlines():
-        if TXN_START_RE.match(raw):
-            if current:
-                transactions.append(current)
-            current = [raw]
-        elif current:
-            current.append(raw)
-    if current:
-        transactions.append(current)
-    return transactions
-
-
-def _parse_transaction(lines: list[str]) -> ParsedTransaction | None:
-    header_match = HEADER_RE.match(lines[0])
-    if not header_match:
-        return None
-
-    try:
-        posted_on = date.fromisoformat(header_match.group("date").replace("/", "-"))
-    except ValueError:
-        return None
-
-    metadata: dict[str, str] = {}
-    postings: list[Posting] = []
-
-    for line in lines[1:]:
-        meta_match = META_RE.match(line)
-        if meta_match:
-            metadata[meta_match.group(1).strip().lower()] = meta_match.group(2).strip()
-            continue
-
-        posting_match = POSTING_RE.match(line)
-        if not posting_match:
-            continue
-
-        account = posting_match.group(1).strip()
-        amount = _parse_amount(posting_match.group(2) or "")
-        postings.append(Posting(account=account, amount=amount))
-
-    if not postings:
-        return None
-
-    known_total = sum((posting.amount or Decimal("0")) for posting in postings if posting.amount is not None)
-    blank_indexes = [index for index, posting in enumerate(postings) if posting.amount is None]
-    if len(blank_indexes) == 1:
-        idx = blank_indexes[0]
-        postings[idx] = Posting(account=postings[idx].account, amount=-known_total, inferred=True)
-
-    return ParsedTransaction(
-        posted_on=posted_on,
-        payee=header_match.group("payee").strip() or "Untitled transaction",
-        postings=postings,
-        metadata=metadata,
-    )
-
-
 def _account_kind(account: str) -> str:
-    prefix = account.split(":", 1)[0].strip().lower()
-    if prefix == "assets":
-        return "asset"
-    if prefix in {"liabilities", "liability"}:
-        return "liability"
-    if prefix in {"expenses", "expense"}:
-        return "expense"
-    if prefix in {"income", "revenue"}:
-        return "income"
-    if prefix in {"equity", "capital"}:
-        return "equity"
-    return "other"
-
-
-def _pretty_account_name(account: str) -> str:
-    parts = [segment.replace("_", " ").strip() for segment in account.split(":") if segment.strip()]
-    if not parts:
-        return "Unlabeled"
-    if len(parts) == 1:
-        return parts[0].title()
-    return " / ".join(part.title() for part in parts[1:])
+    return infer_account_kind(account)
 
 
 def _month_key(posted_on: date) -> str:
@@ -160,19 +39,6 @@ def _month_window(today: date, count: int) -> list[tuple[int, int]]:
 
 def _month_label(year: int, month: int) -> str:
     return date(year, month, 1).strftime("%b")
-
-
-def _load_transactions(config: AppConfig) -> list[ParsedTransaction]:
-    transactions: list[ParsedTransaction] = []
-    for journal_path in sorted(config.journal_dir.glob("*.journal")):
-        if not journal_path.exists():
-            continue
-        text = journal_path.read_text(encoding="utf-8")
-        for lines in _split_transactions(text):
-            transaction = _parse_transaction(lines)
-            if transaction is not None:
-                transactions.append(transaction)
-    return sorted(transactions, key=lambda txn: txn.posted_on)
 
 
 def _primary_posting(transaction: ParsedTransaction, config: AppConfig) -> Posting | None:
@@ -215,25 +81,25 @@ def _primary_account_display(posting: Posting | None, config: AppConfig) -> tupl
         if ledger_account == posting.account:
             return (str(account_cfg.get("display_name", account_id)), account_id)
 
-    return (_pretty_account_name(posting.account), None)
+    return (pretty_account_name(posting.account), None)
 
 
 def _transaction_category(transaction: ParsedTransaction) -> tuple[str, bool]:
     expense_postings = [posting for posting in transaction.postings if _account_kind(posting.account) == "expense"]
     if expense_postings:
         account = expense_postings[0].account
-        return (_pretty_account_name(account), account.lower().startswith("expenses:unknown"))
+        return (pretty_account_name(account), account.lower().startswith("expenses:unknown"))
 
     income_postings = [posting for posting in transaction.postings if _account_kind(posting.account) == "income"]
     if income_postings:
-        return (_pretty_account_name(income_postings[0].account), False)
+        return (pretty_account_name(income_postings[0].account), False)
 
     return ("Transfer", False)
 
 
 def build_dashboard_overview(config: AppConfig, *, today: date | None = None) -> dict:
     current_day = today or date.today()
-    transactions = _load_transactions(config)
+    transactions = load_transactions(config)
     _, opening_by_ledger_account = opening_balance_index(config)
     account_balances: defaultdict[str, Decimal] = defaultdict(lambda: Decimal("0"))
     monthly_income: defaultdict[str, Decimal] = defaultdict(lambda: Decimal("0"))
@@ -275,7 +141,7 @@ def build_dashboard_overview(config: AppConfig, *, today: date | None = None) ->
                 "accountLabel": account_label,
                 "importAccountId": import_account_id,
                 "category": category_label,
-                "amount": _amount_to_number(primary_amount),
+                "amount": amount_to_number(primary_amount),
                 "isIncome": primary_amount > 0,
                 "isUnknown": is_unknown,
             }
@@ -302,7 +168,7 @@ def build_dashboard_overview(config: AppConfig, *, today: date | None = None) ->
                 "ledgerAccount": ledger_account,
                 "last4": account_cfg.get("last4"),
                 "kind": _account_kind(ledger_account),
-                "balance": _amount_to_number(balance),
+                "balance": amount_to_number(balance),
                 "importConfigured": bool(account_cfg.get("import_account_id")),
             }
         )
@@ -325,9 +191,9 @@ def build_dashboard_overview(config: AppConfig, *, today: date | None = None) ->
             {
                 "month": key,
                 "label": _month_label(year_value, month_value),
-                "income": _amount_to_number(income),
-                "spending": _amount_to_number(spending),
-                "net": _amount_to_number(income - spending),
+                "income": amount_to_number(income),
+                "spending": amount_to_number(spending),
+                "net": amount_to_number(income - spending),
             }
         )
 
@@ -362,11 +228,11 @@ def build_dashboard_overview(config: AppConfig, *, today: date | None = None) ->
             direction = "down"
         category_trends.append(
             {
-                "category": _pretty_account_name(category),
+                "category": pretty_account_name(category),
                 "account": category,
-                "current": _amount_to_number(current_total),
-                "previous": _amount_to_number(previous_total),
-                "delta": _amount_to_number(delta),
+                "current": amount_to_number(current_total),
+                "previous": amount_to_number(previous_total),
+                "delta": amount_to_number(delta),
                 "direction": direction,
             }
         )
@@ -380,11 +246,11 @@ def build_dashboard_overview(config: AppConfig, *, today: date | None = None) ->
         "hasData": bool(transactions),
         "lastUpdated": last_updated,
         "summary": {
-            "netWorth": _amount_to_number(net_worth),
-            "trackedBalanceTotal": _amount_to_number(tracked_total),
-            "incomeThisMonth": _amount_to_number(income_this_month),
-            "spendingThisMonth": _amount_to_number(spending_this_month),
-            "savingsThisMonth": _amount_to_number(income_this_month - spending_this_month),
+            "netWorth": amount_to_number(net_worth),
+            "trackedBalanceTotal": amount_to_number(tracked_total),
+            "incomeThisMonth": amount_to_number(income_this_month),
+            "spendingThisMonth": amount_to_number(spending_this_month),
+            "savingsThisMonth": amount_to_number(income_this_month - spending_this_month),
             "transactionCount": len(transactions),
             "unknownTransactionCount": unknown_transaction_count,
         },
@@ -392,9 +258,9 @@ def build_dashboard_overview(config: AppConfig, *, today: date | None = None) ->
         "cashFlow": {
             "currentMonth": current_month,
             "previousMonth": previous_month_key,
-            "income": _amount_to_number(income_this_month),
-            "spending": _amount_to_number(spending_this_month),
-            "net": _amount_to_number(income_this_month - spending_this_month),
+            "income": amount_to_number(income_this_month),
+            "spending": amount_to_number(spending_this_month),
+            "net": amount_to_number(income_this_month - spending_this_month),
             "series": series,
         },
         "categoryTrends": category_trends,

@@ -7,7 +7,8 @@
 			title: 'Daily Use',
 			items: [
 				{ href: '/', label: 'Overview', note: 'Balances, trends, next steps' },
-				{ href: '/accounts', label: 'Accounts', note: 'Tracked accounts and opening balances' }
+				{ href: '/accounts', label: 'Accounts', note: 'Tracked accounts and opening balances' },
+				{ href: '/transactions', label: 'Transactions', note: 'Per-account register and running balances' }
 			]
 		},
 		{
