@@ -1,6 +1,8 @@
 <script lang="ts">
+  import { goto } from '$app/navigation';
+  import { page } from '$app/stores';
   import { onMount, tick } from 'svelte';
-  import { apiGet, apiPost } from '$lib/api';
+  import { apiDelete, apiGet, apiPost } from '$lib/api';
   import AccountCombobox from '$lib/components/AccountCombobox.svelte';
   import RuleEditor from '$lib/components/RuleEditor.svelte';
   import type { RuleAction, RuleCondition } from '$lib/components/rule-editor-types';
@@ -41,6 +43,7 @@
   };
 
   type UnknownStage = {
+    kind?: 'unknowns';
     stageId: string;
     groups: UnknownGroup[];
     summary?: {
@@ -50,6 +53,42 @@
     result?: {
       updatedTxnCount: number;
       warnings?: Array<{ groupKey: string; warning: string }>;
+    } | null;
+  };
+
+  type RuleHistoryCandidate = {
+    id: string;
+    date: string;
+    payee: string;
+    amount: string;
+    lineNo: number;
+    currentAccount: string;
+    targetAccount: string;
+    importAccountId: string;
+    sourceAccountLabel: string;
+    sourceLedgerAccount: string;
+  };
+
+  type RuleHistoryStage = {
+    kind: 'rule_history';
+    stageId: string;
+    ruleId: string;
+    ruleName?: string | null;
+    journalPath: string;
+    targetAccount: string;
+    candidates: RuleHistoryCandidate[];
+    selectedCandidateIds?: string[];
+    warnings?: Array<{ date: string; payee: string; reason: string }>;
+    summary?: {
+      matchedCount: number;
+      candidateCount: number;
+      upToDateCount: number;
+      skippedCount: number;
+    };
+    result?: {
+      updatedTxnCount: number;
+      warnings?: Array<{ candidateId: string; warning: string }>;
+      backupPath: string;
     } | null;
   };
 
@@ -77,9 +116,11 @@
   let rules: Rule[] = [];
 
   let stage: UnknownStage | null = null;
+  let historyStage: RuleHistoryStage | null = null;
   let error = '';
   let loading = false;
   let mappings: Record<string, string> = {};
+  let historySelectedCandidateIds: string[] = [];
 
   let showRuleModal = false;
   let ruleMode: 'create' | 'edit' = 'create';
@@ -135,6 +176,42 @@
     return rules;
   }
 
+  async function loadStageFromRoute(stageId: string) {
+    const loaded = await apiGet<UnknownStage | RuleHistoryStage>(`/api/stages/${encodeURIComponent(stageId)}`);
+    if ((loaded as RuleHistoryStage).kind === 'rule_history') {
+      historyStage = loaded as RuleHistoryStage;
+      stage = null;
+      journalPath = historyStage.journalPath;
+      historySelectedCandidateIds =
+        historyStage.selectedCandidateIds?.length
+          ? [...historyStage.selectedCandidateIds]
+          : historyStage.candidates.map((candidate) => candidate.id);
+      lastApplyResult = null;
+      lastAppliedGroups = [];
+      return;
+    }
+
+    historyStage = null;
+    historySelectedCandidateIds = [];
+    hydrateStage(loaded as UnknownStage, { resetFilter: false });
+  }
+
+  async function cancelHistoryReview() {
+    const stageId = historyStage?.stageId ?? null;
+    const alreadyApplied = Boolean(historyStage?.result);
+    historyStage = null;
+    historySelectedCandidateIds = [];
+    error = '';
+    if (stageId && !alreadyApplied) {
+      try {
+        await apiDelete(`/api/stages/${encodeURIComponent(stageId)}`);
+      } catch {
+        // Ignore stage cleanup failures and still let the user leave the review.
+      }
+    }
+    await goto('/rules', { replaceState: true, noScroll: true, keepFocus: true });
+  }
+
   onMount(async () => {
     try {
       const state = await apiGet<{ initialized: boolean }>('/api/app/state');
@@ -153,6 +230,11 @@
       if (journals.length) {
         journalPath = journals[journals.length - 1].absPath;
       }
+
+      const requestedStageId = $page.url.searchParams.get('stageId') ?? '';
+      if (requestedStageId) {
+        await loadStageFromRoute(requestedStageId);
+      }
     } catch (e) {
       error = String(e);
     }
@@ -161,11 +243,16 @@
   async function scan() {
     error = '';
     stage = null;
+    historyStage = null;
+    historySelectedCandidateIds = [];
     statusFilter = 'all';
     lastApplyResult = null;
     lastAppliedGroups = [];
     loading = true;
     try {
+      if ($page.url.searchParams.get('stageId')) {
+        await goto('/unknowns', { replaceState: true, noScroll: true, keepFocus: true });
+      }
       await refreshUnknownStage({ preserveApplyResult: false, resetFilter: false });
     } catch (e) {
       error = String(e);
@@ -195,6 +282,7 @@
   let readyReviewTransactions = 0;
   let needsReviewTransactions = 0;
   let mappedGroupCount = 0;
+  let historySelectedCount = 0;
 
   $: reviewRowsData = buildReviewRows(stage?.groups ?? []);
   $: filteredReviewRows =
@@ -203,6 +291,7 @@
   $: readyReviewTransactions = reviewRowsData.filter((row) => row.status === 'ready').length;
   $: needsReviewTransactions = reviewRowsData.filter((row) => row.status === 'needs').length;
   $: mappedGroupCount = (stage?.groups ?? []).filter((group) => effectiveAccountFor(group)).length;
+  $: historySelectedCount = historySelectedCandidateIds.length;
 
   function groupStatus(group: UnknownGroup): 'ready' | 'needs' {
     return effectiveAccountFor(group) ? 'ready' : 'needs';
@@ -296,6 +385,35 @@
     return group ? groupLabel(group) : groupKey;
   }
 
+  function resolveGroupRuleMatch(group: UnknownGroup, availableRules: Rule[]) {
+    const signatures = new Set(
+      group.txns.map((txn) => {
+        const matchedRule = findMatchingRule({ payee: group.payeeDisplay, date: txn.date }, availableRules);
+        const suggestedAccount = matchedRule ? extractSetAccount(matchedRule.actions) || null : null;
+        const matchedPattern = matchedRule?.conditions?.[0]?.value ?? null;
+        return JSON.stringify({
+          ruleId: matchedRule?.id ?? null,
+          suggestedAccount,
+          matchedPattern
+        });
+      })
+    );
+
+    if (signatures.size !== 1) {
+      return {
+        ruleId: null,
+        suggestedAccount: null,
+        matchedPattern: null
+      };
+    }
+
+    return JSON.parse(Array.from(signatures)[0]) as {
+      ruleId: string | null;
+      suggestedAccount: string | null;
+      matchedPattern: string | null;
+    };
+  }
+
   function syncGroupsFromRules(nextRules: Rule[]) {
     if (!stage) return;
 
@@ -304,12 +422,12 @@
     for (const group of stage.groups ?? []) {
       const previousSuggested = (group.suggestedAccount ?? '').trim();
       const currentSelected = (nextMappings[group.groupKey] ?? '').trim();
-      const matchedRule = findMatchingRule({ payee: group.payeeDisplay }, nextRules);
-      const suggestedAccount = matchedRule ? extractSetAccount(matchedRule.actions) || null : null;
+      const match = resolveGroupRuleMatch(group, nextRules);
+      const suggestedAccount = match.suggestedAccount;
       const shouldFollowSuggestion = !currentSelected || currentSelected === previousSuggested;
       group.suggestedAccount = suggestedAccount;
-      group.matchedRuleId = matchedRule?.id ?? null;
-      group.matchedRulePattern = matchedRule?.conditions?.[0]?.value ?? null;
+      group.matchedRuleId = match.ruleId;
+      group.matchedRulePattern = match.matchedPattern;
       if (shouldFollowSuggestion && suggestedAccount) {
         nextMappings[group.groupKey] = suggestedAccount;
       } else if (shouldFollowSuggestion) {
@@ -339,6 +457,39 @@
         stage = appliedStage;
         error = `Changes were applied, but the review queue could not be refreshed: ${String(refreshError)}`;
       }
+    } catch (e) {
+      error = String(e);
+    } finally {
+      loading = false;
+    }
+  }
+
+  function toggleHistoryCandidate(candidateId: string) {
+    if (historySelectedCandidateIds.includes(candidateId)) {
+      historySelectedCandidateIds = historySelectedCandidateIds.filter((id) => id !== candidateId);
+      return;
+    }
+    historySelectedCandidateIds = [...historySelectedCandidateIds, candidateId];
+  }
+
+  function setAllHistoryCandidates(selected: boolean) {
+    if (!historyStage) return;
+    historySelectedCandidateIds = selected ? historyStage.candidates.map((candidate) => candidate.id) : [];
+  }
+
+  async function applyHistoryStage() {
+    if (!historyStage?.stageId || historySelectedCandidateIds.length === 0) return;
+    loading = true;
+    error = '';
+    try {
+      historyStage = await apiPost<RuleHistoryStage>('/api/rules/history/apply', {
+        stageId: historyStage.stageId,
+        selectedCandidateIds: historySelectedCandidateIds
+      });
+      historySelectedCandidateIds =
+        historyStage.selectedCandidateIds?.length
+          ? [...historyStage.selectedCandidateIds]
+          : [...historySelectedCandidateIds];
     } catch (e) {
       error = String(e);
     } finally {
@@ -608,8 +759,14 @@
 
 <section class="view-card hero">
   <p class="eyebrow">Categorization</p>
-  <h2 class="page-title">Review uncategorized activity</h2>
-  <p class="subtitle">Fill in missing categories, save repeat decisions as rules, and keep recent activity clean.</p>
+  <h2 class="page-title">{historyStage ? 'Review historical rule matches' : 'Review uncategorized activity'}</h2>
+  <p class="subtitle">
+    {#if historyStage}
+      Review imported transactions matched by a saved rule before rewriting past categories.
+    {:else}
+      Fill in missing categories, save repeat decisions as rules, and keep recent activity clean.
+    {/if}
+  </p>
 </section>
 
 {#if !initialized}
@@ -622,40 +779,167 @@
     <section class="view-card"><p class="error-text">{error}</p></section>
   {/if}
 
-  <section class="view-card">
-    <p class="eyebrow">Review Scope</p>
-    <h3>Choose Activity to Review</h3>
+  {#if !historyStage}
+    <section class="view-card">
+      <p class="eyebrow">Review Scope</p>
+      <h3>Choose Activity to Review</h3>
 
-    <div class="field compact">
-      <div class="field">
-        <label for="journalSelect">Available Years</label>
-        <select id="journalSelect" bind:value={journalPath}>
-          <option value="">Select...</option>
-          {#each journals as j}
-            <option value={j.absPath}>{j.fileName}</option>
-          {/each}
-        </select>
+      <div class="field compact">
+        <div class="field">
+          <label for="journalSelect">Available Years</label>
+          <select id="journalSelect" bind:value={journalPath}>
+            <option value="">Select...</option>
+            {#each journals as j}
+              <option value={j.absPath}>{j.fileName}</option>
+            {/each}
+          </select>
+        </div>
       </div>
-    </div>
 
-    {#if journalPath}
-      <p class="muted">Selected file: {pathLabel(journalPath)}</p>
+      {#if journalPath}
+        <p class="muted">Selected file: {pathLabel(journalPath)}</p>
+      {/if}
+
+      <details class="advanced-panel">
+        <summary>Advanced file selection</summary>
+        <div class="field">
+          <label for="journalPath">Custom Journal Path</label>
+          <input id="journalPath" bind:value={journalPath} placeholder="/abs/path/to/journal" />
+        </div>
+      </details>
+
+      <button class="btn btn-primary" type="button" disabled={loading || !journalPath} on:click={scan}>
+        {loading ? 'Scanning...' : 'Find Transactions to Review'}
+      </button>
+    </section>
+  {/if}
+
+  {#if historyStage}
+    <section class="view-card review-summary-card">
+      <div class="review-summary-head">
+        <div>
+          <p class="eyebrow">Review Queue</p>
+          <h3>{(historyStage.candidates?.length ?? 0) === 0 ? 'Nothing needs rewriting' : 'Review historical matches'}</h3>
+          <p class="muted">
+            {(historyStage.candidates?.length ?? 0) === 0
+              ? `No imported transactions need updates in ${pathLabel(historyStage.journalPath)}.`
+              : `${historyStage.candidates.length} imported transactions in ${pathLabel(historyStage.journalPath)} are ready for review.`}
+          </p>
+        </div>
+        <div class="review-summary-pills">
+          <span class="pill ok">{historyStage.summary?.candidateCount ?? historyStage.candidates.length} ready</span>
+          <span class="pill">{historyStage.summary?.upToDateCount ?? 0} already current</span>
+          <span class="pill warn">{historyStage.summary?.skippedCount ?? 0} skipped</span>
+        </div>
+      </div>
+
+      <div class="review-toolbar">
+        <div class="filters">
+          <button class="btn" type="button" on:click={cancelHistoryReview}>
+            {historyStage.result ? 'Back to Rules' : 'Cancel'}
+          </button>
+        </div>
+
+        {#if !historyStage.result}
+          <div class="review-actions">
+            <p class="muted review-hint">
+              Applying rewrites {historySelectedCount} selected
+              {historySelectedCount === 1 ? ' transaction' : ' transactions'} to {historyStage.targetAccount}.
+            </p>
+            <div class="actions">
+              <button class="btn btn-primary" type="button" disabled={loading || historySelectedCount === 0} on:click={applyHistoryStage}>
+                Apply {historySelectedCount} {historySelectedCount === 1 ? 'Change' : 'Changes'}
+              </button>
+            </div>
+          </div>
+        {/if}
+      </div>
+    </section>
+
+    {#if historyStage.result}
+      <section class="view-card result-card">
+        <p class="eyebrow">Result</p>
+        <h3>Changes applied</h3>
+        <p class="muted">
+          Updated transactions: {historyStage.result.updatedTxnCount}. Backup: {pathLabel(historyStage.result.backupPath)}.
+        </p>
+        {#if historyStage.result.warnings?.length}
+          <h4>Warnings</h4>
+          <ul class="warning-list">
+            {#each historyStage.result.warnings as warning}
+              <li>{warning.warning}</li>
+            {/each}
+          </ul>
+        {/if}
+      </section>
     {/if}
 
-    <details class="advanced-panel">
-      <summary>Advanced file selection</summary>
-      <div class="field">
-        <label for="journalPath">Custom Journal Path</label>
-        <input id="journalPath" bind:value={journalPath} placeholder="/abs/path/to/journal" />
-      </div>
-    </details>
+    {#if historyStage.candidates.length > 0}
+      <section class="view-card history-select-card">
+        <label class="history-select-toggle">
+          <input
+            type="checkbox"
+            checked={historySelectedCandidateIds.length === historyStage.candidates.length}
+            on:change={(e) => setAllHistoryCandidates((e.currentTarget as HTMLInputElement).checked)}
+          />
+          <span>Select all matches</span>
+        </label>
+        <p class="muted">{historySelectedCount} selected for rewrite</p>
+      </section>
 
-    <button class="btn btn-primary" type="button" disabled={loading || !journalPath} on:click={scan}>
-      {loading ? 'Scanning...' : 'Find Transactions to Review'}
-    </button>
-  </section>
+      <section class="review-list">
+        <div class="review-list-header history-review-list-header" aria-hidden="true">
+          <span>Select</span>
+          <span>Activity</span>
+          <span>Amount</span>
+          <span>Category Change</span>
+        </div>
+        {#each historyStage.candidates as candidate (candidate.id)}
+          <article class="view-card review-row row-ready history-review-row">
+            <div class="history-review-select">
+              <input
+                type="checkbox"
+                checked={historySelectedCandidateIds.includes(candidate.id)}
+                aria-label={`Select ${candidate.payee} on ${formatShortDate(candidate.date)}`}
+                on:change={() => toggleHistoryCandidate(candidate.id)}
+              />
+            </div>
 
-  {#if stage}
+            <div class="review-row-activity">
+              <div class="group-title-row">
+                <h4>{candidate.payee}</h4>
+              </div>
+              <p class="group-meta">{formatShortDate(candidate.date)}</p>
+              <p class="assignment-value">{candidate.sourceAccountLabel}</p>
+            </div>
+
+            <div class="review-row-amount">
+              <p class="amount-value">{candidate.amount || '-'}</p>
+            </div>
+
+            <div class="history-review-category">
+              <p class="history-account-shift">
+                <span>{candidate.currentAccount}</span>
+                <span aria-hidden="true">→</span>
+                <span>{candidate.targetAccount}</span>
+              </p>
+            </div>
+          </article>
+        {/each}
+      </section>
+    {/if}
+
+    {#if historyStage.warnings?.length}
+      <section class="view-card result-card">
+        <p class="eyebrow">Skipped Matches</p>
+        <ul class="warning-list">
+          {#each historyStage.warnings as warning}
+            <li>{formatShortDate(warning.date)} · {warning.payee}: {warning.reason}</li>
+          {/each}
+        </ul>
+      </section>
+    {/if}
+  {:else if stage}
     <section class="view-card review-summary-card">
       <div class="review-summary-head">
         <div>
@@ -981,6 +1265,7 @@
   }
 
   .review-summary-card,
+  .history-select-card,
   .result-card,
   .review-row {
     display: grid;
@@ -1138,6 +1423,41 @@
     gap: 0.45rem;
     justify-items: start;
     align-content: center;
+  }
+
+  .history-select-card {
+    align-items: center;
+    grid-template-columns: repeat(auto-fit, minmax(14rem, max-content));
+    justify-content: space-between;
+  }
+
+  .history-select-toggle {
+    display: inline-flex;
+    gap: 0.55rem;
+    align-items: center;
+    font-weight: 600;
+  }
+
+  .history-review-select,
+  .history-review-category {
+    min-width: 0;
+    display: grid;
+    align-content: center;
+  }
+
+  .history-review-select input {
+    justify-self: start;
+  }
+
+  .history-account-shift {
+    margin: 0;
+    display: flex;
+    gap: 0.45rem;
+    flex-wrap: wrap;
+    align-items: center;
+    font-family: var(--font-mono, monospace);
+    font-size: 0.9rem;
+    overflow-wrap: anywhere;
   }
 
   .warning-list {
@@ -1308,6 +1628,14 @@
       justify-items: end;
       text-align: right;
     }
+
+    .history-review-list-header {
+      grid-template-columns: 9rem minmax(15rem, 1.7fr) 7rem minmax(16rem, 1.35fr);
+    }
+
+    .history-review-row {
+      grid-template-columns: 9rem minmax(15rem, 1.7fr) 7rem minmax(16rem, 1.35fr);
+    }
   }
 
   @media (max-width: 920px) {
@@ -1325,6 +1653,11 @@
 
     .review-row {
       padding: 0.85rem 0.9rem;
+    }
+
+    .history-select-card {
+      grid-template-columns: 1fr;
+      justify-content: start;
     }
   }
 

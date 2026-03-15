@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { goto } from '$app/navigation';
   import { onMount } from 'svelte';
   import CreateAccountModal from '$lib/components/CreateAccountModal.svelte';
   import RuleEditor from '$lib/components/RuleEditor.svelte';
@@ -29,11 +30,17 @@
     updatedAt: string;
   };
 
+  type JournalRow = {
+    fileName: string;
+    absPath: string;
+  };
+
   let initialized = false;
   let error = '';
   let loading = false;
   let rules: Rule[] = [];
   let accounts: string[] = [];
+  let journals: JournalRow[] = [];
   let expandedRuleId: string | null = null;
   let savedRuleSnapshots: Record<string, string> = {};
   let dirtyRuleCount = 0;
@@ -51,6 +58,11 @@
     mode: 'new-rule',
     ruleId: null
   };
+  let showRuleHistoryModal = false;
+  let historyRule: Rule | null = null;
+  let historyJournalPath = '';
+  let historyError = '';
+  let historyLoading = false;
 
   onMount(() => {
     const handleBeforeUnload = (event: BeforeUnloadEvent) => {
@@ -79,6 +91,11 @@
 
   function updateInferredTypeFromName() {
     newAccountType = inferAccountType(newAccountName);
+  }
+
+  function pathLabel(path: string): string {
+    const parts = path.split('/').filter(Boolean);
+    return parts.at(-1) ?? path;
   }
 
   function setActionsAccount(actions: RuleAction[], account: string): RuleAction[] {
@@ -178,15 +195,20 @@
       const state = await apiGet<{ initialized: boolean }>('/api/app/state');
       initialized = state.initialized;
       if (!initialized) return;
-      const [rulesData, accountsData] = await Promise.all([
+      const [rulesData, accountsData, journalsData] = await Promise.all([
         apiGet<{ rules: Rule[] }>('/api/rules'),
-        apiGet<{ accounts: string[] }>('/api/accounts')
+        apiGet<{ accounts: string[] }>('/api/accounts'),
+        apiGet<{ journals: JournalRow[] }>('/api/journals')
       ]);
       const nextRules = rulesData.rules.map(normalizeRule);
       rules = nextRules;
       syncExpandedRule(nextRules);
       syncRuleSnapshots(nextRules);
       accounts = accountsData.accounts;
+      journals = journalsData.journals;
+      if (!historyJournalPath) {
+        historyJournalPath = journalsData.journals[journalsData.journals.length - 1]?.absPath ?? '';
+      }
       newActions = ensureSetAccountAction(newActions, accountsData.accounts[0] ?? '');
     } catch (e) {
       error = String(e);
@@ -398,6 +420,60 @@
     }
   }
 
+  async function openRuleHistoryModal(rule: Rule) {
+    if (historyLoading) return;
+    if (hasIncompleteRuleEdits(rule)) {
+      expandedRuleId = rule.id;
+      error = `Finish or remove incomplete edits in "${ruleLabel(rule)}" before applying it to past transactions.`;
+      return;
+    }
+
+    error = '';
+    let activeRule = rule;
+    if (isRuleDirty(rule)) {
+      loading = true;
+      try {
+        activeRule = await persistRuleChanges(rule);
+      } catch (e) {
+        error = String(e);
+        return;
+      } finally {
+        loading = false;
+      }
+    }
+
+    historyRule = activeRule;
+    historyError = '';
+    historyJournalPath = historyJournalPath || journals[journals.length - 1]?.absPath || '';
+    showRuleHistoryModal = true;
+  }
+
+  function closeRuleHistoryModal() {
+    historyError = '';
+    historyLoading = false;
+    historyRule = null;
+    showRuleHistoryModal = false;
+  }
+
+  async function launchRuleHistoryReview() {
+    if (!historyRule || !historyJournalPath) return;
+    historyLoading = true;
+    historyError = '';
+    try {
+      const stage = await apiPost<{ stageId: string }>(`/api/rules/${historyRule.id}/history/scan`, {
+        journalPath: historyJournalPath
+      });
+      showRuleHistoryModal = false;
+      const params = new URLSearchParams();
+      params.set('stageId', stage.stageId);
+      await goto(`/unknowns?${params.toString()}`);
+    } catch (e) {
+      historyError = String(e);
+    } finally {
+      historyLoading = false;
+    }
+  }
+
   $: dirtyRuleCount = rules.filter((rule) => isRuleDirty(rule)).length;
 </script>
 
@@ -483,6 +559,7 @@
             onSave={() => saveRule(rule)}
             onNameCommit={() => saveRuleName(rule)}
             onRemove={() => removeRule(rule.id)}
+            onApplyHistory={() => void openRuleHistoryModal(rule)}
             onMoveUp={() => moveRule(i, -1)}
             onMoveDown={() => moveRule(i, 1)}
             onDragStart={() => onDragStart(i)}
@@ -494,6 +571,65 @@
       </div>
     {/if}
   </section>
+{/if}
+
+{#if showRuleHistoryModal}
+  <div
+    class="modal-backdrop"
+    role="button"
+    aria-label="Close dialog"
+    tabindex="0"
+    on:click={(e) => ((e.target as HTMLElement) === (e.currentTarget as HTMLElement) ? closeRuleHistoryModal() : undefined)}
+    on:keydown={(e) => (e.key === 'Escape' ? closeRuleHistoryModal() : undefined)}
+  >
+    <div class="modal rule-history-modal" role="dialog" tabindex="-1" aria-modal="true" aria-label="Apply Rule to Past Transactions">
+      <h3>Apply Rule to Past Transactions</h3>
+      <p class="muted">
+        Open the review queue for imported transactions that currently match {historyRule ? `"${ruleLabel(historyRule)}"` : 'this rule'}.
+        Review and apply the historical changes on the Categorization page.
+      </p>
+
+      <div class="rule-history-scope">
+        <div class="field">
+          <label for="historyJournalSelect">Journal</label>
+          <select id="historyJournalSelect" bind:value={historyJournalPath}>
+            <option value="">Select...</option>
+            {#each journals as journal}
+              <option value={journal.absPath}>{journal.fileName}</option>
+            {/each}
+          </select>
+        </div>
+        <button
+          class="btn btn-primary"
+          type="button"
+          disabled={historyLoading || !historyRule || !historyJournalPath}
+          on:click={launchRuleHistoryReview}
+        >
+          {historyLoading ? 'Opening...' : 'Open Review Queue'}
+        </button>
+      </div>
+
+      {#if historyJournalPath}
+        <p class="muted">Selected file: {pathLabel(historyJournalPath)}</p>
+      {/if}
+
+      <section class="history-note-card">
+        <p class="eyebrow">Scope</p>
+        <p class="muted">
+          Historical apply rewrites only the matched category account. Tags, key/value actions, and appended comments are not backfilled.
+          No journal files are edited until you click Apply in the review queue.
+        </p>
+      </section>
+
+      {#if historyError}
+        <p class="error-text">{historyError}</p>
+      {/if}
+
+      <div class="actions">
+        <button class="btn" type="button" on:click={closeRuleHistoryModal}>Close</button>
+      </div>
+    </div>
+  </div>
 {/if}
 
 {#if showCreateAccountModal}
@@ -599,6 +735,60 @@
   .empty-title {
     font-weight: 700;
     margin-bottom: 0.25rem;
+  }
+
+  .modal-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(10, 20, 30, 0.35);
+    display: grid;
+    place-items: center;
+    padding: 1rem;
+    z-index: 30;
+  }
+
+  .modal {
+    width: min(620px, 100%);
+    background: #fff;
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    box-shadow: var(--shadow);
+    padding: 1rem;
+    max-height: calc(100vh - 2rem);
+    overflow: auto;
+  }
+
+  .rule-history-modal {
+    width: min(42rem, 92vw);
+    display: grid;
+    gap: 0.95rem;
+  }
+
+  .rule-history-modal h3 {
+    margin: 0;
+  }
+
+  .rule-history-scope {
+    display: flex;
+    gap: 0.8rem;
+    align-items: end;
+    flex-wrap: wrap;
+  }
+
+  .rule-history-scope .field {
+    min-width: min(24rem, 100%);
+    flex: 1 1 18rem;
+  }
+
+  .history-note-card {
+    border: 1px solid rgba(10, 61, 89, 0.08);
+    border-radius: 14px;
+    background: rgba(255, 255, 255, 0.82);
+    padding: 0.9rem 1rem;
+  }
+
+  .history-note-card p {
+    margin: 0;
   }
 
   @media (max-width: 760px) {

@@ -108,7 +108,7 @@ def _group_key(payee: str, import_account_id: str | None) -> str:
 
 def scan_unknowns(journal_path: Path, rules: list[dict], import_accounts: dict[str, dict] | None = None) -> dict:
     lines = journal_path.read_text(encoding="utf-8").splitlines()
-    grouped: dict[str, dict] = defaultdict(lambda: {"txns": []})
+    grouped: dict[str, dict] = defaultdict(lambda: {"txns": [], "_matchSignatures": []})
 
     for start, end in _iter_transaction_ranges(lines):
         header_line = lines[start]
@@ -141,7 +141,7 @@ def scan_unknowns(journal_path: Path, rules: list[dict], import_accounts: dict[s
             import_ledger_account = str(import_account_cfg.get("ledger_account", "")).strip() or None
 
         key = _group_key(current_payee, import_account_id)
-        matched = find_matching_rule({"payee": current_payee}, rules)
+        matched = find_matching_rule({"payee": current_payee, "date": current_date.replace("/", "-")}, rules)
         group = grouped[key]
         group["groupKey"] = key
         group["payeeDisplay"] = current_payee
@@ -150,9 +150,13 @@ def scan_unknowns(journal_path: Path, rules: list[dict], import_accounts: dict[s
         group["importLedgerAccount"] = import_ledger_account
         group["sourceAccountLabel"] = import_account_display_name or counterparty or None
         group["sourceLedgerAccount"] = import_ledger_account or counterparty or None
-        group["suggestedAccount"] = extract_set_account(matched) if matched else None
-        group["matchedRuleId"] = matched["id"] if matched else None
-        group["matchedRulePattern"] = matched["conditions"][0]["value"] if matched else None
+        group["_matchSignatures"].append(
+            (
+                matched["id"] if matched else None,
+                extract_set_account(matched) if matched else None,
+                matched["conditions"][0]["value"] if matched else None,
+            )
+        )
 
         for p in unknown_postings:
             group["txns"].append(
@@ -167,7 +171,20 @@ def scan_unknowns(journal_path: Path, rules: list[dict], import_accounts: dict[s
                 }
             )
 
-    return {"groups": list(grouped.values())}
+    groups = list(grouped.values())
+    for group in groups:
+        signatures = {tuple(signature) for signature in group.pop("_matchSignatures", [])}
+        if len(signatures) == 1:
+            matched_rule_id, suggested_account, matched_pattern = next(iter(signatures))
+            group["suggestedAccount"] = suggested_account
+            group["matchedRuleId"] = matched_rule_id
+            group["matchedRulePattern"] = matched_pattern
+        else:
+            group["suggestedAccount"] = None
+            group["matchedRuleId"] = None
+            group["matchedRulePattern"] = None
+
+    return {"groups": groups}
 
 
 def apply_unknown_mappings(

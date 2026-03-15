@@ -14,6 +14,8 @@ from models import (
     ImportPreviewRequest,
     ImportUndoRequest,
     PayeeRuleRequest,
+    RuleHistoryApplyRequest,
+    RuleHistoryScanRequest,
     RuleCreateRequest,
     RuleReorderRequest,
     RuleUpdateRequest,
@@ -36,6 +38,7 @@ from services.import_profile_service import import_source_summary
 from services.institution_registry import canonical_template_id, display_name_for, list_templates
 from services.ledger_runner import CommandError, run_cmd
 from services.opening_balance_service import opening_balance_index
+from services.rule_reapply_service import apply_rule_reapply, scan_rule_reapply
 from services.stage_store import StageStore
 from services.rules_service import (
     create_rule,
@@ -187,6 +190,13 @@ def _require_workspace_config():
     if config is None:
         raise HTTPException(status_code=409, detail="workspace_not_initialized")
     return config
+
+
+def _rule_or_404(path: Path, rule_id: str) -> dict:
+    rule = next((item for item in load_rules(path) if item["id"] == rule_id), None)
+    if rule is None:
+        raise HTTPException(status_code=404, detail="rule not found")
+    return rule
 
 
 @app.get("/api/health")
@@ -788,6 +798,80 @@ def rules_update(rule_id: str, req: RuleUpdateRequest) -> dict:
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     return {"rule": rule}
+
+
+@app.post("/api/rules/{rule_id}/history/scan")
+def rules_history_scan(rule_id: str, req: RuleHistoryScanRequest) -> dict:
+    config = _require_workspace_config()
+    journal_path = Path(req.journalPath)
+    if not journal_path.exists():
+        raise HTTPException(status_code=404, detail="journal not found")
+
+    accounts_dat = config.init_dir / "10-accounts.dat"
+    path = ensure_rules_store(config.init_dir, accounts_dat)
+    rule = _rule_or_404(path, rule_id)
+    try:
+        data = scan_rule_reapply(journal_path, rule, config.import_accounts)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+    payload = {
+        "kind": "rule_history",
+        "status": "ready",
+        "ruleId": rule_id,
+        "ruleName": rule.get("name"),
+        "journalPath": str(journal_path.resolve()),
+        "targetAccount": data["targetAccount"],
+        "candidates": data["candidates"],
+        "warnings": data["warnings"],
+        "summary": data["summary"],
+    }
+    stage_id = stages.create(payload)
+    payload["stageId"] = stage_id
+    return payload
+
+
+@app.post("/api/rules/history/apply")
+def rules_history_apply(req: RuleHistoryApplyRequest) -> dict:
+    config = _require_workspace_config()
+    try:
+        stage = stages.load(req.stageId)
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail="stage not found") from e
+
+    if stage.get("kind") != "rule_history":
+        raise HTTPException(status_code=400, detail="stage kind mismatch")
+    if stage.get("status") == "applied":
+        return stage
+
+    selected_candidate_ids = [candidate_id for candidate_id in req.selectedCandidateIds if candidate_id]
+    if not selected_candidate_ids:
+        raise HTTPException(status_code=400, detail="no historical matches selected")
+
+    journal_path = Path(stage["journalPath"])
+    accounts_dat = config.init_dir / "10-accounts.dat"
+    journal_backup = backup_file(journal_path, "rule-history")
+
+    try:
+        updated_count, warnings = apply_rule_reapply(
+            journal_path=journal_path,
+            accounts_dat=accounts_dat,
+            candidates=stage.get("candidates") or [],
+            selected_candidate_ids=selected_candidate_ids,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+    stage["status"] = "applied"
+    stage["selectedCandidateIds"] = selected_candidate_ids
+    stage["result"] = {
+        "applied": True,
+        "backupPath": str(journal_backup.resolve()),
+        "updatedTxnCount": updated_count,
+        "warnings": warnings,
+    }
+    stages.save(req.stageId, stage)
+    return stage
 
 
 @app.delete("/api/rules/{rule_id}")
