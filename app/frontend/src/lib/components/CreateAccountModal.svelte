@@ -3,6 +3,7 @@
 
   export let accountName = '';
   export let accountType = 'Expense';
+  export let accountDescription = '';
   export let error = '';
   export let loading = false;
   export let onNameInput: () => void = () => {};
@@ -72,6 +73,17 @@
         <option value="Revenue">Revenue</option>
         <option value="Equity">Equity</option>
       </select>
+    </div>
+
+    <div class="field">
+      <label for="newAccountDescription">Description</label>
+      <input
+        id="newAccountDescription"
+        bind:value={accountDescription}
+        placeholder="Optional account note"
+        on:keydown={handleEnterKey}
+      />
+      <p class="muted small">Optional. Saved to `10-accounts.dat` as `; description: ...`.</p>
     </div>
 
     {#if error}

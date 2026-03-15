@@ -63,6 +63,7 @@
   let showCreateAccountModal = false;
   let newAccountName = '';
   let newAccountType = 'Expense';
+  let newAccountDescription = '';
   let createAccountError = '';
   let createAccountContext: { mode: 'new-rule' | 'existing-rule'; ruleId: string | null } = {
     mode: 'new-rule',
@@ -444,6 +445,7 @@
   ) {
     createAccountContext = context;
     newAccountName = initialName;
+    newAccountDescription = '';
     updateInferredTypeFromName();
     createAccountError = '';
     showCreateAccountModal = true;
@@ -469,7 +471,8 @@
     try {
       const created = await apiPost<{ added: boolean; warning: string | null }>('/api/accounts', {
         account: newAccountName,
-        accountType: newAccountType
+        accountType: newAccountType,
+        description: newAccountDescription
       });
       if (created.warning) {
         createAccountError = created.warning;
@@ -742,6 +745,7 @@
   <CreateAccountModal
     bind:accountName={newAccountName}
     bind:accountType={newAccountType}
+    bind:accountDescription={newAccountDescription}
     error={createAccountError}
     {loading}
     onNameInput={updateInferredTypeFromName}

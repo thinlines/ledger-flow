@@ -140,6 +140,7 @@
   let showCreateAccountModal = false;
   let newAccountName = '';
   let newAccountType = 'Expense';
+  let newAccountDescription = '';
   let createAccountError = '';
   let newAccountInputEl: HTMLInputElement | null = null;
   let createAccountContext: { mode: 'rule' | 'group'; groupKey: string | null } = { mode: 'rule', groupKey: null };
@@ -743,6 +744,7 @@
   async function openCreateAccountModal(initialName = '', context: { mode: 'rule' | 'group'; groupKey: string | null }) {
     createAccountContext = context;
     newAccountName = initialName;
+    newAccountDescription = '';
     updateInferredTypeFromName();
     createAccountError = '';
     showCreateAccountModal = true;
@@ -775,7 +777,8 @@
     try {
       const created = await apiPost<{ added: boolean; warning: string | null }>('/api/accounts', {
         account: newAccountName,
-        accountType: newAccountType
+        accountType: newAccountType,
+        description: newAccountDescription
       });
       if (created.warning) {
         createAccountError = created.warning;
@@ -1260,6 +1263,16 @@
           <option value="Revenue">Revenue</option>
           <option value="Equity">Equity</option>
         </select>
+      </div>
+      <div class="field">
+        <label for="newAccountDescription">Description</label>
+        <input
+          id="newAccountDescription"
+          bind:value={newAccountDescription}
+          placeholder="Optional account note"
+          on:keydown={(e) => (e.key === 'Enter' ? (e.preventDefault(), createAccountAndContinue()) : undefined)}
+        />
+        <p class="muted small">Optional. Saved to `10-accounts.dat` as `; description: ...`.</p>
       </div>
       {#if createAccountError}<p class="error-text">{createAccountError}</p>{/if}
       <div class="actions">
