@@ -24,6 +24,7 @@ class JournalTransaction:
     end: int
     source_identity: str | None
     source_payload_hash: str | None
+    metadata: dict[str, str]
 
 
 def history_file_path(config: AppConfig) -> Path:
@@ -74,12 +75,15 @@ def _scan_journal_transactions(lines: list[str]) -> list[JournalTransaction]:
     for start, end in _iter_transaction_ranges(lines):
         source_identity = None
         source_payload_hash = None
+        metadata: dict[str, str] = {}
         for line in lines[start + 1:end]:
             match = META_RE.match(line)
             if not match:
                 continue
             key = match.group(1).strip().lower()
             value = match.group(2).strip() or None
+            if value is not None:
+                metadata[key] = value
             if key == "source_identity":
                 source_identity = value
             elif key == "source_payload_hash":
@@ -90,6 +94,7 @@ def _scan_journal_transactions(lines: list[str]) -> list[JournalTransaction]:
                 end=end,
                 source_identity=source_identity,
                 source_payload_hash=source_payload_hash,
+                metadata=metadata,
             )
         )
     return transactions
@@ -98,6 +103,64 @@ def _scan_journal_transactions(lines: list[str]) -> list[JournalTransaction]:
 def _load_journal_transactions(journal_path: Path) -> tuple[list[str], list[JournalTransaction]]:
     lines = journal_path.read_text(encoding="utf-8").splitlines()
     return lines, _scan_journal_transactions(lines)
+
+
+def _upsert_transaction_metadata(lines: list[str], transaction: JournalTransaction, updates: dict[str, str]) -> list[str]:
+    txn_lines = list(lines[transaction.start:transaction.end])
+    existing_indexes: dict[str, int] = {}
+    insert_at = 1
+    for index, line in enumerate(txn_lines[1:], start=1):
+        match = META_RE.match(line)
+        if not match:
+            break
+        existing_indexes[match.group(1).strip().lower()] = index
+        insert_at = index + 1
+
+    inserts: list[str] = []
+    for key, value in updates.items():
+        line = f"    ; {key}: {value}"
+        if key in existing_indexes:
+            txn_lines[existing_indexes[key]] = line
+        else:
+            inserts.append(line)
+
+    if inserts:
+        txn_lines[insert_at:insert_at] = inserts
+
+    updated_lines = list(lines)
+    updated_lines[transaction.start:transaction.end] = txn_lines
+    return updated_lines
+
+
+def _downgrade_remaining_transfer_peers(lines: list[str], removed_transactions: list[JournalTransaction]) -> list[str]:
+    removed_transfer_ids = {
+        str(transaction.metadata.get("transfer_id") or "").strip()
+        for transaction in removed_transactions
+        if str(transaction.metadata.get("transfer_id") or "").strip()
+    }
+    if not removed_transfer_ids:
+        return lines
+
+    updated_lines = list(lines)
+    journal_transactions = _scan_journal_transactions(updated_lines)
+    for transfer_id in sorted(removed_transfer_ids):
+        remaining = [
+            transaction
+            for transaction in journal_transactions
+            if str(transaction.metadata.get("transfer_id") or "").strip() == transfer_id
+        ]
+        if len(remaining) > 1:
+            raise ValueError("Transfer-linked transactions are no longer in a valid state for undo.")
+        if len(remaining) != 1:
+            continue
+        updated_lines = _upsert_transaction_metadata(
+            updated_lines,
+            remaining[0],
+            {"transfer_state": "pending"},
+        )
+        journal_transactions = _scan_journal_transactions(updated_lines)
+
+    return updated_lines
 
 
 def _required_imported_transactions(entry: dict) -> list[tuple[str, str | None]]:
@@ -285,6 +348,7 @@ def undo_import(config: AppConfig, history_id: str) -> dict:
         kept_lines.extend(lines[cursor:start])
         cursor = end
     kept_lines.extend(lines[cursor:])
+    kept_lines = _downgrade_remaining_transfer_peers(kept_lines, matched_transactions)
     if kept_lines:
         journal_path.write_text("\n".join(kept_lines).rstrip() + "\n", encoding="utf-8")
     else:

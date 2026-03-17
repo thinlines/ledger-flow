@@ -26,14 +26,17 @@ class UnknownScanRequest(BaseModel):
     journalPath: str
 
 
-class UnknownMapping(BaseModel):
+class UnknownSelection(BaseModel):
     groupKey: str
-    chosenAccount: str
+    selectionType: Literal["category", "transfer"]
+    categoryAccount: str | None = None
+    targetTrackedAccountId: str | None = None
+    matchedCandidateId: str | None = None
 
 
 class UnknownStageRequest(BaseModel):
     stageId: str
-    mappings: list[UnknownMapping]
+    selections: list[UnknownSelection]
 
 
 class PayeeRuleRequest(BaseModel):
