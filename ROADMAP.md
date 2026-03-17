@@ -20,6 +20,8 @@ Important limitations in the current baseline:
 
 - balance and net-worth views depend on imported journal history; opening balances are not yet a first-class workflow
 - the product model is still centered on configured import accounts rather than a broader account inventory
+- review and rule flows can create arbitrary ledger accounts, but the app does not yet make those balance-sheet vs category distinctions visible or auditable
+- transfers between tracked accounts are not yet a first-class workflow; users can approximate them with manual ledger accounts, but the app does not yet detect, match, or hide that bookkeeping cleanly
 - the main navigation is still a compact top bar suited to the current route set, not the next stage of the product
 - ongoing account management still lives mostly inside setup instead of a dedicated account-management surface
 
@@ -122,6 +124,15 @@ Current status:
 - the dashboard derives balances from journal activity for configured import accounts
 - eventual consistency is already a product principle, but the product model is still too import-centric for that principle to be fully usable
 
+Product model direction:
+
+- `/accounts` should represent the user's balance sheet, not the entire chart of accounts
+- tracked accounts should include asset and liability accounts such as checking, savings, cash, credit cards, loans, mortgages, and investments
+- liabilities such as auto loans should be tracked accounts when the user cares about the outstanding balance and net-worth impact
+- income and expense accounts should remain part of categorization and rules, not the primary account inventory
+- equity accounts and transfer-clearing accounts should exist as internal or advanced accounting structures, hidden from the primary account list by default
+- the app should preserve flexibility to create arbitrary ledger accounts, but balance-sheet accounts created during review must become visible and auditable instead of silently living outside tracked-account inventory
+
 Remaining scope:
 
 - opening balance workflow and persistence
@@ -130,6 +141,8 @@ Remaining scope:
 - clearer distinction between tracked accounts and import configuration
 - add/delete/archive/reorder account management as appropriate
 - account-level completeness and status cues
+- clearer guidance in review and rules when the user is creating a category versus a tracked balance-sheet account
+- an advanced chart-of-accounts or account-audit view for ledger accounts created outside the tracked-account flow
 
 Scope:
 
@@ -139,12 +152,22 @@ Scope:
 - Show all accounts in a dedicated Accounts area with names, balances, status, and edit actions
 - Allow users to add more accounts later without relying on setup as the only management surface
 - Preserve backfillability: older years can be imported later without breaking the current financial picture
+- Make account-type expectations explicit:
+  - tracked accounts are assets and liabilities
+  - categories are income and expenses
+  - system accounts such as equity and transfer-clearing stay hidden by default
+- Treat loan payments and other balance-sheet movements accordingly:
+  - principal moves between tracked accounts
+  - interest and fees remain categories
+- Tighten unknown-review and rule-authoring flows so creating an `Assets:` or `Liabilities:` account prompts tracked-account creation or an explicit audit trail instead of only appending to the ledger account list
 
 Expected outcome:
 
 - Users can adopt the product incrementally instead of needing complete importer coverage up front
 - Unsupported institutions no longer block adoption
 - The overview can become trustworthy for balances and net worth, not only spending activity
+- The user can understand why a liability such as an auto loan appears in Accounts while its interest expense appears in categorization
+- Flexibility in review no longer comes at the cost of invisible balance-sheet accounts
 
 ### 2. Navigation, Framing, and App Shell
 
@@ -235,6 +258,7 @@ Current status:
 
 - setup now keeps the first import inline and can hand off to review or overview
 - the broader daily-use loop still needs tighter continuity between overview, accounts, import, review, and automation
+- transfers between tracked accounts still require raw accounting knowledge instead of a first-class product flow
 
 Scope:
 
@@ -243,10 +267,20 @@ Scope:
 - Clearer "what changed" summaries after import and review actions
 - Better movement between accounts, import, and overview once account management is first-class
 - More useful home-page cues for stale inbox files, unresolved unknowns, and recent conflicts
+- Add first-class transfer handling between tracked accounts:
+  - support direct transfers when the movement enters the ledger once
+  - support pending imported transfers when only one imported side has arrived
+  - support matched imported transfers when both sides are imported independently
+- Hide transfer-clearing accounts and journal plumbing from the primary UI while keeping them internally consistent and auditable
+- Detect likely transfer pairs during review using tracked-account context, amount, and timing, and let one user action resolve both sides when confidence is sufficient
+- Keep transfer-clearing balances normally at zero; only pending unmatched transfers should leave a temporary balance behind
+- Treat opaque debt payments as future work rather than forcing early transfer logic to guess principal versus interest
 
 Expected outcome:
 
 - The app feels like one continuous workflow rather than separate tools
+- A user can move money between tracked accounts without learning about intermediate ledger accounts
+- Imported transfers no longer force duplicate-value mistakes or raw account-name workarounds in review
 
 ### 6. All-Caught-Up Experience and Financial Guidance
 
@@ -296,6 +330,7 @@ These are valid ideas, but they are not current priorities:
 
 - Merchant management UI
 - Expanding the rule language beyond the current limited matching model
+- debt-payment decomposition and richer liability servicing workflows such as principal-vs-interest splits, amortization guidance, and lender-specific debt management beyond pure transfer handling
 - Declarative CSV import row rules for advanced conditional parsing or categorization, inspired by hledger-style `if` matching, unless they can be introduced without making account setup feel heavy or surprising
 - Full budgeting system
 - Zero-based/envelope budgeting workflow
@@ -330,6 +365,11 @@ Definition of done:
 - Add a manual or unsupported-account path
 - Separate tracked accounts from import configuration
 - Add a dedicated Accounts screen with add, view, and edit flows
+- Make the account model explicit in product flows:
+  - Accounts = assets and liabilities
+  - Categories = income and expenses
+  - System accounts = advanced/internal only
+- Add auditability for ledger accounts created through review and rules
 
 Current status:
 
@@ -342,6 +382,8 @@ Definition of done:
 - Balances can be seeded with opening values and refined later
 - The account inventory can be viewed and edited outside setup
 - Eventual consistency is reflected in real product workflows, not only in project principles
+- Liabilities such as loans are clearly handled as tracked accounts rather than ambiguous categories
+- Balance-sheet accounts created outside the normal account flow are still visible, reviewable, and explainable
 
 ### Milestone C: Navigation and App Shell
 
@@ -382,10 +424,13 @@ Definition of done:
 - Tighten import-to-review navigation
 - Surface post-import and post-review outcomes more clearly
 - Make account management part of the daily loop instead of a side path
+- Add first-class transfer handling that hides intermediate bookkeeping from the user while correctly matching imported account-to-account movement
 
 Definition of done:
 
 - The common personal-finance loop is smooth: import, review, confirm, monitor, and adjust accounts
+- Pure transfers between tracked accounts can be created or accepted without exposing transfer-clearing accounts
+- Imported transfer pairs can be matched without duplicating balances, while opaque debt-payment splitting remains explicitly out of scope for this milestone
 
 ### Milestone F: All-Caught-Up Guidance
 
