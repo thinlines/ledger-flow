@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { Dialog as DialogPrimitive } from 'bits-ui';
   import { goto } from '$app/navigation';
   import { page } from '$app/stores';
   import { onMount, tick } from 'svelte';
@@ -74,7 +75,9 @@
   let historyJournalPath = '';
   let historyError = '';
   let historyLoading = false;
+  let historyJournalSelectEl: HTMLSelectElement | null = null;
   let historyApplyNotice: HistoryApplyNotice | null = null;
+  const categoryAccountTypes = ['Expense', 'Revenue'];
 
   const historyApplyNoticeKeys = [
     'historyApplied',
@@ -120,8 +123,14 @@
     return 'Expense';
   }
 
+  function isCategoryAccountName(accountName: string): boolean {
+    const prefix = accountName.split(':', 1)[0]?.trim().toLowerCase() || '';
+    return ['expenses', 'expense', 'income', 'revenue'].includes(prefix);
+  }
+
   function updateInferredTypeFromName() {
-    newAccountType = inferAccountType(newAccountName);
+    const inferredType = inferAccountType(newAccountName);
+    newAccountType = categoryAccountTypes.includes(inferredType) ? inferredType : categoryAccountTypes[0];
   }
 
   function pathLabel(path: string): string {
@@ -275,19 +284,19 @@
       if (!initialized) return;
       const [rulesData, accountsData, journalsData] = await Promise.all([
         apiGet<{ rules: Rule[] }>('/api/rules'),
-        apiGet<{ accounts: string[] }>('/api/accounts'),
+        apiGet<{ accounts: string[]; categoryAccounts?: string[] }>('/api/accounts'),
         apiGet<{ journals: JournalRow[] }>('/api/journals')
       ]);
       const nextRules = rulesData.rules.map(normalizeRule);
       rules = nextRules;
       syncExpandedRule(nextRules);
       syncRuleSnapshots(nextRules);
-      accounts = accountsData.accounts;
+      accounts = accountsData.categoryAccounts ?? accountsData.accounts;
       journals = journalsData.journals;
       if (!historyJournalPath) {
         historyJournalPath = journalsData.journals[journalsData.journals.length - 1]?.absPath ?? '';
       }
-      newActions = ensureSetAccountAction(newActions, accountsData.accounts[0] ?? '');
+      newActions = ensureSetAccountAction(newActions, (accountsData.categoryAccounts ?? accountsData.accounts)[0] ?? '');
     } catch (e) {
       error = String(e);
     } finally {
@@ -466,6 +475,10 @@
 
   async function createAccountAndContinue() {
     if (!newAccountName || !newAccountType) return;
+    if (!isCategoryAccountName(newAccountName) || !categoryAccountTypes.includes(newAccountType)) {
+      createAccountError = 'Rules can only create income or expense accounts.';
+      return;
+    }
     loading = true;
     createAccountError = '';
     try {
@@ -479,8 +492,8 @@
         return;
       }
 
-      const refreshed = await apiGet<{ accounts: string[] }>('/api/accounts');
-      accounts = refreshed.accounts;
+      const refreshed = await apiGet<{ accounts: string[]; categoryAccounts?: string[] }>('/api/accounts');
+      accounts = refreshed.categoryAccounts ?? refreshed.accounts;
 
       if (createAccountContext.mode === 'new-rule') {
         newActions = setActionsAccount(newActions, newAccountName);
@@ -526,6 +539,11 @@
     historyError = '';
     historyJournalPath = historyJournalPath || journals[journals.length - 1]?.absPath || '';
     showRuleHistoryModal = true;
+  }
+
+  function handleRuleHistoryOpenAutoFocus(event: Event) {
+    event.preventDefault();
+    historyJournalSelectEl?.focus();
   }
 
   function closeRuleHistoryModal() {
@@ -682,18 +700,18 @@
   </section>
 {/if}
 
-{#if showRuleHistoryModal}
-  <div
-    class="modal-backdrop"
-    role="button"
-    aria-label="Close dialog"
-    tabindex="0"
-    on:click={(e) => ((e.target as HTMLElement) === (e.currentTarget as HTMLElement) ? closeRuleHistoryModal() : undefined)}
-    on:keydown={(e) => (e.key === 'Escape' ? closeRuleHistoryModal() : undefined)}
-  >
-    <div class="modal rule-history-modal" role="dialog" tabindex="-1" aria-modal="true" aria-label="Apply Rule to Past Transactions">
-      <h3>Apply Rule to Past Transactions</h3>
-      <p class="muted">
+<DialogPrimitive.Root bind:open={showRuleHistoryModal}>
+  <DialogPrimitive.Portal>
+    <DialogPrimitive.Overlay class="rules-modal-backdrop" />
+
+    <DialogPrimitive.Content
+      class="rules-modal rules-rule-history-modal"
+      aria-labelledby="rule-history-title"
+      aria-describedby="rule-history-description"
+      onOpenAutoFocus={handleRuleHistoryOpenAutoFocus}
+    >
+      <h3 id="rule-history-title">Apply Rule to Past Transactions</h3>
+      <p id="rule-history-description" class="muted">
         Open the review queue for imported transactions that currently match {historyRule ? `"${ruleLabel(historyRule)}"` : 'this rule'}.
         Review and apply the historical changes on the Categorization page.
       </p>
@@ -701,7 +719,7 @@
       <div class="rule-history-scope">
         <div class="field">
           <label for="historyJournalSelect">Journal</label>
-          <select id="historyJournalSelect" bind:value={historyJournalPath}>
+          <select id="historyJournalSelect" bind:this={historyJournalSelectEl} bind:value={historyJournalPath}>
             <option value="">Select...</option>
             {#each journals as journal}
               <option value={journal.absPath}>{journal.fileName}</option>
@@ -737,22 +755,23 @@
       <div class="actions">
         <button class="btn" type="button" on:click={closeRuleHistoryModal}>Close</button>
       </div>
-    </div>
-  </div>
-{/if}
+    </DialogPrimitive.Content>
+  </DialogPrimitive.Portal>
+</DialogPrimitive.Root>
 
-{#if showCreateAccountModal}
-  <CreateAccountModal
-    bind:accountName={newAccountName}
-    bind:accountType={newAccountType}
-    bind:accountDescription={newAccountDescription}
-    error={createAccountError}
-    {loading}
-    onNameInput={updateInferredTypeFromName}
-    onClose={closeCreateAccountModal}
-    onSubmit={createAccountAndContinue}
-  />
-{/if}
+<CreateAccountModal
+  bind:open={showCreateAccountModal}
+  bind:accountName={newAccountName}
+  bind:accountType={newAccountType}
+  bind:accountDescription={newAccountDescription}
+  allowedAccountTypes={categoryAccountTypes}
+  error={createAccountError}
+  {loading}
+  description="Enter a fully qualified income or expense account name."
+  onNameInput={updateInferredTypeFromName}
+  onClose={closeCreateAccountModal}
+  onSubmit={createAccountAndContinue}
+/>
 
 <style>
   section.view-card {
@@ -872,34 +891,36 @@
     margin-bottom: 0.25rem;
   }
 
-  .modal-backdrop {
+  :global(.rules-modal-backdrop) {
     position: fixed;
     inset: 0;
     background: rgba(10, 20, 30, 0.35);
-    display: grid;
-    place-items: center;
-    padding: 1rem;
     z-index: 30;
   }
 
-  .modal {
-    width: min(620px, 100%);
+  :global(.rules-modal) {
+    width: min(620px, calc(100vw - 2rem));
     background: #fff;
     border: 1px solid var(--line);
     border-radius: 14px;
     box-shadow: var(--shadow);
     padding: 1rem;
     max-height: calc(100vh - 2rem);
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
     overflow: auto;
+    z-index: 31;
   }
 
-  .rule-history-modal {
+  :global(.rules-rule-history-modal) {
     width: min(42rem, 92vw);
     display: grid;
     gap: 0.95rem;
   }
 
-  .rule-history-modal h3 {
+  :global(.rules-rule-history-modal) h3 {
     margin: 0;
   }
 

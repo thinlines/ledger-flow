@@ -1,9 +1,11 @@
 <script lang="ts">
+  import { Dialog as DialogPrimitive } from 'bits-ui';
   import { goto } from '$app/navigation';
   import { page } from '$app/stores';
-  import { onMount, tick } from 'svelte';
+  import { onMount } from 'svelte';
   import { apiDelete, apiGet, apiPost } from '$lib/api';
   import AccountCombobox from '$lib/components/AccountCombobox.svelte';
+  import CreateAccountModal from '$lib/components/CreateAccountModal.svelte';
   import RuleEditor from '$lib/components/RuleEditor.svelte';
   import type { RuleAction, RuleCondition } from '$lib/components/rule-editor-types';
   import {
@@ -19,13 +21,40 @@
     suggestedRuleName
   } from '$lib/rules';
 
+  type TrackedAccount = {
+    id: string;
+    displayName: string;
+    ledgerAccount: string;
+    kind: string;
+    importConfigured: boolean;
+  };
+
+  type TransferSuggestion = {
+    candidateTxnId: string;
+    candidateState: string;
+    candidateTransferId?: string | null;
+    targetTrackedAccountId: string;
+    targetTrackedAccountName?: string | null;
+    targetTrackedAccountKind?: string | null;
+    candidateTransactionStartLine: number;
+    candidateTransactionEndLine: number;
+    candidateGroupKey: string;
+    candidateUnknownLineNo?: number | null;
+  };
+
   type TxnRow = {
     txnId: string;
+    transactionId?: string;
     date: string;
     lineNo: number;
+    transactionStartLine?: number;
+    transactionEndLine?: number;
     amount: string;
     counterpartyAccount: string;
     line: string;
+    sourceTrackedAccountId?: string | null;
+    sourceTrackedAccountKind?: string | null;
+    transferSuggestion?: TransferSuggestion | null;
   };
 
   type UnknownGroup = {
@@ -36,16 +65,26 @@
     importLedgerAccount?: string | null;
     sourceAccountLabel?: string | null;
     sourceLedgerAccount?: string | null;
+    sourceTrackedAccountId?: string | null;
+    sourceTrackedAccountKind?: string | null;
     suggestedAccount: string | null;
     matchedRuleId?: string | null;
     matchedRulePattern?: string | null;
     txns: TxnRow[];
   };
 
+  type GroupSelection = {
+    selectionType: 'category' | 'transfer';
+    categoryAccount?: string;
+    targetTrackedAccountId?: string;
+    matchedCandidateId?: string;
+  };
+
   type UnknownStage = {
     kind?: 'unknowns';
     stageId: string;
     groups: UnknownGroup[];
+    selections?: Record<string, GroupSelection>;
     summary?: {
       groupCount?: number;
       txnUpdates: number;
@@ -113,13 +152,14 @@
   let journalPath = '';
   let journals: Array<{ fileName: string; absPath: string }> = [];
   let accounts: string[] = [];
+  let trackedAccounts: TrackedAccount[] = [];
   let rules: Rule[] = [];
 
   let stage: UnknownStage | null = null;
   let historyStage: RuleHistoryStage | null = null;
   let error = '';
   let loading = false;
-  let mappings: Record<string, string> = {};
+  let selections: Record<string, GroupSelection> = {};
   let historySelectedCandidateIds: string[] = [];
 
   let showRuleModal = false;
@@ -142,11 +182,12 @@
   let newAccountType = 'Expense';
   let newAccountDescription = '';
   let createAccountError = '';
-  let newAccountInputEl: HTMLInputElement | null = null;
-  let createAccountContext: { mode: 'rule' | 'group'; groupKey: string | null } = { mode: 'rule', groupKey: null };
+  let ruleNameInputEl: HTMLInputElement | null = null;
+  let createAccountContext: { mode: 'rule' | 'category'; groupKey: string | null } = { mode: 'rule', groupKey: null };
   let statusFilter: 'all' | 'ready' | 'needs' = 'all';
   let lastApplyResult: UnknownStage['result'] = null;
   let lastAppliedGroups: UnknownGroup[] = [];
+  const categoryAccountTypes = ['Expense', 'Revenue'];
 
   $: selectedRuleAccount = extractSetAccount(ruleActions).trim();
   $: existingRuleCandidates =
@@ -207,7 +248,8 @@
   }
 
   function updateInferredTypeFromName() {
-    newAccountType = inferAccountType(newAccountName);
+    const inferredType = inferAccountType(newAccountName);
+    newAccountType = categoryAccountTypes.includes(inferredType) ? inferredType : categoryAccountTypes[0];
   }
 
   async function loadRules() {
@@ -263,14 +305,16 @@
       initialized = state.initialized;
       if (!initialized) return;
 
-      const [journalsData, accountsData, rulesData] = await Promise.all([
+      const [journalsData, accountsData, trackedAccountsData, rulesData] = await Promise.all([
         apiGet<{ journals: Array<{ fileName: string; absPath: string }> }>('/api/journals'),
-        apiGet<{ accounts: string[] }>('/api/accounts'),
+        apiGet<{ accounts: string[]; categoryAccounts?: string[] }>('/api/accounts'),
+        apiGet<{ trackedAccounts: TrackedAccount[] }>('/api/tracked-accounts'),
         apiGet<{ rules: Rule[] }>('/api/rules')
       ]);
 
       journals = journalsData.journals;
-      accounts = accountsData.accounts;
+      accounts = accountsData.categoryAccounts ?? accountsData.accounts;
+      trackedAccounts = trackedAccountsData.trackedAccounts;
       rules = rulesData.rules.map(normalizeRule);
       if (journals.length) {
         journalPath = journals[journals.length - 1].absPath;
@@ -306,19 +350,13 @@
     }
   }
 
-  function effectiveAccountFor(group: UnknownGroup): string {
-    return (mappings[group.groupKey] || '').trim();
-  }
-
   type ReviewRow = {
     rowId: string;
-    groupKey: string;
-    payeeDisplay: string;
-    date: string;
-    amount: string;
-    sourceAccount: string;
+    group: UnknownGroup;
+    txn: TxnRow;
     status: 'ready' | 'needs';
     matchedRuleId: string | null;
+    selectionType: 'category' | 'transfer';
   };
 
   let reviewRowsData: ReviewRow[] = [];
@@ -326,7 +364,7 @@
   let totalReviewTransactions = 0;
   let readyReviewTransactions = 0;
   let needsReviewTransactions = 0;
-  let mappedGroupCount = 0;
+  let selectedGroupCount = 0;
   let historySelectedCount = 0;
 
   $: reviewRowsData = buildReviewRows(stage?.groups ?? []);
@@ -335,11 +373,77 @@
   $: totalReviewTransactions = reviewRowsData.length;
   $: readyReviewTransactions = reviewRowsData.filter((row) => row.status === 'ready').length;
   $: needsReviewTransactions = reviewRowsData.filter((row) => row.status === 'needs').length;
-  $: mappedGroupCount = (stage?.groups ?? []).filter((group) => effectiveAccountFor(group)).length;
+  $: selectedGroupCount = (stage?.groups ?? []).filter((group) => groupStatus(group) === 'ready').length;
   $: historySelectedCount = historySelectedCandidateIds.length;
 
+  function trackedAccountById(accountId: string | null | undefined): TrackedAccount | null {
+    return trackedAccounts.find((account) => account.id === (accountId ?? '')) ?? null;
+  }
+
+  function isCategoryAccountName(accountName: string): boolean {
+    const prefix = accountName.split(':', 1)[0]?.trim().toLowerCase() || '';
+    return ['expenses', 'expense', 'income', 'revenue'].includes(prefix);
+  }
+
+  function groupTransferSuggestion(group: UnknownGroup): TransferSuggestion | null {
+    const suggestions = group.txns
+      .map((txn) => txn.transferSuggestion ?? null)
+      .filter((suggestion): suggestion is TransferSuggestion => suggestion !== null);
+    if (!suggestions.length || suggestions.length !== group.txns.length) return null;
+    const [firstSuggestion] = suggestions;
+    if (!firstSuggestion) return null;
+    return suggestions.every(
+      (suggestion) => suggestion.targetTrackedAccountId === firstSuggestion.targetTrackedAccountId
+    )
+      ? firstSuggestion
+      : null;
+  }
+
+  function buildDefaultSelection(group: UnknownGroup): GroupSelection {
+    const transferSuggestion = groupTransferSuggestion(group);
+    if (transferSuggestion) {
+      return {
+        selectionType: 'transfer',
+        targetTrackedAccountId: transferSuggestion.targetTrackedAccountId,
+        matchedCandidateId: transferSuggestion.candidateTxnId
+      };
+    }
+
+    return {
+      selectionType: 'category',
+      categoryAccount: (group.suggestedAccount ?? '').trim()
+    };
+  }
+
+  function selectionFor(group: UnknownGroup): GroupSelection {
+    return selections[group.groupKey] ?? buildDefaultSelection(group);
+  }
+
+  function groupMode(group: UnknownGroup): 'category' | 'transfer' {
+    return selectionFor(group).selectionType;
+  }
+
+  function categoryAccountFor(group: UnknownGroup): string {
+    const selection = selectionFor(group);
+    return selection.selectionType === 'category' ? (selection.categoryAccount ?? '').trim() : '';
+  }
+
+  function transferTargetAccountIdFor(group: UnknownGroup): string {
+    const selection = selectionFor(group);
+    return selection.selectionType === 'transfer' ? (selection.targetTrackedAccountId ?? '').trim() : '';
+  }
+
   function groupStatus(group: UnknownGroup): 'ready' | 'needs' {
-    return effectiveAccountFor(group) ? 'ready' : 'needs';
+    const selection = selectionFor(group);
+    if (selection.selectionType === 'transfer') {
+      return selection.targetTrackedAccountId?.trim() ? 'ready' : 'needs';
+    }
+    return selection.categoryAccount?.trim() ? 'ready' : 'needs';
+  }
+
+  function groupStatusLabel(group: UnknownGroup): string {
+    if (groupStatus(group) === 'ready') return 'Ready';
+    return groupMode(group) === 'transfer' ? 'Needs transfer' : 'Needs category';
   }
 
   function buildReviewRows(groups: UnknownGroup[]): ReviewRow[] {
@@ -349,13 +453,11 @@
       for (const txn of group.txns) {
         rows.push({
           rowId: txn.txnId,
-          groupKey: group.groupKey,
-          payeeDisplay: group.payeeDisplay,
-          date: txn.date,
-          amount: txn.amount || '-',
-          sourceAccount: sourceAccountPrimary(group),
+          group,
+          txn,
           status: groupStatus(group),
-          matchedRuleId: group.matchedRuleId || null
+          matchedRuleId: group.matchedRuleId || null,
+          selectionType: groupMode(group)
         });
       }
     }
@@ -363,10 +465,43 @@
     return rows;
   }
 
-  function stageMappingPayload(currentMappings: Record<string, string>) {
-    return Object.entries(currentMappings)
-      .filter(([, value]) => value && value.trim().length > 0)
-      .map(([groupKey, chosenAccount]) => ({ groupKey, chosenAccount }));
+  function stageSelectionPayload(currentSelections: Record<string, GroupSelection>) {
+    return Object.entries(currentSelections).reduce<
+      Array<
+        | {
+            groupKey: string;
+            selectionType: 'category';
+            categoryAccount: string;
+          }
+        | {
+            groupKey: string;
+            selectionType: 'transfer';
+            targetTrackedAccountId: string;
+            matchedCandidateId?: string;
+          }
+      >
+    >((payload, [groupKey, selection]) => {
+      if (selection.selectionType === 'transfer') {
+        const targetTrackedAccountId = (selection.targetTrackedAccountId ?? '').trim();
+        if (!targetTrackedAccountId) return payload;
+        payload.push({
+          groupKey,
+          selectionType: 'transfer',
+          targetTrackedAccountId,
+          matchedCandidateId: selection.matchedCandidateId?.trim() || undefined
+        });
+        return payload;
+      }
+
+      const categoryAccount = (selection.categoryAccount ?? '').trim();
+      if (!categoryAccount) return payload;
+      payload.push({
+        groupKey,
+        selectionType: 'category',
+        categoryAccount
+      });
+      return payload;
+    }, []);
   }
 
   function clearApplyFeedback() {
@@ -377,9 +512,11 @@
   function hydrateStage(nextStage: UnknownStage, { resetFilter }: { resetFilter: boolean }) {
     stage = nextStage;
     if (resetFilter) statusFilter = 'all';
-    mappings = {};
+    const stagedSelections = nextStage.selections ?? {};
+    selections = {};
     for (const group of nextStage.groups ?? []) {
-      if (group.suggestedAccount) mappings[group.groupKey] = group.suggestedAccount;
+      const stagedSelection = stagedSelections[group.groupKey];
+      selections[group.groupKey] = stagedSelection ?? buildDefaultSelection(group);
     }
   }
 
@@ -463,24 +600,36 @@
     if (!stage) return;
 
     clearApplyFeedback();
-    const nextMappings = { ...mappings };
+    const nextSelections = { ...selections };
     for (const group of stage.groups ?? []) {
       const previousSuggested = (group.suggestedAccount ?? '').trim();
-      const currentSelected = (nextMappings[group.groupKey] ?? '').trim();
+      const currentSelection = nextSelections[group.groupKey] ?? buildDefaultSelection(group);
       const match = resolveGroupRuleMatch(group, nextRules);
       const suggestedAccount = match.suggestedAccount;
-      const shouldFollowSuggestion = !currentSelected || currentSelected === previousSuggested;
       group.suggestedAccount = suggestedAccount;
       group.matchedRuleId = match.ruleId;
       group.matchedRulePattern = match.matchedPattern;
-      if (shouldFollowSuggestion && suggestedAccount) {
-        nextMappings[group.groupKey] = suggestedAccount;
-      } else if (shouldFollowSuggestion) {
-        delete nextMappings[group.groupKey];
+
+      if (currentSelection.selectionType === 'transfer') {
+        nextSelections[group.groupKey] = currentSelection;
+        continue;
+      }
+
+      const currentSelected = (currentSelection.categoryAccount ?? '').trim();
+      const shouldFollowSuggestion = !currentSelected || currentSelected === previousSuggested;
+      nextSelections[group.groupKey] = {
+        selectionType: 'category',
+        categoryAccount: shouldFollowSuggestion ? (suggestedAccount ?? '') : currentSelected
+      };
+      if (!shouldFollowSuggestion && !currentSelected) {
+        nextSelections[group.groupKey] = {
+          selectionType: 'category',
+          categoryAccount: ''
+        };
       }
     }
 
-    mappings = nextMappings;
+    selections = nextSelections;
     stage = { ...stage, groups: [...stage.groups] };
   }
 
@@ -490,8 +639,8 @@
     error = '';
     try {
       const stageId = stage.stageId;
-      const payload = stageMappingPayload(mappings);
-      await apiPost<UnknownStage>('/api/unknowns/stage-mappings', { stageId, mappings: payload });
+      const payload = stageSelectionPayload(selections);
+      await apiPost<UnknownStage>('/api/unknowns/stage-mappings', { stageId, selections: payload });
       const appliedStage = await apiPost<UnknownStage>('/api/unknowns/apply', { stageId });
       lastApplyResult = appliedStage.result ?? null;
       lastAppliedGroups = appliedStage.groups ?? [];
@@ -635,6 +784,11 @@
     loadRuleIntoEditor(existingRule, fallbackAccount, ruleSourcePayee);
   }
 
+  function handleRuleModalOpenAutoFocus(event: Event) {
+    event.preventDefault();
+    ruleNameInputEl?.focus();
+  }
+
   async function openRuleModal(groupKey: string) {
     const group = stage?.groups.find((candidate) => candidate.groupKey === groupKey);
     if (!group) return;
@@ -650,7 +804,7 @@
       }
     }
 
-    const fallbackAccount = mappings[group.groupKey] || group.suggestedAccount || '';
+    const fallbackAccount = categoryAccountFor(group) || group.suggestedAccount || '';
 
     ruleGroupKey = group.groupKey;
     ruleSourcePayee = group.payeeDisplay;
@@ -658,7 +812,6 @@
     ruleSourceTxnCount = group.txns.length;
     loadRuleIntoEditor(matchedRule, fallbackAccount, group.payeeDisplay);
     showRuleModal = true;
-    await tick();
   }
 
   async function persistRule({ allowCreateAccountModal }: { allowCreateAccountModal: boolean }) {
@@ -673,6 +826,10 @@
     }
     if (!selectedAccount) {
       ruleError = 'Rule must map to an account.';
+      return false;
+    }
+    if (!isCategoryAccountName(selectedAccount)) {
+      ruleError = 'Rules can only target income or expense accounts.';
       return false;
     }
 
@@ -718,7 +875,13 @@
       ruleMode = 'edit';
       syncGroupsFromRules(nextRules);
       if (ruleGroupKey) {
-        mappings = { ...mappings, [ruleGroupKey]: selectedAccount };
+        selections = {
+          ...selections,
+          [ruleGroupKey]: {
+            selectionType: 'category',
+            categoryAccount: selectedAccount
+          }
+        };
       }
       showRuleModal = false;
       return true;
@@ -735,22 +898,112 @@
     await persistRule({ allowCreateAccountModal: true });
   }
 
-  function setAccountForGroup(groupKey: string, account: string) {
-    if ((mappings[groupKey] || '') === account) return;
+  function setGroupMode(group: UnknownGroup, selectionType: 'category' | 'transfer') {
+    const current = selectionFor(group);
+    const transferSuggestion = groupTransferSuggestion(group);
+    let nextSelection: GroupSelection;
+
+    if (selectionType === 'transfer') {
+      nextSelection = {
+        selectionType,
+        targetTrackedAccountId:
+          current.selectionType === 'transfer'
+            ? current.targetTrackedAccountId ?? ''
+            : transferSuggestion?.targetTrackedAccountId ?? '',
+        matchedCandidateId:
+          current.selectionType === 'transfer'
+            ? current.matchedCandidateId
+            : transferSuggestion?.candidateTxnId
+      };
+    } else {
+      nextSelection = {
+        selectionType,
+        categoryAccount:
+          current.selectionType === 'category' ? current.categoryAccount ?? '' : (group.suggestedAccount ?? '').trim()
+      };
+    }
+
     clearApplyFeedback();
-    mappings = { ...mappings, [groupKey]: account };
+    selections = { ...selections, [group.groupKey]: nextSelection };
   }
 
-  async function openCreateAccountModal(initialName = '', context: { mode: 'rule' | 'group'; groupKey: string | null }) {
+  function setCategoryForGroup(groupKey: string, account: string) {
+    const current = selections[groupKey];
+    if (current?.selectionType === 'category' && (current.categoryAccount ?? '') === account) return;
+    clearApplyFeedback();
+    selections = {
+      ...selections,
+      [groupKey]: {
+        selectionType: 'category',
+        categoryAccount: account
+      }
+    };
+  }
+
+  function setTransferTargetForGroup(group: UnknownGroup, targetTrackedAccountId: string) {
+    const transferSuggestion = groupTransferSuggestion(group);
+    const matchedCandidateId =
+      transferSuggestion?.targetTrackedAccountId === targetTrackedAccountId ? transferSuggestion.candidateTxnId : undefined;
+    clearApplyFeedback();
+    selections = {
+      ...selections,
+      [group.groupKey]: {
+        selectionType: 'transfer',
+        targetTrackedAccountId,
+        matchedCandidateId
+      }
+    };
+  }
+
+  function transferDestinationAccounts(group: UnknownGroup): TrackedAccount[] {
+    return trackedAccounts.filter((account) => account.id !== group.sourceTrackedAccountId);
+  }
+
+  function transferHelperText(group: UnknownGroup, txn: TxnRow): { tone: 'muted' | 'warn'; text: string } | null {
+    if (groupMode(group) !== 'transfer') return null;
+
+    const targetTrackedAccountId = transferTargetAccountIdFor(group);
+    if (!targetTrackedAccountId) {
+      return { tone: 'muted', text: 'Choose the destination tracked account.' };
+    }
+
+    const targetAccount = trackedAccountById(targetTrackedAccountId);
+    const suggestion = txn.transferSuggestion ?? null;
+    if (suggestion && suggestion.targetTrackedAccountId === targetTrackedAccountId) {
+      return {
+        tone: 'muted',
+        text: `Suggested counterpart found in ${suggestion.targetTrackedAccountName ?? targetAccount?.displayName ?? 'the other account'}.`
+      };
+    }
+
+    if (targetAccount?.kind === 'liability') {
+      return {
+        tone: 'warn',
+        text: 'Unmatched liability transfers cannot be accepted yet. Leave this as a category until the other side imports.'
+      };
+    }
+
+    return {
+      tone: 'muted',
+      text: `No imported counterpart found yet. This transfer will stay pending for ${targetAccount?.displayName ?? 'the destination account'}.`
+    };
+  }
+
+  function transferPeerLabel(txn: TxnRow): string {
+    return txn.transferSuggestion?.targetTrackedAccountName?.trim() || 'suggested counterpart';
+  }
+
+  function isTransferMode(group: UnknownGroup): boolean {
+    return groupMode(group) === 'transfer';
+  }
+
+  function openCreateAccountModal(initialName = '', context: { mode: 'rule' | 'category'; groupKey: string | null }) {
     createAccountContext = context;
     newAccountName = initialName;
     newAccountDescription = '';
     updateInferredTypeFromName();
     createAccountError = '';
     showCreateAccountModal = true;
-    await tick();
-    newAccountInputEl?.focus();
-    newAccountInputEl?.select();
   }
 
   function closeCreateAccountModal() {
@@ -761,17 +1014,21 @@
     }
   }
 
-  async function openCreateAccountForGroup(groupKey: string, initialName = '') {
-    await openCreateAccountModal(initialName, { mode: 'group', groupKey });
+  function openCreateAccountForGroup(groupKey: string, initialName = '') {
+    openCreateAccountModal(initialName, { mode: 'category', groupKey });
   }
 
-  async function openCreateAccountForRule(initialName = '') {
+  function openCreateAccountForRule(initialName = '') {
     showRuleModal = false;
-    await openCreateAccountModal(initialName, { mode: 'rule', groupKey: ruleGroupKey });
+    openCreateAccountModal(initialName, { mode: 'rule', groupKey: ruleGroupKey });
   }
 
   async function createAccountAndContinue() {
     if (!newAccountName || !newAccountType) return;
+    if (!isCategoryAccountName(newAccountName) || !categoryAccountTypes.includes(newAccountType)) {
+      createAccountError = 'Review and rules can only create income or expense accounts.';
+      return;
+    }
     loading = true;
     createAccountError = '';
     try {
@@ -785,12 +1042,12 @@
         return;
       }
 
-      const refreshed = await apiGet<{ accounts: string[] }>('/api/accounts');
-      accounts = refreshed.accounts;
+      const refreshed = await apiGet<{ accounts: string[]; categoryAccounts?: string[] }>('/api/accounts');
+      accounts = refreshed.categoryAccounts ?? refreshed.accounts;
 
-      if (createAccountContext.mode === 'group') {
+      if (createAccountContext.mode === 'category') {
         if (createAccountContext.groupKey) {
-          setAccountForGroup(createAccountContext.groupKey, newAccountName);
+          setCategoryForGroup(createAccountContext.groupKey, newAccountName);
         }
         showCreateAccountModal = false;
         return;
@@ -995,7 +1252,7 @@
       <div class="review-summary-head">
         <div>
           <p class="eyebrow">Review Queue</p>
-          <h3>{(stage.groups?.length ?? 0) === 0 ? 'Nothing left to categorize' : 'Review uncategorized transactions'}</h3>
+          <h3>{(stage.groups?.length ?? 0) === 0 ? 'Nothing left to review' : 'Review uncategorized transactions'}</h3>
           <p class="muted">
             {(stage.groups?.length ?? 0) === 0
               ? `No uncategorized transactions were found in ${pathLabel(journalPath)}.`
@@ -1003,7 +1260,7 @@
           </p>
         </div>
         <div class="review-summary-pills">
-          <span class="pill warn">{needsReviewTransactions} need category</span>
+          <span class="pill warn">{needsReviewTransactions} need review</span>
           <span class="pill ok">{readyReviewTransactions} ready</span>
           <span class="pill">{totalReviewTransactions} transactions</span>
         </div>
@@ -1018,7 +1275,7 @@
               class:active-filter={statusFilter === 'needs'}
               on:click={() => (statusFilter = 'needs')}
             >
-              Needs category
+              Needs review
             </button>
             <button
               class="btn"
@@ -1036,9 +1293,9 @@
           {#if !stage.result}
             <div class="review-actions">
               <p class="muted review-hint">
-                Assignments preview automatically. Applying writes {readyReviewTransactions} categorized
-                {readyReviewTransactions === 1 ? ' transaction' : ' transactions'} from {mappedGroupCount}
-                {mappedGroupCount === 1 ? ' payee group' : ' payee groups'} back to {pathLabel(journalPath)}.
+                Assignments preview automatically. Applying writes {readyReviewTransactions} reviewed
+                {readyReviewTransactions === 1 ? ' transaction' : ' transactions'} from {selectedGroupCount}
+                {selectedGroupCount === 1 ? ' review group' : ' review groups'} back to {pathLabel(journalPath)}.
               </p>
               <div class="actions">
                 <button class="btn btn-primary" type="button" disabled={loading || readyReviewTransactions === 0} on:click={applyMappings}>
@@ -1078,7 +1335,7 @@
             <span>Status</span>
             <span>Activity</span>
             <span>Amount</span>
-            <span>Category</span>
+            <span>Assignment</span>
             <span>Automation</span>
           </div>
           {#each filteredReviewRows as row (row.rowId)}
@@ -1086,45 +1343,96 @@
               <div class="review-row-status">
                 <p class="status-copy">
                   <span class="status-dot" aria-hidden="true"></span>
-                  <span>
-                    {#if row.status === 'ready'}
-                      Ready
-                    {:else}
-                      Needs category
-                    {/if}
-                  </span>
+                  <span>{groupStatusLabel(row.group)}</span>
                 </p>
-                {#if row.matchedRuleId}
+                {#if row.selectionType === 'transfer' && row.txn.transferSuggestion}
+                  <p class="row-note">Transfer suggestion</p>
+                {:else if row.matchedRuleId}
                   <p class="row-note">Rule suggestion</p>
                 {/if}
               </div>
 
               <div class="review-row-activity">
                 <div class="group-title-row">
-                  <h4>{row.payeeDisplay}</h4>
+                  <h4>{row.group.payeeDisplay}</h4>
                 </div>
-                <p class="group-meta">{formatShortDate(row.date)}</p>
-                <p class="assignment-value">{row.sourceAccount}</p>
+                <p class="group-meta">{formatShortDate(row.txn.date)}</p>
+                <p class="assignment-value">{sourceAccountPrimary(row.group)}</p>
               </div>
 
               <div class="review-row-amount">
-                <p class="amount-value">{row.amount}</p>
+                <p class="amount-value">{row.txn.amount || '-'}</p>
               </div>
 
               <div class="review-row-category">
-                <AccountCombobox
-                  accounts={accounts}
-                  value={mappings[row.groupKey] || ''}
-                  placeholder="Choose category..."
-                  onChange={(account) => setAccountForGroup(row.groupKey, account)}
-                  onCreate={(seed) => void openCreateAccountForGroup(row.groupKey, seed)}
-                />
+                <div class="assignment-mode-toggle" role="tablist" aria-label={`Assignment mode for ${row.group.payeeDisplay}`}>
+                  <button
+                    class="btn btn-small"
+                    type="button"
+                    class:active-filter={!isTransferMode(row.group)}
+                    on:click={() => setGroupMode(row.group, 'category')}
+                  >
+                    Category
+                  </button>
+                  <button
+                    class="btn btn-small"
+                    type="button"
+                    class:active-filter={isTransferMode(row.group)}
+                    on:click={() => setGroupMode(row.group, 'transfer')}
+                  >
+                    Transfer
+                  </button>
+                </div>
+
+                {#if isTransferMode(row.group)}
+                  <div class="transfer-fields">
+                    <div class="field">
+                      <label for={`transfer-${row.rowId}`}>Destination account</label>
+                      <select
+                        id={`transfer-${row.rowId}`}
+                        value={transferTargetAccountIdFor(row.group)}
+                        on:change={(event) =>
+                          setTransferTargetForGroup(row.group, (event.currentTarget as HTMLSelectElement).value)}
+                      >
+                        <option value="">Choose destination account...</option>
+                        {#each transferDestinationAccounts(row.group) as account}
+                          <option value={account.id}>{account.displayName}</option>
+                        {/each}
+                      </select>
+                    </div>
+
+                    {#if transferHelperText(row.group, row.txn)}
+                      <p
+                        class:warning-text={transferHelperText(row.group, row.txn)?.tone === 'warn'}
+                        class="muted transfer-hint"
+                      >
+                        {transferHelperText(row.group, row.txn)?.text}
+                      </p>
+                    {/if}
+
+                    {#if row.txn.transferSuggestion}
+                      <p class="muted transfer-hint">Suggested peer: {transferPeerLabel(row.txn)}</p>
+                    {/if}
+                  </div>
+                {:else}
+                  <AccountCombobox
+                    accounts={accounts}
+                    value={categoryAccountFor(row.group)}
+                    placeholder="Choose category..."
+                    onChange={(account) => setCategoryForGroup(row.group.groupKey, account)}
+                    onCreate={(seed) => void openCreateAccountForGroup(row.group.groupKey, seed)}
+                  />
+                {/if}
               </div>
 
               <div class="review-row-actions">
-                <button class="btn" type="button" on:click={() => openRuleModal(row.groupKey)}>
-                  {row.matchedRuleId ? 'Edit rule' : 'Save rule'}
-                </button>
+                {#if row.selectionType === 'category'}
+                  <button class="btn" type="button" on:click={() => openRuleModal(row.group.groupKey)}>
+                    {row.matchedRuleId ? 'Edit rule' : 'Save rule'}
+                  </button>
+                {:else}
+                  <p class="muted row-note transfer-rule-note">Transfers are reviewed once and do not create rules.</p>
+                {/if}
               </div>
             </article>
           {/each}
@@ -1134,18 +1442,18 @@
   {/if}
 {/if}
 
-{#if showRuleModal}
-  <div
-    class="modal-backdrop"
-    role="button"
-    aria-label="Close dialog"
-    tabindex="0"
-    on:click={(e) => ((e.target as HTMLElement) === (e.currentTarget as HTMLElement) ? (showRuleModal = false) : undefined)}
-    on:keydown={(e) => (e.key === 'Escape' ? (showRuleModal = false) : undefined)}
-  >
-    <div class="modal rule-modal" role="dialog" tabindex="-1" aria-modal="true" aria-label="Automation Rule">
-      <h3>{ruleMode === 'edit' ? 'Edit Rule' : 'Create Rule'}</h3>
-      <p class="muted">
+<DialogPrimitive.Root bind:open={showRuleModal}>
+  <DialogPrimitive.Portal>
+    <DialogPrimitive.Overlay class="unknowns-modal-backdrop" />
+
+    <DialogPrimitive.Content
+      class="unknowns-modal unknowns-rule-modal"
+      aria-labelledby="rule-modal-title"
+      aria-describedby="rule-modal-description"
+      onOpenAutoFocus={handleRuleModalOpenAutoFocus}
+    >
+      <h3 id="rule-modal-title">{ruleMode === 'edit' ? 'Edit Rule' : 'Create Rule'}</h3>
+      <p id="rule-modal-description" class="muted">
         {ruleMode === 'edit'
           ? 'Update the reusable rule that matched this transaction group.'
           : 'Create a reusable rule from this transaction group.'}
@@ -1166,7 +1474,12 @@
       </div>
       <div class="field rule-name-field">
         <label for="ruleName">Rule Name</label>
-        <input id="ruleName" bind:value={ruleName} placeholder={suggestedRuleName(ruleConditions) || 'Coffee Shop'} />
+        <input
+          id="ruleName"
+          bind:this={ruleNameInputEl}
+          bind:value={ruleName}
+          placeholder={suggestedRuleName(ruleConditions) || 'Coffee Shop'}
+        />
       </div>
       {#if existingRuleCandidates.length}
         <section class="existing-rule-callout" role="status" aria-live="polite">
@@ -1226,69 +1539,24 @@
           {ruleMode === 'edit' ? 'Save Rule Changes' : 'Save Rule'}
         </button>
       </div>
-    </div>
-  </div>
-{/if}
+    </DialogPrimitive.Content>
+  </DialogPrimitive.Portal>
+</DialogPrimitive.Root>
 
-{#if showCreateAccountModal}
-  <div
-    class="modal-backdrop"
-    role="button"
-    aria-label="Close dialog"
-    tabindex="0"
-    on:click={(e) => ((e.target as HTMLElement) === (e.currentTarget as HTMLElement) ? closeCreateAccountModal() : undefined)}
-    on:keydown={(e) => (e.key === 'Escape' ? closeCreateAccountModal() : undefined)}
-  >
-    <div class="modal" role="dialog" tabindex="-1" aria-modal="true" aria-label="Create Account">
-      <h3>Create New Account</h3>
-      <p class="muted">Enter a fully qualified account name.</p>
-      <div class="field">
-        <label for="newAccountName">Account Name</label>
-        <input
-          id="newAccountName"
-          bind:this={newAccountInputEl}
-          bind:value={newAccountName}
-          placeholder="Assets:Transfers"
-          on:input={updateInferredTypeFromName}
-          on:keydown={(e) => (e.key === 'Enter' ? (e.preventDefault(), createAccountAndContinue()) : undefined)}
-        />
-      </div>
-      <div class="field">
-        <label for="newAccountType">Account Type</label>
-        <select id="newAccountType" bind:value={newAccountType}>
-          <option value="Asset">Asset</option>
-          <option value="Cash">Cash</option>
-          <option value="Liability">Liability</option>
-          <option value="Expense">Expense</option>
-          <option value="Revenue">Revenue</option>
-          <option value="Equity">Equity</option>
-        </select>
-      </div>
-      <div class="field">
-        <label for="newAccountDescription">Description</label>
-        <input
-          id="newAccountDescription"
-          bind:value={newAccountDescription}
-          placeholder="Optional account note"
-          on:keydown={(e) => (e.key === 'Enter' ? (e.preventDefault(), createAccountAndContinue()) : undefined)}
-        />
-        <p class="muted small">Optional. Saved to `10-accounts.dat` as `; description: ...`.</p>
-      </div>
-      {#if createAccountError}<p class="error-text">{createAccountError}</p>{/if}
-      <div class="actions">
-        <button class="btn" type="button" on:click={closeCreateAccountModal}>Cancel</button>
-        <button
-          class="btn btn-primary"
-          type="button"
-          disabled={loading || !newAccountName || !newAccountType}
-          on:click={createAccountAndContinue}
-        >
-          {createAccountContext.mode === 'rule' ? 'Create Account and Save Rule' : 'Create Account'}
-        </button>
-      </div>
-    </div>
-  </div>
-{/if}
+<CreateAccountModal
+  bind:open={showCreateAccountModal}
+  bind:accountName={newAccountName}
+  bind:accountType={newAccountType}
+  bind:accountDescription={newAccountDescription}
+  allowedAccountTypes={categoryAccountTypes}
+  error={createAccountError}
+  {loading}
+  description="Enter a fully qualified income or expense account name."
+  submitLabel={createAccountContext.mode === 'rule' ? 'Create Account and Save Rule' : 'Create Account'}
+  onNameInput={updateInferredTypeFromName}
+  onClose={closeCreateAccountModal}
+  onSubmit={createAccountAndContinue}
+/>
 
 <style>
   h3 {
@@ -1486,6 +1754,33 @@
     align-content: center;
   }
 
+  .btn-small {
+    padding: 0.4rem 0.7rem;
+    font-size: 0.78rem;
+  }
+
+  .assignment-mode-toggle {
+    display: inline-flex;
+    gap: 0.45rem;
+    flex-wrap: wrap;
+  }
+
+  .transfer-fields {
+    display: grid;
+    gap: 0.5rem;
+    width: 100%;
+  }
+
+  .transfer-hint,
+  .transfer-rule-note {
+    margin: 0;
+    font-size: 0.8rem;
+  }
+
+  .warning-text {
+    color: #9a3412;
+  }
+
   .history-select-card {
     align-items: center;
     grid-template-columns: repeat(auto-fit, minmax(14rem, max-content));
@@ -1528,29 +1823,31 @@
     padding-left: 1.2rem;
   }
 
-  .modal-backdrop {
+  :global(.unknowns-modal-backdrop) {
     position: fixed;
     inset: 0;
     background: rgba(10, 20, 30, 0.35);
-    display: grid;
-    place-items: center;
-    padding: 1rem;
     z-index: 30;
   }
 
-  .modal {
-    width: min(620px, 100%);
+  :global(.unknowns-modal) {
+    width: min(620px, calc(100vw - 2rem));
     background: #fff;
     border: 1px solid var(--line);
     border-radius: 14px;
     box-shadow: var(--shadow);
     padding: 1rem;
     max-height: calc(100vh - 2rem);
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
     overflow: auto;
+    z-index: 31;
   }
 
-  .rule-modal {
-    width: min(1040px, 100%);
+  :global(.unknowns-rule-modal) {
+    width: min(1040px, calc(100vw - 2rem));
     display: grid;
     gap: 0.9rem;
   }
