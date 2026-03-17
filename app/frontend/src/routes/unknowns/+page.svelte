@@ -567,6 +567,25 @@
     ruleError = '';
   }
 
+  function appendDraftConditionsForEditedRule(existingRule: Rule, draftConditions: RuleCondition[]): RuleCondition[] {
+    const normalizedExisting = sanitizedConditions(existingRule.conditions);
+    const normalizedDraft = sanitizedConditions(draftConditions);
+    if (!normalizedDraft.length) return normalizedExisting;
+
+    const joinerForAppend = normalizedExisting.at(-1)?.joiner ?? 'and';
+    const existingSignatures = new Set(
+      normalizedExisting.map((condition) =>
+        `${condition.field}|${condition.operator}|${condition.value}|${condition.secondaryValue ?? ''}`
+      )
+    );
+
+    const conditionsToAppend = normalizedDraft
+      .filter((condition) => !existingSignatures.has(`${condition.field}|${condition.operator}|${condition.value}|${condition.secondaryValue ?? ''}`))
+      .map((condition) => ({ ...condition, joiner: joinerForAppend }));
+
+    return conditionsToAppend.length ? [...normalizedExisting, ...conditionsToAppend] : normalizedExisting;
+  }
+
   function summarizeRuleCondition(rule: Rule): string {
     const payeeConditions = sanitizedConditions(rule.conditions).filter((condition) => condition.field === 'payee');
     if (!payeeConditions.length) return 'Existing payee rule';
@@ -615,6 +634,7 @@
   }
 
   async function openExistingRuleCandidate(ruleIdToEdit: string) {
+    const draftConditions = [...ruleConditions];
     let existingRule = rules.find((candidate) => candidate.id === ruleIdToEdit) ?? null;
     if (!existingRule) {
       try {
@@ -633,6 +653,7 @@
 
     const fallbackAccount = selectedRuleAccount || extractSetAccount(existingRule.actions);
     loadRuleIntoEditor(existingRule, fallbackAccount, ruleSourcePayee);
+    ruleConditions = appendDraftConditionsForEditedRule(existingRule, draftConditions);
   }
 
   async function openRuleModal(groupKey: string) {
