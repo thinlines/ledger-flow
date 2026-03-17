@@ -1,6 +1,44 @@
 from pathlib import Path
 
 from services.unknowns_service import add_payee_rule, apply_unknown_mappings, create_account, scan_unknowns
+from services.transfer_service import transfer_pair_account
+
+
+def _import_accounts() -> dict[str, dict]:
+    return {
+        "checking_import": {
+            "display_name": "Checking Import",
+            "ledger_account": "Assets:Bank:Checking",
+            "tracked_account_id": "checking",
+        },
+        "savings_import": {
+            "display_name": "Savings Import",
+            "ledger_account": "Assets:Bank:Savings",
+            "tracked_account_id": "savings",
+        },
+        "visa_import": {
+            "display_name": "Visa Import",
+            "ledger_account": "Liabilities:Cards:Visa",
+            "tracked_account_id": "visa",
+        },
+    }
+
+
+def _tracked_accounts() -> dict[str, dict]:
+    return {
+        "checking": {
+            "display_name": "Checking",
+            "ledger_account": "Assets:Bank:Checking",
+        },
+        "savings": {
+            "display_name": "Savings",
+            "ledger_account": "Assets:Bank:Savings",
+        },
+        "visa": {
+            "display_name": "Visa",
+            "ledger_account": "Liabilities:Cards:Visa",
+        },
+    }
 
 
 def test_scan_unknowns_groups_by_payee(tmp_path: Path) -> None:
@@ -161,13 +199,305 @@ account Assets:Wells Fargo Checking
     txn_updates, warnings = apply_unknown_mappings(
         journal_path=journal,
         accounts_dat=accounts,
-        mappings={"coffee shop": "Expenses:Eating Out"},
+        selections={
+            "coffee shop": {
+                "selectionType": "category",
+                "categoryAccount": "Expenses:Eating Out",
+            }
+        },
         scanned_groups=groups,
+        tracked_accounts={},
     )
 
     assert txn_updates == 1
     assert warnings == []
     assert "Expenses:Eating Out" in journal.read_text(encoding="utf-8")
+
+
+def test_scan_unknowns_suggests_unique_transfer_match(tmp_path: Path) -> None:
+    journal = tmp_path / "sample.journal"
+    journal.write_text(
+        """
+2026/02/01 Transfer
+    ; import_account_id: checking_import
+    Expenses:Unknown  $50.00
+    Assets:Bank:Checking
+
+2026/02/03 Transfer
+    ; import_account_id: savings_import
+    Expenses:Unknown  $-50.00
+    Assets:Bank:Savings
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    result = scan_unknowns(journal, [], _import_accounts(), _tracked_accounts())
+
+    checking_group = next(group for group in result["groups"] if group["groupKey"] == "transfer::checking_import")
+    suggestion = checking_group["txns"][0]["transferSuggestion"]
+    assert suggestion is not None
+    assert suggestion["targetTrackedAccountId"] == "savings"
+    assert suggestion["targetTrackedAccountName"] == "Savings"
+
+
+def test_scan_unknowns_leaves_transfer_unsuggested_when_match_is_ambiguous(tmp_path: Path) -> None:
+    journal = tmp_path / "sample.journal"
+    journal.write_text(
+        """
+2026/02/01 Transfer
+    ; import_account_id: checking_import
+    Expenses:Unknown  $50.00
+    Assets:Bank:Checking
+
+2026/02/02 Transfer
+    ; import_account_id: savings_import
+    Expenses:Unknown  $-50.00
+    Assets:Bank:Savings
+
+2026/02/03 Transfer
+    ; import_account_id: savings_import
+    Expenses:Unknown  $-50.00
+    Assets:Bank:Savings
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    result = scan_unknowns(journal, [], _import_accounts(), _tracked_accounts())
+
+    checking_group = next(group for group in result["groups"] if group["groupKey"] == "transfer::checking_import")
+    assert checking_group["txns"][0]["transferSuggestion"] is None
+
+
+def test_apply_unknown_mappings_creates_pending_asset_transfer(tmp_path: Path) -> None:
+    journal = tmp_path / "sample.journal"
+    accounts = tmp_path / "10-accounts.dat"
+    transfer_account = transfer_pair_account("checking", "savings")
+
+    journal.write_text(
+        """
+2026/02/01 Transfer to savings
+    ; import_account_id: checking_import
+    ; source_identity: tx-checking
+    Expenses:Unknown  $50.00
+    Assets:Bank:Checking
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    accounts.write_text(
+        """
+account Assets:Bank:Checking
+    ; type: Cash
+
+account Assets:Bank:Savings
+    ; type: Cash
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    groups = scan_unknowns(journal, [], _import_accounts(), _tracked_accounts())["groups"]
+    txn_updates, warnings = apply_unknown_mappings(
+        journal_path=journal,
+        accounts_dat=accounts,
+        selections={
+            "transfer to savings::checking_import": {
+                "selectionType": "transfer",
+                "targetTrackedAccountId": "savings",
+            }
+        },
+        scanned_groups=groups,
+        tracked_accounts=_tracked_accounts(),
+    )
+
+    content = journal.read_text(encoding="utf-8")
+    assert txn_updates == 1
+    assert warnings == []
+    assert transfer_account in content
+    assert "; transfer_state: pending" in content
+    assert "; transfer_peer_account_id: savings" in content
+    assert f"account {transfer_account}" in accounts.read_text(encoding="utf-8")
+
+
+def test_apply_unknown_mappings_matches_both_imported_transfer_sides(tmp_path: Path) -> None:
+    journal = tmp_path / "sample.journal"
+    accounts = tmp_path / "10-accounts.dat"
+    transfer_account = transfer_pair_account("checking", "savings")
+
+    journal.write_text(
+        """
+2026/02/01 Transfer
+    ; import_account_id: checking_import
+    ; source_identity: tx-checking
+    Expenses:Unknown  $50.00
+    Assets:Bank:Checking
+
+2026/02/03 Transfer
+    ; import_account_id: savings_import
+    ; source_identity: tx-savings
+    Expenses:Unknown  $-50.00
+    Assets:Bank:Savings
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    accounts.write_text(
+        """
+account Assets:Bank:Checking
+    ; type: Cash
+
+account Assets:Bank:Savings
+    ; type: Cash
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    groups = scan_unknowns(journal, [], _import_accounts(), _tracked_accounts())["groups"]
+    txn_updates, warnings = apply_unknown_mappings(
+        journal_path=journal,
+        accounts_dat=accounts,
+        selections={
+            "transfer::checking_import": {
+                "selectionType": "transfer",
+                "targetTrackedAccountId": "savings",
+            }
+        },
+        scanned_groups=groups,
+        tracked_accounts=_tracked_accounts(),
+    )
+
+    content = journal.read_text(encoding="utf-8")
+    assert txn_updates == 2
+    assert warnings == []
+    assert content.count(transfer_account) == 2
+    assert content.count("; transfer_state: matched") == 2
+    assert "; transfer_peer_account_id: savings" in content
+    assert "; transfer_peer_account_id: checking" in content
+
+    transfer_ids = {
+        line.partition(":")[2].strip()
+        for line in content.splitlines()
+        if line.strip().startswith("; transfer_id:")
+    }
+    assert len(transfer_ids) == 1
+
+
+def test_apply_unknown_mappings_rejects_unmatched_liability_transfer(tmp_path: Path) -> None:
+    journal = tmp_path / "sample.journal"
+    accounts = tmp_path / "10-accounts.dat"
+
+    original = """
+2026/02/01 Credit card payment
+    ; import_account_id: checking_import
+    Expenses:Unknown  $50.00
+    Assets:Bank:Checking
+""".strip()
+    journal.write_text(original + "\n", encoding="utf-8")
+    accounts.write_text(
+        """
+account Assets:Bank:Checking
+    ; type: Cash
+
+account Liabilities:Cards:Visa
+    ; type: Liability
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    groups = scan_unknowns(journal, [], _import_accounts(), _tracked_accounts())["groups"]
+    txn_updates, warnings = apply_unknown_mappings(
+        journal_path=journal,
+        accounts_dat=accounts,
+        selections={
+            "credit card payment::checking_import": {
+                "selectionType": "transfer",
+                "targetTrackedAccountId": "visa",
+            }
+        },
+        scanned_groups=groups,
+        tracked_accounts=_tracked_accounts(),
+    )
+
+    assert txn_updates == 0
+    assert warnings == [
+        {
+            "groupKey": "credit card payment::checking_import",
+            "warning": "Liability transfers need a matched counterpart before they can be accepted.",
+        }
+    ]
+    assert journal.read_text(encoding="utf-8") == original + "\n"
+
+
+def test_apply_unknown_mappings_matches_pending_transfer_when_counterpart_arrives(tmp_path: Path) -> None:
+    journal = tmp_path / "sample.journal"
+    accounts = tmp_path / "10-accounts.dat"
+    transfer_account = transfer_pair_account("checking", "savings")
+
+    journal.write_text(
+        f"""
+2026/02/01 Transfer
+    ; import_account_id: checking_import
+    ; source_identity: tx-checking
+    ; transfer_id: transfer-1
+    ; transfer_state: pending
+    ; transfer_peer_account_id: savings
+    {transfer_account}  $50.00
+    Assets:Bank:Checking
+
+2026/02/03 Transfer
+    ; import_account_id: savings_import
+    ; source_identity: tx-savings
+    Expenses:Unknown  $-50.00
+    Assets:Bank:Savings
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    accounts.write_text(
+        f"""
+account Assets:Bank:Checking
+    ; type: Cash
+
+account Assets:Bank:Savings
+    ; type: Cash
+
+account {transfer_account}
+    ; type: Asset
+    ; description: Internal transfer clearing account
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    groups = scan_unknowns(journal, [], _import_accounts(), _tracked_accounts())["groups"]
+    savings_group = next(group for group in groups if group["groupKey"] == "transfer::savings_import")
+    suggestion = savings_group["txns"][0]["transferSuggestion"]
+    assert suggestion is not None
+    assert suggestion["candidateState"] == "pending"
+    assert suggestion["targetTrackedAccountId"] == "checking"
+
+    txn_updates, warnings = apply_unknown_mappings(
+        journal_path=journal,
+        accounts_dat=accounts,
+        selections={
+            "transfer::savings_import": {
+                "selectionType": "transfer",
+                "targetTrackedAccountId": "checking",
+            }
+        },
+        scanned_groups=groups,
+        tracked_accounts=_tracked_accounts(),
+    )
+
+    content = journal.read_text(encoding="utf-8")
+    assert txn_updates == 2
+    assert warnings == []
+    assert content.count("; transfer_state: matched") == 2
+    assert "; transfer_id: transfer-1" in content
 
 
 def test_add_payee_rule_adds_mapping(tmp_path: Path) -> None:

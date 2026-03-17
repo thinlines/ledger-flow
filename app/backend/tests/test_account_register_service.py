@@ -53,6 +53,12 @@ def _make_config(workspace: Path) -> AppConfig:
                 "last4": "5678",
                 "import_account_id": "visa",
             },
+            "savings": {
+                "display_name": "Savings",
+                "institution": "wells_fargo",
+                "ledger_account": "Assets:Bank:Savings",
+                "last4": "4321",
+            },
         },
         payee_aliases="payee_aliases.csv",
     )
@@ -152,3 +158,35 @@ def test_account_register_preserves_liability_signs_in_running_balance(tmp_path:
     assert first_charge["date"] == "2026-03-04"
     assert first_charge["amount"] == -83.21
     assert first_charge["runningBalance"] == -83.21
+
+
+def test_account_register_uses_transfer_peer_metadata_for_pending_transfers(tmp_path: Path) -> None:
+    config = _make_config(tmp_path / "workspace")
+    (config.journal_dir / "2026.journal").write_text(
+        """
+2026/02/04 Transfer to savings
+    ; import_account_id: checking
+    ; transfer_id: transfer-1
+    ; transfer_state: pending
+    ; transfer_peer_account_id: savings
+    Assets:Transfers:checking__savings  $30.00
+    Assets:Bank:Checking
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    register = build_account_register(config, "checking")
+
+    latest = register["entries"][0]
+    assert latest["summary"] == "Transfer · Savings (Pending)"
+    assert latest["transferState"] == "pending"
+    assert latest["transferPeerAccountId"] == "savings"
+    assert latest["transferPeerAccountName"] == "Savings"
+    assert latest["detailLines"] == [
+        {
+            "label": "Savings",
+            "account": "Assets:Bank:Savings",
+            "kind": "asset",
+        }
+    ]

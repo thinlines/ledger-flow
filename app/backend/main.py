@@ -53,6 +53,7 @@ from services.rules_service import (
 from services.unknowns_service import (
     apply_unknown_mappings,
     create_account,
+    list_category_accounts,
     list_known_accounts,
     scan_unknowns,
 )
@@ -524,7 +525,12 @@ def journals() -> dict:
 def accounts() -> dict:
     config = _require_workspace_config()
     accounts_dat = config.init_dir / "10-accounts.dat"
-    return {"accounts": list_known_accounts(accounts_dat)}
+    category_accounts = list_category_accounts(accounts_dat)
+    return {
+        "accounts": category_accounts,
+        "categoryAccounts": category_accounts,
+        "allAccounts": list_known_accounts(accounts_dat),
+    }
 
 
 @app.get("/api/rules")
@@ -673,13 +679,13 @@ def unknown_scan(req: UnknownScanRequest) -> dict:
 
     accounts_dat = config.init_dir / "10-accounts.dat"
     rule_path = ensure_rules_store(config.init_dir, accounts_dat)
-    data = scan_unknowns(journal_path, load_rules(rule_path), config.import_accounts)
+    data = scan_unknowns(journal_path, load_rules(rule_path), config.import_accounts, config.tracked_accounts)
     payload = {
         "kind": "unknowns",
         "status": "ready",
         "journalPath": str(journal_path.resolve()),
         "groups": data["groups"],
-        "mappings": {},
+        "selections": {},
     }
     stage_id = stages.create(payload)
     payload["stageId"] = stage_id
@@ -696,11 +702,14 @@ def unknown_stage_mappings(req: UnknownStageRequest) -> dict:
     if stage.get("kind") != "unknowns":
         raise HTTPException(status_code=400, detail="stage kind mismatch")
 
-    mappings = {m.groupKey: m.chosenAccount for m in req.mappings}
-    stage["mappings"] = mappings
+    selections = {
+        selection.groupKey: selection.model_dump(exclude_none=True)
+        for selection in req.selections
+    }
+    stage["selections"] = selections
     stage["summary"] = {
-        "groupCount": len(mappings),
-        "txnUpdates": sum(len(g["txns"]) for g in stage["groups"] if g["groupKey"] in mappings),
+        "groupCount": len(selections),
+        "txnUpdates": sum(len(g["txns"]) for g in stage["groups"] if g["groupKey"] in selections),
     }
     stages.save(req.stageId, stage)
     return stage
@@ -719,8 +728,8 @@ def unknown_apply(req: StageApplyRequest) -> dict:
     if stage.get("status") == "applied":
         return stage
 
-    mappings = stage.get("mappings") or {}
-    if not mappings:
+    selections = stage.get("selections") or {}
+    if not selections:
         raise HTTPException(status_code=400, detail="no mappings staged")
 
     journal_path = Path(stage["journalPath"])
@@ -732,8 +741,9 @@ def unknown_apply(req: StageApplyRequest) -> dict:
         txn_updates, warnings = apply_unknown_mappings(
             journal_path=journal_path,
             accounts_dat=accounts_dat,
-            mappings=mappings,
+            selections=selections,
             scanned_groups=stage["groups"],
+            tracked_accounts=config.tracked_accounts,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e

@@ -2,19 +2,40 @@ from __future__ import annotations
 
 import re
 from collections import defaultdict
+from datetime import date
+from decimal import Decimal
 from pathlib import Path
+from uuid import uuid4
 
+from .config_service import infer_account_kind
 from .rules_service import extract_set_account, find_matching_rule
+from .transfer_service import (
+    ensure_transfer_account,
+    infer_blank_posting_amounts,
+    is_transfer_account,
+    parse_amount,
+    rewrite_posting_account,
+    upsert_transaction_metadata,
+)
 
 ACCOUNT_LINE_RE = re.compile(r"^(\s+)([^\s].*?)(\s{2,}|\t+)(.*)$")
 ACCOUNT_ONLY_RE = re.compile(r"^(\s+)([^\s].*?)\s*$")
 HEADER_RE = re.compile(r"^(\d{4}[-/]\d{2}[-/]\d{2})(?:\s+[*!])?(?:\s+\([^)]+\))?\s*(.*)$")
 META_RE = re.compile(r"^\s*;\s*([^:]+):\s*(.*)$")
 TXN_START_RE = re.compile(r"^\d{4}[-/]\d{2}[-/]\d{2}")
+MAX_TRANSFER_MATCH_DAYS = 7
 
 
 def list_known_accounts(accounts_dat: Path) -> list[str]:
     return sorted(_load_known_accounts(accounts_dat))
+
+
+def list_category_accounts(accounts_dat: Path) -> list[str]:
+    return sorted(
+        account
+        for account in _load_known_accounts(accounts_dat)
+        if infer_account_kind(account) in {"expense", "income"} and not is_transfer_account(account)
+    )
 
 
 def _load_known_accounts(accounts_dat: Path) -> set[str]:
@@ -106,72 +127,257 @@ def _group_key(payee: str, import_account_id: str | None) -> str:
     return key
 
 
-def scan_unknowns(journal_path: Path, rules: list[dict], import_accounts: dict[str, dict] | None = None) -> dict:
+def _parse_posted_on(value: str) -> date | None:
+    cleaned = value.replace("/", "-").strip()
+    if not cleaned:
+        return None
+    try:
+        return date.fromisoformat(cleaned)
+    except ValueError:
+        return None
+
+
+def _tracked_account_context(
+    metadata: dict[str, str],
+    postings: list[dict],
+    import_accounts: dict[str, dict],
+    tracked_accounts: dict[str, dict],
+    counterparty: str,
+) -> dict:
+    import_account_id = metadata.get("import_account_id") or None
+    import_account_cfg = import_accounts.get(import_account_id or "", {}) if import_account_id else {}
+    source_tracked_account_id = str(import_account_cfg.get("tracked_account_id", "")).strip() or None
+    if source_tracked_account_id is None and import_account_id and import_account_id in tracked_accounts:
+        source_tracked_account_id = import_account_id
+
+    source_tracked_cfg = tracked_accounts.get(source_tracked_account_id or "", {}) if source_tracked_account_id else {}
+    source_ledger_account = str(
+        source_tracked_cfg.get("ledger_account") or import_account_cfg.get("ledger_account") or ""
+    ).strip()
+    if not source_ledger_account:
+        source_ledger_account = counterparty.strip()
+
+    if not source_tracked_account_id and counterparty:
+        for tracked_account_id, tracked_account_cfg in tracked_accounts.items():
+            if str(tracked_account_cfg.get("ledger_account", "")).strip() == counterparty:
+                source_tracked_account_id = tracked_account_id
+                source_tracked_cfg = tracked_account_cfg
+                source_ledger_account = counterparty
+                break
+
+    source_account_label = (
+        str(source_tracked_cfg.get("display_name") or import_account_cfg.get("display_name") or "").strip()
+        or None
+    )
+    source_posting = next(
+        (posting for posting in postings if posting["account"] == source_ledger_account),
+        None,
+    )
+
+    return {
+        "importAccountId": import_account_id,
+        "importAccountDisplayName": (
+            str(import_account_cfg.get("display_name", import_account_id)).strip() if import_account_id else None
+        ),
+        "importLedgerAccount": str(import_account_cfg.get("ledger_account", "")).strip() or None,
+        "sourceTrackedAccountId": source_tracked_account_id,
+        "sourceTrackedAccountKind": infer_account_kind(source_ledger_account) if source_ledger_account else None,
+        "sourceLedgerAccount": source_ledger_account or None,
+        "sourceAccountLabel": source_account_label or counterparty or None,
+        "sourceAmountNumber": source_posting.get("amountNumber") if source_posting else None,
+    }
+
+
+def _transaction_base_id(journal_path: Path, start_line: int, metadata: dict[str, str]) -> str:
+    source_identity = str(metadata.get("source_identity", "")).strip()
+    if source_identity:
+        return source_identity
+    return f"{journal_path.name}:tx:{start_line}"
+
+
+def _build_transaction_records(
+    journal_path: Path,
+    import_accounts: dict[str, dict],
+    tracked_accounts: dict[str, dict],
+) -> tuple[list[dict], list[dict]]:
     lines = journal_path.read_text(encoding="utf-8").splitlines()
     grouped: dict[str, dict] = defaultdict(lambda: {"txns": [], "_matchSignatures": []})
+    transaction_records: list[dict] = []
 
     for start, end in _iter_transaction_ranges(lines):
         header_line = lines[start]
-        hm = HEADER_RE.match(header_line)
-        if hm:
-            current_date = hm.group(1)
-            current_payee = hm.group(2).strip() or "(no payee)"
+        match = HEADER_RE.match(header_line)
+        if match:
+            current_date = match.group(1)
+            current_payee = match.group(2).strip() or "(no payee)"
         else:
             current_date = ""
             current_payee = "(no payee)"
 
         metadata = _parse_metadata(lines, start, end)
-        postings = _parse_postings(lines, start, end)
-        unknown_postings = [p for p in postings if "Unknown" in p["account"]]
+        raw_postings = _parse_postings(lines, start, end)
+        postings = infer_blank_posting_amounts(
+            [
+                {
+                    **posting,
+                    "amountNumber": parse_amount(posting["amount"]),
+                }
+                for posting in raw_postings
+            ]
+        )
+        unknown_postings = [posting for posting in postings if "Unknown" in posting["account"]]
+        counterparty = next((posting["account"] for posting in postings if "Unknown" not in posting["account"]), "")
+        context = _tracked_account_context(metadata, postings, import_accounts, tracked_accounts, counterparty)
+        base_txn_id = _transaction_base_id(journal_path, start + 1, metadata)
+        record = {
+            "txnId": base_txn_id,
+            "payeeDisplay": current_payee,
+            "date": current_date,
+            "postedOn": _parse_posted_on(current_date),
+            "transactionStartLine": start + 1,
+            "transactionEndLine": end,
+            "unknownPostingCount": len(unknown_postings),
+            "postings": postings,
+            "metadata": metadata,
+            "transferId": metadata.get("transfer_id"),
+            "transferState": metadata.get("transfer_state"),
+            "transferPeerAccountId": metadata.get("transfer_peer_account_id"),
+            **context,
+        }
+
+        transaction_records.append(record)
         if not unknown_postings:
             continue
 
-        counterparty = ""
-        for p in postings:
-            if "Unknown" not in p["account"]:
-                counterparty = p["account"]
-                break
-
-        import_account_id = metadata.get("import_account_id") or None
-        import_account_cfg = (import_accounts or {}).get(import_account_id or "", {})
-        import_account_display_name = None
-        import_ledger_account = None
-        if import_account_id:
-            import_account_display_name = str(import_account_cfg.get("display_name", import_account_id))
-            import_ledger_account = str(import_account_cfg.get("ledger_account", "")).strip() or None
-
-        key = _group_key(current_payee, import_account_id)
-        matched = find_matching_rule({"payee": current_payee, "date": current_date.replace("/", "-")}, rules)
+        key = _group_key(current_payee, context["importAccountId"])
         group = grouped[key]
         group["groupKey"] = key
         group["payeeDisplay"] = current_payee
-        group["importAccountId"] = import_account_id
-        group["importAccountDisplayName"] = import_account_display_name
-        group["importLedgerAccount"] = import_ledger_account
-        group["sourceAccountLabel"] = import_account_display_name or counterparty or None
-        group["sourceLedgerAccount"] = import_ledger_account or counterparty or None
-        group["_matchSignatures"].append(
-            (
-                matched["id"] if matched else None,
-                extract_set_account(matched) if matched else None,
-                matched["conditions"][0]["value"] if matched else None,
-            )
-        )
+        group["importAccountId"] = context["importAccountId"]
+        group["importAccountDisplayName"] = context["importAccountDisplayName"]
+        group["importLedgerAccount"] = context["importLedgerAccount"]
+        group["sourceAccountLabel"] = context["sourceAccountLabel"]
+        group["sourceLedgerAccount"] = context["sourceLedgerAccount"]
+        group["sourceTrackedAccountId"] = context["sourceTrackedAccountId"]
+        group["sourceTrackedAccountKind"] = context["sourceTrackedAccountKind"]
 
-        for p in unknown_postings:
-            group["txns"].append(
-                {
-                    "txnId": f"{journal_path.name}:{p['lineNo']}",
-                    "date": current_date,
-                    "lineNo": p["lineNo"],
-                    "currentAccount": p["account"],
-                    "amount": p["amount"],
-                    "counterpartyAccount": counterparty,
-                    "line": p["line"],
-                }
+        for posting in unknown_postings:
+            row = {
+                "txnId": f"{base_txn_id}:{posting['lineNo']}",
+                "transactionId": base_txn_id,
+                "date": current_date,
+                "lineNo": posting["lineNo"],
+                "transactionStartLine": start + 1,
+                "transactionEndLine": end,
+                "currentAccount": posting["account"],
+                "amount": posting["amount"],
+                "counterpartyAccount": counterparty,
+                "line": posting["line"],
+                "sourceTrackedAccountId": context["sourceTrackedAccountId"],
+                "sourceTrackedAccountKind": context["sourceTrackedAccountKind"],
+                "transferSuggestion": None,
+            }
+            group["txns"].append(row)
+            record.setdefault("unknownRows", []).append(row)
+
+    return transaction_records, list(grouped.values())
+
+
+def _transfer_match(current: dict, candidate: dict) -> bool:
+    current_amount = current.get("sourceAmountNumber")
+    candidate_amount = candidate.get("sourceAmountNumber")
+    current_date = current.get("postedOn")
+    candidate_date = candidate.get("postedOn")
+    if current_amount is None or candidate_amount is None:
+        return False
+    if current_date is None or candidate_date is None:
+        return False
+    if current.get("sourceTrackedAccountId") == candidate.get("sourceTrackedAccountId"):
+        return False
+    if current_amount + candidate_amount != Decimal("0"):
+        return False
+    return abs((current_date - candidate_date).days) <= MAX_TRANSFER_MATCH_DAYS
+
+
+def _build_transfer_suggestion(current: dict, candidate: dict) -> dict:
+    suggestion = {
+        "candidateTxnId": candidate.get("unknownRows", [{}])[0].get("txnId") or candidate["txnId"],
+        "candidateState": candidate.get("transferState") or "unknown",
+        "candidateTransferId": candidate.get("transferId"),
+        "targetTrackedAccountId": candidate["sourceTrackedAccountId"],
+        "targetTrackedAccountName": candidate["sourceAccountLabel"],
+        "targetTrackedAccountKind": candidate["sourceTrackedAccountKind"],
+        "candidateTransactionStartLine": candidate["transactionStartLine"],
+        "candidateTransactionEndLine": candidate["transactionEndLine"],
+        "candidateGroupKey": _group_key(candidate["payeeDisplay"], candidate.get("importAccountId")),
+    }
+    if candidate.get("unknownRows"):
+        suggestion["candidateUnknownLineNo"] = candidate["unknownRows"][0]["lineNo"]
+    return suggestion
+
+
+def _populate_transfer_suggestions(transaction_records: list[dict]) -> None:
+    eligible_unknowns = [
+        record
+        for record in transaction_records
+        if record.get("importAccountId")
+        and record.get("sourceTrackedAccountId")
+        and record.get("unknownPostingCount") == 1
+        and not record.get("transferState")
+    ]
+    pending_transfers = [
+        record
+        for record in transaction_records
+        if record.get("transferState") == "pending"
+        and record.get("sourceTrackedAccountId")
+        and record.get("transferPeerAccountId")
+    ]
+
+    for current in eligible_unknowns:
+        matches: list[dict] = []
+        for candidate in eligible_unknowns:
+            if candidate["txnId"] == current["txnId"]:
+                continue
+            if _transfer_match(current, candidate):
+                matches.append(_build_transfer_suggestion(current, candidate))
+
+        for candidate in pending_transfers:
+            if candidate.get("transferPeerAccountId") != current.get("sourceTrackedAccountId"):
+                continue
+            if _transfer_match(current, candidate):
+                matches.append(_build_transfer_suggestion(current, candidate))
+
+        if len(matches) == 1:
+            current["unknownRows"][0]["transferSuggestion"] = matches[0]
+
+
+def scan_unknowns(
+    journal_path: Path,
+    rules: list[dict],
+    import_accounts: dict[str, dict] | None = None,
+    tracked_accounts: dict[str, dict] | None = None,
+) -> dict:
+    transaction_records, groups = _build_transaction_records(
+        journal_path,
+        import_accounts or {},
+        tracked_accounts or {},
+    )
+    _populate_transfer_suggestions(transaction_records)
+
+    for group in groups:
+        for txn in group["txns"]:
+            matched = find_matching_rule(
+                {"payee": group["payeeDisplay"], "date": txn["date"].replace("/", "-")},
+                rules,
+            )
+            group["_matchSignatures"].append(
+                (
+                    matched["id"] if matched else None,
+                    extract_set_account(matched) if matched else None,
+                    matched["conditions"][0]["value"] if matched else None,
+                )
             )
 
-    groups = list(grouped.values())
     for group in groups:
         signatures = {tuple(signature) for signature in group.pop("_matchSignatures", [])}
         if len(signatures) == 1:
@@ -187,43 +393,276 @@ def scan_unknowns(journal_path: Path, rules: list[dict], import_accounts: dict[s
     return {"groups": groups}
 
 
+def _stage_category_selections(selections: dict[str, dict]) -> dict[str, str]:
+    return {
+        group_key: str(selection.get("categoryAccount", "")).strip()
+        for group_key, selection in selections.items()
+        if selection.get("selectionType") == "category"
+    }
+
+
+def _find_group_by_key(scanned_groups: list[dict], group_key: str) -> dict | None:
+    return next((group for group in scanned_groups if group["groupKey"] == group_key), None)
+
+
+def _target_kind(tracked_accounts: dict[str, dict], target_tracked_account_id: str) -> str | None:
+    target_account = tracked_accounts.get(target_tracked_account_id, {})
+    target_ledger_account = str(target_account.get("ledger_account", "")).strip()
+    return infer_account_kind(target_ledger_account) if target_ledger_account else None
+
+
+def _build_operation(
+    *,
+    group_key: str,
+    transaction_start_line: int,
+    transaction_end_line: int,
+    posting_line_no: int | None,
+    target_account: str | None,
+    expected_unknown: bool,
+    metadata_updates: dict[str, str | None],
+) -> dict:
+    return {
+        "groupKey": group_key,
+        "transactionStartLine": transaction_start_line,
+        "transactionEndLine": transaction_end_line,
+        "postingUpdates": (
+            [
+                {
+                    "postingLineNo": posting_line_no,
+                    "targetAccount": target_account,
+                    "expectedUnknown": expected_unknown,
+                }
+            ]
+            if posting_line_no is not None and target_account is not None
+            else []
+        ),
+        "metadataUpdates": metadata_updates,
+    }
+
+
+def _queue_operation(operations_by_start: dict[int, dict], operation: dict) -> None:
+    existing = operations_by_start.get(operation["transactionStartLine"])
+    if existing is None:
+        operations_by_start[operation["transactionStartLine"]] = operation
+        return
+
+    existing["postingUpdates"].extend(operation.get("postingUpdates", []))
+    existing["metadataUpdates"].update(operation.get("metadataUpdates", {}))
+
+
+def _apply_operation(lines: list[str], operation: dict) -> tuple[list[str], str | None]:
+    start_idx = operation["transactionStartLine"] - 1
+    end_idx = operation["transactionEndLine"]
+    if start_idx < 0 or end_idx > len(lines):
+        return lines, f"Transaction starting at line {operation['transactionStartLine']} is no longer available"
+
+    txn_lines = list(lines[start_idx:end_idx])
+    for posting_update in operation.get("postingUpdates", []):
+        posting_line_no = posting_update["postingLineNo"]
+        relative_index = posting_line_no - operation["transactionStartLine"]
+        if relative_index < 0 or relative_index >= len(txn_lines):
+            return lines, f"Line {posting_line_no} is no longer part of this transaction"
+        line = txn_lines[relative_index]
+        match = ACCOUNT_LINE_RE.match(line) or ACCOUNT_ONLY_RE.match(line)
+        if not match:
+            return lines, f"Line {posting_line_no} is no longer a posting"
+        if posting_update.get("expectedUnknown") and "Unknown" not in match.group(2):
+            return lines, f"Line {posting_line_no} is already resolved"
+        rewritten, replaced = rewrite_posting_account(line, posting_update["targetAccount"])
+        if not replaced:
+            return lines, f"Line {posting_line_no} could not be rewritten"
+        txn_lines[relative_index] = rewritten
+
+    txn_lines = upsert_transaction_metadata(txn_lines, operation.get("metadataUpdates", {}))
+    updated_lines = list(lines)
+    updated_lines[start_idx:end_idx] = txn_lines
+    return updated_lines, None
+
+
 def apply_unknown_mappings(
     journal_path: Path,
     accounts_dat: Path,
-    mappings: dict[str, str],
+    selections: dict[str, dict],
     scanned_groups: list[dict],
+    tracked_accounts: dict[str, dict],
 ) -> tuple[int, list[dict]]:
+    category_selections = _stage_category_selections(selections)
     known_accounts = _load_known_accounts(accounts_dat)
-    invalid = sorted({acct for acct in mappings.values() if acct and acct not in known_accounts})
+    invalid = sorted({acct for acct in category_selections.values() if acct and acct not in known_accounts})
     if invalid:
         raise ValueError(f"Unknown account(s): {', '.join(invalid)}")
 
     warnings: list[dict] = []
-    lines = journal_path.read_text(encoding="utf-8").splitlines()
-    txn_updates = 0
+    original_lines = journal_path.read_text(encoding="utf-8").splitlines()
+    operations_by_start: dict[int, dict] = {}
+    processed_line_nos: set[int] = set()
 
+    # Transfer selections win because one accepted transfer may resolve its counterpart automatically.
     for group in scanned_groups:
-        key = group["groupKey"]
-        chosen = mappings.get(key)
-        if not chosen:
+        selection = selections.get(group["groupKey"])
+        if not selection or selection.get("selectionType") != "transfer":
             continue
 
+        target_tracked_account_id = str(selection.get("targetTrackedAccountId", "")).strip()
+        if not target_tracked_account_id:
+            continue
+        if target_tracked_account_id not in tracked_accounts:
+            warnings.append({"groupKey": group["groupKey"], "warning": f"Unknown tracked account: {target_tracked_account_id}"})
+            continue
+
+        target_kind = _target_kind(tracked_accounts, target_tracked_account_id)
         for txn in group["txns"]:
-            idx = txn["lineNo"] - 1
-            if idx < 0 or idx >= len(lines):
+            if txn["lineNo"] in processed_line_nos:
                 continue
-            m = ACCOUNT_LINE_RE.match(lines[idx])
-            if not m:
-                warnings.append({"groupKey": key, "warning": f"Line {txn['lineNo']} is no longer a posting"})
+
+            source_tracked_account_id = str(txn.get("sourceTrackedAccountId") or "").strip()
+            if not source_tracked_account_id:
+                warnings.append(
+                    {"groupKey": group["groupKey"], "warning": f"Transaction on line {txn['lineNo']} does not have a tracked source account"}
+                )
                 continue
-            if "Unknown" not in m.group(2):
-                warnings.append({"groupKey": key, "warning": f"Line {txn['lineNo']} is already resolved"})
+            if source_tracked_account_id == target_tracked_account_id:
+                warnings.append(
+                    {"groupKey": group["groupKey"], "warning": f"Transfer on line {txn['lineNo']} cannot target the same tracked account"}
+                )
                 continue
-            lines[idx] = f"{m.group(1)}{chosen}{m.group(3)}{m.group(4)}"
-            txn_updates += 1
+
+            suggestion = txn.get("transferSuggestion") or {}
+            matched_suggestion = (
+                suggestion
+                if str(suggestion.get("targetTrackedAccountId") or "").strip() == target_tracked_account_id
+                else None
+            )
+            if matched_suggestion is None and target_kind == "liability":
+                warnings.append(
+                    {
+                        "groupKey": group["groupKey"],
+                        "warning": "Liability transfers need a matched counterpart before they can be accepted.",
+                    }
+                )
+                continue
+
+            transfer_account = ensure_transfer_account(accounts_dat, source_tracked_account_id, target_tracked_account_id)
+            transfer_id = str(uuid4().hex)
+            current_state = "pending"
+
+            if matched_suggestion:
+                current_state = "matched"
+                if matched_suggestion.get("candidateState") == "pending":
+                    transfer_id = str(matched_suggestion.get("candidateTransferId") or transfer_id)
+                    transfer_metadata = {
+                        "transfer_id": transfer_id,
+                        "transfer_state": "matched",
+                        "transfer_peer_account_id": source_tracked_account_id,
+                    }
+                    _queue_operation(
+                        operations_by_start,
+                        _build_operation(
+                            group_key=group["groupKey"],
+                            transaction_start_line=int(matched_suggestion["candidateTransactionStartLine"]),
+                            transaction_end_line=int(matched_suggestion["candidateTransactionEndLine"]),
+                            posting_line_no=None,
+                            target_account=None,
+                            expected_unknown=False,
+                            metadata_updates=transfer_metadata,
+                        ),
+                    )
+                else:
+                    candidate_group_key = str(matched_suggestion.get("candidateGroupKey") or "")
+                    candidate_group = _find_group_by_key(scanned_groups, candidate_group_key) if candidate_group_key else None
+                    candidate_txn = next(
+                        (
+                            item
+                            for item in (candidate_group.get("txns", []) if candidate_group else [])
+                            if item["txnId"] == matched_suggestion.get("candidateTxnId")
+                        ),
+                        None,
+                    )
+                    if candidate_txn is None:
+                        warnings.append(
+                            {
+                                "groupKey": group["groupKey"],
+                                "warning": f"Suggested transfer counterpart for line {txn['lineNo']} is no longer available",
+                            }
+                        )
+                        continue
+                    _queue_operation(
+                        operations_by_start,
+                        _build_operation(
+                            group_key=group["groupKey"],
+                            transaction_start_line=int(candidate_txn["transactionStartLine"]),
+                            transaction_end_line=int(candidate_txn["transactionEndLine"]),
+                            posting_line_no=int(candidate_txn["lineNo"]),
+                            target_account=transfer_account,
+                            expected_unknown=True,
+                            metadata_updates={
+                                "transfer_id": transfer_id,
+                                "transfer_state": "matched",
+                                "transfer_peer_account_id": source_tracked_account_id,
+                            },
+                        ),
+                    )
+                    processed_line_nos.add(int(candidate_txn["lineNo"]))
+
+            _queue_operation(
+                operations_by_start,
+                _build_operation(
+                    group_key=group["groupKey"],
+                    transaction_start_line=int(txn["transactionStartLine"]),
+                    transaction_end_line=int(txn["transactionEndLine"]),
+                    posting_line_no=int(txn["lineNo"]),
+                    target_account=transfer_account,
+                    expected_unknown=True,
+                    metadata_updates={
+                        "transfer_id": transfer_id,
+                        "transfer_state": current_state,
+                        "transfer_peer_account_id": target_tracked_account_id,
+                    },
+                ),
+            )
+            processed_line_nos.add(int(txn["lineNo"]))
+
+    for group in scanned_groups:
+        selection = selections.get(group["groupKey"])
+        if not selection or selection.get("selectionType") != "category":
+            continue
+        category_account = str(selection.get("categoryAccount", "")).strip()
+        if not category_account:
+            continue
+        for txn in group["txns"]:
+            if txn["lineNo"] in processed_line_nos:
+                warnings.append(
+                    {
+                        "groupKey": group["groupKey"],
+                        "warning": f"Line {txn['lineNo']} was already resolved as the matched side of a transfer",
+                    }
+                )
+                continue
+            _queue_operation(
+                operations_by_start,
+                _build_operation(
+                    group_key=group["groupKey"],
+                    transaction_start_line=int(txn["transactionStartLine"]),
+                    transaction_end_line=int(txn["transactionEndLine"]),
+                    posting_line_no=int(txn["lineNo"]),
+                    target_account=category_account,
+                    expected_unknown=True,
+                    metadata_updates={},
+                ),
+            )
+            processed_line_nos.add(int(txn["lineNo"]))
+
+    lines = list(original_lines)
+    applied_count = 0
+    for _, operation in sorted(operations_by_start.items(), key=lambda item: item[0], reverse=True):
+        lines, warning = _apply_operation(lines, operation)
+        if warning is not None:
+            warnings.append({"groupKey": operation["groupKey"], "warning": warning})
+            continue
+        applied_count += 1
 
     journal_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    return txn_updates, warnings
+    return applied_count, warnings
 
 
 def _remove_payee_rule_lines(lines: list[str], payee_key: str) -> list[str]:

@@ -207,6 +207,77 @@ def test_undo_import_removes_transactions_restores_source_csv_and_import_index(t
     assert index.get_identity_map("wf_checking") == {}
 
 
+def test_undo_import_downgrades_surviving_transfer_peer_to_pending(tmp_path: Path) -> None:
+    config = _make_config(tmp_path / "workspace")
+    journal_path = config.journal_dir / "2026.journal"
+    _write_journal(
+        journal_path,
+        "\n".join(
+            [
+                "2026/03/01 Transfer out",
+                "    ; import_account_id: wf_checking",
+                "    ; source_identity: txn-undo",
+                "    ; source_payload_hash: payload-undo",
+                "    ; transfer_id: transfer-1",
+                "    ; transfer_state: matched",
+                "    ; transfer_peer_account_id: savings",
+                "    Assets:Transfers:checking__savings  $10.00",
+                "    Assets:Bank:Checking",
+            ]
+        ),
+        "\n".join(
+            [
+                "2026/03/02 Transfer in",
+                "    ; import_account_id: wf_checking",
+                "    ; source_identity: txn-keep",
+                "    ; source_payload_hash: payload-keep",
+                "    ; transfer_id: transfer-1",
+                "    ; transfer_state: matched",
+                "    ; transfer_peer_account_id: checking",
+                "    Assets:Transfers:checking__savings  $-10.00",
+                "    Assets:Bank:Savings",
+            ]
+        ),
+    )
+
+    backup_path = config.imports_dir / "2026.transfer.import.bak"
+    backup_path.write_text("snapshot\n", encoding="utf-8")
+
+    index = ImportIndex(config.root_dir / ".workflow" / "state.db")
+    index.upsert_transactions(
+        import_account_id="wf_checking",
+        year="2026",
+        journal_path=journal_path,
+        source_file_sha256="sha-transfer",
+        txns=[
+            {"sourceIdentity": "txn-undo", "sourcePayloadHash": "payload-undo"},
+            {"sourceIdentity": "txn-keep", "sourcePayloadHash": "payload-keep"},
+        ],
+    )
+
+    recorded = record_applied_import(
+        config,
+        _stage(
+            config,
+            stage_id="undo",
+            csv_path=config.csv_dir / "2026__wf_checking__transfer.csv",
+            backup_path=backup_path,
+            archived_csv_path=None,
+            journal_path=journal_path,
+            source_identity="txn-undo",
+        ),
+    )
+
+    undone = undo_import(config, recorded["id"])
+
+    content = journal_path.read_text(encoding="utf-8")
+    assert "txn-undo" not in content
+    assert "txn-keep" in content
+    assert "; transfer_state: pending" in content
+    assert "; transfer_state: matched" not in content
+    assert undone["undo"]["removedTxnCount"] == 1
+
+
 def test_undo_import_keeps_newer_import_transactions_and_their_undoability(tmp_path: Path) -> None:
     config = _make_config(tmp_path / "workspace")
     journal_path = config.journal_dir / "2026.journal"
