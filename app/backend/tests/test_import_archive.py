@@ -37,6 +37,25 @@ def _make_config(workspace: Path) -> AppConfig:
     )
 
 
+def _prepared_txn(*, date: str, payee: str, source_identity: str, amount: str) -> dict:
+    return {
+        "matchStatus": "new",
+        "annotatedRaw": (
+            f"{date} {payee}\n"
+            f"    ; source_identity: {source_identity}\n"
+            f"    ; source_payload_hash: payload-{source_identity}\n"
+            "    ; source_file_sha256: abc123def4567890\n"
+            "    ; importer_version: mvp2\n"
+            f"    Assets:Bank:Checking  {amount}\n"
+            "    Expenses:Unknown\n"
+        ),
+        "sourceIdentity": source_identity,
+        "sourcePayloadHash": f"payload-{source_identity}",
+        "date": date,
+        "payee": payee,
+    }
+
+
 def test_apply_import_can_archive_inbox_csv_after_success(tmp_path: Path) -> None:
     config = _make_config(tmp_path / "workspace")
     inbox_csv = config.csv_dir / "2026__wf_checking__statement.csv"
@@ -107,3 +126,96 @@ def test_archive_inbox_csv_leaves_external_files_untouched(tmp_path: Path) -> No
 
     assert archived_csv_path is None
     assert external_csv.exists()
+
+
+def test_apply_import_preserves_same_day_prepared_transaction_order(tmp_path: Path) -> None:
+    config = _make_config(tmp_path / "workspace")
+    journal_path = config.journal_dir / "2026.journal"
+
+    stage = {
+        "targetJournalPath": str(journal_path),
+        "preparedTransactions": [
+            _prepared_txn(
+                date="2026/03/12",
+                payee="AMAZON MKTPL*BP9TA8360 Amzn.com/billWA",
+                source_identity="txn-1",
+                amount="$-98.56",
+            ),
+            _prepared_txn(
+                date="2026/03/12",
+                payee="TC @ ALBERTSONS CORPORAT BOISE ID",
+                source_identity="txn-2",
+                amount="$-7.10",
+            ),
+            _prepared_txn(
+                date="2026/03/12",
+                payee="ONLINE PAYMENT THANK YOU",
+                source_identity="txn-3",
+                amount="$1984.86",
+            ),
+        ],
+        "importAccountId": "wf_checking",
+        "year": "2026",
+        "sourceFileSha256": "abc123def4567890",
+    }
+
+    apply_import(config, stage)
+
+    text = journal_path.read_text(encoding="utf-8")
+    assert text.index("AMAZON MKTPL*BP9TA8360 Amzn.com/billWA") < text.index("TC @ ALBERTSONS CORPORAT BOISE ID")
+    assert text.index("TC @ ALBERTSONS CORPORAT BOISE ID") < text.index("ONLINE PAYMENT THANK YOU")
+
+
+def test_apply_import_inserts_older_batch_before_later_existing_transactions(tmp_path: Path) -> None:
+    config = _make_config(tmp_path / "workspace")
+    journal_path = config.journal_dir / "2026.journal"
+    journal_path.write_text(
+        "\n".join(
+            [
+                "include ../rules/10-accounts.dat",
+                "include ../rules/12-tags.dat",
+                "include ../rules/13-commodities.dat",
+                "",
+                "2026/03/15 Later Transaction",
+                "    ; source_identity: existing-txn",
+                "    ; source_payload_hash: payload-existing-txn",
+                "    Assets:Bank:Checking  $-20.00",
+                "    Expenses:Unknown",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    stage = {
+        "targetJournalPath": str(journal_path),
+        "preparedTransactions": [
+            _prepared_txn(
+                date="2026/03/12",
+                payee="AMAZON MKTPL*BP9TA8360 Amzn.com/billWA",
+                source_identity="txn-1",
+                amount="$-98.56",
+            ),
+            _prepared_txn(
+                date="2026/03/12",
+                payee="TC @ ALBERTSONS CORPORAT BOISE ID",
+                source_identity="txn-2",
+                amount="$-7.10",
+            ),
+            _prepared_txn(
+                date="2026/03/12",
+                payee="ONLINE PAYMENT THANK YOU",
+                source_identity="txn-3",
+                amount="$1984.86",
+            ),
+        ],
+        "importAccountId": "wf_checking",
+        "year": "2026",
+        "sourceFileSha256": "abc123def4567890",
+    }
+
+    apply_import(config, stage)
+
+    text = journal_path.read_text(encoding="utf-8")
+    assert text.startswith("include ../rules/10-accounts.dat")
+    assert text.index("ONLINE PAYMENT THANK YOU") < text.index("Later Transaction")

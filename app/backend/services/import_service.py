@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import re
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 
 from .config_service import AppConfig
@@ -127,6 +128,65 @@ def _split_transactions(journal_text: str) -> list[list[str]]:
     if current:
         txns.append(current)
     return txns
+
+
+def _parse_posted_on(value: str) -> date:
+    cleaned = value.strip().replace("/", "-")
+    if not cleaned:
+        raise ValueError("Imported transaction is missing a date")
+    return date.fromisoformat(cleaned)
+
+
+def _normalize_transaction_block(raw_text: str) -> list[str]:
+    lines = raw_text.strip().splitlines()
+    while lines and not lines[-1].strip():
+        lines.pop()
+    return lines
+
+
+def _split_journal_preamble_and_transactions(journal_text: str) -> tuple[list[str], list[list[str]]]:
+    lines = journal_text.splitlines()
+    first_txn_idx = next((index for index, line in enumerate(lines) if TXN_START_RE.match(line)), len(lines))
+    preamble = lines[:first_txn_idx]
+    txns = _split_transactions("\n".join(lines[first_txn_idx:]))
+    return preamble, [_normalize_transaction_block("\n".join(txn)) for txn in txns if txn]
+
+
+def _transaction_block_posted_on(lines: list[str]) -> date:
+    if not lines:
+        raise ValueError("Imported transaction block is empty")
+    header_match = HEADER_RE.match(lines[0])
+    if not header_match:
+        raise ValueError(f"Transaction header is missing a date: {lines[0]}")
+    return _parse_posted_on(header_match.group("date"))
+
+
+def _render_journal_text(preamble_lines: list[str], transaction_blocks: list[list[str]]) -> str:
+    preamble_text = "\n".join(preamble_lines).rstrip()
+    transaction_text = "\n\n".join("\n".join(block) for block in transaction_blocks if block)
+    parts = [part for part in [preamble_text, transaction_text] if part]
+    if not parts:
+        return ""
+    return "\n\n".join(parts) + "\n"
+
+
+def _merge_transaction_blocks(existing_blocks: list[list[str]], new_blocks: list[list[str]]) -> list[list[str]]:
+    existing_dated = [(_transaction_block_posted_on(block), block) for block in existing_blocks]
+    new_dated = sorted(
+        [(_transaction_block_posted_on(block), block) for block in new_blocks],
+        key=lambda item: item[0],
+    )
+
+    merged: list[list[str]] = []
+    new_index = 0
+    for existing_date, existing_block in existing_dated:
+        while new_index < len(new_dated) and new_dated[new_index][0] < existing_date:
+            merged.append(new_dated[new_index][1])
+            new_index += 1
+        merged.append(existing_block)
+
+    merged.extend(block for _, block in new_dated[new_index:])
+    return merged
 
 
 def _normalize_payee(payee: str) -> str:
@@ -391,11 +451,10 @@ def apply_import(config: AppConfig, stage: dict) -> tuple[str, int, int, list[di
     ]
 
     if new_txns:
-        with target.open("a", encoding="utf-8") as f:
-            if target.stat().st_size > 0:
-                f.write("\n\n")
-            f.write("\n\n".join(t["annotatedRaw"].strip() for t in new_txns))
-            f.write("\n")
+        preamble_lines, existing_blocks = _split_journal_preamble_and_transactions(target.read_text(encoding="utf-8"))
+        new_blocks = [_normalize_transaction_block(str(t["annotatedRaw"])) for t in new_txns]
+        merged_blocks = _merge_transaction_blocks(existing_blocks, new_blocks)
+        target.write_text(_render_journal_text(preamble_lines, merged_blocks), encoding="utf-8")
 
     db = ImportIndex(config.root_dir / ".workflow" / "state.db")
     db.upsert_transactions(

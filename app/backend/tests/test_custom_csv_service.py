@@ -1,3 +1,5 @@
+import csv
+import io
 from pathlib import Path
 
 from services.config_service import AppConfig
@@ -112,3 +114,54 @@ def test_normalize_csv_to_intermediate_uses_account_profile_for_custom_accounts(
 
     assert "2026/03/04,,Refund,$12.00" in out
     assert "2026/03/05,,Coffee Shop,$-7.50" in out
+
+
+def test_normalize_csv_to_intermediate_reverses_newest_first_institution_rows(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    for rel in ["settings", "journals", "inbox", "rules", "opening", "imports"]:
+        (workspace / rel).mkdir(parents=True, exist_ok=True)
+
+    csv_path = workspace / "inbox" / "2026__wf_checking__statement.csv"
+    csv_path.write_text(
+        '"03/12/2026","1984.86","*","","ONLINE PAYMENT THANK YOU"\n'
+        '"03/12/2026","-7.10","*","","TC @ ALBERTSONS CORPORAT BOISE ID"\n'
+        '"03/12/2026","-98.56","*","","AMAZON MKTPL*BP9TA8360 Amzn.com/billWA"\n',
+        encoding="utf-8",
+    )
+
+    config = AppConfig(
+        root_dir=workspace,
+        config_toml=workspace / "settings" / "workspace.toml",
+        workspace={"name": "Test Books", "start_year": 2026, "base_currency": "USD"},
+        dirs={
+            "csv_dir": "inbox",
+            "journal_dir": "journals",
+            "init_dir": "rules",
+            "opening_bal_dir": "opening",
+            "imports_dir": "imports",
+        },
+        institution_templates={
+            "wells_fargo": {
+                "display_name": "Wells Fargo",
+                "parser": "wfchk",
+                "CSV_date_format": "%Y/%m/%d",
+            }
+        },
+        import_accounts={
+            "wf_checking": {
+                "display_name": "Wells Fargo Checking",
+                "institution": "wells_fargo",
+                "ledger_account": "Assets:Bank:Checking",
+            }
+        },
+        payee_aliases="payee_aliases.csv",
+    )
+
+    out = normalize_csv_to_intermediate(config, csv_path, config.import_accounts["wf_checking"])
+    rows = list(csv.DictReader(io.StringIO(out)))
+
+    assert [row["description"] for row in rows] == [
+        "AMAZON MKTPL*BP9TA8360 Amzn.com/billWA",
+        "TC @ ALBERTSONS CORPORAT BOISE ID",
+        "ONLINE PAYMENT THANK YOU",
+    ]
