@@ -57,6 +57,14 @@
     }>;
   };
 
+  type AccountGroup = {
+    kind: string;
+    title: string;
+    note: string;
+    balanceTotal: number | null;
+    accounts: TrackedAccount[];
+  };
+
   let initialized = false;
   let workspaceName = '';
   let trackedAccounts: TrackedAccount[] = [];
@@ -65,6 +73,10 @@
   let baseCurrency = 'USD';
   let error = '';
   let loading = true;
+  let accountQuery = '';
+  let normalizedAccountQuery = '';
+  let filteredTrackedAccounts: TrackedAccount[] = [];
+  let accountGroups: AccountGroup[] = [];
 
   function titleCase(value: string): string {
     return value.charAt(0).toUpperCase() + value.slice(1);
@@ -102,6 +114,91 @@
     return dashboardBalances[accountId] ?? null;
   }
 
+  function kindRank(kind: string): number {
+    if (kind === 'asset') return 0;
+    if (kind === 'liability') return 1;
+    return 2;
+  }
+
+  function kindLabel(kind: string): string {
+    if (kind === 'asset') return 'Asset';
+    if (kind === 'liability') return 'Liability';
+    return titleCase(kind);
+  }
+
+  function groupTitle(kind: string): string {
+    if (kind === 'asset') return 'Assets';
+    if (kind === 'liability') return 'Liabilities';
+    return 'Other tracked accounts';
+  }
+
+  function groupNote(kind: string): string {
+    if (kind === 'asset') return 'Cash, bank, and investment accounts that support your current position.';
+    if (kind === 'liability') return 'Credit cards and debt balances that affect net worth and upcoming decisions.';
+    return 'Tracked accounts that fall outside the main balance-sheet groups.';
+  }
+
+  function groupBalanceTotal(accounts: TrackedAccount[]): number | null {
+    const balances = accounts
+      .map((account) => currentBalance(account.id))
+      .filter((balance): balance is number => balance != null);
+    if (!balances.length) return null;
+    return balances.reduce((sum, balance) => sum + balance, 0);
+  }
+
+  function groupBalanceLabel(value: number | null): string {
+    return value == null ? 'No balances yet' : formatCurrency(value);
+  }
+
+  function accountMonogram(label: string): string {
+    const words = label
+      .trim()
+      .split(/\s+/)
+      .filter(Boolean);
+    if (!words.length) return '?';
+    if (words.length === 1) return words[0].slice(0, 2).toUpperCase();
+    return `${words[0].charAt(0)}${words[words.length - 1].charAt(0)}`.toUpperCase();
+  }
+
+  function accountIdentity(account: TrackedAccount): string {
+    const parts = [account.institutionDisplayName || 'Manual account'];
+    if (account.last4) parts.push(`•••• ${account.last4}`);
+    return parts.join(' · ');
+  }
+
+  function accountSourceNote(account: TrackedAccount): string {
+    if (account.last4) return `Ending in ${account.last4}`;
+    if (account.importConfigured) return 'Connected through imported activity.';
+    return 'Tracked directly in the app.';
+  }
+
+  function accountStatusLabel(account: TrackedAccount): string {
+    const balance = currentBalance(account.id);
+    if (!account.openingBalance && balance == null) return 'Needs starting balance';
+    if (account.importConfigured) return 'Import ready';
+    return 'Manual tracking';
+  }
+
+  function accountStatusNote(account: TrackedAccount): string {
+    const balance = currentBalance(account.id);
+    if (!account.openingBalance && balance == null) {
+      return 'Add an opening balance to include this account in totals before full history arrives.';
+    }
+    if (account.importConfigured) {
+      return account.importMode === 'custom'
+        ? 'Custom CSV mapping is ready for the next statement import.'
+        : 'Ready to bring in new institution activity.';
+    }
+    return 'Use this account when you want balances without automated imports.';
+  }
+
+  function accountStatusTone(account: TrackedAccount): string {
+    const balance = currentBalance(account.id);
+    if (!account.openingBalance && balance == null) return 'attention';
+    if (account.importConfigured) return 'ok';
+    return 'manual';
+  }
+
   function modeLabel(account: TrackedAccount): string {
     if (!account.importConfigured) return 'Manual';
     return account.importMode === 'custom' ? 'Custom CSV' : 'Import-enabled';
@@ -129,7 +226,51 @@
   }
 
   function hasAdvancedDetails(account: TrackedAccount): boolean {
-    return account.importMode === 'custom' && Boolean(account.importProfile);
+    return Boolean(account.ledgerAccount) || (account.importMode === 'custom' && Boolean(account.importProfile));
+  }
+
+  function matchesAccountQuery(account: TrackedAccount, query: string): boolean {
+    if (!query) return true;
+    const haystack = [
+      account.displayName,
+      account.institutionDisplayName,
+      account.last4,
+      account.ledgerAccount,
+      account.importAccountId,
+      kindLabel(account.kind),
+      importSetupTitle(account),
+      importSetupNote(account)
+    ]
+      .filter(Boolean)
+      .join(' ')
+      .toLowerCase();
+    return haystack.includes(query);
+  }
+
+  function compareAccounts(left: TrackedAccount, right: TrackedAccount): number {
+    const nameDelta = left.displayName.localeCompare(right.displayName, undefined, { sensitivity: 'base' });
+    if (nameDelta !== 0) return nameDelta;
+    return accountIdentity(left).localeCompare(accountIdentity(right), undefined, { sensitivity: 'base' });
+  }
+
+  function buildAccountGroups(accounts: TrackedAccount[]): AccountGroup[] {
+    const orderedKinds = ['asset', 'liability'];
+    const otherKinds = Array.from(new Set(accounts.map((account) => account.kind))).filter((kind) => !orderedKinds.includes(kind));
+    const groups: AccountGroup[] = [];
+
+    for (const kind of [...orderedKinds, ...otherKinds]) {
+      const items = accounts.filter((account) => account.kind === kind);
+      if (!items.length) continue;
+      groups.push({
+        kind,
+        title: groupTitle(kind),
+        note: groupNote(kind),
+        balanceTotal: groupBalanceTotal(items),
+        accounts: items
+      });
+    }
+
+    return groups;
   }
 
   async function load() {
@@ -160,6 +301,15 @@
       loading = false;
     }
   });
+
+  $: normalizedAccountQuery = accountQuery.trim().toLowerCase();
+  $: filteredTrackedAccounts = [...trackedAccounts]
+    .sort((left, right) => {
+      const rankDelta = kindRank(left.kind) - kindRank(right.kind);
+      return rankDelta !== 0 ? rankDelta : compareAccounts(left, right);
+    })
+    .filter((account) => matchesAccountQuery(account, normalizedAccountQuery));
+  $: accountGroups = buildAccountGroups(filteredTrackedAccounts);
 </script>
 
 {#if error}
@@ -236,94 +386,144 @@
       </div>
     </div>
 
+    {#if trackedAccounts.length > 0}
+      <div class="inventory-toolbar">
+        <label class="search-field" for="account-search">
+          <span>Find an account</span>
+          <input
+            id="account-search"
+            bind:value={accountQuery}
+            type="search"
+            placeholder="Search by name, institution, or last four"
+          />
+        </label>
+        <p aria-live="polite" class="inventory-results">
+          {#if normalizedAccountQuery}
+            Showing {filteredTrackedAccounts.length} of {trackedAccounts.length} accounts
+          {:else}
+            {trackedAccounts.length} tracked account{trackedAccounts.length === 1 ? '' : 's'}
+          {/if}
+        </p>
+      </div>
+    {/if}
+
     {#if trackedAccounts.length === 0}
       <div class="empty-panel">
         <h4>No accounts yet</h4>
         <p>Start with a supported institution, add a custom CSV import, or track an account manually with an opening balance.</p>
       </div>
+    {:else if filteredTrackedAccounts.length === 0}
+      <div class="empty-panel">
+        <h4>No matching accounts</h4>
+        <p>Try a different account name, institution, or last four digits.</p>
+      </div>
     {:else}
-      <div class="account-list">
-        {#each trackedAccounts as account}
-          <article class="account-card">
-            <div class="account-card-main">
-              <div class="account-balance-panel">
-                <p class="metric-label">Current balance</p>
-                <p
-                  class:positive={(currentBalance(account.id) ?? 0) > 0}
-                  class:negative={(currentBalance(account.id) ?? 0) < 0}
-                  class="account-balance-value"
-                >
-                  {formatCurrency(currentBalance(account.id))}
-                </p>
-                <p class="account-balance-note">
-                  {#if account.openingBalance}
-                    Started at {formatStoredAmount(account.openingBalance)}
-                    {#if account.openingBalanceDate}
-                      on {shortDate(account.openingBalanceDate)}
-                    {/if}
-                  {:else}
-                    Opening balance not set yet.
-                  {/if}
-                </p>
+      <div class="account-group-list">
+        {#each accountGroups as group}
+          <div class="account-group">
+            <div class="account-group-head">
+              <div>
+                <h4 class="account-group-title">{group.title}</h4>
+                <p class="account-group-note">{group.note}</p>
               </div>
-
-              <div class="account-card-content">
-                <div class="account-card-head">
-                  <div class="account-title-group">
-                    <h4>{account.displayName}</h4>
-                    <p class="muted">{account.institutionDisplayName || 'Manual account'}</p>
-                  </div>
-                  <div class="account-card-actions">
-                    <a class="inline-link" href={`/transactions?accountId=${account.id}`}>Transactions</a>
-                    <a class="inline-link" href={`/accounts/configure?accountId=${account.id}`}>Edit</a>
-                  </div>
-                </div>
-
-                <div class="pill-row">
-                  <span class:ok={account.importConfigured} class="pill">{modeLabel(account)}</span>
-                  <span class="pill">{titleCase(account.kind)}</span>
-                  {#if account.last4}
-                    <span class="pill">••{account.last4}</span>
-                  {/if}
-                </div>
-
-                <dl class="account-meta-grid">
-                  <div class="account-meta-item">
-                    <dt>Opening balance</dt>
-                    <dd>{account.openingBalance ? formatStoredAmount(account.openingBalance) : 'Not set'}</dd>
-                    <span class="account-meta-note">
-                      {account.openingBalanceDate ? shortDate(account.openingBalanceDate) : 'Add a starting date in setup.'}
-                    </span>
-                  </div>
-
-                  <div class="account-meta-item">
-                    <dt>Ledger account</dt>
-                    <dd>{account.ledgerAccount}</dd>
-                    <span class="account-meta-note">
-                      {account.importConfigured ? 'Ready for imported activity.' : 'Used for manual balance tracking.'}
-                    </span>
-                  </div>
-
-                  <div class="account-meta-item">
-                    <dt>Import setup</dt>
-                    <dd>{importSetupTitle(account)}</dd>
-                    <span class="account-meta-note">{importSetupNote(account)}</span>
-                  </div>
-                </dl>
+              <div class="account-group-summary">
+                <span>{group.accounts.length} account{group.accounts.length === 1 ? '' : 's'}</span>
+                <strong>{groupBalanceLabel(group.balanceTotal)}</strong>
               </div>
             </div>
 
-            {#if hasAdvancedDetails(account)}
-              <details class="advanced-panel">
-                <summary>Import mapping details</summary>
-                <p class="muted small">{customProfileSummary(account)}</p>
-                <p class="muted small">Currency symbol: {account.importProfile?.currency || '$'}</p>
-                <p class="muted small">Date column: {account.importProfile?.dateColumn || 'Not set'}</p>
-                <p class="muted small">Description column: {account.importProfile?.descriptionColumn || 'Not set'}</p>
-                <p class="muted small">Code column: {account.importProfile?.codeColumn || 'Not set'}</p>
-              </details>
-            {/if}
-          </article>
+            <div class="account-list">
+              {#each group.accounts as account}
+                <article class:liability-card={account.kind === 'liability'} class="account-card">
+                  <div class="account-card-main">
+                    <div class:liability-panel={account.kind === 'liability'} class="account-balance-panel">
+                      <div class="account-balance-header">
+                        <span class:liability-mark={account.kind === 'liability'} class="account-mark">
+                          {accountMonogram(account.displayName)}
+                        </span>
+                        <div>
+                          <p class="metric-label">Current balance</p>
+                          <p
+                            class:positive={(currentBalance(account.id) ?? 0) > 0}
+                            class:negative={(currentBalance(account.id) ?? 0) < 0}
+                            class="account-balance-value"
+                          >
+                            {formatCurrency(currentBalance(account.id))}
+                          </p>
+                        </div>
+                      </div>
+                      <p class="account-balance-note">
+                        {#if account.openingBalance}
+                          Started at {formatStoredAmount(account.openingBalance)}
+                          {#if account.openingBalanceDate}
+                            on {shortDate(account.openingBalanceDate)}
+                          {/if}
+                        {:else}
+                          Opening balance not set yet.
+                        {/if}
+                      </p>
+                    </div>
+
+                    <div class="account-card-content">
+                      <div class="account-card-head">
+                        <div class="account-title-group">
+                          <p class="account-kind-label">{kindLabel(account.kind)} account</p>
+                          <h4>{account.displayName}</h4>
+                          <p class="account-identity-note">{accountIdentity(account)}</p>
+                        </div>
+                        <div class="account-card-actions">
+                          <a class="inline-link" href={`/transactions?accountId=${account.id}`}>Transactions</a>
+                          <a class="inline-link" href={`/accounts/configure?accountId=${account.id}`}>Edit</a>
+                        </div>
+                      </div>
+
+                      <div class="pill-row">
+                        <span class={`pill status-pill ${accountStatusTone(account)}`}>{accountStatusLabel(account)}</span>
+                        <span class:ok={account.importConfigured} class="pill">{modeLabel(account)}</span>
+                        <span class={`pill kind-pill ${account.kind}`}>{kindLabel(account.kind)}</span>
+                      </div>
+
+                      <dl class="account-meta-grid">
+                        <div class="account-meta-item">
+                          <dt>Opening balance</dt>
+                          <dd>{account.openingBalance ? formatStoredAmount(account.openingBalance) : 'Not set'}</dd>
+                          <span class="account-meta-note">
+                            {account.openingBalanceDate ? shortDate(account.openingBalanceDate) : 'Add a starting date in setup.'}
+                          </span>
+                        </div>
+
+                        <div class="account-meta-item">
+                          <dt>Account source</dt>
+                          <dd>{account.institutionDisplayName || 'Manual account'}</dd>
+                          <span class="account-meta-note">{accountSourceNote(account)}</span>
+                        </div>
+
+                        <div class="account-meta-item">
+                          <dt>Import setup</dt>
+                          <dd>{importSetupTitle(account)}</dd>
+                          <span class="account-meta-note">{accountStatusNote(account)}</span>
+                        </div>
+                      </dl>
+                    </div>
+                  </div>
+
+                  {#if hasAdvancedDetails(account)}
+                    <details class="advanced-panel">
+                      <summary>Accounting details</summary>
+                      <p class="muted small">Ledger account: {account.ledgerAccount}</p>
+                      {#if account.importMode === 'custom' && account.importProfile}
+                        <p class="muted small">{customProfileSummary(account)}</p>
+                        <p class="muted small">Currency symbol: {account.importProfile.currency || '$'}</p>
+                        <p class="muted small">Date column: {account.importProfile.dateColumn || 'Not set'}</p>
+                        <p class="muted small">Description column: {account.importProfile.descriptionColumn || 'Not set'}</p>
+                        <p class="muted small">Code column: {account.importProfile.codeColumn || 'Not set'}</p>
+                      {/if}
+                    </details>
+                  {/if}
+                </article>
+              {/each}
+            </div>
+          </div>
         {/each}
       </div>
     {/if}
@@ -386,6 +586,87 @@
     gap: 0.6rem;
   }
 
+  .inventory-toolbar {
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 1rem;
+    margin-bottom: 1rem;
+    flex-wrap: wrap;
+  }
+
+  .search-field {
+    display: grid;
+    gap: 0.35rem;
+    min-width: min(26rem, 100%);
+    flex: 1 1 20rem;
+  }
+
+  .search-field span {
+    font-size: 0.86rem;
+    color: var(--muted-foreground);
+    font-weight: 600;
+  }
+
+  .inventory-results {
+    margin: 0;
+    color: var(--muted-foreground);
+  }
+
+  .account-group-list {
+    display: grid;
+    gap: 1.15rem;
+  }
+
+  .account-group {
+    display: grid;
+    gap: 0.85rem;
+  }
+
+  .account-group-head {
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 1rem;
+    flex-wrap: wrap;
+  }
+
+  .account-group-title {
+    margin: 0;
+    font-family: 'Space Grotesk', sans-serif;
+    font-size: 1.15rem;
+  }
+
+  .account-group-note {
+    margin: 0.35rem 0 0;
+    color: var(--muted-foreground);
+    max-width: 56ch;
+  }
+
+  .account-group-summary {
+    min-width: 12rem;
+    border: 1px solid rgba(10, 61, 89, 0.08);
+    border-radius: 1rem;
+    padding: 0.8rem 0.9rem;
+    background: linear-gradient(145deg, rgba(255, 255, 255, 0.9), rgba(243, 249, 255, 0.84));
+  }
+
+  .account-group-summary span {
+    display: block;
+    margin-bottom: 0.2rem;
+    font-size: 0.78rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--muted-foreground);
+    font-weight: 700;
+  }
+
+  .account-group-summary strong {
+    display: block;
+    font-family: 'Space Grotesk', sans-serif;
+    font-size: 1.35rem;
+  }
+
   .account-list {
     display: grid;
     gap: 0.8rem;
@@ -400,6 +681,11 @@
     gap: 0.95rem;
   }
 
+  .liability-card {
+    border-color: rgba(154, 81, 41, 0.14);
+    background: rgba(255, 250, 246, 0.72);
+  }
+
   .account-card-main {
     display: grid;
     grid-template-columns: minmax(17rem, 20rem) minmax(0, 1fr);
@@ -410,13 +696,45 @@
   .account-balance-panel {
     display: flex;
     flex-direction: column;
-    justify-content: center;
     gap: 0.4rem;
     min-height: 100%;
     padding: 1rem;
     border-radius: 1rem;
     border: 1px solid rgba(15, 95, 136, 0.12);
     background: linear-gradient(160deg, rgba(244, 249, 255, 0.96), rgba(239, 248, 244, 0.9));
+  }
+
+  .liability-panel {
+    border-color: rgba(154, 81, 41, 0.14);
+    background: linear-gradient(160deg, rgba(255, 248, 243, 0.96), rgba(255, 244, 237, 0.92));
+  }
+
+  .account-balance-header {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    gap: 0.85rem;
+    align-items: start;
+  }
+
+  .account-mark {
+    width: 3rem;
+    height: 3rem;
+    display: grid;
+    place-items: center;
+    border-radius: 0.95rem;
+    border: 1px solid rgba(15, 95, 136, 0.14);
+    background: linear-gradient(155deg, rgba(255, 255, 255, 0.95), rgba(228, 240, 255, 0.92));
+    color: var(--brand-strong);
+    font-family: 'Space Grotesk', sans-serif;
+    font-size: 1rem;
+    font-weight: 700;
+    box-shadow: 0 10px 22px rgba(17, 35, 52, 0.06);
+  }
+
+  .liability-mark {
+    border-color: rgba(154, 81, 41, 0.16);
+    background: linear-gradient(155deg, rgba(255, 255, 255, 0.95), rgba(255, 233, 219, 0.92));
+    color: #9a5129;
   }
 
   .account-balance-value {
@@ -450,8 +768,24 @@
     min-width: 0;
   }
 
-  .account-title-group p {
-    margin: 0.3rem 0 0;
+  .account-title-group h4 {
+    font-family: 'Space Grotesk', sans-serif;
+    font-size: 1.35rem;
+  }
+
+  .account-kind-label {
+    margin: 0 0 0.3rem;
+    font-size: 0.74rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--muted-foreground);
+    font-weight: 700;
+  }
+
+  .account-identity-note {
+    margin: 0.35rem 0 0;
+    color: var(--muted-foreground);
+    font-weight: 600;
   }
 
   .account-card-actions {
@@ -471,6 +805,20 @@
   .pill.ok {
     background: rgba(13, 127, 88, 0.12);
     color: var(--ok);
+  }
+
+  .status-pill.attention,
+  .kind-pill.liability {
+    background: rgba(154, 81, 41, 0.12);
+    color: #9a5129;
+    border-color: rgba(154, 81, 41, 0.18);
+  }
+
+  .status-pill.manual,
+  .kind-pill.asset {
+    background: rgba(15, 95, 136, 0.08);
+    color: var(--brand-strong);
+    border-color: rgba(15, 95, 136, 0.14);
   }
 
   .account-meta-grid {
@@ -605,6 +953,10 @@
     .account-meta-grid,
     .account-card-main {
       grid-template-columns: 1fr;
+    }
+
+    .account-group-head {
+      align-items: stretch;
     }
 
     .account-card-head {
