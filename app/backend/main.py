@@ -200,6 +200,53 @@ def _rule_or_404(path: Path, rule_id: str) -> dict:
     return rule
 
 
+def _same_resolved_path(left: str | None, right: Path) -> bool:
+    if not left:
+        return False
+    try:
+        return Path(left).resolve() == right.resolve()
+    except OSError:
+        return False
+
+
+def _unknown_stage_summary(groups: list[dict], selections: dict[str, dict]) -> dict:
+    return {
+        "groupCount": len(selections),
+        "txnUpdates": sum(len(group["txns"]) for group in groups if group["groupKey"] in selections),
+    }
+
+
+def _filtered_unknown_selections(groups: list[dict], selections: dict[str, dict] | None) -> dict[str, dict]:
+    group_keys = {group["groupKey"] for group in groups}
+    return {
+        group_key: selection
+        for group_key, selection in (selections or {}).items()
+        if group_key in group_keys
+    }
+
+
+def _find_resumable_unknown_stage(journal_path: Path) -> dict | None:
+    return stages.find_latest(
+        lambda payload: (
+            payload.get("kind") == "unknowns"
+            and payload.get("status") != "applied"
+            and _same_resolved_path(payload.get("journalPath"), journal_path)
+        )
+    )
+
+
+def _build_unknown_stage_payload(journal_path: Path, groups: list[dict], selections: dict[str, dict] | None = None) -> dict:
+    normalized_selections = _filtered_unknown_selections(groups, selections)
+    return {
+        "kind": "unknowns",
+        "status": "ready",
+        "journalPath": str(journal_path.resolve()),
+        "groups": groups,
+        "selections": normalized_selections,
+        "summary": _unknown_stage_summary(groups, normalized_selections),
+    }
+
+
 @app.get("/api/health")
 def health() -> dict:
     try:
@@ -680,13 +727,17 @@ def unknown_scan(req: UnknownScanRequest) -> dict:
     accounts_dat = config.init_dir / "10-accounts.dat"
     rule_path = ensure_rules_store(config.init_dir, accounts_dat)
     data = scan_unknowns(journal_path, load_rules(rule_path), config.import_accounts, config.tracked_accounts)
-    payload = {
-        "kind": "unknowns",
-        "status": "ready",
-        "journalPath": str(journal_path.resolve()),
-        "groups": data["groups"],
-        "selections": {},
-    }
+    existing_stage = _find_resumable_unknown_stage(journal_path)
+    if existing_stage is not None:
+        payload = {
+            **existing_stage,
+            **_build_unknown_stage_payload(journal_path, data["groups"], existing_stage.get("selections")),
+            "stageId": existing_stage["stageId"],
+        }
+        stages.save(existing_stage["stageId"], payload)
+        return payload
+
+    payload = _build_unknown_stage_payload(journal_path, data["groups"])
     stage_id = stages.create(payload)
     payload["stageId"] = stage_id
     return payload
@@ -707,10 +758,7 @@ def unknown_stage_mappings(req: UnknownStageRequest) -> dict:
         for selection in req.selections
     }
     stage["selections"] = selections
-    stage["summary"] = {
-        "groupCount": len(selections),
-        "txnUpdates": sum(len(g["txns"]) for g in stage["groups"] if g["groupKey"] in selections),
-    }
+    stage["summary"] = _unknown_stage_summary(stage["groups"], selections)
     stages.save(req.stageId, stage)
     return stage
 

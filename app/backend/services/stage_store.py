@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -45,6 +46,25 @@ class StageStore:
         path = self.stage_path(stage_id)
         if path.exists():
             path.unlink()
+
+    def find_latest(self, predicate: Callable[[dict], bool]) -> dict | None:
+        self.ensure_dirs()
+        latest_payload: dict | None = None
+        latest_mtime = float("-inf")
+        for path in self.stages_dir.glob("*.json"):
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+            except json.JSONDecodeError:
+                continue
+            if not predicate(payload):
+                continue
+
+            mtime = path.stat().st_mtime
+            if mtime <= latest_mtime:
+                continue
+            latest_mtime = mtime
+            latest_payload = payload
+        return latest_payload
 
     def cleanup_old(self, days: int = 7) -> int:
         self.ensure_dirs()

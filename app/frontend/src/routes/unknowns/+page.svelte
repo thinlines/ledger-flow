@@ -83,6 +83,7 @@
   type UnknownStage = {
     kind?: 'unknowns';
     stageId: string;
+    journalPath: string;
     groups: UnknownGroup[];
     selections?: Record<string, GroupSelection>;
     summary?: {
@@ -149,6 +150,7 @@
   };
 
   let initialized = false;
+  let workspacePath = '';
   let journalPath = '';
   let journals: Array<{ fileName: string; absPath: string }> = [];
   let accounts: string[] = [];
@@ -188,10 +190,71 @@
   let lastApplyResult: UnknownStage['result'] = null;
   let lastAppliedGroups: UnknownGroup[] = [];
   const categoryAccountTypes = ['Expense', 'Revenue'];
+  let stageAutosaveInFlight: Promise<void> | null = null;
+  let stageAutosaveQueued = false;
+  let stageAutosavePaused = false;
+  const UNKNOWN_STAGE_STORAGE_PREFIX = 'ledger-flow:unknown-review:';
 
   $: selectedRuleAccount = extractSetAccount(ruleActions).trim();
   $: existingRuleCandidates =
     ruleMode === 'create' ? findExistingRulesForAccount(selectedRuleAccount, ruleSourcePayee, ruleId) : [];
+
+  function unknownStageStorageKey(): string | null {
+    return workspacePath ? `${UNKNOWN_STAGE_STORAGE_PREFIX}${workspacePath}` : null;
+  }
+
+  function rememberUnknownStage(nextStage: UnknownStage | null) {
+    const key = unknownStageStorageKey();
+    if (!key || typeof window === 'undefined') return;
+    if (!nextStage?.stageId) {
+      window.localStorage.removeItem(key);
+      return;
+    }
+    window.localStorage.setItem(
+      key,
+      JSON.stringify({
+        stageId: nextStage.stageId,
+        journalPath: nextStage.journalPath
+      })
+    );
+  }
+
+  function rememberedUnknownStage(): { stageId: string; journalPath: string } | null {
+    const key = unknownStageStorageKey();
+    if (!key || typeof window === 'undefined') return null;
+    const raw = window.localStorage.getItem(key);
+    if (!raw) return null;
+    try {
+      const parsed = JSON.parse(raw) as { stageId?: string; journalPath?: string };
+      const stageId = parsed.stageId?.trim() ?? '';
+      const journalPath = parsed.journalPath?.trim() ?? '';
+      if (!stageId) return null;
+      return { stageId, journalPath };
+    } catch {
+      window.localStorage.removeItem(key);
+      return null;
+    }
+  }
+
+  function clearRememberedUnknownStage() {
+    const key = unknownStageStorageKey();
+    if (!key || typeof window === 'undefined') return;
+    window.localStorage.removeItem(key);
+  }
+
+  async function syncUnknownStageRoute(stageId: string | null) {
+    const params = new URLSearchParams($page.url.searchParams);
+    if (stageId) {
+      params.set('stageId', stageId);
+    } else {
+      params.delete('stageId');
+    }
+    const query = params.toString();
+    const target = query ? `/unknowns?${query}` : '/unknowns';
+    const current = `${$page.url.pathname}${$page.url.search}`;
+    if (target === current) return;
+    await goto(target, { replaceState: true, noScroll: true, keepFocus: true });
+  }
 
   function pathLabel(path: string): string {
     const parts = path.split('/').filter(Boolean);
@@ -301,8 +364,9 @@
 
   onMount(async () => {
     try {
-      const state = await apiGet<{ initialized: boolean }>('/api/app/state');
+      const state = await apiGet<{ initialized: boolean; workspacePath: string | null }>('/api/app/state');
       initialized = state.initialized;
+      workspacePath = state.workspacePath ?? '';
       if (!initialized) return;
 
       const [journalsData, accountsData, trackedAccountsData, rulesData] = await Promise.all([
@@ -323,6 +387,31 @@
       const requestedStageId = $page.url.searchParams.get('stageId') ?? '';
       if (requestedStageId) {
         await loadStageFromRoute(requestedStageId);
+        return;
+      }
+
+      const savedStage = rememberedUnknownStage();
+      if (savedStage) {
+        if (savedStage.journalPath) {
+          journalPath = savedStage.journalPath;
+          try {
+            const nextStage = await refreshUnknownStage({ preserveApplyResult: false, resetFilter: false });
+            await syncUnknownStageRoute(nextStage.stageId);
+            return;
+          } catch {
+            clearRememberedUnknownStage();
+          }
+        }
+        try {
+          await loadStageFromRoute(savedStage.stageId);
+          return;
+        } catch {
+          clearRememberedUnknownStage();
+        }
+      }
+
+      if (journalPath) {
+        await scan();
       }
     } catch (e) {
       error = String(e);
@@ -339,15 +428,18 @@
     lastAppliedGroups = [];
     loading = true;
     try {
-      if ($page.url.searchParams.get('stageId')) {
-        await goto('/unknowns', { replaceState: true, noScroll: true, keepFocus: true });
-      }
-      await refreshUnknownStage({ preserveApplyResult: false, resetFilter: false });
+      const nextStage = await refreshUnknownStage({ preserveApplyResult: false, resetFilter: false });
+      await syncUnknownStageRoute(nextStage.stageId);
     } catch (e) {
       error = String(e);
     } finally {
       loading = false;
     }
+  }
+
+  async function openSelectedJournalReview() {
+    if (!journalPath.trim()) return;
+    await scan();
   }
 
   type ReviewRow = {
@@ -554,13 +646,19 @@
 
   function hydrateStage(nextStage: UnknownStage, { resetFilter }: { resetFilter: boolean }) {
     stage = nextStage;
+    journalPath = nextStage.journalPath;
     if (resetFilter) statusFilter = 'all';
     const stagedSelections = nextStage.selections ?? {};
+    stageAutosaveInFlight = null;
+    stageAutosaveQueued = false;
+    stageAutosavePaused = false;
     selections = {};
     for (const group of nextStage.groups ?? []) {
       const stagedSelection = stagedSelections[group.groupKey];
       selections[group.groupKey] = stagedSelection ?? buildDefaultSelection(group);
     }
+    rememberUnknownStage(nextStage);
+    void syncUnknownStageRoute(nextStage.stageId);
   }
 
   async function refreshUnknownStage({
@@ -577,6 +675,56 @@
     }
     hydrateStage(data, { resetFilter });
     return data;
+  }
+
+  async function persistStageSelections() {
+    if (!stage?.stageId || historyStage || stage.result) return;
+    const stageId = stage.stageId;
+    const payload = stageSelectionPayload(selections);
+    try {
+      const savedStage = await apiPost<UnknownStage>('/api/unknowns/stage-mappings', { stageId, selections: payload });
+      if (stage?.stageId === savedStage.stageId) {
+        stage = {
+          ...stage,
+          selections: savedStage.selections ?? stage.selections,
+          summary: savedStage.summary ?? stage.summary
+        };
+        rememberUnknownStage(stage);
+      }
+    } catch (e) {
+      error = `Review progress could not be saved: ${String(e)}`;
+    }
+  }
+
+  function queueStageAutosave() {
+    if (!stage?.stageId || historyStage || stage.result || stageAutosavePaused) return;
+    if (stageAutosaveInFlight) {
+      stageAutosaveQueued = true;
+      return;
+    }
+    stageAutosaveInFlight = (async () => {
+      try {
+        await persistStageSelections();
+      } finally {
+        stageAutosaveInFlight = null;
+        if (stageAutosaveQueued && !stageAutosavePaused) {
+          stageAutosaveQueued = false;
+          queueStageAutosave();
+        }
+      }
+    })();
+  }
+
+  async function flushStageAutosave() {
+    stageAutosavePaused = true;
+    try {
+      while (stageAutosaveInFlight) {
+        await stageAutosaveInFlight;
+      }
+      stageAutosaveQueued = false;
+    } finally {
+      stageAutosavePaused = false;
+    }
   }
 
   function parseJournalDate(value: string): number | null {
@@ -674,6 +822,7 @@
 
     selections = nextSelections;
     stage = { ...stage, groups: [...stage.groups] };
+    queueStageAutosave();
   }
 
   async function applyMappings() {
@@ -681,17 +830,21 @@
     loading = true;
     error = '';
     try {
+      await flushStageAutosave();
       const stageId = stage.stageId;
       const payload = stageSelectionPayload(selections);
       await apiPost<UnknownStage>('/api/unknowns/stage-mappings', { stageId, selections: payload });
       const appliedStage = await apiPost<UnknownStage>('/api/unknowns/apply', { stageId });
       lastApplyResult = appliedStage.result ?? null;
       lastAppliedGroups = appliedStage.groups ?? [];
+      clearRememberedUnknownStage();
 
       try {
-        await refreshUnknownStage({ preserveApplyResult: true, resetFilter: false });
+        const nextStage = await refreshUnknownStage({ preserveApplyResult: true, resetFilter: false });
+        await syncUnknownStageRoute(nextStage.stageId);
       } catch (refreshError) {
         stage = appliedStage;
+        await syncUnknownStageRoute(null);
         error = `Changes were applied, but the review queue could not be refreshed: ${String(refreshError)}`;
       }
     } catch (e) {
@@ -946,6 +1099,7 @@
             categoryAccount: selectedAccount
           }
         };
+        queueStageAutosave();
       }
       showRuleModal = false;
       return true;
@@ -989,6 +1143,7 @@
 
     clearApplyFeedback();
     selections = { ...selections, [group.groupKey]: nextSelection };
+    queueStageAutosave();
   }
 
   function setCategoryForGroup(groupKey: string, account: string) {
@@ -1002,6 +1157,7 @@
         categoryAccount: account
       }
     };
+    queueStageAutosave();
   }
 
   function setTransferTargetForGroup(group: UnknownGroup, targetTrackedAccountId: string) {
@@ -1017,6 +1173,7 @@
         matchedCandidateId
       }
     };
+    queueStageAutosave();
   }
 
   function transferDestinationAccounts(
@@ -1155,41 +1312,6 @@
     <section class="view-card"><p class="error-text">{error}</p></section>
   {/if}
 
-  {#if !historyStage}
-    <section class="view-card">
-      <p class="eyebrow">Review Scope</p>
-      <h3>Choose Activity to Review</h3>
-
-      <div class="field compact">
-        <div class="field">
-          <label for="journalSelect">Available Years</label>
-          <select id="journalSelect" bind:value={journalPath}>
-            <option value="">Select...</option>
-            {#each journals as j}
-              <option value={j.absPath}>{j.fileName}</option>
-            {/each}
-          </select>
-        </div>
-      </div>
-
-      {#if journalPath}
-        <p class="muted">Selected file: {pathLabel(journalPath)}</p>
-      {/if}
-
-      <details class="advanced-panel">
-        <summary>Advanced file selection</summary>
-        <div class="field">
-          <label for="journalPath">Custom Journal Path</label>
-          <input id="journalPath" bind:value={journalPath} placeholder="/abs/path/to/journal" />
-        </div>
-      </details>
-
-      <button class="btn btn-primary" type="button" disabled={loading || !journalPath} on:click={scan}>
-        {loading ? 'Scanning...' : 'Find Transactions to Review'}
-      </button>
-    </section>
-  {/if}
-
   {#if historyStage}
     <section class="view-card review-summary-card">
       <div class="review-summary-head">
@@ -1315,66 +1437,147 @@
         </ul>
       </section>
     {/if}
-  {:else if stage}
-    <section class="view-card review-summary-card">
-      <div class="review-summary-head">
-        <div>
-          <p class="eyebrow">Review Queue</p>
-          <h3>{(stage.groups?.length ?? 0) === 0 ? 'Nothing left to review' : 'Review uncategorized transactions'}</h3>
-          <p class="muted">
-            {(stage.groups?.length ?? 0) === 0
-              ? `No uncategorized transactions were found in ${pathLabel(journalPath)}.`
-              : `${totalReviewTransactions} transactions in ${pathLabel(journalPath)}.`}
-          </p>
+  {:else}
+    {#if stage}
+      <section class="view-card review-summary-card">
+        <div class="review-summary-head">
+          <div>
+            <p class="eyebrow">Review Queue</p>
+            <h3>{(stage.groups?.length ?? 0) === 0 ? "You're all caught up" : 'Review uncategorized transactions'}</h3>
+            <p class="muted">
+              {(stage.groups?.length ?? 0) === 0
+                ? 'No uncategorized activity needs attention right now.'
+                : `${totalReviewTransactions} transactions from ${pathLabel(journalPath)} are in the review queue.`}
+            </p>
+          </div>
+          <div class="review-summary-pills">
+            {#if (stage.groups?.length ?? 0) === 0}
+              <span class="pill ok">All caught up</span>
+            {:else}
+              <span class="pill warn">{needsReviewTransactions} need review</span>
+              <span class="pill ok">{readyReviewTransactions} ready</span>
+              <span class="pill">{totalReviewTransactions} transactions</span>
+            {/if}
+          </div>
         </div>
-        <div class="review-summary-pills">
-          <span class="pill warn">{needsReviewTransactions} need review</span>
-          <span class="pill ok">{readyReviewTransactions} ready</span>
-          <span class="pill">{totalReviewTransactions} transactions</span>
-        </div>
-      </div>
 
-      {#if (stage.groups?.length ?? 0) > 0}
-        <div class="review-toolbar">
-          <div class="filters">
-            <button
-              class="btn"
-              type="button"
-              class:active-filter={statusFilter === 'needs'}
-              on:click={() => (statusFilter = 'needs')}
-            >
-              Needs review
-            </button>
-            <button
-              class="btn"
-              type="button"
-              class:active-filter={statusFilter === 'ready'}
-              on:click={() => (statusFilter = 'ready')}
-            >
-              Ready
-            </button>
-            <button class="btn" type="button" class:active-filter={statusFilter === 'all'} on:click={() => (statusFilter = 'all')}>
-              All
-            </button>
+        {#if (stage.groups?.length ?? 0) > 0}
+          <div class="review-toolbar">
+            <div class="filters">
+              <button
+                class="btn"
+                type="button"
+                class:active-filter={statusFilter === 'needs'}
+                on:click={() => (statusFilter = 'needs')}
+              >
+                Needs review
+              </button>
+              <button
+                class="btn"
+                type="button"
+                class:active-filter={statusFilter === 'ready'}
+                on:click={() => (statusFilter = 'ready')}
+              >
+                Ready
+              </button>
+              <button class="btn" type="button" class:active-filter={statusFilter === 'all'} on:click={() => (statusFilter = 'all')}>
+                All
+              </button>
+            </div>
+
+            {#if !stage.result}
+              <div class="review-actions">
+                <p class="muted review-hint">
+                  Assignments preview automatically. Applying writes {readyReviewTransactions} reviewed
+                  {readyReviewTransactions === 1 ? ' transaction' : ' transactions'} from {selectedGroupCount}
+                  {selectedGroupCount === 1 ? ' review group' : ' review groups'} back to {pathLabel(journalPath)}.
+                </p>
+                <div class="actions">
+                  <button class="btn btn-primary" type="button" disabled={loading || readyReviewTransactions === 0} on:click={applyMappings}>
+                    Apply {readyReviewTransactions} {readyReviewTransactions === 1 ? 'Change' : 'Changes'}
+                  </button>
+                </div>
+              </div>
+            {/if}
+          </div>
+        {:else}
+          <div class="caught-up-state">
+            <p class="muted caught-up-copy">
+              Recent activity is categorized and ready. Head back to Overview to see the latest picture, or import more
+              activity when you want to extend it.
+            </p>
+            <div class="actions">
+              <a class="btn btn-primary" href="/">See Overview</a>
+              <a class="btn" href="/import">Import More Activity</a>
+            </div>
+          </div>
+        {/if}
+      </section>
+    {:else if loading}
+      <section class="view-card review-summary-card">
+        <p class="eyebrow">Review Queue</p>
+        <h3>Opening your review queue</h3>
+        <p class="muted">Checking recent activity for transactions that still need attention.</p>
+      </section>
+    {:else if journals.length === 0 && !journalPath}
+      <section class="view-card review-summary-card">
+        <p class="eyebrow">Review Queue</p>
+        <h3>No imported activity yet</h3>
+        <p class="muted">Import transactions first, then return here to review anything that still needs a category.</p>
+        <div class="caught-up-state">
+          <div class="actions">
+            <a class="btn btn-primary" href="/import">Import Activity</a>
+            <a class="btn" href="/">See Overview</a>
+          </div>
+        </div>
+      </section>
+    {/if}
+
+    {#if journals.length > 0 || journalPath}
+      <section class="view-card review-scope-card">
+        <div class="review-scope-head">
+          <div>
+            <p class="eyebrow">Review Scope</p>
+            <h3>Latest activity opens automatically</h3>
+            <p class="muted">Switch years or refresh the queue if you need a different slice of activity.</p>
           </div>
 
-          {#if !stage.result}
-            <div class="review-actions">
-              <p class="muted review-hint">
-                Assignments preview automatically. Applying writes {readyReviewTransactions} reviewed
-                {readyReviewTransactions === 1 ? ' transaction' : ' transactions'} from {selectedGroupCount}
-                {selectedGroupCount === 1 ? ' review group' : ' review groups'} back to {pathLabel(journalPath)}.
-              </p>
-              <div class="actions">
-                <button class="btn btn-primary" type="button" disabled={loading || readyReviewTransactions === 0} on:click={applyMappings}>
-                  Apply {readyReviewTransactions} {readyReviewTransactions === 1 ? 'Change' : 'Changes'}
-                </button>
-              </div>
+          <div class="review-scope-controls">
+            <div class="field">
+              <label for="journalSelect">Available Years</label>
+              <select id="journalSelect" bind:value={journalPath} on:change={() => void openSelectedJournalReview()}>
+                {#each journals as j}
+                  <option value={j.absPath}>{j.fileName}</option>
+                {/each}
+              </select>
             </div>
-          {/if}
+
+            <div class="actions">
+              <button class="btn" type="button" disabled={loading || !journalPath} on:click={openSelectedJournalReview}>
+                {loading ? 'Refreshing...' : 'Refresh'}
+              </button>
+            </div>
+          </div>
         </div>
-      {/if}
-    </section>
+
+        {#if journalPath}
+          <p class="muted review-scope-current">Showing {pathLabel(journalPath)}</p>
+        {/if}
+
+        <details class="advanced-panel">
+          <summary>Advanced file selection</summary>
+          <div class="field">
+            <label for="journalPath">Custom Journal Path</label>
+            <input id="journalPath" bind:value={journalPath} placeholder="/abs/path/to/journal" />
+          </div>
+          <div class="actions">
+            <button class="btn" type="button" disabled={loading || !journalPath} on:click={openSelectedJournalReview}>
+              Open Review
+            </button>
+          </div>
+        </details>
+      </section>
+    {/if}
 
     {#if lastApplyResult}
       <section class="view-card result-card">
@@ -1392,7 +1595,7 @@
       </section>
     {/if}
 
-    {#if (stage.groups?.length ?? 0) > 0}
+    {#if stage && (stage.groups?.length ?? 0) > 0}
       {#if filteredReviewRows.length === 0}
         <section class="view-card">
           <p class="muted">No review groups match the current filter.</p>
@@ -1628,11 +1831,6 @@
     margin: 0.1rem 0 0.8rem;
   }
 
-  .compact {
-    gap: 0.8rem;
-    margin: 0.3rem 0 0.8rem;
-  }
-
   .advanced-panel {
     margin: 0 0 0.9rem;
     border: 1px solid rgba(15, 95, 136, 0.12);
@@ -1659,11 +1857,39 @@
   }
 
   .review-summary-card,
+  .review-scope-card,
   .history-select-card,
   .result-card,
   .review-row {
     display: grid;
     gap: 0.85rem;
+  }
+
+  .review-scope-head {
+    display: flex;
+    justify-content: space-between;
+    gap: 1rem;
+    align-items: end;
+    flex-wrap: wrap;
+  }
+
+  .review-scope-controls {
+    display: grid;
+    grid-template-columns: minmax(15rem, 18rem) auto;
+    gap: 0.75rem;
+    align-items: end;
+  }
+
+  .review-scope-current,
+  .caught-up-copy {
+    margin: 0;
+  }
+
+  .caught-up-state {
+    display: grid;
+    gap: 0.8rem;
+    padding-top: 1rem;
+    border-top: 1px solid rgba(10, 61, 89, 0.08);
   }
 
   .review-summary-head {
@@ -2081,6 +2307,15 @@
     .history-select-card {
       grid-template-columns: 1fr;
       justify-content: start;
+    }
+
+    .review-scope-head {
+      flex-direction: column;
+      align-items: stretch;
+    }
+
+    .review-scope-controls {
+      grid-template-columns: 1fr;
     }
   }
 
