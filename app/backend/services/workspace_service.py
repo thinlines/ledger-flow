@@ -247,6 +247,12 @@ class WorkspaceManager:
             return "true" if value else "false"
         return str(value)
 
+    def _clean_optional_string(self, value: object) -> str | None:
+        if value is None:
+            return None
+        cleaned = str(value).strip()
+        return cleaned or None
+
     def _ledger_suffix(self, institution_display_name: str, display_name: str) -> str:
         candidate = display_name.strip()
         template_name = institution_display_name.strip()
@@ -289,17 +295,17 @@ class WorkspaceManager:
         existing_import_accounts: dict[str, dict] | None = None,
         existing_account_id: str | None = None,
     ) -> tuple[dict, object]:
-        institution_id = str(raw.get("institutionId", "")).strip()
+        institution_id = self._clean_optional_string(raw.get("institutionId")) or ""
         template = get_template(institution_id)
         if template is None:
             raise ValueError(f"Unknown institution template: {institution_id}")
 
-        display_name = str(raw.get("displayName", "")).strip()
+        display_name = self._clean_optional_string(raw.get("displayName")) or ""
         if not display_name:
             raise ValueError("Import account display name is required")
 
-        last4 = str(raw.get("last4", "")).strip() or None
-        ledger_account = str(raw.get("ledgerAccount", "")).strip()
+        last4 = self._clean_optional_string(raw.get("last4"))
+        ledger_account = self._clean_optional_string(raw.get("ledgerAccount")) or ""
         if not ledger_account:
             ledger_account = self._suggest_ledger_account(
                 institution_id,
@@ -368,15 +374,15 @@ class WorkspaceManager:
         default_currency: str,
         existing_account_id: str | None = None,
     ) -> tuple[dict, dict]:
-        display_name = str(raw.get("displayName", "")).strip()
+        display_name = self._clean_optional_string(raw.get("displayName")) or ""
         if not display_name:
             raise ValueError("Import account display name is required")
 
-        ledger_account = str(raw.get("ledgerAccount", "")).strip()
+        ledger_account = self._clean_optional_string(raw.get("ledgerAccount")) or ""
         if not ledger_account or ":" not in ledger_account:
             raise ValueError("Custom import accounts require a ledger account")
 
-        last4 = str(raw.get("last4", "")).strip() or None
+        last4 = self._clean_optional_string(raw.get("last4"))
         base_id = self._slugify(display_name)
         if last4:
             base_id = f"{base_id}_{self._slugify(last4)}"
@@ -406,19 +412,19 @@ class WorkspaceManager:
         used_account_ids: set[str],
         existing_account_id: str | None = None,
     ) -> dict:
-        display_name = str(raw.get("displayName", "")).strip()
+        display_name = self._clean_optional_string(raw.get("displayName")) or ""
         if not display_name:
             raise ValueError("Tracked account display name is required")
 
-        ledger_account = str(raw.get("ledgerAccount", "")).strip()
+        ledger_account = self._clean_optional_string(raw.get("ledgerAccount")) or ""
         if not ledger_account or ":" not in ledger_account:
             raise ValueError("Tracked account ledger account is required")
 
-        institution_id = str(raw.get("institutionId", "")).strip() or None
+        institution_id = self._clean_optional_string(raw.get("institutionId"))
         if institution_id and get_template(institution_id) is None:
             raise ValueError(f"Unknown institution template: {institution_id}")
 
-        last4 = str(raw.get("last4", "")).strip() or None
+        last4 = self._clean_optional_string(raw.get("last4"))
 
         base_id = self._slugify(display_name)
         if last4:

@@ -317,6 +317,39 @@ def test_upsert_tracked_account_creates_manual_account_with_opening_balance(tmp_
     assert "Assets:Cash:Wallet  USD 250.00" in opening_content
 
 
+def test_upsert_tracked_account_accepts_null_institution_id(tmp_path: Path) -> None:
+    manager = WorkspaceManager(tmp_path / "app")
+    workspace_root = tmp_path / "workspace"
+
+    manager.bootstrap_workspace(
+        workspace_path=workspace_root,
+        workspace_name="Test Books",
+        base_currency="USD",
+        start_year=2026,
+        import_accounts=[],
+    )
+
+    config = load_config(workspace_root / "settings" / "workspace.toml")
+    account_id, account_cfg = manager.upsert_tracked_account(
+        config,
+        {
+            "displayName": "Brokerage Cash",
+            "ledgerAccount": "Assets:Investments:Brokerage:Cash",
+            "institutionId": None,
+            "last4": None,
+        },
+    )
+
+    assert account_id == "brokerage_cash"
+    assert account_cfg["institution"] is None
+    assert account_cfg["last4"] is None
+
+    reloaded = load_config(workspace_root / "settings" / "workspace.toml")
+    assert reloaded.tracked_accounts["brokerage_cash"].get("institution") is None
+    assert reloaded.tracked_accounts["brokerage_cash"].get("last4") is None
+    assert reloaded.tracked_accounts["brokerage_cash"]["import_account_id"] is None
+
+
 def test_upsert_import_account_keeps_opening_balance_in_sync_with_ledger_account(tmp_path: Path) -> None:
     manager = WorkspaceManager(tmp_path / "app")
     workspace_root = tmp_path / "workspace"
