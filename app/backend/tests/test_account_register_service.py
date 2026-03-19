@@ -190,3 +190,54 @@ def test_account_register_uses_transfer_peer_metadata_for_pending_transfers(tmp_
             "kind": "asset",
         }
     ]
+
+
+def test_account_register_shows_pending_transfer_on_peer_account_without_changing_balance(tmp_path: Path) -> None:
+    config = _make_config(tmp_path / "workspace")
+    (config.opening_bal_dir / "savings.journal").write_text(
+        """
+2026-02-01 Opening balance
+    ; tracked_account_id: savings
+    Assets:Bank:Savings  USD 125.00
+    Equity:Opening-Balances
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    (config.journal_dir / "2026.journal").write_text(
+        """
+2026/02/04 Transfer to savings
+    ; import_account_id: checking
+    ; transfer_id: transfer-1
+    ; transfer_state: pending
+    ; transfer_peer_account_id: savings
+    Assets:Transfers:checking__savings  $30.00
+    Assets:Bank:Checking
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    register = build_account_register(config, "savings")
+
+    assert register["currentBalance"] == 125.0
+    assert register["transactionCount"] == 0
+    assert register["entryCount"] == 2
+    assert register["latestActivityDate"] == "2026-02-04"
+
+    latest = register["entries"][0]
+    assert latest["date"] == "2026-02-04"
+    assert latest["payee"] == "Transfer to savings"
+    assert latest["summary"] == "Transfer · Wells Fargo Checking (Pending)"
+    assert latest["amount"] == 30.0
+    assert latest["runningBalance"] == 125.0
+    assert latest["transferState"] == "pending"
+    assert latest["transferPeerAccountId"] == "checking"
+    assert latest["transferPeerAccountName"] == "Wells Fargo Checking"
+    assert latest["detailLines"] == [
+        {
+            "label": "Wells Fargo Checking",
+            "account": "Assets:Bank:Checking",
+            "kind": "asset",
+        }
+    ]

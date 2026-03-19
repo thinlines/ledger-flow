@@ -31,6 +31,7 @@
     runningBalance: number;
     isUnknown: boolean;
     isOpeningBalance: boolean;
+    transferState?: string | null;
     detailLines: Array<{
       label: string;
       account: string;
@@ -268,7 +269,7 @@
         <p class="eyebrow">Register</p>
         <h3>Latest to earliest</h3>
       </div>
-      <p class="section-note">Running balances show the balance after each row.</p>
+      <p class="section-note">Running balances reflect posted activity. Pending transfers appear here without changing the balance.</p>
     </div>
 
     {#if registerLoading}
@@ -301,6 +302,9 @@
                   <span>{entry.summary}</span>
                   {#if entry.isUnknown}
                     <span class="pill warn">Needs review</span>
+                  {/if}
+                  {#if entry.transferState === 'pending'}
+                    <span class="pill">Pending transfer</span>
                   {/if}
                   {#if entry.isOpeningBalance}
                     <span class="pill">Starting balance</span>
