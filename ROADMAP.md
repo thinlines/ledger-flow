@@ -128,6 +128,8 @@ Product model direction:
 
 - `/accounts` should represent the user's balance sheet, not the entire chart of accounts
 - tracked accounts should include asset and liability accounts such as checking, savings, cash, credit cards, loans, mortgages, and investments
+- tracked accounts should grow beyond a simple asset-vs-liability split into clearer user-facing subtypes such as cash, credit, loan, investment, vehicle, and real-estate/property
+- long-lived assets such as vehicles and homes should appear in net worth and account inventory, but should not be framed the same way as liquid cash the user can spend today
 - liabilities such as auto loans should be tracked accounts when the user cares about the outstanding balance and net-worth impact
 - income and expense accounts should remain part of categorization and rules, not the primary account inventory
 - equity accounts and transfer-clearing accounts should exist as internal or advanced accounting structures, hidden from the primary account list by default
@@ -139,6 +141,9 @@ Remaining scope:
 - manual or unsupported institution path
 - dedicated accounts overview and management screen
 - clearer distinction between tracked accounts and import configuration
+- account subtype taxonomy and persistence for liquid assets, long-lived assets, investments, and debts
+- valuation workflow for manually tracked assets such as vehicles and real estate, including an as-of date and clear freshness cues
+- optional linking between related balance-sheet accounts such as a home and its mortgage or a vehicle and its auto loan
 - add/delete/archive/reorder account management as appropriate
 - account-level completeness and status cues
 - clearer guidance in review and rules when the user is creating a category versus a tracked balance-sheet account
@@ -156,6 +161,17 @@ Scope:
   - tracked accounts are assets and liabilities
   - categories are income and expenses
   - system accounts such as equity and transfer-clearing stay hidden by default
+- Add user-facing subtypes within tracked accounts so the app can distinguish:
+  - liquid cash accounts such as checking, savings, and cash
+  - debt accounts such as credit cards, loans, and mortgages
+  - invested assets such as brokerage and retirement accounts
+  - long-lived assets such as vehicles and real estate
+- Support lightweight valuation workflows for non-imported long-lived assets:
+  - start with user-entered value, valuation date, and optional notes/source
+  - show stale or missing valuation cues instead of pretending precision
+  - defer advanced depreciation or appraisal modeling until the simpler workflow is proven useful
+- Separate liquidity-oriented views from net-worth-oriented views so fixed assets and property do not distort "cash available" style summaries
+- Allow the product to understand related accounts where helpful, such as a property paired with a mortgage or a vehicle paired with an auto loan
 - Treat loan payments and other balance-sheet movements accordingly:
   - principal moves between tracked accounts
   - interest and fees remain categories
@@ -167,6 +183,8 @@ Expected outcome:
 - Unsupported institutions no longer block adoption
 - The overview can become trustworthy for balances and net worth, not only spending activity
 - The user can understand why a liability such as an auto loan appears in Accounts while its interest expense appears in categorization
+- Users can distinguish spendable cash, invested assets, and long-lived property at a glance instead of seeing all assets treated as one undifferentiated bucket
+- Vehicles, homes, and their related debts can contribute to net worth in a way that remains understandable and honest about valuation freshness
 - Flexibility in review no longer comes at the cost of invisible balance-sheet accounts
 
 ### 2. Navigation, Framing, and App Shell
@@ -365,6 +383,7 @@ Definition of done:
 - Add a manual or unsupported-account path
 - Separate tracked accounts from import configuration
 - Add a dedicated Accounts screen with add, view, and edit flows
+- Add user-facing account subtypes and special treatment for long-lived assets
 - Make the account model explicit in product flows:
   - Accounts = assets and liabilities
   - Categories = income and expenses
@@ -383,6 +402,8 @@ Definition of done:
 - The account inventory can be viewed and edited outside setup
 - Eventual consistency is reflected in real product workflows, not only in project principles
 - Liabilities such as loans are clearly handled as tracked accounts rather than ambiguous categories
+- A user can add a vehicle, property, or other long-lived asset with an understandable value and valuation date
+- Overview and Accounts can distinguish liquid position from total net worth so fixed assets do not confuse day-to-day finance views
 - Balance-sheet accounts created outside the normal account flow are still visible, reviewable, and explainable
 
 ### Milestone C: Navigation and App Shell
