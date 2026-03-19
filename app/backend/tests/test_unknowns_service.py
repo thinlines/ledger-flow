@@ -29,14 +29,25 @@ def _tracked_accounts() -> dict[str, dict]:
         "checking": {
             "display_name": "Checking",
             "ledger_account": "Assets:Bank:Checking",
+            "import_account_id": "checking_import",
         },
         "savings": {
             "display_name": "Savings",
             "ledger_account": "Assets:Bank:Savings",
+            "import_account_id": "savings_import",
         },
         "visa": {
             "display_name": "Visa",
             "ledger_account": "Liabilities:Cards:Visa",
+            "import_account_id": "visa_import",
+        },
+        "vehicle": {
+            "display_name": "Vehicle",
+            "ledger_account": "Assets:Vehicle:Subaru",
+        },
+        "auto_loan": {
+            "display_name": "Auto Loan",
+            "ledger_account": "Liabilities:Loans:Auto",
         },
     }
 
@@ -430,6 +441,110 @@ account Liabilities:Cards:Visa
         }
     ]
     assert journal.read_text(encoding="utf-8") == original + "\n"
+
+
+def test_apply_unknown_mappings_posts_directly_to_manual_asset_account(tmp_path: Path) -> None:
+    journal = tmp_path / "sample.journal"
+    accounts = tmp_path / "10-accounts.dat"
+
+    journal.write_text(
+        """
+2026/02/01 Vehicle purchase
+    ; import_account_id: checking_import
+    ; source_identity: tx-checking
+    Expenses:Unknown  $50.00
+    Assets:Bank:Checking
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    accounts.write_text(
+        """
+account Assets:Bank:Checking
+    ; type: Cash
+
+account Assets:Vehicle:Subaru
+    ; type: Asset
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    groups = scan_unknowns(journal, [], _import_accounts(), _tracked_accounts())["groups"]
+    txn_updates, warnings = apply_unknown_mappings(
+        journal_path=journal,
+        accounts_dat=accounts,
+        selections={
+            "vehicle purchase::checking_import": {
+                "selectionType": "transfer",
+                "targetTrackedAccountId": "vehicle",
+            }
+        },
+        scanned_groups=groups,
+        tracked_accounts=_tracked_accounts(),
+    )
+
+    content = journal.read_text(encoding="utf-8")
+    assert txn_updates == 1
+    assert warnings == []
+    assert "Assets:Vehicle:Subaru" in content
+    assert "Expenses:Unknown" not in content
+    assert "; transfer_state:" not in content
+    assert "; transfer_peer_account_id:" not in content
+    assert "Assets:Transfers:" not in content
+    assert "Assets:Transfers:" not in accounts.read_text(encoding="utf-8")
+
+
+def test_apply_unknown_mappings_posts_directly_to_manual_liability_account(tmp_path: Path) -> None:
+    journal = tmp_path / "sample.journal"
+    accounts = tmp_path / "10-accounts.dat"
+
+    journal.write_text(
+        """
+2026/02/01 Auto loan payment
+    ; import_account_id: checking_import
+    ; source_identity: tx-checking
+    Expenses:Unknown  $50.00
+    Assets:Bank:Checking
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    accounts.write_text(
+        """
+account Assets:Bank:Checking
+    ; type: Cash
+
+account Liabilities:Loans:Auto
+    ; type: Liability
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    groups = scan_unknowns(journal, [], _import_accounts(), _tracked_accounts())["groups"]
+    txn_updates, warnings = apply_unknown_mappings(
+        journal_path=journal,
+        accounts_dat=accounts,
+        selections={
+            "auto loan payment::checking_import": {
+                "selectionType": "transfer",
+                "targetTrackedAccountId": "auto_loan",
+            }
+        },
+        scanned_groups=groups,
+        tracked_accounts=_tracked_accounts(),
+    )
+
+    content = journal.read_text(encoding="utf-8")
+    assert txn_updates == 1
+    assert warnings == []
+    assert "Liabilities:Loans:Auto" in content
+    assert "Expenses:Unknown" not in content
+    assert "; transfer_state:" not in content
+    assert "; transfer_peer_account_id:" not in content
+    assert "Assets:Transfers:" not in content
+    assert "Assets:Transfers:" not in accounts.read_text(encoding="utf-8")
 
 
 def test_apply_unknown_mappings_matches_pending_transfer_when_counterpart_arrives(tmp_path: Path) -> None:

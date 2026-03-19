@@ -355,8 +355,13 @@
     group: UnknownGroup;
     txn: TxnRow;
     status: 'ready' | 'needs';
+    statusLabel: string;
     matchedRuleId: string | null;
     selectionType: 'category' | 'transfer';
+    categoryAccount: string;
+    transferTargetAccountId: string;
+    transferDestinationAccounts: TrackedAccount[];
+    transferHelper: { tone: 'muted' | 'warn'; text: string } | null;
   };
 
   let reviewRowsData: ReviewRow[] = [];
@@ -367,17 +372,20 @@
   let selectedGroupCount = 0;
   let historySelectedCount = 0;
 
-  $: reviewRowsData = buildReviewRows(stage?.groups ?? []);
+  $: reviewRowsData = buildReviewRows(stage?.groups ?? [], selections, trackedAccounts);
   $: filteredReviewRows =
     statusFilter === 'all' ? reviewRowsData : reviewRowsData.filter((row) => row.status === statusFilter);
   $: totalReviewTransactions = reviewRowsData.length;
   $: readyReviewTransactions = reviewRowsData.filter((row) => row.status === 'ready').length;
   $: needsReviewTransactions = reviewRowsData.filter((row) => row.status === 'needs').length;
-  $: selectedGroupCount = (stage?.groups ?? []).filter((group) => groupStatus(group) === 'ready').length;
+  $: selectedGroupCount = (stage?.groups ?? []).filter((group) => groupStatus(group, selections) === 'ready').length;
   $: historySelectedCount = historySelectedCandidateIds.length;
 
-  function trackedAccountById(accountId: string | null | undefined): TrackedAccount | null {
-    return trackedAccounts.find((account) => account.id === (accountId ?? '')) ?? null;
+  function trackedAccountById(
+    accountId: string | null | undefined,
+    currentTrackedAccounts: TrackedAccount[] = trackedAccounts
+  ): TrackedAccount | null {
+    return currentTrackedAccounts.find((account) => account.id === (accountId ?? '')) ?? null;
   }
 
   function isCategoryAccountName(accountName: string): boolean {
@@ -415,49 +423,84 @@
     };
   }
 
-  function selectionFor(group: UnknownGroup): GroupSelection {
-    return selections[group.groupKey] ?? buildDefaultSelection(group);
+  function selectionFor(
+    group: UnknownGroup,
+    currentSelections: Record<string, GroupSelection> = selections
+  ): GroupSelection {
+    return currentSelections[group.groupKey] ?? buildDefaultSelection(group);
   }
 
-  function groupMode(group: UnknownGroup): 'category' | 'transfer' {
-    return selectionFor(group).selectionType;
+  function groupMode(
+    group: UnknownGroup,
+    currentSelections: Record<string, GroupSelection> = selections
+  ): 'category' | 'transfer' {
+    return selectionFor(group, currentSelections).selectionType;
   }
 
-  function categoryAccountFor(group: UnknownGroup): string {
-    const selection = selectionFor(group);
+  function categoryAccountFor(
+    group: UnknownGroup,
+    currentSelections: Record<string, GroupSelection> = selections
+  ): string {
+    const selection = selectionFor(group, currentSelections);
     return selection.selectionType === 'category' ? (selection.categoryAccount ?? '').trim() : '';
   }
 
-  function transferTargetAccountIdFor(group: UnknownGroup): string {
-    const selection = selectionFor(group);
+  function transferTargetAccountIdFor(
+    group: UnknownGroup,
+    currentSelections: Record<string, GroupSelection> = selections
+  ): string {
+    const selection = selectionFor(group, currentSelections);
     return selection.selectionType === 'transfer' ? (selection.targetTrackedAccountId ?? '').trim() : '';
   }
 
-  function groupStatus(group: UnknownGroup): 'ready' | 'needs' {
-    const selection = selectionFor(group);
+  function groupStatus(
+    group: UnknownGroup,
+    currentSelections: Record<string, GroupSelection> = selections
+  ): 'ready' | 'needs' {
+    const selection = selectionFor(group, currentSelections);
     if (selection.selectionType === 'transfer') {
       return selection.targetTrackedAccountId?.trim() ? 'ready' : 'needs';
     }
     return selection.categoryAccount?.trim() ? 'ready' : 'needs';
   }
 
-  function groupStatusLabel(group: UnknownGroup): string {
-    if (groupStatus(group) === 'ready') return 'Ready';
-    return groupMode(group) === 'transfer' ? 'Needs transfer' : 'Needs category';
+  function groupStatusLabel(
+    group: UnknownGroup,
+    currentSelections: Record<string, GroupSelection> = selections
+  ): string {
+    if (groupStatus(group, currentSelections) === 'ready') return 'Ready';
+    return groupMode(group, currentSelections) === 'transfer' ? 'Needs transfer' : 'Needs category';
   }
 
-  function buildReviewRows(groups: UnknownGroup[]): ReviewRow[] {
+  function buildReviewRows(
+    groups: UnknownGroup[],
+    currentSelections: Record<string, GroupSelection>,
+    currentTrackedAccounts: TrackedAccount[]
+  ): ReviewRow[] {
     const rows: ReviewRow[] = [];
 
     for (const group of groups) {
+      const selection = selectionFor(group, currentSelections);
+      const selectionType = selection.selectionType;
+      const status = groupStatus(group, currentSelections);
+      const transferTargetAccountId =
+        selectionType === 'transfer' ? (selection.targetTrackedAccountId ?? '').trim() : '';
+      const categoryAccount = selectionType === 'category' ? (selection.categoryAccount ?? '').trim() : '';
+      const destinationAccounts = transferDestinationAccounts(group, currentTrackedAccounts);
+
       for (const txn of group.txns) {
         rows.push({
           rowId: txn.txnId,
           group,
           txn,
-          status: groupStatus(group),
+          status,
+          statusLabel: groupStatusLabel(group, currentSelections),
           matchedRuleId: group.matchedRuleId || null,
-          selectionType: groupMode(group)
+          selectionType,
+          categoryAccount,
+          transferTargetAccountId,
+          transferDestinationAccounts: destinationAccounts,
+          transferHelper: transferHelperText(group, txn, currentSelections, currentTrackedAccounts)
         });
       }
     }
@@ -976,19 +1019,27 @@
     };
   }
 
-  function transferDestinationAccounts(group: UnknownGroup): TrackedAccount[] {
-    return trackedAccounts.filter((account) => account.id !== group.sourceTrackedAccountId);
+  function transferDestinationAccounts(
+    group: UnknownGroup,
+    currentTrackedAccounts: TrackedAccount[] = trackedAccounts
+  ): TrackedAccount[] {
+    return currentTrackedAccounts.filter((account) => account.id !== group.sourceTrackedAccountId);
   }
 
-  function transferHelperText(group: UnknownGroup, txn: TxnRow): { tone: 'muted' | 'warn'; text: string } | null {
-    if (groupMode(group) !== 'transfer') return null;
+  function transferHelperText(
+    group: UnknownGroup,
+    txn: TxnRow,
+    currentSelections: Record<string, GroupSelection> = selections,
+    currentTrackedAccounts: TrackedAccount[] = trackedAccounts
+  ): { tone: 'muted' | 'warn'; text: string } | null {
+    if (groupMode(group, currentSelections) !== 'transfer') return null;
 
-    const targetTrackedAccountId = transferTargetAccountIdFor(group);
+    const targetTrackedAccountId = transferTargetAccountIdFor(group, currentSelections);
     if (!targetTrackedAccountId) {
       return { tone: 'muted', text: 'Choose the destination tracked account.' };
     }
 
-    const targetAccount = trackedAccountById(targetTrackedAccountId);
+    const targetAccount = trackedAccountById(targetTrackedAccountId, currentTrackedAccounts);
     const suggestion = txn.transferSuggestion ?? null;
     if (suggestion && suggestion.targetTrackedAccountId === targetTrackedAccountId) {
       return {
@@ -1012,10 +1063,6 @@
 
   function transferPeerLabel(txn: TxnRow): string {
     return txn.transferSuggestion?.targetTrackedAccountName?.trim() || 'suggested counterpart';
-  }
-
-  function isTransferMode(group: UnknownGroup): boolean {
-    return groupMode(group) === 'transfer';
   }
 
   function openCreateAccountModal(initialName = '', context: { mode: 'rule' | 'category'; groupKey: string | null }) {
@@ -1364,7 +1411,7 @@
               <div class="review-row-status">
                 <p class="status-copy">
                   <span class="status-dot" aria-hidden="true"></span>
-                  <span>{groupStatusLabel(row.group)}</span>
+                  <span>{row.statusLabel}</span>
                 </p>
                 {#if row.selectionType === 'transfer' && row.txn.transferSuggestion}
                   <p class="row-note">Transfer suggestion</p>
@@ -1390,7 +1437,7 @@
                   <button
                     class="btn btn-small"
                     type="button"
-                    class:active-filter={!isTransferMode(row.group)}
+                    class:active-filter={row.selectionType === 'category'}
                     on:click={() => setGroupMode(row.group, 'category')}
                   >
                     Category
@@ -1398,36 +1445,33 @@
                   <button
                     class="btn btn-small"
                     type="button"
-                    class:active-filter={isTransferMode(row.group)}
+                    class:active-filter={row.selectionType === 'transfer'}
                     on:click={() => setGroupMode(row.group, 'transfer')}
                   >
                     Transfer
                   </button>
                 </div>
 
-                {#if isTransferMode(row.group)}
+                {#if row.selectionType === 'transfer'}
                   <div class="transfer-fields">
                     <div class="field">
                       <label for={`transfer-${row.rowId}`}>Destination account</label>
                       <select
                         id={`transfer-${row.rowId}`}
-                        value={transferTargetAccountIdFor(row.group)}
+                        value={row.transferTargetAccountId}
                         on:change={(event) =>
                           setTransferTargetForGroup(row.group, (event.currentTarget as HTMLSelectElement).value)}
                       >
                         <option value="">Choose destination account...</option>
-                        {#each transferDestinationAccounts(row.group) as account}
+                        {#each row.transferDestinationAccounts as account}
                           <option value={account.id}>{account.displayName}</option>
                         {/each}
                       </select>
                     </div>
 
-                    {#if transferHelperText(row.group, row.txn)}
-                      <p
-                        class:warning-text={transferHelperText(row.group, row.txn)?.tone === 'warn'}
-                        class="muted transfer-hint"
-                      >
-                        {transferHelperText(row.group, row.txn)?.text}
+                    {#if row.transferHelper}
+                      <p class:warning-text={row.transferHelper.tone === 'warn'} class="muted transfer-hint">
+                        {row.transferHelper.text}
                       </p>
                     {/if}
 
@@ -1438,7 +1482,7 @@
                 {:else}
                   <AccountCombobox
                     accounts={accounts}
-                    value={categoryAccountFor(row.group)}
+                    value={row.categoryAccount}
                     placeholder="Choose category..."
                     onChange={(account) => setCategoryForGroup(row.group.groupKey, account)}
                     onCreate={(seed) => void openCreateAccountForGroup(row.group.groupKey, seed)}

@@ -411,6 +411,16 @@ def _target_kind(tracked_accounts: dict[str, dict], target_tracked_account_id: s
     return infer_account_kind(target_ledger_account) if target_ledger_account else None
 
 
+def _target_ledger_account(tracked_accounts: dict[str, dict], target_tracked_account_id: str) -> str | None:
+    target_account = tracked_accounts.get(target_tracked_account_id, {})
+    return str(target_account.get("ledger_account", "")).strip() or None
+
+
+def _target_requires_import_match(tracked_accounts: dict[str, dict], target_tracked_account_id: str) -> bool:
+    target_account = tracked_accounts.get(target_tracked_account_id, {})
+    return bool(str(target_account.get("import_account_id", "")).strip())
+
+
 def _build_operation(
     *,
     group_key: str,
@@ -511,6 +521,17 @@ def apply_unknown_mappings(
             continue
 
         target_kind = _target_kind(tracked_accounts, target_tracked_account_id)
+        target_ledger_account = _target_ledger_account(tracked_accounts, target_tracked_account_id)
+        target_requires_import_match = _target_requires_import_match(tracked_accounts, target_tracked_account_id)
+        if not target_ledger_account:
+            warnings.append(
+                {
+                    "groupKey": group["groupKey"],
+                    "warning": f"Tracked account {target_tracked_account_id} is missing a ledger account",
+                }
+            )
+            continue
+
         for txn in group["txns"]:
             if txn["lineNo"] in processed_line_nos:
                 continue
@@ -533,6 +554,27 @@ def apply_unknown_mappings(
                 if str(suggestion.get("targetTrackedAccountId") or "").strip() == target_tracked_account_id
                 else None
             )
+
+            if not target_requires_import_match:
+                _queue_operation(
+                    operations_by_start,
+                    _build_operation(
+                        group_key=group["groupKey"],
+                        transaction_start_line=int(txn["transactionStartLine"]),
+                        transaction_end_line=int(txn["transactionEndLine"]),
+                        posting_line_no=int(txn["lineNo"]),
+                        target_account=target_ledger_account,
+                        expected_unknown=True,
+                        metadata_updates={
+                            "transfer_id": None,
+                            "transfer_state": None,
+                            "transfer_peer_account_id": None,
+                        },
+                    ),
+                )
+                processed_line_nos.add(int(txn["lineNo"]))
+                continue
+
             if matched_suggestion is None and target_kind == "liability":
                 warnings.append(
                     {
