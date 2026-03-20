@@ -396,17 +396,22 @@ account Assets:Bank:Savings
     assert len(transfer_ids) == 1
 
 
-def test_apply_unknown_mappings_rejects_unmatched_liability_transfer(tmp_path: Path) -> None:
+def test_apply_unknown_mappings_creates_pending_liability_transfer(tmp_path: Path) -> None:
     journal = tmp_path / "sample.journal"
     accounts = tmp_path / "10-accounts.dat"
+    transfer_account = transfer_pair_account("checking", "visa")
 
-    original = """
+    journal.write_text(
+        """
 2026/02/01 Credit card payment
     ; import_account_id: checking_import
+    ; source_identity: tx-checking
     Expenses:Unknown  $50.00
     Assets:Bank:Checking
 """.strip()
-    journal.write_text(original + "\n", encoding="utf-8")
+        + "\n",
+        encoding="utf-8",
+    )
     accounts.write_text(
         """
 account Assets:Bank:Checking
@@ -433,14 +438,13 @@ account Liabilities:Cards:Visa
         tracked_accounts=_tracked_accounts(),
     )
 
-    assert txn_updates == 0
-    assert warnings == [
-        {
-            "groupKey": "credit card payment::checking_import",
-            "warning": "Liability transfers need a matched counterpart before they can be accepted.",
-        }
-    ]
-    assert journal.read_text(encoding="utf-8") == original + "\n"
+    content = journal.read_text(encoding="utf-8")
+    assert txn_updates == 1
+    assert warnings == []
+    assert transfer_account in content
+    assert "; transfer_state: pending" in content
+    assert "; transfer_peer_account_id: visa" in content
+    assert f"account {transfer_account}" in accounts.read_text(encoding="utf-8")
 
 
 def test_apply_unknown_mappings_posts_directly_to_manual_asset_account(tmp_path: Path) -> None:

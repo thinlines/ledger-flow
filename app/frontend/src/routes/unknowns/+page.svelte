@@ -1205,13 +1205,6 @@
       };
     }
 
-    if (targetAccount?.importConfigured && targetAccount.kind === 'liability') {
-      return {
-        tone: 'warn',
-        text: `This imported liability needs its counterpart transaction before it can be accepted. Wait for ${targetAccount.displayName} activity to import.`
-      };
-    }
-
     if (targetAccount && !targetAccount.importConfigured) {
       return {
         tone: 'muted',

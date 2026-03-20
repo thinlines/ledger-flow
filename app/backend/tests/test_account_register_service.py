@@ -241,3 +241,44 @@ def test_account_register_shows_pending_transfer_on_peer_account_without_changin
             "kind": "asset",
         }
     ]
+
+
+def test_account_register_shows_pending_transfer_on_liability_peer_account_without_changing_balance(tmp_path: Path) -> None:
+    config = _make_config(tmp_path / "workspace")
+    (config.journal_dir / "2026.journal").write_text(
+        """
+2026/02/04 Credit card payment
+    ; import_account_id: checking
+    ; transfer_id: transfer-1
+    ; transfer_state: pending
+    ; transfer_peer_account_id: visa
+    Assets:Transfers:checking__visa  $50.00
+    Assets:Bank:Checking
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    register = build_account_register(config, "visa")
+
+    assert register["currentBalance"] == 0.0
+    assert register["transactionCount"] == 0
+    assert register["entryCount"] == 1
+    assert register["latestActivityDate"] == "2026-02-04"
+
+    latest = register["entries"][0]
+    assert latest["date"] == "2026-02-04"
+    assert latest["payee"] == "Credit card payment"
+    assert latest["summary"] == "Transfer · Wells Fargo Checking (Pending)"
+    assert latest["amount"] == 50.0
+    assert latest["runningBalance"] == 0.0
+    assert latest["transferState"] == "pending"
+    assert latest["transferPeerAccountId"] == "checking"
+    assert latest["transferPeerAccountName"] == "Wells Fargo Checking"
+    assert latest["detailLines"] == [
+        {
+            "label": "Wells Fargo Checking",
+            "account": "Assets:Bank:Checking",
+            "kind": "asset",
+        }
+    ]

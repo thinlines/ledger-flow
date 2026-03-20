@@ -405,12 +405,6 @@ def _find_group_by_key(scanned_groups: list[dict], group_key: str) -> dict | Non
     return next((group for group in scanned_groups if group["groupKey"] == group_key), None)
 
 
-def _target_kind(tracked_accounts: dict[str, dict], target_tracked_account_id: str) -> str | None:
-    target_account = tracked_accounts.get(target_tracked_account_id, {})
-    target_ledger_account = str(target_account.get("ledger_account", "")).strip()
-    return infer_account_kind(target_ledger_account) if target_ledger_account else None
-
-
 def _target_ledger_account(tracked_accounts: dict[str, dict], target_tracked_account_id: str) -> str | None:
     target_account = tracked_accounts.get(target_tracked_account_id, {})
     return str(target_account.get("ledger_account", "")).strip() or None
@@ -520,7 +514,6 @@ def apply_unknown_mappings(
             warnings.append({"groupKey": group["groupKey"], "warning": f"Unknown tracked account: {target_tracked_account_id}"})
             continue
 
-        target_kind = _target_kind(tracked_accounts, target_tracked_account_id)
         target_ledger_account = _target_ledger_account(tracked_accounts, target_tracked_account_id)
         target_requires_import_match = _target_requires_import_match(tracked_accounts, target_tracked_account_id)
         if not target_ledger_account:
@@ -573,15 +566,6 @@ def apply_unknown_mappings(
                     ),
                 )
                 processed_line_nos.add(int(txn["lineNo"]))
-                continue
-
-            if matched_suggestion is None and target_kind == "liability":
-                warnings.append(
-                    {
-                        "groupKey": group["groupKey"],
-                        "warning": "Liability transfers need a matched counterpart before they can be accepted.",
-                    }
-                )
                 continue
 
             transfer_account = ensure_transfer_account(accounts_dat, source_tracked_account_id, target_tracked_account_id)
