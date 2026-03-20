@@ -4,7 +4,7 @@
   import { accountKindFromLedger, accountSubtypeLabel, subtypeOptionsForKind } from '$lib/account-subtypes';
   import ImportFlow from '$lib/components/ImportFlow.svelte';
 
-  type SetupStepId = 'welcome' | 'workspace' | 'accounts' | 'import' | 'finish';
+  type SetupStepId = 'workspace' | 'accounts' | 'import' | 'finish';
 
   type InstitutionTemplate = {
     id: string;
@@ -61,6 +61,10 @@
     detail: string;
   };
 
+  type SidebarStep = SetupStep & {
+    status: 'complete' | 'current' | 'pending';
+  };
+
   type ImportPreviewResult = {
     summary?: {
       newCount: number;
@@ -85,11 +89,10 @@
 
   const DEFAULT_WORKSPACE_PATH = '/home/randy/Desktop/tmp-books/workspace';
   const STEP_ORDER: SetupStep[] = [
-    { id: 'welcome', number: '01', label: 'Welcome', detail: 'See the shortest path' },
-    { id: 'workspace', number: '02', label: 'Workspace', detail: 'Create or select one' },
-    { id: 'accounts', number: '03', label: 'First Account', detail: 'Add one to continue' },
-    { id: 'import', number: '04', label: 'First Import', detail: 'Preview before apply' },
-    { id: 'finish', number: '05', label: 'Finish', detail: 'Review and handoff' }
+    { id: 'workspace', number: '01', label: 'Workspace', detail: 'Create or select one' },
+    { id: 'accounts', number: '02', label: 'First Account', detail: 'Add one to continue' },
+    { id: 'import', number: '03', label: 'First Import', detail: 'Preview before apply' },
+    { id: 'finish', number: '04', label: 'Finish', detail: 'Review and handoff' }
   ];
 
   let state: AppState | null = null;
@@ -101,8 +104,6 @@
   let workspaceName = 'My Books';
   let baseCurrency = 'USD';
   let startYear = new Date().getFullYear();
-  let setupStarted = false;
-  let setupViewDirty = false;
   let showExisting = false;
   let showWorkspaceAdvanced = false;
   let showAccountAdvanced = false;
@@ -117,6 +118,10 @@
   $: accountEditorTitle = editingAccountId ? 'Edit account' : 'Add your first account';
   $: accountEditorAction = editingAccountId ? 'Save changes' : 'Save account';
   $: currentStepId = deriveCurrentStepId(state);
+  $: sidebarSteps = STEP_ORDER.map((step, index) => ({
+    ...step,
+    status: index < stepIndex(currentStepId) ? 'complete' : index === stepIndex(currentStepId) ? 'current' : 'pending'
+  })) satisfies SidebarStep[];
   $: finishAction = postImportAction(state);
 
   function postImportAction(appState: AppState | null) {
@@ -131,7 +136,7 @@
 
   function deriveCurrentStepId(appState: AppState | null): SetupStepId {
     if (!appState?.initialized) {
-      return setupStarted ? 'workspace' : 'welcome';
+      return 'workspace';
     }
     if (appState.setup.needsAccounts) return 'accounts';
     if (appState.setup.needsFirstImport) return 'import';
@@ -142,21 +147,9 @@
     return STEP_ORDER.findIndex((step) => step.id === stepId);
   }
 
-  function stepStatus(stepId: SetupStepId): 'complete' | 'current' | 'pending' {
-    const target = stepIndex(stepId);
-    const current = stepIndex(currentStepId);
-    if (target < current) return 'complete';
-    if (target === current) return 'current';
-    return 'pending';
-  }
-
-  function showStepSummary(stepId: SetupStepId): boolean {
-    return stepIndex(stepId) < stepIndex(currentStepId);
-  }
-
   function sidebarCopy(appState: AppState | null, stepId: SetupStepId): string {
     if (!appState?.initialized) {
-      return 'Create a workspace, add one account, and import one statement before you deal with anything technical.';
+      return 'Start by creating a workspace or selecting an existing one. After that, add one account and import one statement.';
     }
     if (stepId === 'accounts') {
       return 'You only need one account to reach the first import. Add more later once the workspace is useful.';
@@ -185,40 +178,17 @@
     };
   }
 
-  function accountReadinessLabel(appState: AppState): string {
-    return appState.setup.hasImportedActivity ? 'Tracked' : 'Ready to import';
-  }
-
-  function importSummaryCopy(appState: AppState): string {
-    if (lastAppliedSummary) {
-      return `${lastAppliedSummary.appendedTxnCount} ${pluralize(lastAppliedSummary.appendedTxnCount, 'transaction')} added in the first import.`;
-    }
-    if (appState.setup.needsReview) {
-      return 'Your first statement is in. A review queue still needs attention before setup is truly finished.';
-    }
-    return 'Your first statement is in and setup can hand off to the dashboard.';
-  }
-
   function applyDefaultViewState() {
     const wantsExisting = typeof window !== 'undefined' && window.location.hash === '#existing';
-    if (state?.initialized) {
-      setupStarted = true;
-      showExisting = wantsExisting;
-      return;
-    }
-    if (setupViewDirty) {
-      return;
-    }
-    setupStarted = wantsExisting;
     showExisting = wantsExisting;
   }
 
-  function templateById(id: string): InstitutionTemplate | undefined {
-    return state?.institutionTemplates.find((template) => template.id === id);
+  function templateById(id: string, appState: AppState | null = state): InstitutionTemplate | undefined {
+    return appState?.institutionTemplates.find((template) => template.id === id);
   }
 
-  function newImportAccountDraft(institutionId = ''): ImportAccountDraft {
-    const template = templateById(institutionId);
+  function newImportAccountDraft(institutionId = '', appState: AppState | null = state): ImportAccountDraft {
+    const template = templateById(institutionId, appState);
     return {
       institutionId,
       displayName: template?.displayName ?? '',
@@ -240,14 +210,14 @@
     return parts.join(':') || 'Account';
   }
 
-  function suggestedLedgerAccount(draft: ImportAccountDraft): string {
-    const template = templateById(draft.institutionId);
+  function suggestedLedgerAccount(draft: ImportAccountDraft, appState: AppState | null = state): string {
+    const template = templateById(draft.institutionId, appState);
     if (!template?.suggestedLedgerPrefix || !draft.displayName.trim()) return '';
     return `${template.suggestedLedgerPrefix}:${ledgerSuffix(template.displayName, draft.displayName)}`;
   }
 
-  function effectiveLedgerAccount(draft: ImportAccountDraft): string {
-    return draft.ledgerAccount.trim() || suggestedLedgerAccount(draft);
+  function effectiveLedgerAccount(draft: ImportAccountDraft, appState: AppState | null = state): string {
+    return draft.ledgerAccount.trim() || suggestedLedgerAccount(draft, appState);
   }
 
   async function loadState() {
@@ -261,25 +231,12 @@
   }
 
   function openCreateWorkspace() {
-    setupViewDirty = true;
-    setupStarted = true;
     showExisting = false;
     error = '';
   }
 
   function openExisting() {
-    setupViewDirty = true;
-    setupStarted = true;
     showExisting = true;
-    error = '';
-  }
-
-  function backToWelcome() {
-    if (state?.initialized) return;
-    setupViewDirty = true;
-    setupStarted = false;
-    showExisting = false;
-    showWorkspaceAdvanced = false;
     error = '';
   }
 
@@ -390,12 +347,12 @@
     }
   });
 
-  $: draftKind = accountKindFromLedger(effectiveLedgerAccount(accountDraft));
+  $: draftKind = accountKindFromLedger(effectiveLedgerAccount(accountDraft, state));
   $: draftSubtypePreview = accountSubtypeLabel({
     subtype: accountDraft.subtype,
     kind: draftKind,
     displayName: accountDraft.displayName,
-    ledgerAccount: effectiveLedgerAccount(accountDraft)
+    ledgerAccount: effectiveLedgerAccount(accountDraft, state)
   });
 </script>
 
@@ -406,11 +363,24 @@
     <p class="subtitle">{sidebarCopy(state, currentStepId)}</p>
 
     <section class="sidebar-progress">
-      {#each STEP_ORDER as step}
-        <article class={`sidebar-step ${stepStatus(step.id)}`}>
-          <p class="step-number">{stepStatus(step.id) === 'complete' ? '✓' : step.number}</p>
-          <div>
-            <p class="step-label">{step.label}</p>
+      {#each sidebarSteps as step}
+        <article
+          class="sidebar-step"
+          class:complete={step.status === 'complete'}
+          class:current={step.status === 'current'}
+          class:pending={step.status === 'pending'}
+          aria-current={step.status === 'current' ? 'step' : undefined}
+        >
+          <p class="step-number">{step.status === 'complete' ? '✓' : step.number}</p>
+          <div class="step-copy">
+            <div class="step-row">
+              <p class="step-label">{step.label}</p>
+              {#if step.status === 'current'}
+                <span class="step-badge">Current</span>
+              {:else if step.status === 'complete'}
+                <span class="step-badge complete">Done</span>
+              {/if}
+            </div>
             <p class="step-detail">{step.detail}</p>
           </div>
         </article>
@@ -427,34 +397,11 @@
       </section>
     {/if}
 
-    {#if currentStepId === 'welcome'}
-      <section class="view-card active-step-card">
-        <div class="step-head">
-          <div>
-            <p class="eyebrow">Step 1</p>
-            <h3>Start with the shortest path</h3>
-            <p class="muted">You only need three things to reach first value: a workspace, one account, and one statement.</p>
-          </div>
-        </div>
-
-        <ul class="setup-checklist">
-          <li>Create your finance workspace</li>
-          <li>Add the first account you want to track</li>
-          <li>Preview and import your first statement</li>
-        </ul>
-
-        <div class="actions">
-          <button class="btn btn-primary" type="button" on:click={openCreateWorkspace}>Create new workspace</button>
-          <button class="inline-link" type="button" on:click={openExisting}>Use existing workspace</button>
-        </div>
-      </section>
-    {/if}
-
     {#if currentStepId === 'workspace'}
       <section class="view-card active-step-card">
         <div class="step-head">
           <div>
-            <p class="eyebrow">Step 2</p>
+            <p class="eyebrow">Step 1</p>
             <h3>{showExisting ? 'Use an existing workspace' : 'Create your workspace'}</h3>
             <p class="muted">
               {#if showExisting}
@@ -481,7 +428,6 @@
 
           <div class="choice-links">
             <button class="inline-link" type="button" on:click={openCreateWorkspace}>Create a new workspace instead</button>
-            <button class="inline-link" type="button" on:click={backToWelcome}>Back</button>
           </div>
         {:else}
           <div class="field-grid">
@@ -517,33 +463,8 @@
 
           <div class="choice-links">
             <button class="inline-link" type="button" on:click={openExisting}>Use an existing workspace instead</button>
-            <button class="inline-link" type="button" on:click={backToWelcome}>Back</button>
           </div>
         {/if}
-      </section>
-    {/if}
-
-    {#if state?.initialized && showStepSummary('workspace')}
-      <section class="view-card summary-step-card">
-        <div class="step-head">
-          <div>
-            <p class="eyebrow">Step 2</p>
-            <h3>Workspace ready</h3>
-            <p class="workspace-name">{state.workspaceName}</p>
-          </div>
-          <span class="pill ok">Complete</span>
-        </div>
-
-        <p class="status-row">
-          <span class="pill ok">Ready</span>
-          <span class="pill">{state.journals} {pluralize(state.journals, 'year')} loaded</span>
-          <span class="pill">{state.csvInbox} {pluralize(state.csvInbox, 'statement')} waiting</span>
-        </p>
-
-        <details class="advanced-panel">
-          <summary>Workspace details</summary>
-          <p class="muted workspace-path">{state.workspacePath}</p>
-        </details>
       </section>
     {/if}
 
@@ -551,7 +472,7 @@
       <section class="view-card active-step-card">
         <div class="step-head">
           <div>
-            <p class="eyebrow">Step 3</p>
+            <p class="eyebrow">Step 2</p>
             <h3>{accountEditorOpen ? accountEditorTitle : 'Add your first account'}</h3>
             <p class="muted">
               {#if accountEditorOpen}
@@ -673,50 +594,11 @@
       </section>
     {/if}
 
-    {#if state?.initialized && showStepSummary('accounts')}
-      <section class="view-card summary-step-card">
-        <div class="step-head">
-          <div>
-            <p class="eyebrow">Step 3</p>
-            <h3>{state.importAccounts.length} {pluralize(state.importAccounts.length, 'account')} ready</h3>
-            <p class="muted">The workspace can move into statement import now. Add more accounts later from the Accounts screen.</p>
-          </div>
-          <span class="pill ok">Complete</span>
-        </div>
-
-        <div class="account-list">
-          {#each state.importAccounts.slice(0, 3) as account}
-            <article class="configured-account">
-              <div class="configured-account-head">
-                <div>
-                  <strong>{account.displayName}</strong>
-                  <p class="muted small">{account.institutionDisplayName}</p>
-                </div>
-              </div>
-              <p class="status-row">
-                <span class="pill ok">{accountReadinessLabel(state)}</span>
-                <span class="pill">{accountSubtypeLabel(account, 'short')}</span>
-                {#if account.last4}
-                  <span class="pill">••{account.last4}</span>
-                {/if}
-              </p>
-            </article>
-          {/each}
-        </div>
-
-        {#if state.importAccounts.length > 3}
-          <p class="secondary-note">+ {state.importAccounts.length - 3} more {pluralize(state.importAccounts.length - 3, 'account')} ready to import.</p>
-        {/if}
-
-        <a class="inline-link" href="/accounts">Manage accounts</a>
-      </section>
-    {/if}
-
     {#if currentStepId === 'import' && state?.initialized}
       <section class="view-card active-step-card">
         <div class="step-head">
           <div>
-            <p class="eyebrow">Step 4</p>
+            <p class="eyebrow">Step 3</p>
             <h3>Import your first statement</h3>
             <p class="muted">Stay in setup for this first statement. Preview first, then apply when the result looks right.</p>
           </div>
@@ -727,48 +609,11 @@
       <ImportFlow mode="setup" refreshToken={importRefreshToken} onApplied={handleImportApplied} />
     {/if}
 
-    {#if state?.initialized && showStepSummary('import')}
-      <section class="view-card summary-step-card">
-        <div class="step-head">
-          <div>
-            <p class="eyebrow">Step 4</p>
-            <h3>First statement imported</h3>
-            <p class="muted">{importSummaryCopy(state)}</p>
-          </div>
-          <span class="pill ok">Complete</span>
-        </div>
-
-        {#if lastAppliedSummary}
-          <div class="metric-grid">
-            <article class="metric-card">
-              <strong>{lastAppliedSummary.appendedTxnCount}</strong>
-              <span>Added</span>
-            </article>
-            <article class="metric-card">
-              <strong>{lastAppliedSummary.skippedDuplicateCount}</strong>
-              <span>Skipped duplicates</span>
-            </article>
-            <article class="metric-card">
-              <strong>{lastAppliedSummary.unknownCount}</strong>
-              <span>Need review</span>
-            </article>
-          </div>
-        {:else}
-          <p class="status-row">
-            <span class="pill ok">Imported activity detected</span>
-            {#if state.setup.needsReview}
-              <span class="pill warn">Review remaining</span>
-            {/if}
-          </p>
-        {/if}
-      </section>
-    {/if}
-
     {#if currentStepId === 'finish' && state?.initialized && finishAction}
       <section class="view-card active-step-card">
         <div class="step-head">
           <div>
-            <p class="eyebrow">Step 5</p>
+            <p class="eyebrow">Step 4</p>
             <h3>{state.setup.needsReview ? 'Review what still needs attention' : 'Setup is complete'}</h3>
             <p class="muted">{finishAction.secondary}</p>
           </div>
@@ -833,24 +678,40 @@
   }
 
   .sidebar-step {
+    position: relative;
     display: grid;
     grid-template-columns: auto minmax(0, 1fr);
     gap: 0.75rem;
+    align-items: start;
     border: 1px solid var(--line);
     border-radius: 14px;
     padding: 0.85rem;
     background: rgba(255, 255, 255, 0.74);
+    transition:
+      border-color 120ms ease,
+      box-shadow 120ms ease,
+      background 120ms ease,
+      opacity 120ms ease,
+      transform 120ms ease;
   }
 
   .sidebar-step.complete {
-    border-color: rgba(44, 122, 74, 0.2);
-    background: rgba(238, 247, 241, 0.9);
+    border-color: rgba(44, 122, 74, 0.14);
+    background: rgba(255, 255, 255, 0.72);
+  }
+
+  .sidebar-step.pending {
+    opacity: 0.62;
   }
 
   .sidebar-step.current {
-    border-color: rgba(12, 103, 138, 0.28);
-    box-shadow: 0 0 0 1px rgba(12, 103, 138, 0.08);
-    background: linear-gradient(145deg, #fffef8, #f3f9ff);
+    border-color: rgba(12, 103, 138, 0.42);
+    box-shadow:
+      inset 4px 0 0 #0c678a,
+      0 14px 32px rgba(12, 103, 138, 0.12);
+    background: linear-gradient(145deg, #fefcf3, #eef8ff);
+    opacity: 1;
+    transform: translateX(2px);
   }
 
   .step-number,
@@ -860,19 +721,75 @@
   }
 
   .step-number {
+    display: grid;
+    place-items: center;
     font-family: 'Space Grotesk', sans-serif;
     font-size: 0.86rem;
     color: var(--muted-foreground);
     min-width: 2.3rem;
+    min-height: 2.3rem;
+    border-radius: 999px;
+    border: 1px solid rgba(22, 34, 51, 0.12);
+    background: rgba(255, 255, 255, 0.94);
+  }
+
+  .sidebar-step.current .step-number {
+    color: #fff;
+    border-color: transparent;
+    background: linear-gradient(145deg, #0c678a, #1381a2);
+    box-shadow: 0 10px 24px rgba(12, 103, 138, 0.18);
+  }
+
+  .sidebar-step.complete .step-number {
+    color: #2c7a4a;
+    border-color: rgba(44, 122, 74, 0.16);
+    background: rgba(243, 250, 245, 0.95);
   }
 
   .step-label {
     font-weight: 700;
   }
 
+  .sidebar-step.current .step-label {
+    color: var(--foreground);
+  }
+
   .step-detail {
     color: var(--muted-foreground);
     font-size: 0.92rem;
+  }
+
+  .sidebar-step.current .step-detail {
+    color: color-mix(in srgb, var(--foreground) 72%, var(--muted-foreground));
+  }
+
+  .step-copy {
+    display: grid;
+    gap: 0.35rem;
+  }
+
+  .step-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+  }
+
+  .step-badge {
+    flex-shrink: 0;
+    border-radius: 999px;
+    padding: 0.18rem 0.55rem;
+    background: rgba(12, 103, 138, 0.12);
+    color: #0c678a;
+    font-size: 0.73rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+
+  .step-badge.complete {
+    background: rgba(44, 122, 74, 0.1);
+    color: color-mix(in srgb, #2c7a4a 72%, var(--muted-foreground));
   }
 
   .sidebar-note {
@@ -889,10 +806,6 @@
   .active-step-card {
     background: linear-gradient(145deg, #fffef8, #f8fcff);
     border-color: rgba(12, 103, 138, 0.18);
-  }
-
-  .summary-step-card {
-    background: rgba(255, 255, 255, 0.76);
   }
 
   .error-card {
@@ -917,14 +830,6 @@
     display: flex;
     flex-wrap: wrap;
     gap: 0.9rem 1.2rem;
-  }
-
-  .setup-checklist {
-    margin: 0 0 1.2rem;
-    padding-left: 1.15rem;
-    color: var(--brand-strong);
-    display: grid;
-    gap: 0.45rem;
   }
 
   .field-grid {
@@ -953,40 +858,9 @@
     font-weight: 600;
   }
 
-  .configured-account {
-    border: 1px solid var(--line);
-    border-radius: 14px;
-    background: rgba(255, 255, 255, 0.72);
-    padding: 0.9rem;
-  }
-
-  .account-list {
-    display: grid;
-    gap: 0.8rem;
-    margin-top: 1rem;
-  }
-
-  .configured-account-head {
-    display: flex;
-    gap: 1rem;
-    align-items: flex-start;
-  }
-
-  .configured-account-head p,
-  .workspace-name,
-  .workspace-path,
   .status-row,
   .secondary-note {
     margin: 0;
-  }
-
-  .workspace-name {
-    font-family: 'Space Grotesk', sans-serif;
-    font-size: 1.08rem;
-  }
-
-  .workspace-path {
-    word-break: break-word;
   }
 
   .status-row {
