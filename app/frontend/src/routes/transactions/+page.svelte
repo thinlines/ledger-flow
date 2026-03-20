@@ -58,9 +58,19 @@
   let error = '';
   let loading = true;
   let registerLoading = false;
+  let postedEntries: RegisterEntry[] = [];
+  let pendingEntries: RegisterEntry[] = [];
+  let pendingTransferCount = 0;
+  let pendingTransferTotal = 0;
+  let balanceWithPending: number | null = null;
+  let latestPostedActivityDate: string | null = null;
 
   function titleCase(value: string): string {
     return value.charAt(0).toUpperCase() + value.slice(1);
+  }
+
+  function countLabel(count: number, singular: string, plural = `${singular}s`): string {
+    return `${count} ${count === 1 ? singular : plural}`;
   }
 
   function formatCurrency(
@@ -92,10 +102,6 @@
       day: 'numeric',
       year: 'numeric'
     }).format(new Date(`${value}T00:00:00`));
-  }
-
-  function registerCountLabel(count: number): string {
-    return `${count} ${count === 1 ? 'entry' : 'entries'}`;
   }
 
   async function loadRegister(accountId: string) {
@@ -158,6 +164,12 @@
   }
 
   $: selectedAccount = trackedAccounts.find((account) => account.id === selectedAccountId) ?? null;
+  $: postedEntries = register?.entries.filter((entry) => entry.transferState !== 'pending') ?? [];
+  $: pendingEntries = register?.entries.filter((entry) => entry.transferState === 'pending') ?? [];
+  $: pendingTransferCount = pendingEntries.length;
+  $: pendingTransferTotal = pendingEntries.reduce((sum, entry) => sum + entry.amount, 0);
+  $: balanceWithPending = register ? register.currentBalance + pendingTransferTotal : null;
+  $: latestPostedActivityDate = postedEntries[0]?.date ?? null;
 
   onMount(async () => {
     loading = true;
@@ -242,34 +254,146 @@
   </section>
 
   <section class="summary-grid">
-    <article class="view-card summary-card">
-      <p class="stat-label">Current balance</p>
+    <article class="view-card summary-card summary-balance-card">
+      <p class="stat-label">Imported balance</p>
       <p class:positive={(register?.currentBalance ?? 0) > 0} class:negative={(register?.currentBalance ?? 0) < 0} class="stat-value">
         {formatCurrency(register?.currentBalance ?? null)}
       </p>
       <p class="stat-note">{selectedAccount?.institutionDisplayName || 'Tracked account'}{#if selectedAccount?.last4} •••• {selectedAccount.last4}{/if}</p>
     </article>
 
-    <article class="view-card summary-card">
-      <p class="stat-label">Register</p>
-      <p class="stat-value">{registerCountLabel(register?.entryCount ?? 0)}</p>
-      <p class="stat-note">{register?.transactionCount ?? 0} imported transactions plus any opening balance entry.</p>
+    <article class="view-card summary-card summary-balance-card summary-balance-pending">
+      <p class="stat-label">Balance with pending</p>
+      <p class:positive={(balanceWithPending ?? 0) > 0} class:negative={(balanceWithPending ?? 0) < 0} class="stat-value">
+        {formatCurrency(balanceWithPending)}
+      </p>
+      <p class="stat-note">
+        {#if pendingTransferCount > 0}
+          {countLabel(pendingTransferCount, 'pending transfer')} worth {formatCurrency(pendingTransferTotal, { signed: true })} waiting to import.
+        {:else}
+          Matches imported balance when nothing is pending.
+        {/if}
+      </p>
     </article>
 
     <article class="view-card summary-card">
-      <p class="stat-label">Latest activity</p>
-      <p class="stat-value">{shortDate(register?.latestActivityDate)}</p>
-      <p class="stat-note">{titleCase(selectedAccount?.kind || 'account')} register.</p>
+      <p class="stat-label">Pending transfers</p>
+      <p class:positive={pendingTransferTotal > 0} class:negative={pendingTransferTotal < 0} class="stat-value">
+        {pendingTransferCount > 0 ? formatCurrency(pendingTransferTotal, { signed: true }) : 'None'}
+      </p>
+      <p class="stat-note">
+        {#if pendingTransferCount > 0}
+          {countLabel(pendingTransferCount, 'transfer')} waiting to move into the imported register.
+        {:else}
+          No pending transfers for this account.
+        {/if}
+      </p>
+    </article>
+
+    <article class="view-card summary-card">
+      <p class="stat-label">Latest imported</p>
+      <p class="stat-value">{latestPostedActivityDate ? shortDate(latestPostedActivityDate) : 'No imports yet'}</p>
+      <p class="stat-note">
+        {#if latestPostedActivityDate}
+          {titleCase(selectedAccount?.kind || 'account')} register.
+        {:else if pendingTransferCount > 0}
+          Pending transfers are above while imported activity is still empty.
+        {:else}
+          Imported activity will appear here after the first statement import.
+        {/if}
+      </p>
     </article>
   </section>
+
+  {#if pendingTransferCount > 0}
+    <section class="view-card pending-card">
+      <div class="section-head">
+        <div>
+          <p class="eyebrow">Pending</p>
+          <h3>Pending transfers</h3>
+        </div>
+        <p class="section-note">
+          These affect <strong>Balance with pending</strong> above, but they do not change imported running balances
+          until the matching transactions are imported.
+        </p>
+      </div>
+
+      <div class="pending-balance-banner">
+        <div>
+          <p class="pending-banner-label">Balance with pending</p>
+          <p class:positive={(balanceWithPending ?? 0) > 0} class:negative={(balanceWithPending ?? 0) < 0} class="pending-banner-value">
+            {formatCurrency(balanceWithPending)}
+          </p>
+        </div>
+        <p class="pending-banner-note">Imported balance remains {formatCurrency(register?.currentBalance ?? null)} until import completes.</p>
+      </div>
+
+      <div class="pending-header" aria-hidden="true">
+        <span>Date</span>
+        <span>Description</span>
+        <span class="align-right">Amount</span>
+        <span>Status</span>
+      </div>
+
+      <div class="pending-list">
+        {#each pendingEntries as entry}
+          <details class="pending-row">
+            <summary class="pending-summary">
+              <div class="register-cell register-date">{shortDate(entry.date)}</div>
+
+              <div class="register-cell register-description">
+                <p class="register-payee">{entry.payee}</p>
+                <div class="register-meta">
+                  <span>{entry.summary}</span>
+                  {#if entry.isUnknown}
+                    <span class="pill warn">Needs review</span>
+                  {/if}
+                  <span class="pill pending-pill">Pending</span>
+                </div>
+              </div>
+
+              <div class="register-cell register-money align-right">
+                <p class:positive={entry.amount > 0} class:negative={entry.amount < 0} class="money-value">
+                  {formatCurrency(entry.amount, { signed: true })}
+                </p>
+              </div>
+
+              <div class="register-cell pending-status">
+                <p class="pending-status-title">Included in balance with pending</p>
+                <p class="muted small">Waiting for import</p>
+              </div>
+            </summary>
+
+            <div class="register-details">
+              <p class="details-note pending-details-note">
+                This transfer stays in the pending section until the imported transaction lands and replaces it in the
+                register.
+              </p>
+
+              {#if entry.detailLines.length > 0}
+                <div class="detail-lines">
+                  {#each entry.detailLines as line}
+                    <div class="detail-line">
+                      <p>{line.label}</p>
+                      <p class="muted small">{line.account}</p>
+                    </div>
+                  {/each}
+                </div>
+              {/if}
+            </div>
+          </details>
+        {/each}
+      </div>
+    </section>
+  {/if}
 
   <section class="view-card register-card">
     <div class="section-head">
       <div>
-        <p class="eyebrow">Register</p>
-        <h3>Latest to earliest</h3>
+        <p class="eyebrow">Imported</p>
+        <h3>Imported register</h3>
       </div>
-      <p class="section-note">Running balances reflect posted activity. Pending transfers appear here without changing the balance.</p>
+      <p class="section-note">Only imported activity changes this running balance.</p>
     </div>
 
     {#if registerLoading}
@@ -277,10 +401,16 @@
         <h4>Loading transactions</h4>
         <p>Refreshing this account’s register.</p>
       </div>
-    {:else if !register || register.entries.length === 0}
+    {:else if !register || postedEntries.length === 0}
       <div class="empty-panel">
-        <h4>No activity yet</h4>
-        <p>Once this account has imported transactions or an opening balance, the register will appear here.</p>
+        <h4>No imported activity yet</h4>
+        <p>
+          {#if pendingTransferCount > 0}
+            Pending transfers are listed above. Imported transactions and opening-balance history will appear here after import.
+          {:else}
+            Once this account has imported transactions or an opening balance, the register will appear here.
+          {/if}
+        </p>
       </div>
     {:else}
       <div class="register-header" aria-hidden="true">
@@ -291,7 +421,7 @@
       </div>
 
       <div class="register-list">
-        {#each register.entries as entry}
+        {#each postedEntries as entry}
           <details class:opening-row={entry.isOpeningBalance} class="register-row">
             <summary class="register-summary">
               <div class="register-cell register-date">{shortDate(entry.date)}</div>
@@ -302,9 +432,6 @@
                   <span>{entry.summary}</span>
                   {#if entry.isUnknown}
                     <span class="pill warn">Needs review</span>
-                  {/if}
-                  {#if entry.transferState === 'pending'}
-                    <span class="pill">Pending transfer</span>
                   {/if}
                   {#if entry.isOpeningBalance}
                     <span class="pill">Starting balance</span>
@@ -404,12 +531,25 @@
   .summary-grid {
     display: grid;
     gap: 1rem;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
   }
 
   .summary-card {
     display: grid;
     gap: 0.35rem;
+  }
+
+  .summary-balance-card {
+    background:
+      linear-gradient(160deg, rgba(250, 252, 255, 0.95), rgba(243, 248, 252, 0.9)),
+      rgba(255, 255, 255, 0.86);
+  }
+
+  .summary-balance-pending {
+    border-color: rgba(15, 95, 136, 0.18);
+    background:
+      radial-gradient(circle at top right, rgba(214, 235, 220, 0.78), transparent 42%),
+      linear-gradient(155deg, rgba(250, 253, 248, 0.98), rgba(241, 247, 255, 0.96));
   }
 
   .stat-label {
@@ -448,19 +588,61 @@
     margin-bottom: 1rem;
   }
 
+  .pending-card {
+    background:
+      radial-gradient(circle at top right, rgba(214, 235, 220, 0.68), transparent 36%),
+      linear-gradient(155deg, rgba(252, 252, 247, 0.98), rgba(247, 250, 255, 0.96));
+  }
+
+  .pending-balance-banner {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    margin-bottom: 1rem;
+    padding: 0.95rem 1rem;
+    border-radius: 1rem;
+    border: 1px solid rgba(10, 61, 89, 0.08);
+    background: rgba(255, 255, 255, 0.72);
+  }
+
+  .pending-banner-label {
+    font-size: 0.78rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--muted-foreground);
+    font-weight: 700;
+  }
+
+  .pending-banner-value {
+    font-family: 'Space Grotesk', sans-serif;
+    font-size: 1.5rem;
+    line-height: 1.05;
+    margin-top: 0.2rem;
+  }
+
+  .pending-banner-note {
+    max-width: 26rem;
+    color: var(--muted-foreground);
+    font-size: 0.9rem;
+  }
+
   .register-card {
     overflow: hidden;
   }
 
   .register-header,
-  .register-summary {
+  .register-summary,
+  .pending-header,
+  .pending-summary {
     display: grid;
     grid-template-columns: minmax(7.5rem, 0.75fr) minmax(0, 2fr) minmax(7.5rem, 0.75fr) minmax(8rem, 0.85fr);
     gap: 1rem;
     align-items: center;
   }
 
-  .register-header {
+  .register-header,
+  .pending-header {
     padding: 0 1rem 0.75rem;
     border-bottom: 1px solid rgba(10, 61, 89, 0.08);
     font-size: 0.78rem;
@@ -474,9 +656,21 @@
     display: grid;
   }
 
+  .pending-list {
+    display: grid;
+    gap: 0.8rem;
+  }
+
   .register-row {
     border-bottom: 1px solid rgba(10, 61, 89, 0.08);
     background: rgba(255, 255, 255, 0.35);
+  }
+
+  .pending-row {
+    border: 1px solid rgba(10, 61, 89, 0.08);
+    border-radius: 1rem;
+    background: rgba(255, 255, 255, 0.62);
+    overflow: hidden;
   }
 
   .register-row:last-child {
@@ -491,13 +685,15 @@
     background: rgba(247, 249, 245, 0.78);
   }
 
-  .register-summary {
+  .register-summary,
+  .pending-summary {
     padding: 0.95rem 1rem;
     cursor: pointer;
     list-style: none;
   }
 
-  .register-summary::-webkit-details-marker {
+  .register-summary::-webkit-details-marker,
+  .pending-summary::-webkit-details-marker {
     display: none;
   }
 
@@ -518,12 +714,29 @@
     font-size: 0.92rem;
   }
 
+  .pending-pill {
+    color: var(--warn);
+    border-color: #f3cf96;
+    background: #fff7ea;
+  }
+
   .money-value {
     font-weight: 700;
   }
 
   .align-right {
     text-align: right;
+  }
+
+  .pending-status {
+    display: grid;
+    gap: 0.15rem;
+  }
+
+  .pending-status-title {
+    font-size: 0.84rem;
+    font-weight: 700;
+    color: var(--brand-strong);
   }
 
   .register-details {
@@ -535,6 +748,10 @@
   .details-note {
     color: var(--muted-foreground);
     font-size: 0.92rem;
+  }
+
+  .pending-details-note {
+    color: #7d5200;
   }
 
   .detail-lines {
@@ -570,14 +787,21 @@
     .section-head {
       flex-direction: column;
     }
+
+    .pending-balance-banner {
+      flex-direction: column;
+      align-items: flex-start;
+    }
   }
 
   @media (max-width: 820px) {
-    .register-header {
+    .register-header,
+    .pending-header {
       display: none;
     }
 
-    .register-summary {
+    .register-summary,
+    .pending-summary {
       grid-template-columns: 1fr;
       gap: 0.45rem;
     }
@@ -588,6 +812,10 @@
     }
 
     .register-money {
+      text-align: left;
+    }
+
+    .pending-status {
       text-align: left;
     }
 

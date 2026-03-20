@@ -137,6 +137,12 @@ def test_dashboard_overview_summarizes_financial_state(tmp_path: Path) -> None:
     balances = {row["id"]: row for row in overview["balances"]}
     assert balances["checking"]["balance"] == 3492.7
     assert balances["visa"]["balance"] == -33.21
+    assert balances["checking"]["hasOpeningBalance"] is False
+    assert balances["checking"]["hasTransactionActivity"] is True
+    assert balances["checking"]["hasBalanceSource"] is True
+    assert balances["visa"]["hasOpeningBalance"] is False
+    assert balances["visa"]["hasTransactionActivity"] is True
+    assert balances["visa"]["hasBalanceSource"] is True
 
     assert overview["cashFlow"]["series"][-1] == {
         "month": "2026-03",
@@ -171,6 +177,7 @@ def test_dashboard_overview_handles_empty_journals(tmp_path: Path) -> None:
     assert overview["lastUpdated"] is None
     assert overview["summary"]["netWorth"] == 0.0
     assert overview["balances"][0]["balance"] == 0.0
+    assert overview["balances"][0]["hasBalanceSource"] is False
     assert overview["recentTransactions"] == []
 
 
@@ -196,6 +203,9 @@ def test_dashboard_overview_includes_opening_balances_without_counting_them_as_a
 
     balances = {row["id"]: row for row in overview["balances"]}
     assert balances["cash_wallet"]["balance"] == 250.0
+    assert balances["cash_wallet"]["hasOpeningBalance"] is True
+    assert balances["cash_wallet"]["hasTransactionActivity"] is False
+    assert balances["cash_wallet"]["hasBalanceSource"] is True
     assert overview["summary"]["trackedBalanceTotal"] == 250.0
     assert overview["summary"]["netWorth"] == 250.0
     assert overview["summary"]["transactionCount"] == 0

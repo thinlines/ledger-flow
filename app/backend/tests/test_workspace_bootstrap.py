@@ -122,6 +122,7 @@ def test_upsert_import_account_adds_post_bootstrap_account_and_updates_setup_sta
         {
             "institutionId": "wells_fargo",
             "displayName": "Wells Fargo Checking",
+            "subtype": "checking",
             "last4": "1234",
         },
     )
@@ -133,6 +134,7 @@ def test_upsert_import_account_adds_post_bootstrap_account_and_updates_setup_sta
     assert reloaded.import_accounts[account_id]["ledger_account"] == "Assets:Bank:Wells Fargo:Checking"
     assert reloaded.tracked_accounts[account_id]["ledger_account"] == "Assets:Bank:Wells Fargo:Checking"
     assert reloaded.tracked_accounts[account_id]["import_account_id"] == account_id
+    assert reloaded.tracked_accounts[account_id]["subtype"] == "checking"
     assert list(reloaded.institution_templates) == ["wells_fargo"]
 
     setup = manager.get_setup_state(reloaded)
@@ -160,6 +162,7 @@ def test_upsert_import_account_updates_existing_account_without_replacing_id(tmp
                 "institutionId": "wells_fargo",
                 "displayName": "Wells Fargo Checking",
                 "ledgerAccount": "Assets:Bank:Wells Fargo:Checking",
+                "subtype": "checking",
                 "last4": "1234",
             }
         ],
@@ -189,6 +192,7 @@ def test_upsert_import_account_updates_existing_account_without_replacing_id(tmp
     assert reloaded.import_accounts[account_id]["ledger_account"] == "Assets:Bank:Wells Fargo:Primary:Checking"
     assert reloaded.tracked_accounts[account_id]["display_name"] == "Primary Checking"
     assert reloaded.tracked_accounts[account_id]["ledger_account"] == "Assets:Bank:Wells Fargo:Primary:Checking"
+    assert reloaded.tracked_accounts[account_id]["subtype"] == "checking"
 
     accounts_dat = workspace_root / "rules" / "10-accounts.dat"
     content = accounts_dat.read_text(encoding="utf-8")
@@ -293,6 +297,7 @@ def test_upsert_tracked_account_creates_manual_account_with_opening_balance(tmp_
         {
             "displayName": "Cash Wallet",
             "ledgerAccount": "Assets:Cash:Wallet",
+            "subtype": "cash",
         },
         opening_balance="250.00",
         opening_balance_date="2026-01-15",
@@ -306,6 +311,7 @@ def test_upsert_tracked_account_creates_manual_account_with_opening_balance(tmp_
     assert sorted(reloaded.tracked_accounts) == ["cash_wallet"]
     assert reloaded.tracked_accounts["cash_wallet"]["ledger_account"] == "Assets:Cash:Wallet"
     assert reloaded.tracked_accounts["cash_wallet"]["import_account_id"] is None
+    assert reloaded.tracked_accounts["cash_wallet"]["subtype"] == "cash"
 
     accounts_dat = workspace_root / "rules" / "10-accounts.dat"
     content = accounts_dat.read_text(encoding="utf-8")
@@ -335,6 +341,7 @@ def test_upsert_tracked_account_accepts_null_institution_id(tmp_path: Path) -> N
         {
             "displayName": "Brokerage Cash",
             "ledgerAccount": "Assets:Investments:Brokerage:Cash",
+            "subtype": "investment",
             "institutionId": None,
             "last4": None,
         },
@@ -343,11 +350,13 @@ def test_upsert_tracked_account_accepts_null_institution_id(tmp_path: Path) -> N
     assert account_id == "brokerage_cash"
     assert account_cfg["institution"] is None
     assert account_cfg["last4"] is None
+    assert account_cfg["subtype"] == "investment"
 
     reloaded = load_config(workspace_root / "settings" / "workspace.toml")
     assert reloaded.tracked_accounts["brokerage_cash"].get("institution") is None
     assert reloaded.tracked_accounts["brokerage_cash"].get("last4") is None
     assert reloaded.tracked_accounts["brokerage_cash"]["import_account_id"] is None
+    assert reloaded.tracked_accounts["brokerage_cash"]["subtype"] == "investment"
 
 
 def test_upsert_import_account_keeps_opening_balance_in_sync_with_ledger_account(tmp_path: Path) -> None:
@@ -504,6 +513,7 @@ def test_upsert_custom_import_account_creates_profile_and_links_tracked_account(
         {
             "displayName": "Capital One Card",
             "ledgerAccount": "Liabilities:Cards:Capital One",
+            "subtype": "credit_card",
             "last4": "4242",
             "customProfile": {
                 "displayName": "Capital One CSV",
@@ -534,6 +544,7 @@ def test_upsert_custom_import_account_creates_profile_and_links_tracked_account(
     assert sorted(reloaded.import_profiles) == [account_id]
     assert reloaded.import_profiles[account_id]["amount_mode"] == "debit_credit"
     assert reloaded.tracked_accounts[account_id]["import_account_id"] == account_id
+    assert reloaded.tracked_accounts[account_id]["subtype"] == "credit_card"
 
     opening_file = workspace_root / "opening" / f"{account_id}.journal"
     assert "Liabilities:Cards:Capital One  USD 500.00" in opening_file.read_text(encoding="utf-8")

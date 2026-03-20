@@ -101,7 +101,9 @@ def build_dashboard_overview(config: AppConfig, *, today: date | None = None) ->
     current_day = today or date.today()
     transactions = load_transactions(config)
     _, opening_by_ledger_account = opening_balance_index(config)
+    opening_balance_accounts = set(opening_by_ledger_account)
     account_balances: defaultdict[str, Decimal] = defaultdict(lambda: Decimal("0"))
+    accounts_with_activity: set[str] = set()
     monthly_income: defaultdict[str, Decimal] = defaultdict(lambda: Decimal("0"))
     monthly_spending: defaultdict[str, Decimal] = defaultdict(lambda: Decimal("0"))
     category_spending: defaultdict[tuple[str, str], Decimal] = defaultdict(lambda: Decimal("0"))
@@ -121,6 +123,7 @@ def build_dashboard_overview(config: AppConfig, *, today: date | None = None) ->
             kind = _account_kind(posting.account)
             if kind in {"asset", "liability"}:
                 account_balances[posting.account] += posting.amount
+                accounts_with_activity.add(posting.account)
             elif kind == "expense":
                 monthly_spending[month] += posting.amount
                 category_spending[(month, posting.account)] += posting.amount
@@ -159,6 +162,8 @@ def build_dashboard_overview(config: AppConfig, *, today: date | None = None) ->
     ):
         ledger_account = str(account_cfg.get("ledger_account", "")).strip()
         balance = account_balances.get(ledger_account, Decimal("0"))
+        has_opening_balance = ledger_account in opening_balance_accounts
+        has_transaction_activity = ledger_account in accounts_with_activity
         tracked_total += balance
         balances.append(
             {
@@ -170,6 +175,9 @@ def build_dashboard_overview(config: AppConfig, *, today: date | None = None) ->
                 "kind": _account_kind(ledger_account),
                 "balance": amount_to_number(balance),
                 "importConfigured": bool(account_cfg.get("import_account_id")),
+                "hasOpeningBalance": has_opening_balance,
+                "hasTransactionActivity": has_transaction_activity,
+                "hasBalanceSource": has_opening_balance or has_transaction_activity,
             }
         )
 

@@ -156,6 +156,7 @@ def _tracked_account_ui(
         "displayName": account_cfg.get("display_name", account_id),
         "ledgerAccount": ledger_account,
         "kind": _account_kind(ledger_account),
+        "subtype": account_cfg.get("subtype"),
         "institutionId": institution_id,
         "institutionDisplayName": institution_display_name,
         "last4": account_cfg.get("last4"),
@@ -360,6 +361,7 @@ def workspace_import_account_upsert(req: WorkspaceImportAccountUpsertRequest) ->
                 "institutionId": req.institutionId,
                 "displayName": req.displayName,
                 "ledgerAccount": req.ledgerAccount,
+                "subtype": req.subtype,
                 "last4": req.last4,
             },
             account_id=req.accountId,
@@ -394,6 +396,7 @@ def workspace_custom_import_account_upsert(req: CustomImportAccountUpsertRequest
             {
                 "displayName": req.displayName,
                 "ledgerAccount": req.ledgerAccount,
+                "subtype": req.subtype,
                 "last4": req.last4,
                 "customProfile": req.customProfile.model_dump(),
             },
@@ -443,6 +446,7 @@ def tracked_account_upsert(req: TrackedAccountUpsertRequest) -> dict:
             {
                 "displayName": req.displayName,
                 "ledgerAccount": req.ledgerAccount,
+                "subtype": req.subtype,
                 "institutionId": req.institutionId,
                 "last4": req.last4,
             },

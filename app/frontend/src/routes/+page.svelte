@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { apiGet } from '$lib/api';
+  import { accountSubtypeLabel } from '$lib/account-subtypes';
 
   type SetupState = {
     needsAccounts: boolean;
@@ -35,6 +36,25 @@
     kind: string;
     last4?: string | null;
     balance: number;
+    importConfigured: boolean;
+    hasOpeningBalance: boolean;
+    hasTransactionActivity: boolean;
+    hasBalanceSource: boolean;
+  };
+
+  type TrackedAccount = {
+    id: string;
+    displayName: string;
+    ledgerAccount: string;
+    kind: string;
+    subtype?: string | null;
+    institutionId: string | null;
+    institutionDisplayName?: string | null;
+    last4?: string | null;
+    importConfigured: boolean;
+    importMode?: 'institution' | 'custom' | null;
+    openingBalance?: string | null;
+    openingBalanceDate?: string | null;
   };
 
   type CashFlowRow = {
@@ -81,6 +101,35 @@
     recentTransactions: RecentTransaction[];
   };
 
+  type CoverageItem = {
+    label: string;
+    value: string;
+    note: string;
+    tone?: 'ok' | 'warn' | 'neutral';
+  };
+
+  type HeroSignal = {
+    label: string;
+    value: string;
+    note: string;
+    tone?: 'ok' | 'warn' | 'neutral';
+  };
+
+  type OverviewAccount = TrackedAccount & {
+    balance: number;
+    hasOpeningBalance: boolean;
+    hasTransactionActivity: boolean;
+    hasBalanceSource: boolean;
+  };
+
+  type BalanceGroup = {
+    key: string;
+    title: string;
+    note: string;
+    total: number;
+    accounts: OverviewAccount[];
+  };
+
   type ActionLink = {
     href: string;
     label: string;
@@ -88,13 +137,6 @@
 
   type PrimaryTask = ActionLink & {
     note: string;
-  };
-
-  type AttentionItem = {
-    title: string;
-    note: string;
-    href: string;
-    cta: string;
   };
 
   type SetupStep = {
@@ -107,6 +149,11 @@
 
   let state: AppState | null = null;
   let dashboard: DashboardOverview | null = null;
+  let trackedAccounts: TrackedAccount[] = [];
+  let overviewAccounts: OverviewAccount[] = [];
+  let balanceGroups: BalanceGroup[] = [];
+  let coverage: CoverageItem[] = [];
+  let todaySignals: HeroSignal[] = [];
   let error = '';
   let loading = true;
 
@@ -148,8 +195,8 @@
     return `${delta > 0 ? '+' : ''}${formatCurrency(delta)} vs last month`;
   }
 
-  function titleCase(kind: string): string {
-    return kind.charAt(0).toUpperCase() + kind.slice(1);
+  function countLabel(count: number, singular: string, plural = `${singular}s`): string {
+    return `${count} ${count === 1 ? singular : plural}`;
   }
 
   function reviewQueueCount(): number {
@@ -178,14 +225,6 @@
     return 'Next up: review the remaining queue.';
   }
 
-  function reviewAttentionNote(): string {
-    const count = reviewQueueCount();
-    if (count > 0) {
-      return 'Clear uncategorized activity so the dashboard reflects cleaner trends.';
-    }
-    return 'Finish the remaining review work so the dashboard reflects cleaner trends.';
-  }
-
   function statementInboxTitle(): string {
     const count = statementInboxCount();
     return count === 1 ? '1 statement waiting' : `${count} statements waiting`;
@@ -195,6 +234,226 @@
     const count = statementInboxCount();
     if (count === 1) return 'Next up: import 1 waiting statement.';
     return `Next up: import ${count} waiting statements.`;
+  }
+
+  function accountIdentity(account: OverviewAccount): string {
+    const parts = [account.institutionDisplayName || 'Manual account'];
+    if (account.last4) parts.push(`•••• ${account.last4}`);
+    return parts.join(' · ');
+  }
+
+  function kindRank(kind: string): number {
+    if (kind === 'asset') return 0;
+    if (kind === 'liability') return 1;
+    return 2;
+  }
+
+  function groupTitle(kind: string): string {
+    if (kind === 'asset') return 'Assets';
+    if (kind === 'liability') return 'Liabilities';
+    return 'Other tracked accounts';
+  }
+
+  function groupNote(kind: string): string {
+    if (kind === 'asset') return 'Cash, investments, and other tracked assets that support your position.';
+    if (kind === 'liability') return 'Cards and debt balances that pull against net worth and upcoming decisions.';
+    return 'Tracked accounts that sit outside the main balance-sheet groups.';
+  }
+
+  function accountCoverageLabel(account: OverviewAccount): string {
+    if (!account.hasBalanceSource) return 'Needs setup';
+    if (account.hasTransactionActivity && account.hasOpeningBalance) return 'History + start';
+    if (account.hasTransactionActivity) return 'History';
+    return 'Starting balance';
+  }
+
+  function accountCoverageTone(account: OverviewAccount): 'ok' | 'warn' | 'neutral' {
+    if (!account.hasBalanceSource) return 'warn';
+    if (account.hasTransactionActivity) return 'ok';
+    return 'neutral';
+  }
+
+  function accountCoverageNote(account: OverviewAccount): string {
+    if (!account.hasBalanceSource) return 'Add a starting balance or import history to include this account with confidence.';
+    if (account.hasTransactionActivity && account.hasOpeningBalance) {
+      return 'Backed by activity with a starting balance on file.';
+    }
+    if (account.hasTransactionActivity) return 'Backed by imported or journal activity.';
+    if (account.openingBalanceDate) return `Starting balance set ${shortDate(account.openingBalanceDate)}.`;
+    return 'Starting balance set.';
+  }
+
+  function compareOverviewAccounts(left: OverviewAccount, right: OverviewAccount): number {
+    const balanceDelta = Math.abs(right.balance) - Math.abs(left.balance);
+    if (balanceDelta !== 0) return balanceDelta;
+    return left.displayName.localeCompare(right.displayName, undefined, { sensitivity: 'base' });
+  }
+
+  function buildOverviewAccounts(): OverviewAccount[] {
+    if (!dashboard) return [];
+
+    const trackedById = new Map(trackedAccounts.map((account) => [account.id, account]));
+
+    return dashboard.balances
+      .map((balance) => {
+        const tracked = trackedById.get(balance.id);
+        return {
+          id: balance.id,
+          displayName: tracked?.displayName ?? balance.displayName,
+          ledgerAccount: tracked?.ledgerAccount ?? '',
+          kind: tracked?.kind ?? balance.kind,
+          subtype: tracked?.subtype ?? null,
+          institutionId: tracked?.institutionId ?? balance.institutionId,
+          institutionDisplayName: tracked?.institutionDisplayName ?? null,
+          last4: tracked?.last4 ?? balance.last4 ?? null,
+          importConfigured: tracked?.importConfigured ?? balance.importConfigured,
+          importMode: tracked?.importMode ?? null,
+          openingBalance: tracked?.openingBalance ?? null,
+          openingBalanceDate: tracked?.openingBalanceDate ?? null,
+          balance: balance.balance,
+          hasOpeningBalance: balance.hasOpeningBalance,
+          hasTransactionActivity: balance.hasTransactionActivity,
+          hasBalanceSource: balance.hasBalanceSource
+        } satisfies OverviewAccount;
+      })
+      .sort((left, right) => {
+        const rankDelta = kindRank(left.kind) - kindRank(right.kind);
+        return rankDelta !== 0 ? rankDelta : compareOverviewAccounts(left, right);
+      });
+  }
+
+  function buildBalanceGroups(accounts: OverviewAccount[]): BalanceGroup[] {
+    const orderedKinds = ['asset', 'liability'];
+    const otherKinds = Array.from(new Set(accounts.map((account) => account.kind))).filter((kind) => !orderedKinds.includes(kind));
+
+    return [...orderedKinds, ...otherKinds]
+      .map((kind) => {
+        const accountsInGroup = accounts.filter((account) => account.kind === kind);
+        if (!accountsInGroup.length) return null;
+        return {
+          key: kind,
+          title: groupTitle(kind),
+          note: groupNote(kind),
+          total: accountsInGroup.reduce((sum, account) => sum + account.balance, 0),
+          accounts: accountsInGroup
+        } satisfies BalanceGroup;
+      })
+      .filter((group): group is BalanceGroup => group !== null);
+  }
+
+  function coverageItems(accounts: OverviewAccount[]): CoverageItem[] {
+    if (!accounts.length) return [];
+
+    const coveredCount = accounts.filter((account) => account.hasBalanceSource).length;
+    const missingCount = accounts.length - coveredCount;
+    const importReadyCount = accounts.filter((account) => account.importConfigured).length;
+    const manualCount = accounts.length - importReadyCount;
+
+    return [
+      {
+        label: 'Coverage',
+        value: `${coveredCount} of ${accounts.length}`,
+        note: 'Balances backed by history or a starting balance.',
+        tone: coveredCount === accounts.length ? 'ok' : 'neutral'
+      },
+      {
+        label: 'Needs a start',
+        value: String(missingCount),
+        note:
+          missingCount > 0
+            ? `${countLabel(missingCount, 'account')} still need imported history or a starting balance.`
+            : 'Every tracked account has history or a starting balance.',
+        tone: missingCount > 0 ? 'warn' : 'ok'
+      },
+      {
+        label: 'Import ready',
+        value: `${importReadyCount} of ${accounts.length}`,
+        note:
+          manualCount > 0
+            ? `${countLabel(manualCount, 'account')} ${manualCount === 1 ? 'is' : 'are'} tracked manually.`
+            : 'Every tracked account can import fresh activity.',
+        tone: importReadyCount > 0 ? 'neutral' : 'ok'
+      }
+    ];
+  }
+
+  function caughtUpInsight(): HeroSignal | null {
+    if (dashboard?.categoryTrends.length) {
+      const trend = dashboard.categoryTrends[0];
+      return {
+        label: 'Watch item',
+        value: trend.category,
+        note: formatTrend(trend.delta),
+        tone: trend.delta > 0 ? 'warn' : trend.delta < 0 ? 'ok' : 'neutral'
+      };
+    }
+
+    const latest = dashboard?.recentTransactions[0];
+    if (!latest) return null;
+    return {
+      label: 'Latest activity',
+      value: latest.payee,
+      note: `${shortDate(latest.date)} · ${formatCurrency(latest.amount, { signed: true })}`,
+      tone: latest.isUnknown ? 'warn' : 'neutral'
+    };
+  }
+
+  function heroRailTitle(): string {
+    if (hasReviewQueue()) return reviewQueueTitle();
+    if (statementInboxCount() > 0) return statementInboxTitle();
+    return 'Books look current';
+  }
+
+  function heroRailNote(): string {
+    if (hasReviewQueue()) return 'Resolve uncategorized activity so the overview stays clean and trustworthy.';
+    if (statementInboxCount() > 0) return 'Bring in the latest files to keep balances and recent activity current.';
+    if (dashboard?.categoryTrends.length) {
+      return `${dashboard.categoryTrends[0].category} is the biggest spending move versus last month.`;
+    }
+    return 'No review or import backlog right now.';
+  }
+
+  function heroSignals(): HeroSignal[] {
+    if (!dashboard) return [];
+
+    const reviewCount = reviewQueueCount();
+    const inboxCount = statementInboxCount();
+    const monthSignal: HeroSignal = {
+      label: 'This month',
+      value: formatCurrency(dashboard.summary.savingsThisMonth, { signed: true }),
+      note: `Net cash flow for ${monthTitle(dashboard.cashFlow.currentMonth)}.`,
+      tone: dashboard.summary.savingsThisMonth < 0 ? 'warn' : dashboard.summary.savingsThisMonth > 0 ? 'ok' : 'neutral'
+    };
+
+    const reviewSignal: HeroSignal = {
+      label: 'Review',
+      value: reviewCount > 0 ? `${reviewCount} waiting` : 'Clear',
+      note: reviewCount > 0 ? 'Uncategorized activity still needs attention.' : 'No uncategorized transactions right now.',
+      tone: reviewCount > 0 ? 'warn' : 'ok'
+    };
+
+    const inboxSignal: HeroSignal = {
+      label: 'Statements',
+      value: inboxCount > 0 ? `${inboxCount} waiting` : 'Inbox empty',
+      note: inboxCount > 0 ? 'New files are ready to import.' : 'No queued statement files right now.',
+      tone: inboxCount > 0 ? 'neutral' : 'ok'
+    };
+
+    if (reviewCount > 0) return [reviewSignal, inboxSignal, monthSignal];
+    if (inboxCount > 0) return [inboxSignal, reviewSignal, monthSignal];
+
+    const insight = caughtUpInsight();
+    const signals: HeroSignal[] = [
+      {
+        label: 'Status',
+        value: 'Up to date',
+        note: 'Review and import queues are both clear.',
+        tone: 'ok'
+      },
+      monthSignal
+    ];
+    if (insight) signals.splice(1, 0, insight);
+    return signals;
   }
 
   function setupSteps(): SetupStep[] {
@@ -270,9 +529,9 @@
       };
     }
     return {
-      href: '/import',
-      label: 'Import latest statement',
-      note: 'Nothing needs review right now.'
+      href: '/transactions',
+      label: 'Open transactions',
+      note: 'Scan the latest activity or drill into an account register.'
     };
   }
 
@@ -286,76 +545,24 @@
     if (hasReviewQueue()) {
       actions.push({ href: '/rules', label: 'Refine automation' });
     } else {
-      actions.push({ href: '/unknowns', label: 'Open review queue' });
+      actions.push({ href: '/transactions', label: 'Open transactions' });
     }
     actions.push({ href: '/accounts', label: 'Manage accounts' });
     return actions;
   }
 
   function recentActivityAction(): ActionLink {
-    if (hasReviewQueue()) return { href: '/unknowns', label: 'Open review queue' };
-    return { href: '/import', label: 'Import more' };
-  }
-
-  function attentionItems(): AttentionItem[] {
-    if (!state?.initialized) return [];
-
-    const items: AttentionItem[] = [];
-    const inboxCount = statementInboxCount();
-
-    if (state.setup?.needsAccounts) {
-      items.push({
-        title: 'Accounts still need setup',
-        note: 'Add the first accounts before the dashboard can stay current.',
-        href: '/setup',
-        cta: 'Finish setup'
-      });
-    }
-
-    if (state.setup?.needsFirstImport || !dashboard?.hasData) {
-      items.push({
-        title: 'No imported activity yet',
-        note: 'Bring in one statement so balances and trends can populate.',
-        href: '/setup',
-        cta: 'Import first statement'
-      });
-    }
-
-    if (hasReviewQueue()) {
-      items.push({
-        title: reviewQueueTitle(),
-        note: reviewAttentionNote(),
-        href: '/unknowns',
-        cta: 'Review now'
-      });
-    }
-
-    if (inboxCount > 0) {
-      items.push({
-        title: statementInboxTitle(),
-        note: 'Import the latest files to keep balances and recent activity accurate.',
-        href: '/import',
-        cta: 'Open import'
-      });
-    }
-
-    if (items.length === 0) {
-      items.push({
-        title: 'Everything looks current',
-        note: 'There is nothing urgent to clean up. Import fresh activity when you are ready.',
-        href: '/import',
-        cta: 'Import latest statement'
-      });
-    }
-
-    return items.slice(0, 3);
+    return { href: '/transactions', label: 'Open transactions' };
   }
 
   $: activeTask = primaryTask();
   $: secondary = secondaryActions();
-  $: attention = attentionItems();
   $: recentAction = recentActivityAction();
   $: steps = setupSteps();
+  $: overviewAccounts = buildOverviewAccounts();
+  $: balanceGroups = buildBalanceGroups(overviewAccounts);
+  $: coverage = coverageItems(overviewAccounts);
+  $: todaySignals = heroSignals();
   $: cashFlowMax = Math.max(...(dashboard?.cashFlow.series.map((row) => Math.max(row.income, row.spending)) ?? [0]));
   $: categoryMax = Math.max(
     ...(dashboard?.categoryTrends.flatMap((row) => [row.current, row.previous]) ?? [0])
@@ -368,7 +575,12 @@
     try {
       state = await apiGet<AppState>('/api/app/state');
       if (state.initialized) {
-        dashboard = await apiGet<DashboardOverview>('/api/dashboard/overview');
+        const [dashboardData, accountsData] = await Promise.all([
+          apiGet<DashboardOverview>('/api/dashboard/overview'),
+          apiGet<{ trackedAccounts: TrackedAccount[] }>('/api/tracked-accounts')
+        ]);
+        dashboard = dashboardData;
+        trackedAccounts = accountsData.trackedAccounts;
       }
     } catch (e) {
       error = String(e);
@@ -394,8 +606,8 @@
       <p class="eyebrow">Start here</p>
       <h2 class="page-title page-title-xl">See your money at a glance.</h2>
       <p class="subtitle hero-subtitle">
-        Ledger Flow now centers the daily overview, not the underlying file structure. Start with a workspace,
-        import one statement, and the app takes over from there.
+        Start with a workspace and one statement. From there, Ledger Flow turns the routine work into balances,
+        recent activity, and a clear next step.
       </p>
     </div>
 
@@ -432,8 +644,7 @@
       <p class="eyebrow">Finish setup</p>
       <h2 class="page-title page-title-xl">{state.workspaceName || 'Your workspace'} is ready for the next step.</h2>
       <p class="subtitle hero-subtitle">
-        The dashboard is in place, but it needs one complete path through setup before it can show balances, cash
-        flow, and recent activity.
+        Finish one clean pass through setup so the overview can show balances, spending movement, and recent activity.
       </p>
     </div>
 
@@ -467,94 +678,121 @@
       <h2 class="page-title hero-worth">{formatCurrency(dashboard.summary.netWorth, { compact: true })}</h2>
       <p class="hero-label">Net worth</p>
       <p class="subtitle hero-subtitle">
-        Updated through {formatDate(dashboard.lastUpdated)}. {dashboard.summary.transactionCount} transactions are
-        loaded into the workspace. {activeTask.note}
+        Through {formatDate(dashboard.lastUpdated)}, with {countLabel(dashboard.summary.transactionCount, 'transaction')} in view.
+        {activeTask.note}
       </p>
     </div>
 
-    <div class="hero-side hero-side-compact">
+    <div class="hero-side hero-side-compact today-rail">
+      <div class="today-head">
+        <p class="eyebrow">Today</p>
+        <h3>{heroRailTitle()}</h3>
+        <p class="section-note today-note">{heroRailNote()}</p>
+      </div>
+
+      <div class="today-signal-list">
+        {#each todaySignals as signal}
+          <article class={`today-signal ${signal.tone ?? 'neutral'}`}>
+            <span class="today-signal-label">{signal.label}</span>
+            <strong>{signal.value}</strong>
+            <p>{signal.note}</p>
+          </article>
+        {/each}
+      </div>
+
       <a class="btn btn-primary" href={activeTask.href}>{activeTask.label}</a>
-      {#each secondary as action}
-        <a class="text-link" href={action.href}>{action.label}</a>
+      <div class="hero-links">
+        {#each secondary as action}
+          <a class="text-link" href={action.href}>{action.label}</a>
+        {/each}
+      </div>
+    </div>
+
+    <div class="coverage-strip">
+      {#each coverage as item}
+        <article class={`coverage-item ${item.tone ?? 'neutral'}`}>
+          <span class="coverage-label">{item.label}</span>
+          <strong>{item.value}</strong>
+          <p>{item.note}</p>
+        </article>
       {/each}
     </div>
   </section>
 
-  <section class="summary-grid">
-    <article class="view-card summary-card">
+  <section class="view-card snapshot-band">
+    <article class="snapshot-metric">
       <p class="stat-label">Tracked balances</p>
       <p class="stat-value">{formatCurrency(dashboard.summary.trackedBalanceTotal)}</p>
-      <p class="stat-note">{dashboard.balances.length} tracked accounts on the overview.</p>
+      <p class="stat-note">Across {countLabel(overviewAccounts.length, 'tracked account')}.</p>
     </article>
 
-    <article class="view-card summary-card">
-      <p class="stat-label">Cash flow this month</p>
+    <article class="snapshot-metric">
+      <p class="stat-label">Income this month</p>
+      <p class="stat-value positive">{formatCurrency(dashboard.summary.incomeThisMonth)}</p>
+      <p class="stat-note">Money in for {monthTitle(dashboard.cashFlow.currentMonth)}.</p>
+    </article>
+
+    <article class="snapshot-metric">
+      <p class="stat-label">Spent this month</p>
+      <p class="stat-value negative">{formatCurrency(dashboard.summary.spendingThisMonth)}</p>
+      <p class="stat-note">Categorized outflow this month.</p>
+    </article>
+
+    <article class="snapshot-metric">
+      <p class="stat-label">Net this month</p>
       <p class:positive={dashboard.summary.savingsThisMonth >= 0} class:negative={dashboard.summary.savingsThisMonth < 0} class="stat-value">
         {formatCurrency(dashboard.summary.savingsThisMonth, { signed: true })}
       </p>
-      <p class="stat-note">{monthTitle(dashboard.cashFlow.currentMonth)}</p>
-    </article>
-
-    <article class="view-card summary-card">
-      <p class="stat-label">Income this month</p>
-      <p class="stat-value positive">{formatCurrency(dashboard.summary.incomeThisMonth)}</p>
-      <p class="stat-note">Money in across imported activity.</p>
-    </article>
-
-    <article class="view-card summary-card">
-      <p class="stat-label">Spent this month</p>
-      <p class="stat-value negative">{formatCurrency(dashboard.summary.spendingThisMonth)}</p>
-      <p class="stat-note">Based on categorized expense postings.</p>
+      <p class="stat-note">Current month cash flow.</p>
     </article>
   </section>
 
-  <section class="dashboard-main">
-    <article class="view-card balances-panel">
-      <div class="section-head">
-        <div>
-          <p class="eyebrow">Balances</p>
-          <h3>Tracked accounts</h3>
-        </div>
-        <a class="text-link" href="/accounts">Manage accounts</a>
+  <section class="view-card balances-panel balance-sheet-panel">
+    <div class="section-head">
+      <div>
+        <p class="eyebrow">Balance sheet</p>
+        <h3>Tracked accounts</h3>
       </div>
+      <a class="text-link" href="/accounts">Manage accounts</a>
+    </div>
 
-      <div class="balance-list">
-        {#each dashboard.balances as balance}
-          <div class="balance-row">
+    <div class="balance-group-list">
+      {#each balanceGroups as group}
+        <section class={`balance-group ${group.key}`}>
+          <div class="balance-group-head">
             <div>
-              <p class="balance-name">{balance.displayName}</p>
-              <p class="balance-note">
-                {titleCase(balance.kind)}{#if balance.last4} •••• {balance.last4}{/if}
-              </p>
+              <h4>{group.title}</h4>
+              <p class="balance-group-note">{group.note}</p>
             </div>
-            <p class:negative={balance.balance < 0} class:positive={balance.balance > 0} class="balance-value">
-              {formatCurrency(balance.balance)}
-            </p>
+            <div class="balance-group-summary">
+              <span>{countLabel(group.accounts.length, 'account')}</span>
+              <strong class:negative={group.total < 0} class:positive={group.total > 0}>{formatCurrency(group.total)}</strong>
+            </div>
           </div>
-        {/each}
-      </div>
-    </article>
 
-    <article class="view-card attention-panel">
-      <div class="section-head">
-        <div>
-          <p class="eyebrow">Attention</p>
-          <h3>What to do next</h3>
-        </div>
-      </div>
-
-      <div class="attention-list">
-        {#each attention as item}
-          <a class="attention-item" href={item.href}>
-            <div>
-              <p class="attention-title">{item.title}</p>
-              <p class="attention-note">{item.note}</p>
-            </div>
-            <span class="attention-cta">{item.cta}</span>
-          </a>
-        {/each}
-      </div>
-    </article>
+          <div class="balance-list grouped-balance-list">
+            {#each group.accounts as account}
+              <div class="balance-row grouped-balance-row">
+                <div class="grouped-balance-main">
+                  <div class="grouped-balance-head">
+                    <p class="balance-name">{account.displayName}</p>
+                    <div class="pill-row">
+                      <span class={`pill subtype-pill ${account.kind}`}>{accountSubtypeLabel(account, 'short')}</span>
+                      <span class={`pill coverage-pill ${accountCoverageTone(account)}`}>{accountCoverageLabel(account)}</span>
+                    </div>
+                  </div>
+                  <p class="balance-note">{accountIdentity(account)}</p>
+                  <p class="balance-subnote">{accountCoverageNote(account)}</p>
+                </div>
+                <p class:negative={account.balance < 0} class:positive={account.balance > 0} class="balance-value">
+                  {formatCurrency(account.balance)}
+                </p>
+              </div>
+            {/each}
+          </div>
+        </section>
+      {/each}
+    </div>
   </section>
 
   <section class="view-card cashflow-panel">
@@ -738,14 +976,12 @@
 
   .landing-grid,
   .progress-grid,
-  .summary-grid,
   .detail-grid {
     display: grid;
     gap: 1rem;
   }
 
-  .landing-grid,
-  .summary-grid {
+  .landing-grid {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
@@ -753,18 +989,145 @@
     grid-template-columns: repeat(4, minmax(0, 1fr));
   }
 
-  .summary-grid {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-  }
-
   .detail-grid {
     grid-template-columns: minmax(0, 1.1fr) minmax(0, 0.9fr);
+  }
+
+  h3,
+  h4 {
+    margin: 0;
+  }
+
+  .today-rail {
+    gap: 1rem;
+    width: 100%;
+  }
+
+  .today-head {
+    display: grid;
+    gap: 0.35rem;
+    width: 100%;
+  }
+
+  .today-head h3 {
+    font-family: 'Space Grotesk', sans-serif;
+    font-size: 1.25rem;
+    line-height: 1.08;
+  }
+
+  .today-note {
+    line-height: 1.55;
+  }
+
+  .today-signal-list {
+    width: 100%;
+    display: grid;
+    gap: 0.7rem;
+  }
+
+  .today-signal {
+    display: grid;
+    gap: 0.18rem;
+    width: 100%;
+    padding: 0.85rem 0.9rem;
+    border-radius: 1rem;
+    border: 1px solid rgba(10, 61, 89, 0.08);
+    background: rgba(255, 255, 255, 0.86);
+  }
+
+  .today-signal.ok {
+    border-color: rgba(13, 127, 88, 0.16);
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.94), rgba(242, 250, 246, 0.92));
+  }
+
+  .today-signal.warn {
+    border-color: rgba(173, 106, 0, 0.2);
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.94), rgba(255, 248, 236, 0.94));
+  }
+
+  .today-signal-label,
+  .coverage-label {
+    font-size: 0.74rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--muted-foreground);
+    font-weight: 700;
+  }
+
+  .today-signal strong,
+  .coverage-item strong,
+  .balance-group-summary strong {
+    display: block;
+    font-family: 'Space Grotesk', sans-serif;
+  }
+
+  .today-signal strong {
+    font-size: 1.12rem;
+  }
+
+  .today-signal p,
+  .coverage-item p {
+    margin: 0;
+    color: var(--muted-foreground);
+    line-height: 1.45;
+  }
+
+  .hero-links {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.85rem;
+  }
+
+  .coverage-strip {
+    grid-column: 1 / -1;
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 0.85rem;
+    padding-top: 0.2rem;
+  }
+
+  .coverage-item {
+    display: grid;
+    gap: 0.3rem;
+    padding: 0.95rem 1rem;
+    border-radius: 1rem;
+    border: 1px solid rgba(10, 61, 89, 0.08);
+    background: rgba(255, 255, 255, 0.72);
+  }
+
+  .coverage-item.ok {
+    border-color: rgba(13, 127, 88, 0.16);
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.94), rgba(242, 250, 246, 0.9));
+  }
+
+  .coverage-item.warn {
+    border-color: rgba(173, 106, 0, 0.2);
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.94), rgba(255, 248, 236, 0.94));
+  }
+
+  .coverage-item strong {
+    font-size: 1.28rem;
+  }
+
+  .snapshot-band {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 0;
+    padding: 0;
+    overflow: hidden;
+  }
+
+  .snapshot-metric {
+    padding: 1.1rem 1.15rem;
+  }
+
+  .snapshot-metric + .snapshot-metric {
+    border-left: 1px solid rgba(10, 61, 89, 0.08);
   }
 
   .value-card h3,
   .progress-card h3,
   .balances-panel h3,
-  .attention-panel h3,
   .cashflow-panel h3,
   .categories-panel h3,
   .recent-panel h3,
@@ -805,10 +1168,6 @@
     box-shadow: 0 16px 30px rgba(8, 45, 68, 0.09);
   }
 
-  .summary-card {
-    padding: 1.1rem 1.15rem;
-  }
-
   .stat-label {
     margin: 0;
     font-size: 0.78rem;
@@ -828,7 +1187,7 @@
   .stat-note,
   .section-note,
   .balance-note,
-  .attention-note,
+  .balance-subnote,
   .transaction-meta,
   .empty-copy,
   .category-values,
@@ -837,14 +1196,7 @@
     color: var(--muted-foreground);
   }
 
-  .dashboard-main {
-    display: grid;
-    grid-template-columns: minmax(0, 1.25fr) minmax(18rem, 0.75fr);
-    gap: 1rem;
-  }
-
   .balances-panel,
-  .attention-panel,
   .cashflow-panel,
   .categories-panel,
   .recent-panel {
@@ -860,7 +1212,6 @@
   }
 
   .balance-list,
-  .attention-list,
   .cashflow-list,
   .category-list,
   .transaction-list {
@@ -883,7 +1234,6 @@
   }
 
   .balance-name,
-  .attention-title,
   .transaction-payee,
   .category-head p,
   .cashflow-meta p {
@@ -898,28 +1248,117 @@
     font-size: 1.1rem;
   }
 
-  .attention-item {
+  .balance-group-list {
+    display: grid;
+    gap: 1.1rem;
+  }
+
+  .balance-group {
+    display: grid;
+    gap: 0.85rem;
+  }
+
+  .balance-group + .balance-group {
+    padding-top: 1rem;
+    border-top: 1px solid rgba(10, 61, 89, 0.08);
+  }
+
+  .balance-group-head {
     display: flex;
-    gap: 1rem;
+    align-items: flex-end;
     justify-content: space-between;
-    align-items: center;
-    padding: 1rem;
-    border-radius: 1rem;
-    background: rgba(244, 249, 255, 0.72);
+    gap: 1rem;
+    flex-wrap: wrap;
+  }
+
+  .balance-group-note {
+    margin: 0.35rem 0 0;
+    color: var(--muted-foreground);
+    max-width: 58ch;
+  }
+
+  .balance-group-summary {
+    min-width: 12rem;
     border: 1px solid rgba(10, 61, 89, 0.08);
-    text-decoration: none;
-    color: inherit;
+    border-radius: 1rem;
+    padding: 0.8rem 0.9rem;
+    background: linear-gradient(145deg, rgba(255, 255, 255, 0.92), rgba(243, 249, 255, 0.88));
   }
 
-  .attention-item:hover {
-    border-color: rgba(15, 95, 136, 0.18);
-    transform: translateY(-1px);
-  }
-
-  .attention-cta {
+  .balance-group-summary span {
+    display: block;
+    margin-bottom: 0.2rem;
+    font-size: 0.78rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--muted-foreground);
     font-weight: 700;
+  }
+
+  .balance-group-summary strong {
+    font-size: 1.35rem;
+  }
+
+  .grouped-balance-list {
+    gap: 0;
+  }
+
+  .grouped-balance-row {
+    align-items: flex-start;
+  }
+
+  .grouped-balance-main {
+    min-width: 0;
+    display: grid;
+    gap: 0.3rem;
+  }
+
+  .grouped-balance-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 0.75rem;
+  }
+
+  .balance-subnote {
+    font-size: 0.9rem;
+    line-height: 1.5;
+  }
+
+  .pill-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+  }
+
+  .subtype-pill.asset {
+    background: rgba(15, 95, 136, 0.08);
     color: var(--brand-strong);
-    white-space: nowrap;
+    border-color: rgba(15, 95, 136, 0.14);
+  }
+
+  .subtype-pill.liability {
+    background: rgba(154, 81, 41, 0.12);
+    color: #9a5129;
+    border-color: rgba(154, 81, 41, 0.18);
+  }
+
+  .coverage-pill.ok {
+    background: rgba(13, 127, 88, 0.12);
+    color: var(--ok);
+    border-color: rgba(13, 127, 88, 0.16);
+  }
+
+  .coverage-pill.warn {
+    background: rgba(173, 106, 0, 0.12);
+    color: var(--warn);
+    border-color: rgba(173, 106, 0, 0.18);
+  }
+
+  .coverage-pill.neutral {
+    background: rgba(10, 61, 89, 0.06);
+    color: var(--brand-strong);
+    border-color: rgba(10, 61, 89, 0.12);
   }
 
   .cashflow-row,
@@ -1002,13 +1441,13 @@
 
   @media (max-width: 1100px) {
     .dashboard-hero,
-    .dashboard-main,
     .detail-grid {
       grid-template-columns: 1fr;
     }
 
     .landing-grid,
-    .summary-grid {
+    .coverage-strip,
+    .snapshot-band {
       grid-template-columns: repeat(2, minmax(0, 1fr));
     }
 
@@ -1020,7 +1459,8 @@
   @media (max-width: 720px) {
     .landing-grid,
     .progress-grid,
-    .summary-grid {
+    .coverage-strip,
+    .snapshot-band {
       grid-template-columns: 1fr;
     }
 
@@ -1031,7 +1471,6 @@
     .section-head,
     .balance-row,
     .transaction-row,
-    .attention-item,
     .cashflow-meta,
     .cashflow-values,
     .category-head,
@@ -1040,9 +1479,23 @@
       display: grid;
     }
 
+    .grouped-balance-head,
+    .balance-group-head {
+      align-items: stretch;
+    }
+
+    .grouped-balance-head {
+      flex-direction: column;
+    }
+
     .transaction-side,
     .hero-side {
       justify-items: start;
+    }
+
+    .snapshot-metric + .snapshot-metric {
+      border-left: 0;
+      border-top: 1px solid rgba(10, 61, 89, 0.08);
     }
   }
 </style>

@@ -2,6 +2,7 @@
   import { page } from '$app/stores';
   import { onMount } from 'svelte';
   import { apiGet, apiPost } from '$lib/api';
+  import { accountKindFromLedger, accountSubtypeLabel, subtypeOptionsForKind } from '$lib/account-subtypes';
 
   type AppState = {
     initialized: boolean;
@@ -40,6 +41,7 @@
     displayName: string;
     ledgerAccount: string;
     kind: string;
+    subtype?: string | null;
     institutionId: string | null;
     institutionDisplayName?: string | null;
     last4?: string | null;
@@ -90,6 +92,7 @@
   type AccountDraft = {
     displayName: string;
     ledgerAccount: string;
+    subtype: string;
     institutionId: string;
     last4: string;
     openingBalance: string;
@@ -142,6 +145,8 @@
   let loading = true;
   let saving = false;
   let inspecting = false;
+  let draftKind = 'other';
+  let draftSubtypePreview = 'Tracked account';
 
   let editorMode: 'manual' | 'institution' | 'custom' = 'manual';
   let editingAccountId: string | null = null;
@@ -201,6 +206,7 @@
     return {
       displayName: template?.displayName ?? '',
       ledgerAccount: '',
+      subtype: '',
       institutionId,
       last4: '',
       openingBalance: '',
@@ -211,10 +217,6 @@
 
   function templateById(id: string): InstitutionTemplate | undefined {
     return institutionTemplates.find((template) => template.id === id);
-  }
-
-  function titleCase(value: string): string {
-    return value.charAt(0).toUpperCase() + value.slice(1);
   }
 
   function ledgerSuffix(templateDisplayName: string, displayName: string): string {
@@ -351,6 +353,7 @@
     draft = {
       displayName: account.displayName,
       ledgerAccount: account.ledgerAccount,
+      subtype: account.subtype ?? '',
       institutionId: account.institutionId ?? '',
       last4: account.last4 ?? '',
       openingBalance: account.openingBalance ?? '',
@@ -516,6 +519,7 @@
       accountId: editingAccountId,
       displayName: draft.displayName.trim(),
       ledgerAccount: effectiveLedgerAccount(draft) || null,
+      subtype: draft.subtype || null,
       institutionId: draft.institutionId || null,
       last4: draft.last4.trim() || null,
       openingBalance: draft.openingBalance,
@@ -531,6 +535,7 @@
           institutionId: payload.institutionId,
           displayName: payload.displayName,
           ledgerAccount: draft.ledgerAccount.trim() || null,
+          subtype: payload.subtype,
           last4: payload.last4,
           openingBalance: payload.openingBalance,
           openingBalanceDate: payload.openingBalanceDate
@@ -540,6 +545,7 @@
           accountId: payload.accountId,
           displayName: payload.displayName,
           ledgerAccount: payload.ledgerAccount,
+          subtype: payload.subtype,
           last4: payload.last4,
           openingBalance: payload.openingBalance,
           openingBalanceDate: payload.openingBalanceDate,
@@ -603,6 +609,13 @@
               ? 'custom CSV'
               : 'manual'
         } account`;
+  $: draftKind = accountKindFromLedger(effectiveLedgerAccount(draft));
+  $: draftSubtypePreview = accountSubtypeLabel({
+    subtype: draft.subtype,
+    kind: draftKind,
+    displayName: draft.displayName,
+    ledgerAccount: effectiveLedgerAccount(draft)
+  });
 
   onMount(async () => {
     loading = true;
@@ -708,7 +721,7 @@
 
               <div class="pill-row">
                 <span class:ok={account.importConfigured} class="pill">{modeLabel(account)}</span>
-                <span class="pill">{titleCase(account.kind)}</span>
+                <span class="pill">{accountSubtypeLabel(account, 'short')}</span>
                 {#if account.last4}
                   <span class="pill">••{account.last4}</span>
                 {/if}
@@ -786,6 +799,17 @@
           placeholder={editorMode === 'institution' ? 'Wells Fargo Checking' : editorMode === 'custom' ? 'Capital One Card' : 'Brokerage Cash'}
           on:input={(e) => updateDraft({ displayName: (e.currentTarget as HTMLInputElement).value })}
         />
+      </div>
+
+      <div class="field">
+        <label for="subtype">Account subtype</label>
+        <select id="subtype" value={draft.subtype} on:change={(e) => updateDraft({ subtype: (e.currentTarget as HTMLSelectElement).value })}>
+          <option value="">Use broad type for now</option>
+          {#each subtypeOptionsForKind(draftKind) as option}
+            <option value={option.value}>{option.label}</option>
+          {/each}
+        </select>
+        <p class="muted small">Shows as {draftSubtypePreview} on Accounts. This stays separate from the ledger account.</p>
       </div>
 
       <div class="field grid-2 compact">

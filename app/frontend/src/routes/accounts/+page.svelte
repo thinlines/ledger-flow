@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { apiGet } from '$lib/api';
+  import { accountSubtypeLabel } from '$lib/account-subtypes';
 
   type AppState = {
     initialized: boolean;
@@ -38,6 +39,7 @@
     displayName: string;
     ledgerAccount: string;
     kind: string;
+    subtype?: string | null;
     institutionId: string | null;
     institutionDisplayName?: string | null;
     last4?: string | null;
@@ -150,16 +152,6 @@
     return value == null ? 'No balances yet' : formatCurrency(value);
   }
 
-  function accountMonogram(label: string): string {
-    const words = label
-      .trim()
-      .split(/\s+/)
-      .filter(Boolean);
-    if (!words.length) return '?';
-    if (words.length === 1) return words[0].slice(0, 2).toUpperCase();
-    return `${words[0].charAt(0)}${words[words.length - 1].charAt(0)}`.toUpperCase();
-  }
-
   function accountIdentity(account: TrackedAccount): string {
     const parts = [account.institutionDisplayName || 'Manual account'];
     if (account.last4) parts.push(`•••• ${account.last4}`);
@@ -235,8 +227,11 @@
       account.displayName,
       account.institutionDisplayName,
       account.last4,
+      account.subtype,
       account.ledgerAccount,
       account.importAccountId,
+      accountSubtypeLabel(account, 'short'),
+      accountSubtypeLabel(account, 'long'),
       kindLabel(account.kind),
       importSetupTitle(account),
       importSetupNote(account)
@@ -438,19 +433,17 @@
                   <div class="account-card-main">
                     <div class:liability-panel={account.kind === 'liability'} class="account-balance-panel">
                       <div class="account-balance-header">
-                        <span class:liability-mark={account.kind === 'liability'} class="account-mark">
-                          {accountMonogram(account.displayName)}
-                        </span>
-                        <div>
-                          <p class="metric-label">Current balance</p>
-                          <p
-                            class:positive={(currentBalance(account.id) ?? 0) > 0}
-                            class:negative={(currentBalance(account.id) ?? 0) < 0}
-                            class="account-balance-value"
-                          >
-                            {formatCurrency(currentBalance(account.id))}
-                          </p>
-                        </div>
+                        <p class:liability-context={account.kind === 'liability'} class="account-balance-context">
+                          {accountSubtypeLabel(account, 'long')}
+                        </p>
+                        <p class="metric-label">Current balance</p>
+                        <p
+                          class:positive={(currentBalance(account.id) ?? 0) > 0}
+                          class:negative={(currentBalance(account.id) ?? 0) < 0}
+                          class="account-balance-value"
+                        >
+                          {formatCurrency(currentBalance(account.id))}
+                        </p>
                       </div>
                       <p class="account-balance-note">
                         {#if account.openingBalance}
@@ -467,7 +460,6 @@
                     <div class="account-card-content">
                       <div class="account-card-head">
                         <div class="account-title-group">
-                          <p class="account-kind-label">{kindLabel(account.kind)} account</p>
                           <h4>{account.displayName}</h4>
                           <p class="account-identity-note">{accountIdentity(account)}</p>
                         </div>
@@ -480,7 +472,10 @@
                       <div class="pill-row">
                         <span class={`pill status-pill ${accountStatusTone(account)}`}>{accountStatusLabel(account)}</span>
                         <span class:ok={account.importConfigured} class="pill">{modeLabel(account)}</span>
-                        <span class={`pill kind-pill ${account.kind}`}>{kindLabel(account.kind)}</span>
+                        <span class={`pill subtype-pill ${account.kind}`}>{accountSubtypeLabel(account, 'short')}</span>
+                        {#if account.last4}
+                          <span class="pill">••{account.last4}</span>
+                        {/if}
                       </div>
 
                       <dl class="account-meta-grid">
@@ -711,29 +706,18 @@
 
   .account-balance-header {
     display: grid;
-    grid-template-columns: auto minmax(0, 1fr);
-    gap: 0.85rem;
+    gap: 0.3rem;
     align-items: start;
   }
 
-  .account-mark {
-    width: 3rem;
-    height: 3rem;
-    display: grid;
-    place-items: center;
-    border-radius: 0.95rem;
-    border: 1px solid rgba(15, 95, 136, 0.14);
-    background: linear-gradient(155deg, rgba(255, 255, 255, 0.95), rgba(228, 240, 255, 0.92));
+  .account-balance-context {
+    margin: 0;
     color: var(--brand-strong);
-    font-family: 'Space Grotesk', sans-serif;
-    font-size: 1rem;
+    font-size: 0.88rem;
     font-weight: 700;
-    box-shadow: 0 10px 22px rgba(17, 35, 52, 0.06);
   }
 
-  .liability-mark {
-    border-color: rgba(154, 81, 41, 0.16);
-    background: linear-gradient(155deg, rgba(255, 255, 255, 0.95), rgba(255, 233, 219, 0.92));
+  .liability-context {
     color: #9a5129;
   }
 
@@ -773,15 +757,6 @@
     font-size: 1.35rem;
   }
 
-  .account-kind-label {
-    margin: 0 0 0.3rem;
-    font-size: 0.74rem;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-    color: var(--muted-foreground);
-    font-weight: 700;
-  }
-
   .account-identity-note {
     margin: 0.35rem 0 0;
     color: var(--muted-foreground);
@@ -808,14 +783,14 @@
   }
 
   .status-pill.attention,
-  .kind-pill.liability {
+  .subtype-pill.liability {
     background: rgba(154, 81, 41, 0.12);
     color: #9a5129;
     border-color: rgba(154, 81, 41, 0.18);
   }
 
   .status-pill.manual,
-  .kind-pill.asset {
+  .subtype-pill.asset {
     background: rgba(15, 95, 136, 0.08);
     color: var(--brand-strong);
     border-color: rgba(15, 95, 136, 0.14);

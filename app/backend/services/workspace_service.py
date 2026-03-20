@@ -5,7 +5,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-from .config_service import AppConfig, load_config
+from .config_service import AppConfig, infer_account_kind, load_config
 from .custom_csv_service import normalize_custom_profile
 from .import_identity_service import source_payload_hash_for_lines
 from .import_index import ImportIndex
@@ -27,6 +27,19 @@ BASE_CURRENCY_SYMBOLS = {
     "GBP": "£",
     "JPY": "¥",
     "CNY": "¥",
+}
+ACCOUNT_SUBTYPE_KIND = {
+    "checking": "asset",
+    "savings": "asset",
+    "cash": "asset",
+    "investment": "asset",
+    "vehicle": "asset",
+    "real_estate": "asset",
+    "other_asset": "asset",
+    "credit_card": "liability",
+    "loan": "liability",
+    "mortgage": "liability",
+    "other_liability": "liability",
 }
 
 
@@ -314,6 +327,7 @@ class WorkspaceManager:
                 existing_import_accounts=existing_import_accounts,
                 existing_account_id=existing_account_id,
             )
+        subtype = self._normalize_account_subtype(raw.get("subtype"), ledger_account)
 
         base_id = self._slugify(display_name)
         if last4:
@@ -325,6 +339,7 @@ class WorkspaceManager:
                 "display_name": display_name,
                 "institution": institution_id,
                 "ledger_account": ledger_account,
+                "subtype": subtype,
                 "last4": last4,
             },
             template,
@@ -381,6 +396,7 @@ class WorkspaceManager:
         ledger_account = self._clean_optional_string(raw.get("ledgerAccount")) or ""
         if not ledger_account or ":" not in ledger_account:
             raise ValueError("Custom import accounts require a ledger account")
+        subtype = self._normalize_account_subtype(raw.get("subtype"), ledger_account)
 
         last4 = self._clean_optional_string(raw.get("last4"))
         base_id = self._slugify(display_name)
@@ -400,6 +416,7 @@ class WorkspaceManager:
                 "display_name": display_name,
                 "institution": None,
                 "ledger_account": ledger_account,
+                "subtype": subtype,
                 "last4": last4,
                 "import_profile_id": account_id,
             },
@@ -425,6 +442,7 @@ class WorkspaceManager:
             raise ValueError(f"Unknown institution template: {institution_id}")
 
         last4 = self._clean_optional_string(raw.get("last4"))
+        subtype = self._normalize_account_subtype(raw.get("subtype"), ledger_account)
 
         base_id = self._slugify(display_name)
         if last4:
@@ -434,10 +452,27 @@ class WorkspaceManager:
             "id": existing_account_id or self._unique_account_id(base_id, used_account_ids),
             "display_name": display_name,
             "ledger_account": ledger_account,
+            "subtype": subtype,
             "institution": institution_id,
             "last4": last4,
             "import_account_id": raw.get("importAccountId"),
         }
+
+    def _normalize_account_subtype(
+        self,
+        raw_subtype: object,
+        ledger_account: str,
+    ) -> str | None:
+        subtype = self._clean_optional_string(raw_subtype)
+        if not subtype:
+            return None
+        if subtype not in ACCOUNT_SUBTYPE_KIND:
+            raise ValueError(f"Unknown account subtype: {subtype}")
+        kind = infer_account_kind(ledger_account)
+        expected_kind = ACCOUNT_SUBTYPE_KIND[subtype]
+        if kind != expected_kind:
+            raise ValueError(f"Subtype '{subtype}' requires a {expected_kind} account")
+        return subtype
 
     def _tracked_account_from_import_account(
         self,
@@ -448,6 +483,7 @@ class WorkspaceManager:
         return {
             "display_name": account_cfg.get("display_name", tracked_account_id),
             "ledger_account": account_cfg.get("ledger_account", ""),
+            "subtype": account_cfg.get("subtype"),
             "institution": account_cfg.get("institution"),
             "last4": account_cfg.get("last4"),
             "import_account_id": import_account_id,
@@ -500,6 +536,9 @@ class WorkspaceManager:
             cfg_lines.append(f"[tracked_accounts.{account_id}]")
             cfg_lines.append(f"display_name = {json.dumps(str(account_cfg.get('display_name', account_id)))}")
             cfg_lines.append(f"ledger_account = {json.dumps(str(account_cfg.get('ledger_account', '')))}")
+            subtype = str(account_cfg.get("subtype") or "").strip()
+            if subtype:
+                cfg_lines.append(f"subtype = {json.dumps(subtype)}")
             institution = str(account_cfg.get("institution") or "").strip()
             if institution:
                 cfg_lines.append(f"institution = {json.dumps(institution)}")
@@ -753,6 +792,7 @@ class WorkspaceManager:
                 "display_name": normalized["display_name"],
                 "institution": normalized["institution"],
                 "ledger_account": normalized["ledger_account"],
+                "subtype": normalized.get("subtype"),
                 "last4": normalized["last4"],
                 "tracked_account_id": normalized["id"],
             }
@@ -873,11 +913,17 @@ class WorkspaceManager:
         previous_ledger_account = str(existing_row.get("ledger_account", "")).strip()
         tracked_account_id = str(existing_row.get("tracked_account_id", "")).strip() or normalized["id"]
         stale_profile_id = str(existing_row.get("import_profile_id") or "").strip()
+        subtype = (
+            normalized.get("subtype")
+            if "subtype" in account
+            else existing_tracked_accounts.get(tracked_account_id, {}).get("subtype")
+        )
 
         existing_accounts[normalized["id"]] = {
             "display_name": normalized["display_name"],
             "institution": normalized["institution"],
             "ledger_account": normalized["ledger_account"],
+            "subtype": subtype,
             "last4": normalized["last4"],
             "tracked_account_id": tracked_account_id,
         }
@@ -968,11 +1014,17 @@ class WorkspaceManager:
         ).strip()
         if stale_profile_id and stale_profile_id != normalized["import_profile_id"]:
             existing_import_profiles.pop(stale_profile_id, None)
+        subtype = (
+            normalized.get("subtype")
+            if "subtype" in account
+            else existing_tracked_accounts.get(tracked_account_id, {}).get("subtype")
+        )
 
         existing_accounts[normalized["id"]] = {
             "display_name": normalized["display_name"],
             "institution": None,
             "ledger_account": normalized["ledger_account"],
+            "subtype": subtype,
             "last4": normalized["last4"],
             "tracked_account_id": tracked_account_id,
             "import_profile_id": normalized["import_profile_id"],
@@ -1046,6 +1098,7 @@ class WorkspaceManager:
         existing_tracked_accounts[normalized["id"]] = {
             "display_name": normalized["display_name"],
             "ledger_account": normalized["ledger_account"],
+            "subtype": normalized.get("subtype"),
             "institution": normalized["institution"],
             "last4": normalized["last4"],
             "import_account_id": None,

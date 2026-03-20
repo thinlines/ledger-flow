@@ -6,6 +6,19 @@ from pydantic import BaseModel, Field
 
 
 DATE_PATTERN = r"^\d{4}-\d{2}-\d{2}$"
+AccountSubtype = Literal[
+    "checking",
+    "savings",
+    "cash",
+    "investment",
+    "vehicle",
+    "real_estate",
+    "other_asset",
+    "credit_card",
+    "loan",
+    "mortgage",
+    "other_liability",
+]
 
 
 class ImportPreviewRequest(BaseModel):
@@ -98,6 +111,7 @@ class WorkspaceImportAccountRequest(BaseModel):
     institutionId: str = Field(min_length=1)
     displayName: str = Field(min_length=1)
     ledgerAccount: str | None = None
+    subtype: AccountSubtype | None = None
     last4: str | None = None
     openingBalance: str | None = None
     openingBalanceDate: str | None = Field(default=None, pattern=DATE_PATTERN)
@@ -144,6 +158,7 @@ class CustomImportAccountUpsertRequest(BaseModel):
     accountId: str | None = None
     displayName: str = Field(min_length=1)
     ledgerAccount: str = Field(min_length=1)
+    subtype: AccountSubtype | None = None
     last4: str | None = None
     openingBalance: str | None = None
     openingBalanceDate: str | None = Field(default=None, pattern=DATE_PATTERN)
@@ -154,6 +169,7 @@ class TrackedAccountUpsertRequest(BaseModel):
     accountId: str | None = None
     displayName: str = Field(min_length=1)
     ledgerAccount: str = Field(min_length=1)
+    subtype: AccountSubtype | None = None
     institutionId: str | None = None
     last4: str | None = None
     openingBalance: str | None = None

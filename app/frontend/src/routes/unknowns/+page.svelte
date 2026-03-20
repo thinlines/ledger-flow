@@ -1205,10 +1205,17 @@
       };
     }
 
-    if (targetAccount?.kind === 'liability') {
+    if (targetAccount?.importConfigured && targetAccount.kind === 'liability') {
       return {
         tone: 'warn',
-        text: 'Unmatched liability transfers cannot be accepted yet. Leave this as a category until the other side imports.'
+        text: `This imported liability needs its counterpart transaction before it can be accepted. Wait for ${targetAccount.displayName} activity to import.`
+      };
+    }
+
+    if (targetAccount && !targetAccount.importConfigured) {
+      return {
+        tone: 'muted',
+        text: `This will post directly to ${targetAccount.displayName}. No imported counterpart is required.`
       };
     }
 
