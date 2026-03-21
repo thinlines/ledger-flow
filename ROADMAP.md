@@ -3,6 +3,8 @@
 This document captures the near-term product direction for Ledger Flow.
 It is a planning document, not a strict delivery contract.
 
+> Context ownership: `README.md` covers product purpose, `ARCHITECTURE.md` covers the current system, `AGENT_RULES.md` covers implementation rules, `TASK.md` covers the active task, and `DECISIONS.md` covers durable rationale. `ROADMAP.md` remains the source of truth for direction and milestones.
+
 ## Current Baseline
 
 The app already has a usable bookkeeping workflow:

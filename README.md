@@ -1,59 +1,40 @@
 # Ledger Flow
 
-Ledger Flow is a GUI-first bookkeeping app designed to feel like a polished, professional personal finance workspace.
-Its open plain-text foundation matters for durability and portability, but that implementation detail should stay behind the curtain unless the user wants to engage with it.
+Ledger Flow is a GUI-first bookkeeping app for people who want a polished personal finance workspace without learning plaintext accounting. It stores financial data in open, human-readable files for durability and portability, but the product should feel like a finance app first.
 
-## Core Principles
+## Product Purpose
 
-1. User-facing product first
-- Primary UI language should talk about money, accounts, spending, activity, and next steps.
-- Terms like ledger, journal, postings, workspace files, or rule stores belong in advanced views, diagnostics, or documentation.
+Ledger Flow helps users answer three questions every time they open the app:
 
-2. GUI-first interaction
-- Users manage setup, import, categorization, and review through the app UI.
-- CLI tooling is optional developer infrastructure, not a user requirement.
+- Where do I stand right now?
+- What changed recently?
+- What needs attention next?
 
-3. Plain-text as an open foundation, not a required mental model
-- Canonical financial data is stored in human-readable text files inside a workspace.
-- The app is a control plane for that data, not a closed storage silo.
-- Most users should never need to think about file layout or plaintext accounting in routine workflows.
+The product should make setup, importing, review, account management, and daily visibility feel like one continuous finance workflow rather than a collection of accounting tools.
 
-4. Polished, efficient workflow design
-- The app should feel approachable to non-specialists without becoming shallow.
-- Common tasks should be obvious, safe, and fast, with technical detail available only when needed.
+## Audience
 
-5. Zero-file bootstrapping
-- A new install must work with no pre-existing ledger files or config.
-- The app can initialize a workspace from scratch through Setup.
+- People managing personal finances who may be nontechnical and not accounting specialists.
+- Contributors building a consumer-grade finance workspace, not a tooling-first plaintext ledger interface.
 
-6. Safe import semantics
-- Imports are idempotent and append-oriented.
-- New transactions are appended; duplicates are skipped; conflicts are surfaced for review.
-- Existing transaction content is not auto-rewritten.
+## Product Posture
 
-7. Eventual consistency
-- Financial history can be built incrementally.
-- Choosing an initial year does not block importing older years later.
-- Missing years can be backfilled over time without breaking workflow.
+- Use money, accounts, balances, spending, activity, and next steps as the main product language.
+- Treat the GUI as the default way to manage data; CLI tooling is optional developer infrastructure.
+- Keep the plain-text foundation real and durable, but behind the curtain in normal workflows.
+- Make common tasks obvious, safe, and fast; move advanced details into explicit reveals or secondary screens.
+- Support zero-file bootstrapping, idempotent import, and incremental backfill over time.
+- Keep accounting truth in workspace files and use operational state only to speed up UX and remember workflow state.
 
-8. Separation of concerns
-- Plain-text workspace files hold accounting truth.
-- Operational indexes (e.g., SQLite/state files) exist for UX speed and workflow memory, and are non-canonical.
+## Experience North Star
 
-## Current Product Shape
+Ledger Flow should feel like a polished, consumer-grade personal finance application, not a frontend for plaintext accounting. The default interface should lead with financial outcomes and guidance, keep one dominant next action per screen, and hide implementation details such as paths, journals, and ledger-account mappings unless the user explicitly needs them.
 
-- Overview: finance-first dashboard with net worth, tracked balances, six-month cash flow, category movement, recent transactions, and next-action cues
-- Setup: staged first-run flow for create/select workspace, add tracked accounts, and complete the first import
-- Import: shared preview/apply account-linked CSV workflow, available both inside setup and on `/import`
-- Review: reconcile unknown account mappings
-- Account setup: add or edit import accounts after workspace bootstrap
+## Context Map
 
-These workflows are the current foundation, not the full product identity.
-The app should ultimately feel like a daily finance workspace where import and review are supporting workflows that keep the user's financial picture current.
-
-## UI Direction
-
-- The primary screen should answer: where do I stand, what changed, and what needs attention next.
-- The default UI should show financial outcomes first and operational detail second.
-- Advanced details such as paths, journals, and ledger-account mappings should stay behind setup, diagnostics, or explicit reveals.
-- Each screen should have one dominant next action, with supporting actions kept secondary and sparse.
+- [README.md](README.md): product purpose and posture
+- [ARCHITECTURE.md](ARCHITECTURE.md): current system shape, boundaries, and invariants
+- [AGENT_RULES.md](AGENT_RULES.md): implementation, copy, and change-safety rules
+- [TASK.md](TASK.md): the active task only
+- [DECISIONS.md](DECISIONS.md): durable tradeoffs and rationale
+- [ROADMAP.md](ROADMAP.md): product direction and milestones
