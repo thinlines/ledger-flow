@@ -8,6 +8,8 @@ This file captures repo-specific rules for agents and contributors. Use it with 
 - Do not expose `ledger`, `journal`, postings, workspace files, intermediary accounts, or rule-store terminology in default UI copy.
 - Assume the user is nontechnical and may know little accounting.
 - The purpose of each control should be self-evident. Do not explain internal implementation structure in field labels.
+- Do not make a user choose asset vs liability by editing an advanced account name or learning account prefixes. Primary account setup must expose that choice directly.
+- Do not present inferred account subtypes as if they were saved state. Suggestions must be explicit, or the subtype must be deliberately persisted.
 - Keep one dominant action per screen. Secondary actions should be sparse and obviously secondary.
 - Prefer summaries and action cues over dense diagnostics.
 - Advanced details belong in explicit reveals, secondary screens, or diagnostic surfaces.
@@ -32,6 +34,7 @@ This file captures repo-specific rules for agents and contributors. Use it with 
 - Keep business rules in backend services. Frontend components should orchestrate flows, not own import/accounting logic.
 - Treat `/api/*` payloads as shared contracts. If they change, update backend models, handlers, frontend callers, local types, and tests together.
 - Preserve the product distinction between tracked accounts as balance-sheet items and categories as income/expense classification.
+- Keep Accounts as the primary home for tracked balance-sheet account creation and management. Rules and review should not become the default path for creating liabilities or other tracked accounts.
 - Hide internal/system accounts such as equity or transfer-clearing accounts from default UI unless the user is in an advanced or audit-oriented path.
 
 ## Import Safety Rules

@@ -61,3 +61,11 @@ This document records stable product and architecture choices that explain why t
 **Why:** First-run should feel guided and lightweight instead of becoming the permanent home for account management or diagnostics.
 
 **Implication:** Account management, import work, and review must all remain available outside setup, and advanced bootstrap detail should stay hidden by default.
+
+## 8. Keep Balance-Sheet Setup in Accounts, Not Rules
+
+**Decision:** Tracked balance-sheet accounts belong in Accounts flows. Rules and review remain focused on income/expense categorization and automation, not as the primary place to create or manage tracked assets and liabilities.
+
+**Why:** Once the product separates tracked accounts from categories, users need a first-class, finance-first way to create liabilities such as car loans without learning ledger prefixes or accounting internals.
+
+**Implication:** Accounts UI must expose asset-vs-liability choice directly, subtype state must be trustworthy instead of silently inferred, and financed asset-plus-loan workflows belong in Accounts rather than being pushed into rules or review.

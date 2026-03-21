@@ -7,15 +7,15 @@ It is a planning document, not a strict delivery contract.
 
 ## Current Delivery Focus
 
-As of March 20, 2026, Ledger Flow has the core setup, dashboard, accounts, import, review, and rules surfaces in place. The main delivery risk is no longer missing surface area; it is UX fragmentation across those surfaces.
+As of March 21, 2026, Ledger Flow has the core setup, dashboard, accounts, import, review, and rules surfaces in place. The main delivery risk is no longer generic missing surface area; it is that balance-sheet account setup in Accounts is not yet clear or trustworthy enough for real use.
 
 Near-term work should prioritize:
 
-- clearer hierarchy, copy, and next-action cues on existing screens
-- stronger empty, loading, success, and error states
-- better handoff between setup, overview, accounts, import, and review
-- more explicit balance-trust, completeness, and freshness cues
-- deferring broader new capability unless it directly improves the current core journey
+- explicit asset-vs-liability account creation in Accounts without requiring advanced ledger knowledge
+- consistent, trustworthy subtype behavior instead of mixing saved subtype state with inferred UI badges
+- finance-first copy and hierarchy on `/accounts` and `/accounts/configure`, especially for manual liabilities and opening balances
+- keeping Rules and Review focused on P&L categorization while Accounts remains the home for tracked balance-sheet accounts
+- the next bounded follow-on: paired financed asset + loan setup once the liability-account blocker is removed
 
 ## Current Baseline
 
@@ -33,10 +33,10 @@ The app already has a usable bookkeeping workflow:
 
 Important limitations in the current baseline:
 
-- balance trust is still uneven when history is partial, even though manual accounts and opening balances now exist
-- the dashboard and accounts surfaces need clearer distinction between liquid position, total net worth, and account completeness
-- review and rule flows can create arbitrary ledger accounts, but the product still needs stronger guidance and auditability when those accounts belong in tracked account inventory
-- transfers between tracked accounts are not yet a first-class workflow; users can approximate them with manual ledger accounts, but the app does not yet detect, match, or hide that bookkeeping cleanly
+- the manual account editor still hides asset-vs-liability choice behind advanced account naming, which blocks clean liability setup for users such as someone adding a car loan
+- account subtype can appear authoritative in the UI even when the saved subtype is unset, because the product can infer badges from naming
+- the product does not yet offer a first-class paired financed-asset workflow for cases such as a vehicle plus its auto loan
+- review and rule flows still need clearer guardrails when the user is creating a category versus a tracked balance-sheet account
 - setup completion, import results, and review handoffs still need more polish to feel like one continuous finance workflow
 - the sectioned shell is in place, but cross-route consistency and presentation polish still need work as the product surface grows
 
@@ -98,30 +98,33 @@ Merchant management remains desirable, but it is not an active priority right no
 
 ## Priorities
 
-### 0. Core UX Polish and Trust
+### 0. Account Setup Clarity and Trust
 
-Treat the current product surface as the primary milestone. Improve clarity, continuity, and confidence across the features that already exist before adding broader new workflows.
+Treat the current product surface as the primary milestone, but focus the immediate cut line on Accounts. Before broader new workflows land, the user must be able to create tracked assets and liabilities confidently enough to trust balances and net worth.
 
 Current status:
 
 - the sectioned app shell, overview dashboard, accounts inventory and configuration, staged setup, import flow, unknown review, and rules editor are all implemented
-- the main gaps are copy hierarchy, empty and success states, balance-trust messaging, and screen-to-screen continuity
-- the product now has enough breadth that more surface area would likely dilute quality if added before polish
+- the highest-leverage remaining blocker is no longer generic surface polish; it is that Accounts does not yet make asset-vs-liability setup explicit or trustworthy enough for real balance-sheet use
+- the product now has enough breadth that the next work should sharpen the current account model before adding broader workflow surface area
 
 Scope:
 
-- sharpen hierarchy and dominant actions across overview, accounts, setup, import, unknowns, and rules
-- strengthen empty, loading, error, and success states so users always know what to do next
-- make manual-account, opening-balance, and partial-history trust cues more explicit and consistent
-- tighten handoffs between setup, overview, accounts, import, review, and transactions
-- remove or demote implementation-heavy copy from primary surfaces
-- align desktop and mobile layout quality and CTA hierarchy across the major routes
+- add an explicit asset-vs-liability choice to account creation and edit flows instead of making users rely on advanced account naming
+- make subtype behavior trustworthy:
+  - explicit subtype selection should persist as product state
+  - inferred subtype presentation should be clearly labeled as suggested or deliberately persisted
+- rewrite manual-account copy, placeholders, and summaries so the main path is finance-first instead of ledger-first
+- improve `/accounts/configure` hierarchy on desktop and mobile so the active create/edit flow is the dominant task
+- keep Rules and Review focused on P&L categorization while Accounts remains the primary home for tracked balance-sheet accounts
+- define the next bounded follow-on for paired financed asset + loan setup once liability-account setup is unblocked
 
 Expected outcome:
 
-- existing features feel intentional and trustworthy instead of merely present
-- users can move through the common finance loop without pausing to interpret the UI
-- the next bottleneck becomes a specific missing workflow, not general interface friction
+- a user can create a manual liability tracked account such as a car loan without editing advanced account names
+- a user can trust what account subtype means and whether it was explicitly chosen or merely suggested
+- Accounts becomes credible as the home for balance-sheet setup rather than feeling like a thin wrapper over internal naming
+- the next bottleneck becomes the paired financed-asset workflow itself, not confusion about how to set up the liability account
 
 ### 1. Setup and First-Run Flow
 
@@ -165,7 +168,7 @@ Current status:
 - tracked accounts can be added and edited after workspace bootstrap through dedicated Accounts surfaces
 - manual accounts, supported institutions, custom CSV accounts, opening balances, and user-facing account subtypes are implemented
 - the dashboard and register views already include opening-balance-backed balances and balance-source cues
-- the remaining work is about trust framing, valuation, and edge-case clarity more than basic account creation
+- the remaining work is now centered on making account type explicit, making subtype state trustworthy, and defining the next paired financed-asset workflow
 
 Product model direction:
 
@@ -180,6 +183,9 @@ Product model direction:
 
 Remaining scope:
 
+- explicit account-type choice in Accounts flows so liabilities do not require advanced ledger naming
+- clearer subtype persistence rules so badges do not silently imply saved state when the subtype is only inferred
+- a paired financed asset + loan setup flow for cases such as a vehicle and its auto loan
 - valuation workflow for manually tracked assets such as vehicles and real estate, including an as-of date and clear freshness cues
 - optional linking between related balance-sheet accounts such as a home and its mortgage or a vehicle and its auto loan
 - add/delete/archive/reorder account management as appropriate

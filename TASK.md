@@ -2,30 +2,33 @@
 
 ## Objective
 
-Polish the existing finance workspace so the shipped flows feel coherent, trustworthy, and low-friction before adding broader new capability.
+Unblock balance-sheet account setup in Accounts so a user can create liability accounts such as car loans and place opening balances correctly without editing advanced account names or relying on inferred UI labels.
 
 ## Deliverables
 
-- Improve hierarchy, copy, and next-action cues across overview, accounts, setup, import, review, and rules.
-- Strengthen empty, loading, error, and success states so each major route has a clear dominant action.
-- Tighten the handoff moments between setup, overview, accounts, import, review, and transactions.
-- Make balance-trust cues clearer for manual accounts, opening balances, import coverage, and incomplete history.
-- Keep roadmap and task documentation aligned with the active cut line while this work lands.
+- Make asset vs liability an explicit primary choice in Accounts setup and edit flows.
+- Make subtype behavior trustworthy across account creation and account inventory:
+  - explicit subtype selection should be saved as product state
+  - inferred subtype presentation should either be persisted deliberately or clearly labeled as suggested, not shown as authoritative state
+- Rewrite manual-account copy, placeholders, and summaries so the main path talks about what the user owns or owes, not ledger internals.
+- Improve `/accounts/configure` hierarchy on desktop and mobile so the active create/edit flow is dominant.
+- Keep Rules and Review focused on P&L categorization; Accounts remains the home for tracked balance-sheet accounts.
+- Define the immediate follow-on for a paired financed asset + loan flow once liability account setup is unblocked.
+- Keep roadmap, decisions, and agent rules aligned with this cut line while the work lands.
 
 ## Success Criteria
 
-- The core daily-use routes feel like one finance workspace rather than separate tools.
-- A new or returning user can tell what to do next on overview, accounts, setup, import, and review without learning internal accounting structure.
-- Existing dashboard and account-management capabilities feel polished enough that the next bottleneck is a specific missing workflow, not general UI friction.
-- No new heavy feature area is introduced as part of this task.
+- A user can create a manual liability tracked account such as a car loan from Accounts without editing the advanced account name.
+- A user can enter an opening balance for that liability confidently and understand how it will affect balances.
+- The product no longer presents inferred account subtypes as if they were saved state.
+- The next bottleneck after this task is the paired financed-asset workflow itself, not confusion about how to create the liability account.
 
 ## Out of Scope
 
-- New reporting suites or major analytics expansion
-- Advanced transfer automation
-- Valuation or linked-account workflows for long-lived assets
-- Budgeting, forecasting, or other planning-system expansion
-- Broad backend/schema work that does not directly support the UI polish objective
+- Full amortization schedules or payoff planning
+- Automated valuation or depreciation for vehicles or real estate
+- Broad reporting, budgeting, or forecasting expansion
+- General transfer automation beyond the bounded financed-asset follow-on
 
 ## Replacement Rule
 
