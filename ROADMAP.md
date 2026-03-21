@@ -5,6 +5,18 @@ It is a planning document, not a strict delivery contract.
 
 > Context ownership: `README.md` covers product purpose, `ARCHITECTURE.md` covers the current system, `AGENT_RULES.md` covers implementation rules, `TASK.md` covers the active task, and `DECISIONS.md` covers durable rationale. `ROADMAP.md` remains the source of truth for direction and milestones.
 
+## Current Delivery Focus
+
+As of March 20, 2026, Ledger Flow has the core setup, dashboard, accounts, import, review, and rules surfaces in place. The main delivery risk is no longer missing surface area; it is UX fragmentation across those surfaces.
+
+Near-term work should prioritize:
+
+- clearer hierarchy, copy, and next-action cues on existing screens
+- stronger empty, loading, success, and error states
+- better handoff between setup, overview, accounts, import, and review
+- more explicit balance-trust, completeness, and freshness cues
+- deferring broader new capability unless it directly improves the current core journey
+
 ## Current Baseline
 
 The app already has a usable bookkeeping workflow:
@@ -12,20 +24,21 @@ The app already has a usable bookkeeping workflow:
 - Finance-first overview dashboard with net worth, tracked balances, cash flow, category movement, recent transactions, and action cues
 - Workspace setup and selection
 - Staged setup flow with workspace-first creation, post-bootstrap account setup, and inline first import
+- Dedicated accounts inventory and configuration for manual, institution-backed, and custom CSV accounts
+- Opening-balance-backed tracked accounts and per-account registers
 - CSV import with preview, duplicate detection, conflict detection, and safe apply
 - Unknown transaction review with staged account assignment
 - Reusable match rules with ordered evaluation
 - Inline account creation during review and rule authoring
-- Import-account add/edit flow after workspace bootstrap
 
 Important limitations in the current baseline:
 
-- balance and net-worth views depend on imported journal history; opening balances are not yet a first-class workflow
-- the product model is still centered on configured import accounts rather than a broader account inventory
-- review and rule flows can create arbitrary ledger accounts, but the app does not yet make those balance-sheet vs category distinctions visible or auditable
+- balance trust is still uneven when history is partial, even though manual accounts and opening balances now exist
+- the dashboard and accounts surfaces need clearer distinction between liquid position, total net worth, and account completeness
+- review and rule flows can create arbitrary ledger accounts, but the product still needs stronger guidance and auditability when those accounts belong in tracked account inventory
 - transfers between tracked accounts are not yet a first-class workflow; users can approximate them with manual ledger accounts, but the app does not yet detect, match, or hide that bookkeeping cleanly
-- the main navigation is still a compact top bar suited to the current route set, not the next stage of the product
-- ongoing account management still lives mostly inside setup instead of a dedicated account-management surface
+- setup completion, import results, and review handoffs still need more polish to feel like one continuous finance workflow
+- the sectioned shell is in place, but cross-route consistency and presentation polish still need work as the product surface grows
 
 The current matching model is intentionally limited. That is acceptable for now.
 
@@ -44,7 +57,9 @@ That means:
 
 ## Product Direction
 
-The current goal is to make the overview trustworthy and to turn account management into a first-class part of the product without losing the momentum of the new dashboard-first posture.
+The current goal is to make the existing finance workspace feel coherent and trustworthy before expanding it much further. That means polishing the overview, accounts, setup, import, review, and rules experience so the app feels like one product instead of a capable but uneven set of screens.
+
+That focus still serves the broader product direction: make the overview trustworthy and keep account management first-class without losing the dashboard-first posture.
 
 That means:
 
@@ -83,7 +98,32 @@ Merchant management remains desirable, but it is not an active priority right no
 
 ## Priorities
 
-### 0. Setup and First-Run Flow
+### 0. Core UX Polish and Trust
+
+Treat the current product surface as the primary milestone. Improve clarity, continuity, and confidence across the features that already exist before adding broader new workflows.
+
+Current status:
+
+- the sectioned app shell, overview dashboard, accounts inventory and configuration, staged setup, import flow, unknown review, and rules editor are all implemented
+- the main gaps are copy hierarchy, empty and success states, balance-trust messaging, and screen-to-screen continuity
+- the product now has enough breadth that more surface area would likely dilute quality if added before polish
+
+Scope:
+
+- sharpen hierarchy and dominant actions across overview, accounts, setup, import, unknowns, and rules
+- strengthen empty, loading, error, and success states so users always know what to do next
+- make manual-account, opening-balance, and partial-history trust cues more explicit and consistent
+- tighten handoffs between setup, overview, accounts, import, review, and transactions
+- remove or demote implementation-heavy copy from primary surfaces
+- align desktop and mobile layout quality and CTA hierarchy across the major routes
+
+Expected outcome:
+
+- existing features feel intentional and trustworthy instead of merely present
+- users can move through the common finance loop without pausing to interpret the UI
+- the next bottleneck becomes a specific missing workflow, not general interface friction
+
+### 1. Setup and First-Run Flow
 
 Revamp setup so new users reach first imported activity with less friction and better momentum.
 
@@ -116,15 +156,16 @@ Expected outcome:
 - Users can get to first useful result without understanding internal storage structure
 - The app's safe import model remains intact while setup becomes easier to complete
 
-### 1. Account Foundation and Eventual Consistency
+### 2. Account Foundation and Eventual Consistency
 
 Make balances trustworthy and let users build a complete account inventory over time instead of only through preconfigured import accounts.
 
 Current status:
 
-- import accounts can be added and edited after workspace bootstrap
-- the dashboard derives balances from journal activity for configured import accounts
-- eventual consistency is already a product principle, but the product model is still too import-centric for that principle to be fully usable
+- tracked accounts can be added and edited after workspace bootstrap through dedicated Accounts surfaces
+- manual accounts, supported institutions, custom CSV accounts, opening balances, and user-facing account subtypes are implemented
+- the dashboard and register views already include opening-balance-backed balances and balance-source cues
+- the remaining work is about trust framing, valuation, and edge-case clarity more than basic account creation
 
 Product model direction:
 
@@ -139,11 +180,6 @@ Product model direction:
 
 Remaining scope:
 
-- opening balance workflow and persistence
-- manual or unsupported institution path
-- dedicated accounts overview and management screen
-- clearer distinction between tracked accounts and import configuration
-- account subtype taxonomy and persistence for liquid assets, long-lived assets, investments, and debts
 - valuation workflow for manually tracked assets such as vehicles and real estate, including an as-of date and clear freshness cues
 - optional linking between related balance-sheet accounts such as a home and its mortgage or a vehicle and its auto loan
 - add/delete/archive/reorder account management as appropriate
@@ -189,19 +225,19 @@ Expected outcome:
 - Vehicles, homes, and their related debts can contribute to net worth in a way that remains understandable and honest about valuation freshness
 - Flexibility in review no longer comes at the cost of invisible balance-sheet accounts
 
-### 2. Navigation, Framing, and App Shell
+### 3. Navigation, Framing, and App Shell
 
-Keep the product finance-first while moving from a compact route list to a shell that can support a broader workspace.
+Keep the product finance-first while refining the sectioned shell so it can support a broader workspace cleanly.
 
 Current status:
 
-- the app shell, overview copy, and home screen hierarchy are now finance-first instead of status-first
-- workspace-path and version detail no longer dominate the main home screen
-- the current top navigation works for the present route set but will become crowded as accounts and reporting grow
+- the app already uses a sectioned sidebar shell with grouped daily-use, workflow, automation, and workspace navigation
+- overview framing, section naming, and home-screen hierarchy are now finance-first instead of status-first
+- remaining work is consistency, responsiveness, and polish as the route set deepens
 
 Scope:
 
-- Move from a flat top nav to a sidebar or other sectioned shell when the account surface lands
+- Continue refining the sectioned shell so it scales cleanly as accounts and reporting grow
 - Group the product into clear areas such as Overview, Accounts, Import or Activity, Review, Automation, and Setup
 - Keep daily-use workflows prominent while moving setup/admin flows into secondary sections
 - Continue moving file paths, journal terminology, and other implementation details into secondary or advanced UI
@@ -212,7 +248,7 @@ Expected outcome:
 - The product reads as a coherent finance workspace rather than a growing list of routes
 - New capabilities can land without making navigation noisy or ambiguous
 
-### 3. Dashboard and Financial Visibility
+### 4. Dashboard and Financial Visibility
 
 Build a dashboard that surfaces financial state instead of mostly system state.
 
@@ -239,7 +275,7 @@ Expected outcome:
 - The home screen becomes useful even when the user is not importing files
 - The user can quickly see whether books are current, what needs action, and how trustworthy the current balance picture is
 
-### 4. Reporting Foundation
+### 5. Reporting Foundation
 
 Add the backend support needed to power the dashboard and future reporting screens.
 
@@ -270,14 +306,14 @@ Expected outcome:
 - Dashboard data comes from explicit API endpoints instead of ad hoc page logic
 - Future reporting work and account insights can build on a stable backend shape
 
-### 5. Workflow Integration and Daily Use
+### 6. Workflow Integration and Daily Use
 
 Once setup, accounts, and dashboard visibility exist, tighten the links between screens.
 
 Current status:
 
 - setup now keeps the first import inline and can hand off to review or overview
-- the broader daily-use loop still needs tighter continuity between overview, accounts, import, review, and automation
+- overview, accounts, import, review, and rules all exist, but the broader daily-use loop still needs tighter continuity between them
 - transfers between tracked accounts still require raw accounting knowledge instead of a first-class product flow
 
 Scope:
@@ -302,7 +338,7 @@ Expected outcome:
 - A user can move money between tracked accounts without learning about intermediate ledger accounts
 - Imported transfers no longer force duplicate-value mistakes or raw account-name workarounds in review
 
-### 6. All-Caught-Up Experience and Financial Guidance
+### 7. All-Caught-Up Experience and Financial Guidance
 
 Once maintenance tasks are clear and the balance picture is trustworthy, the product should still provide value.
 
@@ -381,11 +417,10 @@ Definition of done:
 
 ### Milestone B: Account Foundation and Eventual Consistency
 
-- Add opening-balance support
-- Add a manual or unsupported-account path
-- Separate tracked accounts from import configuration
-- Add a dedicated Accounts screen with add, view, and edit flows
-- Add user-facing account subtypes and special treatment for long-lived assets
+- Polish the dedicated Accounts inventory and configuration flows
+- Strengthen balance-source, completeness, and opening-balance trust cues
+- Add valuation support for long-lived tracked assets
+- Preserve separation between tracked accounts and import configuration
 - Make the account model explicit in product flows:
   - Accounts = assets and liabilities
   - Categories = income and expenses
@@ -394,8 +429,8 @@ Definition of done:
 
 Current status:
 
-- post-bootstrap import-account add/edit exists
-- milestone completion now depends on broadening from import accounts to a durable account inventory
+- manual accounts, opening balances, dedicated Accounts surfaces, and subtype support are implemented
+- milestone completion now depends on trust framing, valuation, and edge-case clarity rather than core account CRUD
 
 Definition of done:
 
@@ -410,14 +445,14 @@ Definition of done:
 
 ### Milestone C: Navigation and App Shell
 
-- Move from a flat top nav to a sectioned shell or sidebar
+- Refine the sectioned shell and route hierarchy
 - Group related workflows by purpose
 - Keep daily finance work primary and setup/admin work secondary
 
 Current status:
 
-- the finance-first shell and framing are already in place
-- remaining work is structural scalability, not copy direction
+- the sectioned finance-first shell and framing are already in place
+- remaining work is consistency, responsiveness, and structural scalability, not basic navigation direction
 
 Definition of done:
 

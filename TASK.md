@@ -2,34 +2,30 @@
 
 ## Objective
 
-Consolidate repository context into a single top-level documentation set that works well for both humans and LLMs.
+Polish the existing finance workspace so the shipped flows feel coherent, trustworthy, and low-friction before adding broader new capability.
 
 ## Deliverables
 
-- Refine `README.md` into a concise product-purpose document with a context map.
-- Create `ARCHITECTURE.md`, `AGENT_RULES.md`, and `DECISIONS.md`.
-- Migrate the relevant content from the retired embedded UX and import docs into the new top-level docs.
-- Add a brief doc-ownership note to `ROADMAP.md`.
-- Remove the retired embedded spec docs after migration.
+- Improve hierarchy, copy, and next-action cues across overview, accounts, setup, import, review, and rules.
+- Strengthen empty, loading, error, and success states so each major route has a clear dominant action.
+- Tighten the handoff moments between setup, overview, accounts, import, review, and transactions.
+- Make balance-trust cues clearer for manual accounts, opening balances, import coverage, and incomplete history.
+- Keep roadmap and task documentation aligned with the active cut line while this work lands.
 
 ## Success Criteria
 
-- One obvious document answers each of these questions:
-  - What is Ledger Flow?
-  - How does the system work?
-  - What rules should changes follow?
-  - What is the current task?
-  - Why do the current tradeoffs exist?
-- Every important concept from the retired UX/import docs appears in exactly one top-level source of truth.
-- No remaining repo references depend on the retired embedded UX/import docs.
-- No runtime, API, or schema changes are introduced as part of this task.
+- The core daily-use routes feel like one finance workspace rather than separate tools.
+- A new or returning user can tell what to do next on overview, accounts, setup, import, and review without learning internal accounting structure.
+- Existing dashboard and account-management capabilities feel polished enough that the next bottleneck is a specific missing workflow, not general UI friction.
+- No new heavy feature area is introduced as part of this task.
 
 ## Out of Scope
 
-- Product behavior changes
-- UI redesign beyond documenting the existing direction
-- Backend or API changes
-- Roadmap reprioritization
+- New reporting suites or major analytics expansion
+- Advanced transfer automation
+- Valuation or linked-account workflows for long-lived assets
+- Budgeting, forecasting, or other planning-system expansion
+- Broad backend/schema work that does not directly support the UI polish objective
 
 ## Replacement Rule
 
