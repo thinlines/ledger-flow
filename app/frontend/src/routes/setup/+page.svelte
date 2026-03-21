@@ -939,7 +939,7 @@
     font-size: 0.9rem;
   }
 
-  @media (max-width: 980px) {
+  @media (max-width: 1100px) {
     .setup-shell {
       grid-template-columns: 1fr;
     }
