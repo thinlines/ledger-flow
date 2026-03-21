@@ -3,6 +3,7 @@
   import { onMount } from 'svelte';
   import { apiGet, apiPost } from '$lib/api';
   import { accountKindFromLedger, accountSubtypeLabel, subtypeOptionsForKind } from '$lib/account-subtypes';
+  import { describeBalanceTrust } from '$lib/account-trust';
 
   type AppState = {
     initialized: boolean;
@@ -59,6 +60,9 @@
     balances: Array<{
       id: string;
       balance: number;
+      hasOpeningBalance: boolean;
+      hasTransactionActivity: boolean;
+      hasBalanceSource: boolean;
     }>;
   };
 
@@ -139,7 +143,7 @@
   let workspaceName = '';
   let trackedAccounts: TrackedAccount[] = [];
   let institutionTemplates: InstitutionTemplate[] = [];
-  let dashboardBalances: Record<string, number> = {};
+  let dashboardBalances: Record<string, DashboardOverview['balances'][number]> = {};
   let baseCurrency = 'USD';
   let error = '';
   let loading = true;
@@ -154,6 +158,7 @@
   let selectedSampleFile: File | null = null;
   let inspection: CsvInspection | null = null;
   let lastRouteKey = '';
+  let needsSetupCount = 0;
 
   function defaultCurrencySymbol(value: string): string {
     switch (value.toUpperCase()) {
@@ -255,8 +260,41 @@
     }).format(value);
   }
 
-  function currentBalance(accountId: string): number | null {
+  function formatStoredAmount(value: string | null | undefined): string {
+    if (!value) return 'Not set';
+    const numeric = Number(value);
+    if (Number.isNaN(numeric)) return value;
+    return formatCurrency(numeric);
+  }
+
+  function shortDate(value: string | null | undefined): string {
+    if (!value) return 'No date';
+    const parsed = new Date(`${value}T12:00:00`);
+    if (Number.isNaN(parsed.getTime())) return value;
+    return new Intl.DateTimeFormat(undefined, {
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric'
+    }).format(parsed);
+  }
+
+  function balanceMeta(accountId: string) {
     return dashboardBalances[accountId] ?? null;
+  }
+
+  function currentBalance(accountId: string): number | null {
+    return balanceMeta(accountId)?.balance ?? null;
+  }
+
+  function balanceTrust(account: TrackedAccount) {
+    const meta = balanceMeta(account.id);
+    return describeBalanceTrust({
+      hasOpeningBalance: meta?.hasOpeningBalance ?? Boolean(account.openingBalance),
+      hasTransactionActivity: meta?.hasTransactionActivity ?? false,
+      hasBalanceSource: meta?.hasBalanceSource ?? Boolean(account.openingBalance),
+      importConfigured: account.importConfigured,
+      openingBalanceDate: account.openingBalanceDate
+    });
   }
 
   function resetSampleState() {
@@ -378,7 +416,7 @@
     trackedAccounts = accountsData.trackedAccounts;
     institutionTemplates = accountsData.institutionTemplates;
     baseCurrency = dashboardData.baseCurrency;
-    dashboardBalances = Object.fromEntries(dashboardData.balances.map((balance) => [balance.id, balance.balance]));
+    dashboardBalances = Object.fromEntries(dashboardData.balances.map((balance) => [balance.id, balance]));
     if (!draft.customProfile.currency) {
       updateCustomProfile({ currency: defaultCurrencySymbol(baseCurrency) });
     }
@@ -616,6 +654,7 @@
     displayName: draft.displayName,
     ledgerAccount: effectiveLedgerAccount(draft)
   });
+  $: needsSetupCount = trackedAccounts.filter((account) => balanceTrust(account).tone === 'warn').length;
 
   onMount(async () => {
     loading = true;
@@ -661,8 +700,8 @@
       <p class="eyebrow">Account Setup</p>
       <h2 class="page-title">{workspaceName || 'Workspace'} configuration workspace</h2>
       <p class="subtitle">
-        Configure manual accounts, supported institution imports, or custom CSV mappings without squeezing the form into
-        the account inventory view.
+        Add manual accounts, supported statement imports, or custom CSV mappings here. The same accounts then roll back
+        into the overview, account inventory, and import workflow.
       </p>
     </div>
 
@@ -676,8 +715,8 @@
         <strong>{trackedAccounts.filter((account) => account.importConfigured).length}</strong>
       </div>
       <div>
-        <span class="stat-kicker">Custom CSV</span>
-        <strong>{trackedAccounts.filter((account) => account.importMode === 'custom').length}</strong>
+        <span class="stat-kicker">Needs setup</span>
+        <strong>{needsSetupCount}</strong>
       </div>
     </div>
   </section>
@@ -694,12 +733,8 @@
 
       <div class="quick-actions">
         <button class="btn btn-primary" type="button" on:click={startManualAccount}>Add manual account</button>
+        <button class="btn" type="button" on:click={() => startInstitutionAccount()}>Add supported account</button>
         <button class="btn" type="button" on:click={startCustomAccount}>Add custom CSV</button>
-        {#each institutionTemplates as template}
-          <button class="btn" type="button" on:click={() => startInstitutionAccount(template.id)}>
-            Add {template.displayName}
-          </button>
-        {/each}
       </div>
 
       {#if trackedAccounts.length === 0}
@@ -720,6 +755,9 @@
               </div>
 
               <div class="pill-row">
+                <span class={`pill ${balanceTrust(account).tone === 'warn' ? 'warn' : balanceTrust(account).tone === 'ok' ? 'ok' : ''}`}>
+                  {balanceTrust(account).shortLabel}
+                </span>
                 <span class:ok={account.importConfigured} class="pill">{modeLabel(account)}</span>
                 <span class="pill">{accountSubtypeLabel(account, 'short')}</span>
                 {#if account.last4}
@@ -733,12 +771,23 @@
                   <p class="metric-value">{formatCurrency(currentBalance(account.id))}</p>
                 </div>
                 <div>
-                  <p class="metric-label">Opening balance</p>
-                  <p class="metric-value">
-                    {account.openingBalance ? `${account.openingBalance} · ${account.openingBalanceDate || 'No date'}` : 'Not set'}
-                  </p>
+                  <p class="metric-label">Balance coverage</p>
+                  <p class="metric-value">{balanceTrust(account).label}</p>
                 </div>
               </div>
+
+              <p class="muted small account-card-note">{balanceTrust(account).note}</p>
+              <p class="muted small account-card-note">
+                Starting balance:
+                {#if account.openingBalance}
+                  {formatStoredAmount(account.openingBalance)}
+                  {#if account.openingBalanceDate}
+                    on {shortDate(account.openingBalanceDate)}
+                  {/if}
+                {:else}
+                  Not set
+                {/if}
+              </p>
 
               <details class="advanced-panel">
                 <summary>Account details</summary>
@@ -763,9 +812,9 @@
       <h3>{editorTitle}</h3>
       <p class="muted">
         {#if editorMode === 'institution'}
-          Use this for supported institutions that already have a built-in parser.
+          Use this for a supported institution with a built-in parser.
         {:else if editorMode === 'custom'}
-          Use this when you have a normal transaction CSV and want to manage the mapping yourself.
+          Use this when you have a transaction CSV and want to control the mapping yourself.
         {:else}
           Use this for unsupported institutions, manual balances, or accounts you want in the overview before import automation exists.
         {/if}
@@ -809,12 +858,15 @@
             <option value={option.value}>{option.label}</option>
           {/each}
         </select>
-        <p class="muted small">Shows as {draftSubtypePreview} on Accounts. This stays separate from the ledger account.</p>
+        <p class="muted small">
+          Shows as {draftSubtypePreview} on Accounts. This stays separate from the underlying account name used behind
+          the scenes.
+        </p>
       </div>
 
       <div class="field grid-2 compact">
         <div class="field">
-          <label for="ledgerAccount">Ledger account</label>
+          <label for="ledgerAccount">Advanced account name</label>
           <input
             id="ledgerAccount"
             value={draft.ledgerAccount}
@@ -1094,13 +1146,13 @@
       {/if}
 
       <div class="selection-summary">
-        <p class="selection-label">Account target</p>
-        <p class="selection-value">{effectiveLedgerAccount(draft) || 'Fill in the account details to continue'}</p>
+        <p class="selection-label">What this account adds</p>
+        <p class="selection-value">{draft.displayName.trim() || 'Fill in the account details to continue'}</p>
         <p class="muted">
           {#if editorMode === 'institution'}
-            Leave the ledger account blank to use the suggested destination automatically.
+            This account will be ready for statement imports and appear on Accounts as {draftSubtypePreview}.
           {:else if editorMode === 'custom'}
-            Save the profile here, then use the Import screen to preview a real statement before applying it.
+            Save the mapping here, then use Import to preview a real statement before applying it.
           {:else}
             Manual accounts appear in the overview even without import automation.
           {/if}
@@ -1194,6 +1246,16 @@
     margin-bottom: 1rem;
   }
 
+  .text-link {
+    color: var(--brand-strong);
+    text-decoration: none;
+    font-weight: 700;
+  }
+
+  .text-link:hover {
+    text-decoration: underline;
+  }
+
   .account-list {
     display: grid;
     gap: 0.8rem;
@@ -1211,6 +1273,18 @@
     align-items: flex-start;
     justify-content: space-between;
     gap: 1rem;
+  }
+
+  .inline-link {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.48rem 0.8rem;
+    border-radius: 999px;
+    border: 1px solid rgba(10, 61, 89, 0.12);
+    background: rgba(255, 255, 255, 0.94);
+    color: var(--brand-strong);
+    font-weight: 700;
+    cursor: pointer;
   }
 
   .pill-row {
@@ -1243,6 +1317,11 @@
   .metric-value {
     margin: 0;
     font-weight: 700;
+  }
+
+  .account-card-note {
+    margin: 0;
+    line-height: 1.5;
   }
 
   .editor-card {
@@ -1298,6 +1377,29 @@
     padding: 1rem;
     display: grid;
     gap: 0.9rem;
+  }
+
+  .selection-summary {
+    border: 1px solid rgba(10, 61, 89, 0.08);
+    border-radius: 1rem;
+    background: rgba(255, 255, 255, 0.72);
+    padding: 0.9rem 1rem;
+  }
+
+  .selection-label {
+    margin: 0 0 0.2rem;
+    font-size: 0.78rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--muted-foreground);
+    font-weight: 700;
+  }
+
+  .selection-value {
+    margin: 0 0 0.25rem;
+    font-family: 'Space Grotesk', sans-serif;
+    font-size: 1.1rem;
+    color: var(--brand-strong);
   }
 
   .sample-table-wrap {

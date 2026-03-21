@@ -588,7 +588,15 @@
   </section>
 {:else}
   {#if error}
-    <section class="view-card"><p class="error-text">{error}</p></section>
+    <section class="view-card">
+      <p class="eyebrow">Rules</p>
+      <h3>Could not load automation rules</h3>
+      <p class="error-text">{error}</p>
+      <div class="actions">
+        <button class="btn btn-primary" type="button" on:click={reloadRules}>Reload rules</button>
+        <a class="btn" href="/unknowns">Open review</a>
+      </div>
+    </section>
   {/if}
 
   {#if historyApplyNotice}
@@ -665,7 +673,7 @@
     {#if rules.length === 0}
       <div class="empty-state">
         <p class="empty-title">No saved rules yet.</p>
-        <p class="muted">Create a rule above to start automating categorization.</p>
+        <p class="muted">Create a rule above, or save one directly from Review after you categorize a repeating transaction.</p>
       </div>
     {:else}
       <div class="rule-list">
@@ -808,6 +816,12 @@
     display: flex;
     gap: 0.6rem;
     align-items: end;
+    flex-wrap: wrap;
+  }
+
+  .actions {
+    display: flex;
+    gap: 0.6rem;
     flex-wrap: wrap;
   }
 

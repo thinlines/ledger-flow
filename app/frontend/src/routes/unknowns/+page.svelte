@@ -1291,8 +1291,8 @@
 </script>
 
 <section class="view-card hero">
-  <p class="eyebrow">Categorization</p>
-  <h2 class="page-title">{historyStage ? 'Review historical rule matches' : 'Review uncategorized activity'}</h2>
+  <p class="eyebrow">Review</p>
+  <h2 class="page-title">{historyStage ? 'Review historical rule matches' : 'Review recent transactions'}</h2>
   <p class="subtitle">
     {#if historyStage}
       Review imported transactions matched by a saved rule before rewriting past categories.
@@ -1346,7 +1346,7 @@
             </p>
             <div class="actions">
               <button class="btn btn-primary" type="button" disabled={loading || historySelectedCount === 0} on:click={applyHistoryStage}>
-                Apply {historySelectedCount} {historySelectedCount === 1 ? 'Change' : 'Changes'}
+                Apply selected changes
               </button>
             </div>
           </div>
@@ -1487,14 +1487,14 @@
 
             {#if !stage.result}
               <div class="review-actions">
-                <p class="muted review-hint">
-                  Assignments preview automatically. Applying writes {readyReviewTransactions} reviewed
-                  {readyReviewTransactions === 1 ? ' transaction' : ' transactions'} from {selectedGroupCount}
-                  {selectedGroupCount === 1 ? ' review group' : ' review groups'} back to {pathLabel(journalPath)}.
-                </p>
-                <div class="actions">
+              <p class="muted review-hint">
+                Assignments preview automatically. Applying writes {readyReviewTransactions} reviewed
+                {readyReviewTransactions === 1 ? ' transaction' : ' transactions'} from {selectedGroupCount}
+                {selectedGroupCount === 1 ? ' review group' : ' review groups'} into the selected year.
+              </p>
+              <div class="actions">
                   <button class="btn btn-primary" type="button" disabled={loading || readyReviewTransactions === 0} on:click={applyMappings}>
-                    Apply {readyReviewTransactions} {readyReviewTransactions === 1 ? 'Change' : 'Changes'}
+                    Apply reviewed changes
                   </button>
                 </div>
               </div>
@@ -1539,7 +1539,7 @@
           <div>
             <p class="eyebrow">Review Scope</p>
             <h3>Latest activity opens automatically</h3>
-            <p class="muted">Switch years or refresh the queue if you need a different slice of activity.</p>
+            <p class="muted">Switch years or refresh the queue if you need a different slice of imported activity.</p>
           </div>
 
           <div class="review-scope-controls">

@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import { apiGet } from '$lib/api';
   import { accountSubtypeLabel } from '$lib/account-subtypes';
+  import { describeBalanceTrust } from '$lib/account-trust';
 
   type SetupState = {
     needsAccounts: boolean;
@@ -261,26 +262,33 @@
   }
 
   function accountCoverageLabel(account: OverviewAccount): string {
-    if (!account.hasBalanceSource) return 'Needs setup';
-    if (account.hasTransactionActivity && account.hasOpeningBalance) return 'History + start';
-    if (account.hasTransactionActivity) return 'History';
-    return 'Starting balance';
+    return describeBalanceTrust({
+      hasOpeningBalance: account.hasOpeningBalance,
+      hasTransactionActivity: account.hasTransactionActivity,
+      hasBalanceSource: account.hasBalanceSource,
+      importConfigured: account.importConfigured,
+      openingBalanceDate: account.openingBalanceDate
+    }).shortLabel;
   }
 
   function accountCoverageTone(account: OverviewAccount): 'ok' | 'warn' | 'neutral' {
-    if (!account.hasBalanceSource) return 'warn';
-    if (account.hasTransactionActivity) return 'ok';
-    return 'neutral';
+    return describeBalanceTrust({
+      hasOpeningBalance: account.hasOpeningBalance,
+      hasTransactionActivity: account.hasTransactionActivity,
+      hasBalanceSource: account.hasBalanceSource,
+      importConfigured: account.importConfigured,
+      openingBalanceDate: account.openingBalanceDate
+    }).tone;
   }
 
   function accountCoverageNote(account: OverviewAccount): string {
-    if (!account.hasBalanceSource) return 'Add a starting balance or import history to include this account with confidence.';
-    if (account.hasTransactionActivity && account.hasOpeningBalance) {
-      return 'Backed by activity with a starting balance on file.';
-    }
-    if (account.hasTransactionActivity) return 'Backed by imported or journal activity.';
-    if (account.openingBalanceDate) return `Starting balance set ${shortDate(account.openingBalanceDate)}.`;
-    return 'Starting balance set.';
+    return describeBalanceTrust({
+      hasOpeningBalance: account.hasOpeningBalance,
+      hasTransactionActivity: account.hasTransactionActivity,
+      hasBalanceSource: account.hasBalanceSource,
+      importConfigured: account.importConfigured,
+      openingBalanceDate: account.openingBalanceDate
+    }).note;
   }
 
   function compareOverviewAccounts(left: OverviewAccount, right: OverviewAccount): number {

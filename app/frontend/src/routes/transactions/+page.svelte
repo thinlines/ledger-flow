@@ -3,6 +3,7 @@
   import { page } from '$app/stores';
   import { onMount } from 'svelte';
   import { apiGet } from '$lib/api';
+  import { describeBalanceTrust } from '$lib/account-trust';
 
   type AppState = {
     initialized: boolean;
@@ -49,6 +50,15 @@
     entries: RegisterEntry[];
   };
 
+  type ActionLink = {
+    href: string;
+    label: string;
+  };
+
+  type RegisterAction = ActionLink & {
+    note: string;
+  };
+
   let initialized = false;
   let workspaceName = '';
   let trackedAccounts: TrackedAccount[] = [];
@@ -64,6 +74,9 @@
   let pendingTransferTotal = 0;
   let balanceWithPending: number | null = null;
   let latestPostedActivityDate: string | null = null;
+  let registerUnknownCount = 0;
+  let primaryAction: RegisterAction | null = null;
+  let secondaryActions: ActionLink[] = [];
 
   function titleCase(value: string): string {
     return value.charAt(0).toUpperCase() + value.slice(1);
@@ -102,6 +115,66 @@
       day: 'numeric',
       year: 'numeric'
     }).format(new Date(`${value}T00:00:00`));
+  }
+
+  function selectedAccountTrust() {
+    if (!selectedAccount) return null;
+    return describeBalanceTrust({
+      hasOpeningBalance: Boolean(selectedAccount.openingBalance),
+      hasTransactionActivity: Boolean(register?.transactionCount ?? 0),
+      hasBalanceSource: Boolean(selectedAccount.openingBalance) || Boolean(register?.transactionCount ?? 0),
+      importConfigured: selectedAccount.importConfigured,
+      openingBalanceDate: selectedAccount.openingBalanceDate,
+      latestActivityDate: latestPostedActivityDate
+    });
+  }
+
+  function registerPrimaryAction(account: TrackedAccount | null, unknownCount: number): RegisterAction | null {
+    if (!account) return null;
+
+    if (unknownCount > 0) {
+      return {
+        href: '/unknowns',
+        label: unknownCount === 1 ? 'Review 1 transaction' : `Review ${unknownCount} transactions`,
+        note: 'Some imported activity still needs a category before this register is fully clean.'
+      };
+    }
+
+    if (account.importConfigured) {
+      return {
+        href: '/import',
+        label: latestPostedActivityDate ? 'Import latest statement' : 'Import first statement',
+        note: latestPostedActivityDate
+          ? 'Bring in the newest statement to keep this register current.'
+          : 'Bring in the first statement so this register has full transaction history instead of only a starting balance.'
+      };
+    }
+
+    if (!account.openingBalance) {
+      return {
+        href: `/accounts/configure?accountId=${account.id}`,
+        label: 'Set starting balance',
+        note: 'Add a starting balance before relying on this manually tracked account in totals.'
+      };
+    }
+
+    return {
+      href: `/accounts/configure?accountId=${account.id}`,
+      label: 'Edit account setup',
+      note: 'Update this account when you want to change the starting balance or add import automation later.'
+    };
+  }
+
+  function registerSecondaryActions(account: TrackedAccount | null): ActionLink[] {
+    if (!account) return [];
+
+    const actions: ActionLink[] = [{ href: '/accounts', label: 'Back to accounts' }];
+    if (account.importConfigured) {
+      actions.push({ href: `/accounts/configure?accountId=${account.id}`, label: 'Edit account' });
+    } else {
+      actions.push({ href: '/accounts/configure?mode=institution', label: 'Add import-ready account' });
+    }
+    return actions;
   }
 
   async function loadRegister(accountId: string) {
@@ -170,6 +243,9 @@
   $: pendingTransferTotal = pendingEntries.reduce((sum, entry) => sum + entry.amount, 0);
   $: balanceWithPending = register ? register.currentBalance + pendingTransferTotal : null;
   $: latestPostedActivityDate = postedEntries[0]?.date ?? null;
+  $: registerUnknownCount = postedEntries.filter((entry) => entry.isUnknown).length;
+  $: primaryAction = registerPrimaryAction(selectedAccount, registerUnknownCount);
+  $: secondaryActions = registerSecondaryActions(selectedAccount);
 
   onMount(async () => {
     loading = true;
@@ -220,10 +296,7 @@
     <div class="hero-copy">
       <p class="eyebrow">Transactions</p>
       <h2 class="page-title">{selectedAccount?.displayName || 'Account register'}</h2>
-      <p class="subtitle">
-        Reverse-chronological activity for this account. Running balances reflect each row in posted-date order and
-        keep detail tucked behind expansion when you need it.
-      </p>
+      <p class="subtitle">{selectedAccountTrust()?.note || 'Review recent activity and running balances for this account.'}</p>
       {#if selectedAccount?.openingBalance}
         <p class="supporting-note">
           Starting balance {formatStoredAmount(selectedAccount.openingBalance)}
@@ -245,15 +318,27 @@
       </div>
 
       <div class="hero-actions">
-        <a class="text-link" href="/accounts">Back to accounts</a>
-        {#if selectedAccount}
-          <a class="text-link" href={`/accounts/configure?accountId=${selectedAccount.id}`}>Edit account</a>
+        {#if primaryAction}
+          <a class="btn btn-primary" href={primaryAction.href}>{primaryAction.label}</a>
         {/if}
+        {#each secondaryActions as action}
+          <a class="text-link" href={action.href}>{action.label}</a>
+        {/each}
       </div>
+
+      {#if primaryAction}
+        <p class="supporting-note">{primaryAction.note}</p>
+      {/if}
     </div>
   </section>
 
   <section class="summary-grid">
+    <article class="view-card summary-card">
+      <p class="stat-label">Balance coverage</p>
+      <p class="stat-value">{selectedAccountTrust()?.label || 'No balance yet'}</p>
+      <p class="stat-note">{selectedAccountTrust()?.note || 'Add activity or a starting balance to build this register.'}</p>
+    </article>
+
     <article class="view-card summary-card summary-balance-card">
       <p class="stat-label">Imported balance</p>
       <p class:positive={(register?.currentBalance ?? 0) > 0} class:negative={(register?.currentBalance ?? 0) < 0} class="stat-value">
@@ -272,20 +357,6 @@
           {countLabel(pendingTransferCount, 'pending transfer')} worth {formatCurrency(pendingTransferTotal, { signed: true })} waiting to import.
         {:else}
           Matches imported balance when nothing is pending.
-        {/if}
-      </p>
-    </article>
-
-    <article class="view-card summary-card">
-      <p class="stat-label">Pending transfers</p>
-      <p class:positive={pendingTransferTotal > 0} class:negative={pendingTransferTotal < 0} class="stat-value">
-        {pendingTransferCount > 0 ? formatCurrency(pendingTransferTotal, { signed: true }) : 'None'}
-      </p>
-      <p class="stat-note">
-        {#if pendingTransferCount > 0}
-          {countLabel(pendingTransferCount, 'transfer')} waiting to move into the imported register.
-        {:else}
-          No pending transfers for this account.
         {/if}
       </p>
     </article>

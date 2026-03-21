@@ -129,7 +129,7 @@
       return null;
     }
     if (appState.setup.needsReview) {
-      return { href: '/unknowns', label: 'Review categories', secondary: 'Your first import is complete. Resolve the remaining unknown postings next.' };
+      return { href: '/unknowns', label: 'Review transactions', secondary: 'Your first import is complete. Review the remaining uncategorized transactions next.' };
     }
     return { href: '/', label: 'Open overview', secondary: 'Setup is complete. Continue from the dashboard.' };
   }
@@ -387,7 +387,7 @@
       {/each}
     </section>
 
-    <p class="sidebar-note">Path, journal, and ledger details stay hidden unless you explicitly open them.</p>
+    <p class="sidebar-note">Storage and bookkeeping details stay hidden unless you explicitly open them.</p>
   </aside>
 
   <div class="setup-main">
@@ -405,9 +405,9 @@
             <h3>{showExisting ? 'Use an existing workspace' : 'Create your workspace'}</h3>
             <p class="muted">
               {#if showExisting}
-                Point Ledger Flow at a workspace that already contains `settings/workspace.toml`.
+                Choose the folder for a workspace that Ledger Flow already uses.
               {:else}
-                Start with a name and currency. Path and journal settings stay hidden unless you need them.
+                Start with a name and currency. Storage details stay hidden unless you need them.
               {/if}
             </p>
           </div>
@@ -424,7 +424,7 @@
               {loading ? 'Selecting...' : 'Select Workspace'}
             </button>
           </div>
-          <p class="secondary-note">Path must contain `settings/workspace.toml`.</p>
+          <p class="secondary-note">Choose the workspace folder itself, not a subfolder inside it.</p>
 
           <div class="choice-links">
             <button class="inline-link" type="button" on:click={openCreateWorkspace}>Create a new workspace instead</button>
@@ -476,7 +476,7 @@
             <h3>{accountEditorOpen ? accountEditorTitle : 'Add your first account'}</h3>
             <p class="muted">
               {#if accountEditorOpen}
-                Name the first account you want to import. Technical routing stays optional.
+                Name the first account you want to track. Advanced account details stay optional.
               {:else}
                 You only need one account to continue. Add more later once your first import is complete.
               {/if}
@@ -524,7 +524,10 @@
                 <option value={option.value}>{option.label}</option>
               {/each}
             </select>
-            <p class="muted small">Shows as {draftSubtypePreview} on Accounts. This stays separate from the destination account.</p>
+            <p class="muted small">
+              Shows as {draftSubtypePreview} on Accounts. This stays separate from the underlying account name used
+              behind the scenes.
+            </p>
           </div>
 
           <div class="field-grid">
@@ -548,13 +551,13 @@
             </div>
           </div>
 
-          <p class="secondary-note">Ledger Flow will generate the destination account automatically from the institution and account name.</p>
+          <p class="secondary-note">Ledger Flow can suggest the underlying account name automatically from the institution and account name.</p>
           <p class="secondary-note">Use signed opening balances. Assets are usually positive; liabilities such as credit-card debt should usually be negative.</p>
 
           <details class="advanced-panel" bind:open={showAccountAdvanced}>
             <summary>Advanced account settings</summary>
             <div class="field">
-              <label for="ledgerAccount">Destination account</label>
+              <label for="ledgerAccount">Advanced account name</label>
               <input
                 id="ledgerAccount"
                 value={accountDraft.ledgerAccount}
@@ -562,7 +565,7 @@
                 on:input={(e) => updateAccountDraft({ ledgerAccount: (e.currentTarget as HTMLInputElement).value })}
               />
             </div>
-            <p class="muted small">Default target: {effectiveLedgerAccount(accountDraft) || 'Choose an institution and account name first'}</p>
+            <p class="muted small">Suggested account name: {effectiveLedgerAccount(accountDraft) || 'Choose an institution and account name first'}</p>
           </details>
 
           <div class="actions">

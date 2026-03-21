@@ -76,6 +76,15 @@
 
   type WorkflowStep = 'prepare' | 'preview' | 'apply' | 'complete';
   type LoadingState = 'idle' | 'upload' | 'preview' | 'apply' | 'undo';
+  type FollowUpAction = {
+    href: string;
+    label: string;
+    note: string;
+    secondary: {
+      href: string;
+      label: string;
+    };
+  };
 
   export let mode: 'standalone' | 'setup' = 'standalone';
   export let refreshToken = 0;
@@ -121,6 +130,33 @@
 
   function optionalPathLabel(path?: string | null, fallback = 'Unknown file'): string {
     return path ? pathLabel(path) : fallback;
+  }
+
+  function importResultAction(): FollowUpAction | null {
+    if (!preview?.result) return null;
+
+    const unknownCount = preview.summary?.unknownCount ?? 0;
+    if (unknownCount > 0) {
+      return {
+        href: '/unknowns',
+        label: unknownCount === 1 ? 'Review 1 transaction' : `Review ${unknownCount} transactions`,
+        note: 'Imported activity is in. Review the remaining uncategorized transactions next so balances and recent activity stay clean.',
+        secondary: {
+          href: '/',
+          label: 'See overview'
+        }
+      };
+    }
+
+    return {
+      href: '/',
+      label: 'See overview',
+      note: 'Imported activity is in and nothing from this statement still needs review.',
+      secondary: {
+        href: '/transactions',
+        label: 'Open transactions'
+      }
+    };
   }
 
   function accountLabel(account: ImportAccountOption): string {
@@ -252,7 +288,7 @@
     if (!entry.canUndo) return;
 
     const confirmed = window.confirm(
-      `Undo ${entry.csvFileName ?? 'this import'}? This removes the transactions added by this import and creates a recovery backup of the current journal.`
+      `Undo ${entry.csvFileName ?? 'this import'}? This removes the transactions added by this import and creates a recovery backup first.`
     );
     if (!confirmed) return;
 
@@ -294,8 +330,10 @@
 
   {#if !initialized}
     <section class="view-card">
-      <p class="error-text">Workspace not initialized yet.</p>
-      <a class="btn btn-primary" href="/setup">Go to Setup</a>
+      <p class="eyebrow">Import</p>
+      <h3>Finish setup before importing statements</h3>
+      <p class="muted">Import becomes available after the workspace exists and at least one account is ready to receive statement activity.</p>
+      <a class="btn btn-primary" href="/setup">Open setup</a>
     </section>
   {:else}
     {#if error}
@@ -304,8 +342,13 @@
 
     {#if importAccounts.length === 0}
       <section class="view-card">
-        <p class="error-text">No import accounts are configured for this workspace yet.</p>
-        <a class="btn btn-primary" href="/accounts">Configure Accounts</a>
+        <p class="eyebrow">Import</p>
+        <h3>Add an account before importing</h3>
+        <p class="muted">Connect a supported account or save a custom CSV mapping first. Then statement imports can flow straight into review and overview.</p>
+        <div class="actions">
+          <a class="btn btn-primary" href="/accounts/configure?mode=institution">Add supported account</a>
+          <a class="btn" href="/accounts/configure?mode=custom">Add custom CSV</a>
+        </div>
       </section>
     {:else if mode === 'setup'}
       <section class="view-card setup-workflow-card">
@@ -438,9 +481,9 @@
             <p class="status-value">{selectedImportAccount ? accountLabel(selectedImportAccount) : 'Choose an import account'}</p>
             <p class="muted small">
               {#if selectedImportAccount}
-                {selectedImportAccount.institutionDisplayName} • {selectedImportAccount.ledgerAccount}
+                {selectedImportAccount.institutionDisplayName} • This statement will flow into balances, transactions, and review for this account.
               {:else}
-                The selected account decides which journal entries this statement maps into.
+                The selected account decides where this statement lands after import.
               {/if}
             </p>
           </section>
@@ -494,15 +537,7 @@
                 <section class="status-card">
                   <p class="status-label">Preview account</p>
                   <p class="status-value">{preview.importAccountDisplayName}</p>
-                  <p class="muted small">{preview.destinationAccount}</p>
-                </section>
-              {/if}
-
-              {#if preview.targetJournalPath}
-                <section class="status-card">
-                  <p class="status-label">Destination file</p>
-                  <p class="status-value">{pathLabel(preview.targetJournalPath)}</p>
-                  <p class="muted small">{preview.targetJournalPath}</p>
+                  <p class="muted small">This statement will update the selected account when you apply the preview.</p>
                 </section>
               {/if}
             </div>
@@ -669,9 +704,9 @@
               <p class="status-value">{selectedImportAccount ? accountLabel(selectedImportAccount) : 'Choose an import account'}</p>
               <p class="muted small">
                 {#if selectedImportAccount}
-                  {selectedImportAccount.institutionDisplayName} • {selectedImportAccount.ledgerAccount}
+                  {selectedImportAccount.institutionDisplayName} • This statement will flow into balances, transactions, and review for this account.
                 {:else}
-                  The selected account decides which journal entries this statement maps into.
+                  The selected account decides where this statement lands after import.
                 {/if}
               </p>
             </section>
@@ -723,15 +758,7 @@
                   <section class="status-card">
                     <p class="status-label">Preview account</p>
                     <p class="status-value">{preview.importAccountDisplayName}</p>
-                    <p class="muted small">{preview.destinationAccount}</p>
-                  </section>
-                {/if}
-
-                {#if preview.targetJournalPath}
-                  <section class="status-card">
-                    <p class="status-label">Destination file</p>
-                    <p class="status-value">{pathLabel(preview.targetJournalPath)}</p>
-                    <p class="muted small">{preview.targetJournalPath}</p>
+                    <p class="muted small">This statement will update the selected account when you apply the preview.</p>
                   </section>
                 {/if}
               </div>
@@ -756,6 +783,19 @@
                   </div>
                   <span class="pill ok">Complete</span>
                 </div>
+
+                {#if importResultAction()}
+                  <div class="next-step-banner">
+                    <div>
+                      <p class="result-title">Next step</p>
+                      <p class="muted">{importResultAction()?.note}</p>
+                    </div>
+                    <div class="actions">
+                      <a class="btn btn-primary" href={importResultAction()?.href}>{importResultAction()?.label}</a>
+                      <a class="btn" href={importResultAction()?.secondary.href}>{importResultAction()?.secondary.label}</a>
+                    </div>
+                  </div>
+                {/if}
 
                 {#if preview.result.sourceCsvWarning}
                   <p class="error-text inline-message">{preview.result.sourceCsvWarning}</p>
@@ -855,7 +895,7 @@
           <div>
             <p class="eyebrow">Import History</p>
             <h3>Recent imports</h3>
-            <p class="muted">Undo is available for the latest applied import on each journal.</p>
+            <p class="muted">Undo is available for the latest applied import in each destination year.</p>
           </div>
           {#if historyEntries.length > 0}
             <span class="pill">{historyEntries.length} recorded</span>
@@ -1185,9 +1225,26 @@
     padding: 0.85rem 0.9rem;
   }
 
+  .next-step-banner {
+    display: flex;
+    justify-content: space-between;
+    gap: 1rem;
+    align-items: start;
+    border: 1px solid rgba(15, 95, 136, 0.16);
+    border-radius: 14px;
+    background: rgba(241, 248, 255, 0.9);
+    padding: 0.85rem 0.9rem;
+  }
+
   .result-title {
     margin: 0 0 0.2rem;
     font-weight: 700;
+  }
+
+  .actions {
+    display: flex;
+    gap: 0.6rem;
+    flex-wrap: wrap;
   }
 
   .list,
@@ -1376,7 +1433,8 @@
       justify-content: start;
     }
 
-    .result-banner {
+    .result-banner,
+    .next-step-banner {
       flex-direction: column;
     }
   }

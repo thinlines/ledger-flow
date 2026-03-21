@@ -2,15 +2,11 @@
   import { onMount } from 'svelte';
   import { apiGet } from '$lib/api';
   import { accountSubtypeLabel } from '$lib/account-subtypes';
+  import { describeBalanceTrust } from '$lib/account-trust';
 
   type AppState = {
     initialized: boolean;
     workspaceName: string | null;
-  };
-
-  type InstitutionTemplate = {
-    id: string;
-    displayName: string;
   };
 
   type CustomImportProfile = {
@@ -56,6 +52,9 @@
     balances: Array<{
       id: string;
       balance: number;
+      hasOpeningBalance: boolean;
+      hasTransactionActivity: boolean;
+      hasBalanceSource: boolean;
     }>;
   };
 
@@ -67,11 +66,22 @@
     accounts: TrackedAccount[];
   };
 
+  type DashboardBalance = DashboardOverview['balances'][number];
+
+  type ActionLink = {
+    href: string;
+    label: string;
+  };
+
+  type NextStepAction = ActionLink & {
+    title: string;
+    note: string;
+  };
+
   let initialized = false;
   let workspaceName = '';
   let trackedAccounts: TrackedAccount[] = [];
-  let institutionTemplates: InstitutionTemplate[] = [];
-  let dashboardBalances: Record<string, number> = {};
+  let dashboardBalances: Record<string, DashboardBalance> = {};
   let baseCurrency = 'USD';
   let error = '';
   let loading = true;
@@ -79,6 +89,13 @@
   let normalizedAccountQuery = '';
   let filteredTrackedAccounts: TrackedAccount[] = [];
   let accountGroups: AccountGroup[] = [];
+  let missingSourceAccounts: TrackedAccount[] = [];
+  let startingBalanceOnlyAccounts: TrackedAccount[] = [];
+  let balanceReadyCount = 0;
+  let balanceNeedsSetupCount = 0;
+  let openingBalanceOnlyCount = 0;
+  let primaryAction: NextStepAction | null = null;
+  let secondaryActions: ActionLink[] = [];
 
   function titleCase(value: string): string {
     return value.charAt(0).toUpperCase() + value.slice(1);
@@ -112,8 +129,12 @@
     }).format(parsed);
   }
 
-  function currentBalance(accountId: string): number | null {
+  function balanceMeta(accountId: string): DashboardBalance | null {
     return dashboardBalances[accountId] ?? null;
+  }
+
+  function currentBalance(accountId: string): number | null {
+    return balanceMeta(accountId)?.balance ?? null;
   }
 
   function kindRank(kind: string): number {
@@ -158,36 +179,29 @@
     return parts.join(' · ');
   }
 
-  function accountSourceNote(account: TrackedAccount): string {
-    if (account.last4) return `Ending in ${account.last4}`;
-    if (account.importConfigured) return 'Connected through imported activity.';
-    return 'Tracked directly in the app.';
+  function balanceTrust(account: TrackedAccount) {
+    const meta = balanceMeta(account.id);
+    return describeBalanceTrust({
+      hasOpeningBalance: meta?.hasOpeningBalance ?? Boolean(account.openingBalance),
+      hasTransactionActivity: meta?.hasTransactionActivity ?? false,
+      hasBalanceSource: meta?.hasBalanceSource ?? Boolean(account.openingBalance),
+      importConfigured: account.importConfigured,
+      openingBalanceDate: account.openingBalanceDate
+    });
   }
 
   function accountStatusLabel(account: TrackedAccount): string {
-    const balance = currentBalance(account.id);
-    if (!account.openingBalance && balance == null) return 'Needs starting balance';
-    if (account.importConfigured) return 'Import ready';
-    return 'Manual tracking';
+    return balanceTrust(account).shortLabel;
   }
 
   function accountStatusNote(account: TrackedAccount): string {
-    const balance = currentBalance(account.id);
-    if (!account.openingBalance && balance == null) {
-      return 'Add an opening balance to include this account in totals before full history arrives.';
-    }
-    if (account.importConfigured) {
-      return account.importMode === 'custom'
-        ? 'Custom CSV mapping is ready for the next statement import.'
-        : 'Ready to bring in new institution activity.';
-    }
-    return 'Use this account when you want balances without automated imports.';
+    return balanceTrust(account).note;
   }
 
   function accountStatusTone(account: TrackedAccount): string {
-    const balance = currentBalance(account.id);
-    if (!account.openingBalance && balance == null) return 'attention';
-    if (account.importConfigured) return 'ok';
+    const trust = balanceTrust(account).tone;
+    if (trust === 'warn') return 'attention';
+    if (trust === 'ok') return 'ok';
     return 'manual';
   }
 
@@ -205,16 +219,15 @@
   function importSetupTitle(account: TrackedAccount): string {
     if (!account.importConfigured) return 'Manual tracking';
     if (account.importMode === 'custom') return account.importProfile?.displayName || 'Custom CSV';
-    return 'Institution import';
+    return 'Supported institution';
   }
 
   function importSetupNote(account: TrackedAccount): string {
     if (!account.importConfigured) return 'No automated import attached.';
     if (account.importMode === 'custom') {
-      const amountMode = account.importProfile?.amountMode === 'debit_credit' ? 'Debit / credit mapping' : 'Signed amount mapping';
-      return account.importAccountId ? `${account.importAccountId} · ${amountMode}` : amountMode;
+      return 'Custom CSV mapping is ready for the next statement.';
     }
-    return account.importAccountId || 'Connected through a supported institution.';
+    return 'Ready to bring in new statement activity.';
   }
 
   function hasAdvancedDetails(account: TrackedAccount): boolean {
@@ -268,6 +281,66 @@
     return groups;
   }
 
+  function accountsMissingSource(accounts: TrackedAccount[]): TrackedAccount[] {
+    return accounts.filter((account) => balanceTrust(account).tone === 'warn');
+  }
+
+  function accountsUsingOnlyStartingBalance(accounts: TrackedAccount[]): TrackedAccount[] {
+    return accounts.filter((account) => balanceTrust(account).shortLabel === 'Starting balance');
+  }
+
+  function nextStepAction(accounts: TrackedAccount[], missingAccounts: TrackedAccount[]): NextStepAction {
+    if (accounts.length === 0) {
+      return {
+        href: '/accounts/configure?mode=manual',
+        label: 'Add first account',
+        title: 'Add the first account you want to track',
+        note: 'Start with one real account and either a starting balance or import setup. You can add the rest later.'
+      };
+    }
+
+    const firstMissing = missingAccounts[0];
+    if (firstMissing) {
+      return {
+        href: `/accounts/configure?accountId=${firstMissing.id}`,
+        label: 'Finish balance setup',
+        title: 'Fill in the missing starting points',
+        note: `${firstMissing.displayName} still needs a starting balance or imported history before it belongs in totals with confidence.`
+      };
+    }
+
+    if (accounts.some((account) => account.importConfigured)) {
+      return {
+        href: '/import',
+        label: 'Import latest statements',
+        title: 'Bring in the latest activity',
+        note: 'Balances are in place. Import new statements to keep recent activity and account totals current.'
+      };
+    }
+
+    return {
+      href: '/transactions',
+      label: 'Open transactions',
+      title: 'Review the balances already on file',
+      note: 'These accounts are being tracked manually. Use transactions to inspect the current picture, or add import-ready accounts later.'
+    };
+  }
+
+  function nextStepSecondaryActions(accounts: TrackedAccount[]): ActionLink[] {
+    if (accounts.length === 0) {
+      return [{ href: '/setup', label: 'Open setup' }];
+    }
+
+    const actions: ActionLink[] = [];
+    if (accounts.some((account) => account.importConfigured)) {
+      actions.push({ href: '/transactions', label: 'Open transactions' });
+    } else {
+      actions.push({ href: '/accounts/configure?mode=institution', label: 'Add supported account' });
+    }
+    actions.push({ href: '/accounts/configure?mode=manual', label: 'Add manual account' });
+    return actions;
+  }
+
   async function load() {
     const state = await apiGet<AppState>('/api/app/state');
     initialized = state.initialized;
@@ -275,14 +348,13 @@
     if (!initialized) return;
 
     const [accountsData, dashboardData] = await Promise.all([
-      apiGet<{ trackedAccounts: TrackedAccount[]; institutionTemplates: InstitutionTemplate[] }>('/api/tracked-accounts'),
+      apiGet<{ trackedAccounts: TrackedAccount[] }>('/api/tracked-accounts'),
       apiGet<DashboardOverview>('/api/dashboard/overview')
     ]);
 
     trackedAccounts = accountsData.trackedAccounts;
-    institutionTemplates = accountsData.institutionTemplates;
     baseCurrency = dashboardData.baseCurrency;
-    dashboardBalances = Object.fromEntries(dashboardData.balances.map((balance) => [balance.id, balance.balance]));
+    dashboardBalances = Object.fromEntries(dashboardData.balances.map((balance) => [balance.id, balance]));
   }
 
   onMount(async () => {
@@ -305,11 +377,24 @@
     })
     .filter((account) => matchesAccountQuery(account, normalizedAccountQuery));
   $: accountGroups = buildAccountGroups(filteredTrackedAccounts);
+  $: missingSourceAccounts = accountsMissingSource(trackedAccounts);
+  $: startingBalanceOnlyAccounts = accountsUsingOnlyStartingBalance(trackedAccounts);
+  $: balanceReadyCount = trackedAccounts.length - missingSourceAccounts.length;
+  $: balanceNeedsSetupCount = missingSourceAccounts.length;
+  $: openingBalanceOnlyCount = startingBalanceOnlyAccounts.length;
+  $: primaryAction = nextStepAction(trackedAccounts, missingSourceAccounts);
+  $: secondaryActions = nextStepSecondaryActions(trackedAccounts);
 </script>
 
 {#if error}
-  <section class="view-card">
-    <p class="error-text">{error}</p>
+  <section class="view-card hero">
+    <p class="eyebrow">Accounts</p>
+    <h2 class="page-title">Could not load account inventory</h2>
+    <p class="subtitle">{error}</p>
+    <div class="actions">
+      <button class="btn btn-primary" type="button" on:click={() => window.location.reload()}>Reload page</button>
+      <a class="btn" href="/">Back to overview</a>
+    </div>
   </section>
 {/if}
 
@@ -345,12 +430,12 @@
         <strong>{trackedAccounts.length}</strong>
       </div>
       <div>
-        <span class="stat-kicker">Import-enabled</span>
-        <strong>{trackedAccounts.filter((account) => account.importConfigured).length}</strong>
+        <span class="stat-kicker">Balance ready</span>
+        <strong>{balanceReadyCount}</strong>
       </div>
       <div>
-        <span class="stat-kicker">Custom CSV</span>
-        <strong>{trackedAccounts.filter((account) => account.importMode === 'custom').length}</strong>
+        <span class="stat-kicker">Needs setup</span>
+        <strong>{balanceNeedsSetupCount}</strong>
       </div>
     </div>
   </section>
@@ -358,18 +443,26 @@
   <section class="view-card">
     <div class="section-head">
       <div>
-        <p class="eyebrow">Configure</p>
-        <h3>Account setup workspace</h3>
+        <p class="eyebrow">Next step</p>
+        <h3>{primaryAction?.title}</h3>
+        <p class="muted">
+          {primaryAction?.note}
+          {#if openingBalanceOnlyCount > 0}
+            {` ${openingBalanceOnlyCount} account${openingBalanceOnlyCount === 1 ? '' : 's'} still rely on a starting balance only.`}
+          {/if}
+        </p>
       </div>
       <a class="text-link" href="/">Back to overview</a>
     </div>
 
     <div class="quick-actions">
-      <a class="btn btn-primary" href="/accounts/configure?mode=manual">Add manual account</a>
-      <a class="btn" href="/accounts/configure?mode=custom">Add custom CSV</a>
-      {#each institutionTemplates as template}
-        <a class="btn" href={`/accounts/configure?mode=institution&institutionId=${template.id}`}>Add {template.displayName}</a>
+      {#if primaryAction}
+        <a class="btn btn-primary" href={primaryAction.href}>{primaryAction.label}</a>
+      {/if}
+      {#each secondaryActions as action}
+        <a class="btn" href={action.href}>{action.label}</a>
       {/each}
+      <a class="text-link" href="/accounts/configure">Open configuration workspace</a>
     </div>
   </section>
 
@@ -478,25 +571,29 @@
                         {/if}
                       </div>
 
+                      <p class="account-trust-note">{accountStatusNote(account)}</p>
+
                       <dl class="account-meta-grid">
                         <div class="account-meta-item">
-                          <dt>Opening balance</dt>
-                          <dd>{account.openingBalance ? formatStoredAmount(account.openingBalance) : 'Not set'}</dd>
+                          <dt>Balance coverage</dt>
+                          <dd>{balanceTrust(account).label}</dd>
                           <span class="account-meta-note">
-                            {account.openingBalanceDate ? shortDate(account.openingBalanceDate) : 'Add a starting date in setup.'}
+                            {accountStatusNote(account)}
                           </span>
                         </div>
 
                         <div class="account-meta-item">
-                          <dt>Account source</dt>
-                          <dd>{account.institutionDisplayName || 'Manual account'}</dd>
-                          <span class="account-meta-note">{accountSourceNote(account)}</span>
+                          <dt>Starting balance</dt>
+                          <dd>{account.openingBalance ? formatStoredAmount(account.openingBalance) : 'Not set'}</dd>
+                          <span class="account-meta-note">
+                            {account.openingBalanceDate ? shortDate(account.openingBalanceDate) : 'Add a starting date if older history is still missing.'}
+                          </span>
                         </div>
 
                         <div class="account-meta-item">
                           <dt>Import setup</dt>
                           <dd>{importSetupTitle(account)}</dd>
-                          <span class="account-meta-note">{accountStatusNote(account)}</span>
+                          <span class="account-meta-note">{importSetupNote(account)}</span>
                         </div>
                       </dl>
                     </div>
@@ -775,6 +872,12 @@
     gap: 0.45rem;
     flex-wrap: wrap;
     margin: 0;
+  }
+
+  .account-trust-note {
+    margin: 0;
+    color: var(--muted-foreground);
+    line-height: 1.5;
   }
 
   .pill.ok {
