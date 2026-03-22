@@ -5,12 +5,14 @@
     BALANCE_SHEET_KIND_OPTIONS,
     accountKindFromLedger,
     accountSubtypeLabel,
-    describeAccountSubtype,
+    autoSyncAccountSubtype,
+    describeDraftAccountSubtype,
     normalizeBalanceSheetKind,
     subtypeMatchesKind,
     subtypeOptionsForKind,
     suggestedTrackedLedgerAccount
   } from '$lib/account-subtypes';
+  import { openingBalanceDateForDraft } from '$lib/account-defaults';
   import ImportFlow from '$lib/components/ImportFlow.svelte';
 
   type SetupStepId = 'workspace' | 'accounts' | 'import' | 'finish';
@@ -120,6 +122,7 @@
   let accountEditorOpen = false;
   let editingAccountId: string | null = null;
   let accountDraft = newImportAccountDraft();
+  let lastAutoSubtype: string | null = null;
   let draftSubtypePreview = 'Asset account';
   let lastAppliedSummary: AppliedImportSummary | null = null;
 
@@ -215,7 +218,7 @@
       subtype: '',
       last4: '',
       openingBalance: '',
-      openingBalanceDate: ''
+      openingBalanceDate: openingBalanceDateForDraft(null)
     };
   }
 
@@ -253,20 +256,41 @@
       : 'Enter what you owned or held on the starting date. Asset opening balances are usually positive.';
   }
 
+  function draftInstitutionDisplayName(draft: ImportAccountDraft, appState: AppState | null = state): string | null {
+    return templateById(draft.institutionId, appState)?.displayName ?? null;
+  }
+
+  function syncAccountDraftSubtype(nextDraft: ImportAccountDraft) {
+    const { subtype, autoSubtype } = autoSyncAccountSubtype({
+      subtype: nextDraft.subtype,
+      autoSubtype: lastAutoSubtype,
+      kind: nextDraft.kind,
+      displayName: nextDraft.displayName,
+      institutionDisplayName: draftInstitutionDisplayName(nextDraft),
+      ledgerAccount: nextDraft.ledgerAccount.trim()
+    });
+    accountDraft = { ...nextDraft, subtype };
+    lastAutoSubtype = autoSubtype;
+  }
+
   function subtypeHelperText() {
-    const subtypeState = describeAccountSubtype({
+    const subtypeState = describeDraftAccountSubtype({
       subtype: accountDraft.subtype,
+      autoSubtype: lastAutoSubtype,
       kind: accountDraft.kind,
       displayName: accountDraft.displayName,
-      institutionDisplayName: templateById(accountDraft.institutionId, state)?.displayName ?? null,
+      institutionDisplayName: draftInstitutionDisplayName(accountDraft),
       ledgerAccount: accountDraft.ledgerAccount.trim()
     });
 
     if (subtypeState.source === 'saved') {
-      return `Saved as ${subtypeState.longLabel}. This stays separate from the advanced account name behind the scenes.`;
+      return `This account will save as ${subtypeState.longLabel}. It stays separate from the advanced account name behind the scenes.`;
     }
     if (subtypeState.source === 'suggested') {
-      return `Suggested from the account name: ${subtypeState.longLabel}. Select it here if you want that subtype saved on the account.`;
+      return `Auto-matched from the account name: ${subtypeState.longLabel}. This keeps syncing while you keep the suggested subtype selected.`;
+    }
+    if (subtypeState.source === 'available') {
+      return `The account name points to ${subtypeState.longLabel}. Keep typing to let Accounts fill it in, or leave the subtype broad.`;
     }
     return 'Leave this broad for now, or pick a subtype so Accounts can show exactly what you own or owe.';
   }
@@ -293,6 +317,7 @@
 
   function resetAccountEditor() {
     editingAccountId = null;
+    lastAutoSubtype = null;
     accountDraft = newImportAccountDraft();
     showAccountAdvanced = false;
     accountEditorOpen = false;
@@ -300,17 +325,30 @@
 
   function startNewAccount(institutionId = '') {
     editingAccountId = null;
-    accountDraft = newImportAccountDraft(institutionId);
+    lastAutoSubtype = null;
+    syncAccountDraftSubtype(newImportAccountDraft(institutionId));
     showAccountAdvanced = false;
     accountEditorOpen = true;
   }
 
-  function updateAccountDraft(patch: Partial<ImportAccountDraft>) {
-    accountDraft = { ...accountDraft, ...patch };
+  function updateAccountDraft(patch: Partial<ImportAccountDraft>, syncSubtype = false) {
+    const nextDraft = { ...accountDraft, ...patch };
+    if (syncSubtype) {
+      syncAccountDraftSubtype(nextDraft);
+      return;
+    }
+    accountDraft = nextDraft;
+  }
+
+  function setAccountSubtype(subtype: string) {
+    accountDraft = { ...accountDraft, subtype };
+    lastAutoSubtype = subtype && subtype === lastAutoSubtype ? lastAutoSubtype : null;
   }
 
   function setAccountKind(kind: 'asset' | 'liability') {
-    updateAccountDraft({
+    lastAutoSubtype = subtypeMatchesKind(lastAutoSubtype, kind) ? lastAutoSubtype : null;
+    syncAccountDraftSubtype({
+      ...accountDraft,
       kind,
       subtype: subtypeMatchesKind(accountDraft.subtype, kind) ? accountDraft.subtype : ''
     });
@@ -322,7 +360,9 @@
     const previousSuggested = accountDraft.institutionId ? suggestedLedgerAccount(accountDraft) : '';
     const nextTemplateKind = templateKind(institutionId);
 
-    updateAccountDraft({
+    lastAutoSubtype = subtypeMatchesKind(lastAutoSubtype, nextTemplateKind) ? lastAutoSubtype : null;
+    syncAccountDraftSubtype({
+      ...accountDraft,
       institutionId,
       kind:
         accountDraft.institutionId && accountDraft.kind !== templateKind(accountDraft.institutionId)
@@ -420,7 +460,7 @@
     subtype: accountDraft.subtype,
     kind: accountDraft.kind,
     displayName: accountDraft.displayName,
-    institutionDisplayName: templateById(accountDraft.institutionId, state)?.displayName ?? null,
+    institutionDisplayName: draftInstitutionDisplayName(accountDraft, state),
     ledgerAccount: effectiveLedgerAccount(accountDraft, state)
   });
 </script>
@@ -589,7 +629,7 @@
                 id="displayName"
                 value={accountDraft.displayName}
                 placeholder={accountNamePlaceholder()}
-                on:input={(e) => updateAccountDraft({ displayName: (e.currentTarget as HTMLInputElement).value })}
+                on:input={(e) => updateAccountDraft({ displayName: (e.currentTarget as HTMLInputElement).value }, true)}
               />
             </div>
             <div class="field">
@@ -605,7 +645,7 @@
 
           <div class="field">
             <label for="subtype">Account subtype</label>
-            <select id="subtype" value={accountDraft.subtype} on:change={(e) => updateAccountDraft({ subtype: (e.currentTarget as HTMLSelectElement).value })}>
+            <select id="subtype" value={accountDraft.subtype} on:change={(e) => setAccountSubtype((e.currentTarget as HTMLSelectElement).value)}>
               <option value="">Keep it broad for now</option>
               {#each subtypeOptionsForKind(accountDraft.kind) as option}
                 <option value={option.value}>{option.label}</option>
@@ -645,7 +685,7 @@
                 id="ledgerAccount"
                 value={accountDraft.ledgerAccount}
                 placeholder={suggestedLedgerAccount(accountDraft) || (accountDraft.kind === 'liability' ? 'Liabilities:Wells:Fargo:Card' : 'Assets:Bank:Wells Fargo:Checking')}
-                on:input={(e) => updateAccountDraft({ ledgerAccount: (e.currentTarget as HTMLInputElement).value })}
+                on:input={(e) => updateAccountDraft({ ledgerAccount: (e.currentTarget as HTMLInputElement).value }, true)}
               />
             </div>
             <p class="muted small">Accounting name in use: {effectiveLedgerAccount(accountDraft) || 'Choose an institution and account name first'}</p>

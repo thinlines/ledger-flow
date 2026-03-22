@@ -21,9 +21,11 @@ export type AccountSubtype = (typeof ACCOUNT_SUBTYPE_OPTIONS)[number]['value'];
 export type AccountSubtypeKind = (typeof ACCOUNT_SUBTYPE_OPTIONS)[number]['kind'];
 export type BalanceSheetKind = (typeof BALANCE_SHEET_KIND_OPTIONS)[number]['value'];
 export type AccountSubtypeSource = 'saved' | 'suggested' | 'broad';
+export type DraftAccountSubtypeSource = AccountSubtypeSource | 'available';
 
 type AccountSubtypeContext = {
   subtype?: string | null;
+  autoSubtype?: string | null;
   kind?: string;
   displayName?: string;
   ledgerAccount?: string;
@@ -43,6 +45,11 @@ export type AccountSubtypePresentation = {
   source: AccountSubtypeSource;
   shortLabel: string;
   longLabel: string;
+};
+
+export type DraftAccountSubtypePresentation = Omit<AccountSubtypePresentation, 'source'> & {
+  source: DraftAccountSubtypeSource;
+  inferredSubtype: AccountSubtype | null;
 };
 
 const ACCOUNT_SUBTYPE_LOOKUP = new Map(ACCOUNT_SUBTYPE_OPTIONS.map((option) => [option.value, option]));
@@ -166,6 +173,53 @@ export function inferAccountSubtype(context: AccountSubtypeContext): AccountSubt
   return null;
 }
 
+function subtypePresentation(
+  subtype: AccountSubtype,
+  kind: string,
+  source: AccountSubtypeSource
+): AccountSubtypePresentation {
+  const option = ACCOUNT_SUBTYPE_LOOKUP.get(subtype);
+  if (!option) {
+    const broadLabel = accountKindLabel(kind);
+    return {
+      subtype: null,
+      kind,
+      source: 'broad',
+      shortLabel: broadLabel,
+      longLabel: `${broadLabel} account`
+    };
+  }
+
+  return {
+    subtype,
+    kind,
+    source,
+    shortLabel: option.label,
+    longLabel: option.longLabel
+  };
+}
+
+export function autoSyncAccountSubtype(context: AccountSubtypeContext): {
+  subtype: AccountSubtype | '';
+  autoSubtype: AccountSubtype | null;
+} {
+  const selectedSubtype = normalizeAccountSubtype(context.subtype);
+  const lastAutoSubtype = normalizeAccountSubtype(context.autoSubtype);
+  const inferredSubtype = inferAccountSubtype(context);
+
+  if (selectedSubtype && selectedSubtype !== lastAutoSubtype) {
+    return {
+      subtype: selectedSubtype,
+      autoSubtype: lastAutoSubtype
+    };
+  }
+
+  return {
+    subtype: inferredSubtype ?? '',
+    autoSubtype: inferredSubtype
+  };
+}
+
 export function describeAccountSubtype(context: AccountSubtypeContext): AccountSubtypePresentation {
   const savedSubtype = normalizeAccountSubtype(context.subtype);
   const kind = context.kind || accountKindFromLedger(context.ledgerAccount);
@@ -173,16 +227,7 @@ export function describeAccountSubtype(context: AccountSubtypeContext): AccountS
   const resolvedSubtype = savedSubtype || suggestedSubtype;
 
   if (resolvedSubtype) {
-    const option = ACCOUNT_SUBTYPE_LOOKUP.get(resolvedSubtype);
-    if (option) {
-      return {
-        subtype: resolvedSubtype,
-        kind,
-        source: savedSubtype ? 'saved' : 'suggested',
-        shortLabel: option.label,
-        longLabel: option.longLabel
-      };
-    }
+    return subtypePresentation(resolvedSubtype, kind, savedSubtype ? 'saved' : 'suggested');
   }
 
   const broadLabel = accountKindLabel(kind);
@@ -192,6 +237,47 @@ export function describeAccountSubtype(context: AccountSubtypeContext): AccountS
     source: 'broad',
     shortLabel: broadLabel,
     longLabel: `${broadLabel} account`
+  };
+}
+
+export function describeDraftAccountSubtype(context: AccountSubtypeContext): DraftAccountSubtypePresentation {
+  const selectedSubtype = normalizeAccountSubtype(context.subtype);
+  const autoSubtype = normalizeAccountSubtype(context.autoSubtype);
+  const inferredSubtype = inferAccountSubtype(context);
+  const kind = context.kind || accountKindFromLedger(context.ledgerAccount);
+
+  if (selectedSubtype && autoSubtype && selectedSubtype === autoSubtype) {
+    return {
+      ...subtypePresentation(selectedSubtype, kind, 'suggested'),
+      source: 'suggested',
+      inferredSubtype
+    };
+  }
+
+  if (selectedSubtype) {
+    return {
+      ...subtypePresentation(selectedSubtype, kind, 'saved'),
+      source: 'saved',
+      inferredSubtype
+    };
+  }
+
+  if (inferredSubtype) {
+    return {
+      ...subtypePresentation(inferredSubtype, kind, 'suggested'),
+      source: 'available',
+      inferredSubtype
+    };
+  }
+
+  const broadLabel = accountKindLabel(kind);
+  return {
+    subtype: null,
+    kind,
+    source: 'broad',
+    shortLabel: broadLabel,
+    longLabel: `${broadLabel} account`,
+    inferredSubtype: null
   };
 }
 

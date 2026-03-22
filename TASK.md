@@ -2,34 +2,35 @@
 
 ## Objective
 
-Unblock financed liability opening balances in Accounts so a user can create a liability such as a car loan and have its starting balance offset the correct existing tracked account instead of always posting to opening-balances equity.
+Reduce friction in Accounts setup by choosing sensible defaults automatically. A user adding or editing an account should not have to resolve obvious starting-date or subtype choices manually when the product can infer them confidently.
 
 ## Deliverables
 
-- Add a plain-language selector near opening balance in Accounts create and edit flows so the user can choose where the starting balance comes from.
-- Default that selector to opening-balances equity, but allow the user to pick an existing tracked account when the starting liability should offset something already tracked.
-- Limit this cut to accounting correctness for the opening entry:
-  - do not introduce a durable paired-account or relationship model
-  - do not frame the selector as a long-term account link
-- Write the opening-balance transaction against the selected offset account instead of `Equity:Opening-Balances` when a tracked account is chosen.
-- Make edit flows derive the selected offset from the existing opening-balance transaction itself instead of storing new relationship state on the tracked account.
-- Keep copy finance-first and concrete so a user understands what account the starting balance will reduce or increase.
-- Keep roadmap, decisions, and agent rules aligned with this narrower cut line while the work lands.
+- Default the opening date in Accounts configuration to January 1 of the current calendar year for fresh account drafts.
+- Preserve any saved opening date on edit. If an existing account has an opening balance but no saved date, present the same sensible default instead of leaving the field blank.
+- Remove copy that asks the user to add a starting date manually when the product can now supply that default for the common case.
+- Review Accounts inventory and balance-trust messaging so warnings are reserved for accounts that truly lack any starting balance or imported history, not merely a defaultable date detail.
+- Auto-sync the subtype dropdown in Accounts configuration with the existing name heuristic as the user types.
+- Only auto-apply the heuristic while subtype is still broad or still matches the last automatic suggestion. If the user deliberately picks a different subtype, preserve that choice.
+- Keep asset vs liability selection explicit for this cut. Do not silently flip the balance-sheet kind just because the name heuristic points at a subtype in the other group.
+- Keep behavior aligned across manual, supported-institution, and custom CSV account setup modes.
 
 ## Success Criteria
 
-- A user can create or edit a liability tracked account such as a car loan and choose an existing tracked account as the starting-balance offset.
-- The resulting opening-balance journal entry posts against the selected account instead of `Equity:Opening-Balances`.
-- The default path still works for ordinary opening balances that should continue to offset equity.
-- The product does not add a new persistent account-pairing model just to support this starting-balance fix.
+- On March 22, 2026, a fresh account draft would prefill the opening date as January 1, 2026. The implementation should keep that behavior dynamic for future years.
+- A user can save a starting balance without first choosing an opening date manually unless they want a different date.
+- Accounts surfaces no longer nudge users to add a starting date when the default already covers the common case.
+- Typing a liability account name that matches the current heuristic, such as a credit card name, updates the subtype dropdown to the matching subtype automatically.
+- A manual subtype override is not repeatedly overwritten by later keystrokes.
+- This work lands without introducing a broader onboarding redesign or a new persistent relationship model.
 
 ## Out of Scope
 
-- Durable account-link or paired-account state on tracked accounts
-- Guided vehicle-plus-loan or property-plus-mortgage creation flows
-- Full amortization schedules or payoff planning
-- Automated valuation or depreciation for vehicles or real estate
-- Broad reporting, budgeting, or forecasting expansion
+- New subtype heuristics beyond the current keyword-based matcher
+- Automatic switching of asset vs liability kind
+- Broad redesign of the Accounts dashboard or onboarding flow outside this defaults pass
+- Data-model changes that exist only to support UI defaults
+- Bulk backfill or migration of existing accounts beyond normal edit behavior
 
 ## Replacement Rule
 

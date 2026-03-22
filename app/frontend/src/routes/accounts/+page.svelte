@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import { apiGet } from '$lib/api';
   import { describeAccountSubtype } from '$lib/account-subtypes';
+  import { effectiveOpeningBalanceDate } from '$lib/account-defaults';
   import { describeBalanceTrust } from '$lib/account-trust';
 
   type AppState = {
@@ -127,6 +128,10 @@
       day: 'numeric',
       year: 'numeric'
     }).format(parsed);
+  }
+
+  function accountStartingBalanceDate(account: Pick<TrackedAccount, 'openingBalance' | 'openingBalanceDate'>): string | null {
+    return effectiveOpeningBalanceDate(account.openingBalanceDate, Boolean(account.openingBalance));
   }
 
   function balanceMeta(accountId: string): DashboardBalance | null {
@@ -571,8 +576,8 @@
                       <p class="account-balance-note">
                         {#if account.openingBalance}
                           Started at {formatStoredAmount(account.openingBalance)}
-                          {#if account.openingBalanceDate}
-                            on {shortDate(account.openingBalanceDate)}
+                          {#if accountStartingBalanceDate(account)}
+                            on {shortDate(accountStartingBalanceDate(account))}
                           {/if}
                         {:else}
                           Opening balance not set yet.
@@ -616,7 +621,9 @@
                           <dt>Starting balance</dt>
                           <dd>{account.openingBalance ? formatStoredAmount(account.openingBalance) : 'Not set'}</dd>
                           <span class="account-meta-note">
-                            {account.openingBalanceDate ? shortDate(account.openingBalanceDate) : 'Add a starting date if older history is still missing.'}
+                            {accountStartingBalanceDate(account)
+                              ? shortDate(accountStartingBalanceDate(account))
+                              : 'Add a starting balance or import history when you want this account included in totals.'}
                           </span>
                         </div>
 

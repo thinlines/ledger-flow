@@ -1,3 +1,5 @@
+import { effectiveOpeningBalanceDate } from '$lib/account-defaults';
+
 export type BalanceTrustTone = 'ok' | 'warn' | 'neutral';
 
 export type BalanceTrustInput = {
@@ -28,7 +30,7 @@ function formatDate(value: string | null | undefined): string | null {
 }
 
 export function describeBalanceTrust(input: BalanceTrustInput): BalanceTrustState {
-	const openingDate = formatDate(input.openingBalanceDate);
+	const openingDate = formatDate(effectiveOpeningBalanceDate(input.openingBalanceDate, input.hasOpeningBalance));
 	const latestActivityDate = formatDate(input.latestActivityDate);
 
 	if (!input.hasBalanceSource) {

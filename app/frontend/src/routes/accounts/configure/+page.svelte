@@ -6,12 +6,15 @@
     BALANCE_SHEET_KIND_OPTIONS,
     accountKindFromLedger,
     accountSubtypeLabel,
+    autoSyncAccountSubtype,
     describeAccountSubtype,
+    describeDraftAccountSubtype,
     normalizeBalanceSheetKind,
     subtypeMatchesKind,
     subtypeOptionsForKind,
     suggestedTrackedLedgerAccount
   } from '$lib/account-subtypes';
+  import { effectiveOpeningBalanceDate, openingBalanceDateForDraft } from '$lib/account-defaults';
   import { describeBalanceTrust } from '$lib/account-trust';
 
   type AppState = {
@@ -166,6 +169,7 @@
   let editorMode: 'manual' | 'institution' | 'custom' = 'manual';
   let editingAccountId: string | null = null;
   let draft = newDraft();
+  let lastAutoSubtype: string | null = null;
   let selectedSampleFile: File | null = null;
   let inspection: CsvInspection | null = null;
   let lastRouteKey = '';
@@ -232,8 +236,8 @@
       subtype: '',
       institutionId,
       last4: '',
-      openingBalance: '',
-      openingBalanceDate: '',
+      openingBalance: '0',
+      openingBalanceDate: openingBalanceDateForDraft(null),
       openingBalanceOffsetAccountId: '',
       customProfile: newCustomProfileDraft()
     };
@@ -314,20 +318,45 @@
       : 'Use the starting point option unless the other side of this starting balance is another tracked account you already have here.';
   }
 
+  function draftInstitutionDisplayName(nextDraft: AccountDraft): string | null {
+    return templateById(nextDraft.institutionId)?.displayName ?? null;
+  }
+
+  function syncDraftSubtype(nextDraft: AccountDraft) {
+    const { subtype, autoSubtype } = autoSyncAccountSubtype({
+      subtype: nextDraft.subtype,
+      autoSubtype: lastAutoSubtype,
+      kind: nextDraft.kind,
+      displayName: nextDraft.displayName,
+      institutionDisplayName: draftInstitutionDisplayName(nextDraft),
+      ledgerAccount: nextDraft.ledgerAccount.trim()
+    });
+    draft = { ...nextDraft, subtype };
+    lastAutoSubtype = autoSubtype;
+  }
+
+  function openingBalanceDateLabel(account: Pick<TrackedAccount, 'openingBalance' | 'openingBalanceDate'>): string | null {
+    return effectiveOpeningBalanceDate(account.openingBalanceDate, Boolean(account.openingBalance));
+  }
+
   function subtypeHelperText() {
-    const subtypeState = describeAccountSubtype({
+    const subtypeState = describeDraftAccountSubtype({
       subtype: draft.subtype,
+      autoSubtype: lastAutoSubtype,
       kind: draft.kind,
       displayName: draft.displayName,
-      institutionDisplayName: templateById(draft.institutionId)?.displayName ?? null,
+      institutionDisplayName: draftInstitutionDisplayName(draft),
       ledgerAccount: draft.ledgerAccount.trim()
     });
 
     if (subtypeState.source === 'saved') {
-      return `Saved as ${subtypeState.longLabel}. This stays separate from the advanced account name behind the scenes.`;
+      return `This account will save as ${subtypeState.longLabel}. It stays separate from the advanced account name behind the scenes.`;
     }
     if (subtypeState.source === 'suggested') {
-      return `Suggested from the account name: ${subtypeState.longLabel}. Select it here if you want that subtype saved on the account.`;
+      return `Auto-matched from the account name: ${subtypeState.longLabel}. This keeps syncing while you keep the suggested subtype selected.`;
+    }
+    if (subtypeState.source === 'available') {
+      return `The account name points to ${subtypeState.longLabel}. Keep typing to let Accounts fill it in, or leave the subtype broad.`;
     }
     return `Leave this broad for now, or pick a subtype so Accounts can show exactly what you own or owe.`;
   }
@@ -346,7 +375,9 @@
   }
 
   function setDraftKind(kind: 'asset' | 'liability') {
-    updateDraft({
+    lastAutoSubtype = subtypeMatchesKind(lastAutoSubtype, kind) ? lastAutoSubtype : null;
+    syncDraftSubtype({
+      ...draft,
       kind,
       subtype: subtypeMatchesKind(draft.subtype, kind) ? draft.subtype : ''
     });
@@ -407,8 +438,10 @@
   function startManualAccount() {
     editorMode = 'manual';
     editingAccountId = null;
-    draft = newDraft('', 'asset');
-    draft.customProfile.currency = defaultCurrencySymbol(baseCurrency);
+    lastAutoSubtype = null;
+    const nextDraft = newDraft('', 'asset');
+    nextDraft.customProfile.currency = defaultCurrencySymbol(baseCurrency);
+    syncDraftSubtype(nextDraft);
     showAdvancedSettings = false;
     resetSampleState();
   }
@@ -416,8 +449,10 @@
   function startInstitutionAccount(institutionId = '') {
     editorMode = 'institution';
     editingAccountId = null;
-    draft = newDraft(institutionId);
-    draft.customProfile.currency = defaultCurrencySymbol(baseCurrency);
+    lastAutoSubtype = null;
+    const nextDraft = newDraft(institutionId);
+    nextDraft.customProfile.currency = defaultCurrencySymbol(baseCurrency);
+    syncDraftSubtype(nextDraft);
     showAdvancedSettings = false;
     resetSampleState();
   }
@@ -425,14 +460,26 @@
   function startCustomAccount() {
     editorMode = 'custom';
     editingAccountId = null;
-    draft = newDraft('', 'asset');
-    draft.customProfile.currency = defaultCurrencySymbol(baseCurrency);
+    lastAutoSubtype = null;
+    const nextDraft = newDraft('', 'asset');
+    nextDraft.customProfile.currency = defaultCurrencySymbol(baseCurrency);
+    syncDraftSubtype(nextDraft);
     showAdvancedSettings = false;
     resetSampleState();
   }
 
-  function updateDraft(patch: Partial<AccountDraft>) {
-    draft = { ...draft, ...patch };
+  function updateDraft(patch: Partial<AccountDraft>, syncSubtype = false) {
+    const nextDraft = { ...draft, ...patch };
+    if (syncSubtype) {
+      syncDraftSubtype(nextDraft);
+      return;
+    }
+    draft = nextDraft;
+  }
+
+  function setDraftSubtype(subtype: string) {
+    draft = { ...draft, subtype };
+    lastAutoSubtype = subtype && subtype === lastAutoSubtype ? lastAutoSubtype : null;
   }
 
   function updateCustomProfile(patch: Partial<CustomProfileDraft>) {
@@ -451,7 +498,8 @@
     const previousSuggested = suggestedLedgerAccount(draft);
     const nextTemplateKind = templateKind(institutionId);
 
-    draft = {
+    lastAutoSubtype = subtypeMatchesKind(lastAutoSubtype, nextTemplateKind) ? lastAutoSubtype : null;
+    syncDraftSubtype({
       ...draft,
       institutionId,
       kind:
@@ -472,7 +520,7 @@
         !draft.ledgerAccount.trim() || draft.ledgerAccount === previousSuggested
           ? ''
           : draft.ledgerAccount
-    };
+    });
   }
 
   function profileDraftFromAccount(account: TrackedAccount): CustomProfileDraft {
@@ -504,7 +552,8 @@
         : 'institution'
       : 'manual';
     editingAccountId = account.id;
-    draft = {
+    lastAutoSubtype = null;
+    syncDraftSubtype({
       kind: normalizeBalanceSheetKind(account.kind),
       displayName: account.displayName,
       ledgerAccount: account.ledgerAccount,
@@ -512,10 +561,10 @@
       institutionId: account.institutionId ?? '',
       last4: account.last4 ?? '',
       openingBalance: account.openingBalance ?? '',
-      openingBalanceDate: account.openingBalanceDate ?? '',
+      openingBalanceDate: openingBalanceDateForDraft(account.openingBalanceDate),
       openingBalanceOffsetAccountId: account.openingBalanceOffsetAccountId ?? '',
       customProfile: profileDraftFromAccount(account)
-    };
+    });
     showAdvancedSettings = false;
     inspection = null;
     selectedSampleFile = null;
@@ -771,7 +820,7 @@
     subtype: draft.subtype,
     kind: draft.kind,
     displayName: draft.displayName,
-    institutionDisplayName: templateById(draft.institutionId)?.displayName ?? null,
+    institutionDisplayName: draftInstitutionDisplayName(draft),
     ledgerAccount: effectiveLedgerAccount(draft)
   });
   $: needsSetupCount = trackedAccounts.filter((account) => balanceTrust(account).tone === 'warn').length;
@@ -905,7 +954,7 @@
             id="displayName"
             value={draft.displayName}
             placeholder={accountNamePlaceholder()}
-            on:input={(e) => updateDraft({ displayName: (e.currentTarget as HTMLInputElement).value })}
+            on:input={(e) => updateDraft({ displayName: (e.currentTarget as HTMLInputElement).value }, true)}
           />
         </div>
         <div class="field">
@@ -921,7 +970,7 @@
 
       <div class="field">
         <label for="subtype">Account subtype</label>
-        <select id="subtype" value={draft.subtype} on:change={(e) => updateDraft({ subtype: (e.currentTarget as HTMLSelectElement).value })}>
+        <select id="subtype" value={draft.subtype} on:change={(e) => setDraftSubtype((e.currentTarget as HTMLSelectElement).value)}>
           <option value="">Keep it broad for now</option>
           {#each subtypeOptionsForKind(draft.kind) as option}
             <option value={option.value}>{option.label}</option>
@@ -977,7 +1026,7 @@
             id="ledgerAccount"
             value={draft.ledgerAccount}
             placeholder={suggestedLedgerAccount(draft) || (draft.kind === 'liability' ? 'Liabilities:Car:Loan' : 'Assets:House:Savings')}
-            on:input={(e) => updateDraft({ ledgerAccount: (e.currentTarget as HTMLInputElement).value })}
+            on:input={(e) => updateDraft({ ledgerAccount: (e.currentTarget as HTMLInputElement).value }, true)}
           />
         </div>
 
@@ -1320,8 +1369,8 @@
                 Starting balance:
                 {#if account.openingBalance}
                   {formatStoredAmount(account.openingBalance)}
-                  {#if account.openingBalanceDate}
-                    on {shortDate(account.openingBalanceDate)}
+                  {#if openingBalanceDateLabel(account)}
+                    on {shortDate(openingBalanceDateLabel(account))}
                   {/if}
                 {:else}
                   Not set

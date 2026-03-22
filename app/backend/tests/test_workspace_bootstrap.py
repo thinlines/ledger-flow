@@ -3,6 +3,7 @@ from pathlib import Path
 from main import _tracked_account_ui
 from services.account_register_service import build_account_register
 from services.config_service import load_config
+from services.dashboard_service import build_dashboard_overview
 from services.import_index import ImportIndex
 from services.import_service import _classify_transaction, _parse_transaction
 from services.import_service import scan_candidates
@@ -544,6 +545,66 @@ def test_upsert_import_account_keeps_opening_balance_in_sync_with_ledger_account
     updated_opening = opening_file.read_text(encoding="utf-8")
     assert "Assets:Bank:Primary:Checking  USD 1200.00" in updated_opening
     assert "2026-01-01 Opening balance" in updated_opening
+
+
+def test_upsert_import_account_keeps_explicit_zero_opening_balance(tmp_path: Path) -> None:
+    manager = WorkspaceManager(tmp_path / "app")
+    workspace_root = tmp_path / "workspace"
+
+    manager.bootstrap_workspace(
+        workspace_path=workspace_root,
+        workspace_name="Test Books",
+        base_currency="USD",
+        start_year=2026,
+        import_accounts=[
+            {
+                "institutionId": "wells_fargo",
+                "displayName": "Wells Fargo Checking",
+                "ledgerAccount": "Assets:Bank:Checking",
+                "last4": "1234",
+                "openingBalance": "1200.00",
+                "openingBalanceDate": "2026-01-01",
+            }
+        ],
+    )
+
+    config = load_config(workspace_root / "settings" / "workspace.toml")
+    account_id = next(iter(config.import_accounts))
+
+    manager.upsert_import_account(
+        config,
+        {
+            "institutionId": "wells_fargo",
+            "displayName": "Wells Fargo Checking",
+            "ledgerAccount": "Assets:Bank:Checking",
+            "last4": "1234",
+        },
+        account_id=account_id,
+        opening_balance="0",
+        opening_balance_date="2026-01-01",
+    )
+
+    reloaded = load_config(workspace_root / "settings" / "workspace.toml")
+    opening_file = workspace_root / "opening" / f"{account_id}.journal"
+    opening_content = opening_file.read_text(encoding="utf-8")
+    assert "2026-01-01 Opening balance" in opening_content
+    assert "Assets:Bank:Checking  USD 0.00" in opening_content
+
+    opening_by_id, opening_by_ledger = opening_balance_index(reloaded)
+    tracked_account_ui = _tracked_account_ui(
+        reloaded,
+        account_id,
+        reloaded.tracked_accounts[account_id],
+        opening_by_id,
+        opening_by_ledger,
+    )
+    assert tracked_account_ui["openingBalance"] == "0.00"
+
+    overview = build_dashboard_overview(reloaded)
+    balances = {row["id"]: row for row in overview["balances"]}
+    assert balances[account_id]["balance"] == 0.0
+    assert balances[account_id]["hasOpeningBalance"] is True
+    assert balances[account_id]["hasBalanceSource"] is True
 
 
 def test_upsert_import_account_rewrites_existing_journal_postings_to_new_ledger_account(tmp_path: Path) -> None:

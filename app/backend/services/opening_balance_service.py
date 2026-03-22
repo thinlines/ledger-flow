@@ -161,7 +161,7 @@ def write_opening_balance(
         return
 
     amount = _parse_amount(cleaned_amount)
-    if amount is None or amount == 0:
+    if amount is None:
         if target_path.exists():
             target_path.unlink()
         return
