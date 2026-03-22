@@ -68,4 +68,4 @@ This document records stable product and architecture choices that explain why t
 
 **Why:** Once the product separates tracked accounts from categories, users need a first-class, finance-first way to create liabilities such as car loans without learning ledger prefixes or accounting internals.
 
-**Implication:** Accounts UI must expose asset-vs-liability choice directly, subtype state must be trustworthy instead of silently inferred, and financed asset-plus-loan workflows belong in Accounts rather than being pushed into rules or review.
+**Implication:** Accounts UI must expose asset-vs-liability choice directly, subtype state must be trustworthy instead of silently inferred, and financed asset-plus-loan workflows belong in Accounts rather than being pushed into rules or review. The immediate next workflow after this cut is a guided pairing path for something owned plus the liability financing it, such as a vehicle with its auto loan.

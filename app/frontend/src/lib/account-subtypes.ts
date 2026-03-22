@@ -12,8 +12,15 @@ export const ACCOUNT_SUBTYPE_OPTIONS = [
   { value: 'other_liability', label: 'Other liability', longLabel: 'Other liability', kind: 'liability' }
 ] as const;
 
+export const BALANCE_SHEET_KIND_OPTIONS = [
+  { value: 'asset', label: 'Asset', longLabel: 'Asset account' },
+  { value: 'liability', label: 'Liability', longLabel: 'Liability account' }
+] as const;
+
 export type AccountSubtype = (typeof ACCOUNT_SUBTYPE_OPTIONS)[number]['value'];
 export type AccountSubtypeKind = (typeof ACCOUNT_SUBTYPE_OPTIONS)[number]['kind'];
+export type BalanceSheetKind = (typeof BALANCE_SHEET_KIND_OPTIONS)[number]['value'];
+export type AccountSubtypeSource = 'saved' | 'suggested' | 'broad';
 
 type AccountSubtypeContext = {
   subtype?: string | null;
@@ -23,6 +30,21 @@ type AccountSubtypeContext = {
   institutionDisplayName?: string | null;
 };
 
+type SuggestedTrackedLedgerAccountContext = {
+  kind?: string | null;
+  displayName?: string | null;
+  institutionDisplayName?: string | null;
+  templateLedgerPrefix?: string | null;
+};
+
+export type AccountSubtypePresentation = {
+  subtype: AccountSubtype | null;
+  kind: string;
+  source: AccountSubtypeSource;
+  shortLabel: string;
+  longLabel: string;
+};
+
 const ACCOUNT_SUBTYPE_LOOKUP = new Map(ACCOUNT_SUBTYPE_OPTIONS.map((option) => [option.value, option]));
 
 function normalizedText(parts: Array<string | null | undefined>): string {
@@ -30,6 +52,10 @@ function normalizedText(parts: Array<string | null | undefined>): string {
     .filter(Boolean)
     .join(' ')
     .toLowerCase();
+}
+
+export function normalizeBalanceSheetKind(value: string | null | undefined): BalanceSheetKind {
+  return value === 'liability' ? 'liability' : 'asset';
 }
 
 export function accountKindFromLedger(ledgerAccount: string | null | undefined): string {
@@ -63,6 +89,12 @@ export function accountSubtypeKind(value: string | null | undefined): AccountSub
   return normalizeAccountSubtype(value) ? ACCOUNT_SUBTYPE_LOOKUP.get(value as AccountSubtype)?.kind ?? null : null;
 }
 
+export function subtypeMatchesKind(value: string | null | undefined, kind: string | null | undefined): boolean {
+  const subtypeKind = accountSubtypeKind(value);
+  if (subtypeKind == null) return true;
+  return subtypeKind === normalizeBalanceSheetKind(kind);
+}
+
 export function subtypeOptionsForKind(kind: string | null | undefined) {
   if (kind === 'asset' || kind === 'liability') {
     return ACCOUNT_SUBTYPE_OPTIONS.filter((option) => option.kind === kind);
@@ -70,9 +102,49 @@ export function subtypeOptionsForKind(kind: string | null | undefined) {
   return ACCOUNT_SUBTYPE_OPTIONS;
 }
 
+export function ledgerSuffix(
+  templateDisplayName: string | null | undefined,
+  displayName: string | null | undefined
+): string {
+  let candidate = String(displayName || '').trim();
+  const template = String(templateDisplayName || '').trim();
+  if (template && candidate.toLowerCase().startsWith(template.toLowerCase())) {
+    const remainder = candidate.slice(template.length).replace(/^[\s:._-]+/, '').trim();
+    if (remainder) candidate = remainder;
+  }
+  const parts = candidate
+    .split(/[^A-Za-z0-9]+/)
+    .filter(Boolean)
+    .map((part) => part[0].toUpperCase() + part.slice(1).toLowerCase());
+  return parts.join(':') || 'Account';
+}
+
+export function suggestedTrackedLedgerAccount(context: SuggestedTrackedLedgerAccountContext): string {
+  const displayName = String(context.displayName || '').trim();
+  if (!displayName) return '';
+
+  const institutionDisplayName = String(context.institutionDisplayName || '').trim();
+  const kind = normalizeBalanceSheetKind(context.kind);
+  const templateLedgerPrefix = String(context.templateLedgerPrefix || '').trim();
+  const defaultPrefix = kind === 'liability' ? 'Liabilities' : 'Assets';
+  const baseSegments =
+    templateLedgerPrefix && accountKindFromLedger(templateLedgerPrefix) === kind
+      ? templateLedgerPrefix.split(':').map((segment) => segment.trim()).filter(Boolean)
+      : [
+          defaultPrefix,
+          ...ledgerSuffix('', institutionDisplayName)
+            .split(':')
+            .filter(Boolean)
+        ];
+  const nameSegments = ledgerSuffix(institutionDisplayName, displayName)
+    .split(':')
+    .filter(Boolean);
+  return [...baseSegments, ...nameSegments].join(':');
+}
+
 export function inferAccountSubtype(context: AccountSubtypeContext): AccountSubtype | null {
   const kind = context.kind || accountKindFromLedger(context.ledgerAccount);
-  const text = normalizedText([context.displayName, context.ledgerAccount, context.institutionDisplayName]);
+  const text = normalizedText([context.displayName, context.institutionDisplayName, context.ledgerAccount]);
 
   if (kind === 'asset') {
     if (/\bchecking\b/.test(text)) return 'checking';
@@ -94,14 +166,36 @@ export function inferAccountSubtype(context: AccountSubtypeContext): AccountSubt
   return null;
 }
 
-export function accountSubtypeLabel(context: AccountSubtypeContext, format: 'short' | 'long' = 'long'): string {
-  const subtype = normalizeAccountSubtype(context.subtype) || inferAccountSubtype(context);
-  if (subtype) {
-    const option = ACCOUNT_SUBTYPE_LOOKUP.get(subtype);
-    if (option) return format === 'short' ? option.label : option.longLabel;
+export function describeAccountSubtype(context: AccountSubtypeContext): AccountSubtypePresentation {
+  const savedSubtype = normalizeAccountSubtype(context.subtype);
+  const kind = context.kind || accountKindFromLedger(context.ledgerAccount);
+  const suggestedSubtype = savedSubtype ? null : inferAccountSubtype(context);
+  const resolvedSubtype = savedSubtype || suggestedSubtype;
+
+  if (resolvedSubtype) {
+    const option = ACCOUNT_SUBTYPE_LOOKUP.get(resolvedSubtype);
+    if (option) {
+      return {
+        subtype: resolvedSubtype,
+        kind,
+        source: savedSubtype ? 'saved' : 'suggested',
+        shortLabel: option.label,
+        longLabel: option.longLabel
+      };
+    }
   }
 
-  const kind = context.kind || accountKindFromLedger(context.ledgerAccount);
   const broadLabel = accountKindLabel(kind);
-  return format === 'short' ? broadLabel : `${broadLabel} account`;
+  return {
+    subtype: null,
+    kind,
+    source: 'broad',
+    shortLabel: broadLabel,
+    longLabel: `${broadLabel} account`
+  };
+}
+
+export function accountSubtypeLabel(context: AccountSubtypeContext, format: 'short' | 'long' = 'long'): string {
+  const presentation = describeAccountSubtype(context);
+  return format === 'short' ? presentation.shortLabel : presentation.longLabel;
 }

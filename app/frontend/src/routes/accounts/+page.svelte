@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { apiGet } from '$lib/api';
-  import { accountSubtypeLabel } from '$lib/account-subtypes';
+  import { describeAccountSubtype } from '$lib/account-subtypes';
   import { describeBalanceTrust } from '$lib/account-trust';
 
   type AppState = {
@@ -174,9 +174,39 @@
   }
 
   function accountIdentity(account: TrackedAccount): string {
-    const parts = [account.institutionDisplayName || 'Manual account'];
+    const parts = [account.institutionDisplayName || 'Tracked manually'];
     if (account.last4) parts.push(`•••• ${account.last4}`);
     return parts.join(' · ');
+  }
+
+  function accountSubtypeLine(account: TrackedAccount): string {
+    const subtype = describeAccountSubtype(account);
+    if (subtype.source === 'suggested') return `Suggested ${subtype.longLabel.toLowerCase()}`;
+    return subtype.longLabel;
+  }
+
+  function accountSubtypePillLabel(account: TrackedAccount): string {
+    const subtype = describeAccountSubtype(account);
+    if (subtype.source === 'suggested') return `Suggested: ${subtype.shortLabel}`;
+    return subtype.shortLabel;
+  }
+
+  function accountSubtypePillTone(account: TrackedAccount): string {
+    const subtype = describeAccountSubtype(account);
+    if (subtype.source === 'saved') return account.kind;
+    if (subtype.source === 'suggested') return 'suggested';
+    return 'broad';
+  }
+
+  function subtypeStateNote(account: TrackedAccount): string {
+    const subtype = describeAccountSubtype(account);
+    if (subtype.source === 'suggested') {
+      return 'Subtype is suggested from the account name. Save the account in Accounts if you want it stored explicitly.';
+    }
+    if (subtype.source === 'broad') {
+      return 'No narrower subtype is saved yet.';
+    }
+    return `Saved as ${subtype.longLabel}.`;
   }
 
   function balanceTrust(account: TrackedAccount) {
@@ -243,8 +273,8 @@
       account.subtype,
       account.ledgerAccount,
       account.importAccountId,
-      accountSubtypeLabel(account, 'short'),
-      accountSubtypeLabel(account, 'long'),
+      accountSubtypePillLabel(account),
+      accountSubtypeLine(account),
       kindLabel(account.kind),
       importSetupTitle(account),
       importSetupNote(account)
@@ -419,8 +449,8 @@
       <p class="eyebrow">Accounts</p>
       <h2 class="page-title">{workspaceName || 'Workspace'} account inventory</h2>
       <p class="subtitle">
-        Review tracked accounts, balances, and import status here. Open the dedicated configuration workspace when you
-        want to add accounts or edit import setup.
+        Review the assets and liabilities you track here. Open the configuration workspace when you want to add
+        accounts, save a subtype explicitly, or edit import setup.
       </p>
     </div>
 
@@ -498,7 +528,7 @@
     {#if trackedAccounts.length === 0}
       <div class="empty-panel">
         <h4>No accounts yet</h4>
-        <p>Start with a supported institution, add a custom CSV import, or track an account manually with an opening balance.</p>
+        <p>Start with something you own or owe, then add a starting balance or import setup so totals are grounded.</p>
       </div>
     {:else if filteredTrackedAccounts.length === 0}
       <div class="empty-panel">
@@ -527,7 +557,7 @@
                     <div class:liability-panel={account.kind === 'liability'} class="account-balance-panel">
                       <div class="account-balance-header">
                         <p class:liability-context={account.kind === 'liability'} class="account-balance-context">
-                          {accountSubtypeLabel(account, 'long')}
+                          {accountSubtypeLine(account)}
                         </p>
                         <p class="metric-label">Current balance</p>
                         <p
@@ -565,7 +595,7 @@
                       <div class="pill-row">
                         <span class={`pill status-pill ${accountStatusTone(account)}`}>{accountStatusLabel(account)}</span>
                         <span class:ok={account.importConfigured} class="pill">{modeLabel(account)}</span>
-                        <span class={`pill subtype-pill ${account.kind}`}>{accountSubtypeLabel(account, 'short')}</span>
+                        <span class={`pill subtype-pill ${accountSubtypePillTone(account)}`}>{accountSubtypePillLabel(account)}</span>
                         {#if account.last4}
                           <span class="pill">••{account.last4}</span>
                         {/if}
@@ -588,6 +618,12 @@
                           <span class="account-meta-note">
                             {account.openingBalanceDate ? shortDate(account.openingBalanceDate) : 'Add a starting date if older history is still missing.'}
                           </span>
+                        </div>
+
+                        <div class="account-meta-item">
+                          <dt>Subtype</dt>
+                          <dd>{accountSubtypePillLabel(account)}</dd>
+                          <span class="account-meta-note">{subtypeStateNote(account)}</span>
                         </div>
 
                         <div class="account-meta-item">
@@ -897,6 +933,18 @@
     background: rgba(15, 95, 136, 0.08);
     color: var(--brand-strong);
     border-color: rgba(15, 95, 136, 0.14);
+  }
+
+  .subtype-pill.suggested {
+    background: rgba(199, 146, 43, 0.12);
+    color: #8a5b0f;
+    border-color: rgba(199, 146, 43, 0.2);
+  }
+
+  .subtype-pill.broad {
+    background: rgba(10, 61, 89, 0.06);
+    color: var(--muted-foreground);
+    border-color: rgba(10, 61, 89, 0.1);
   }
 
   .account-meta-grid {

@@ -2,7 +2,16 @@
   import { page } from '$app/stores';
   import { onMount } from 'svelte';
   import { apiGet, apiPost } from '$lib/api';
-  import { accountKindFromLedger, accountSubtypeLabel, subtypeOptionsForKind } from '$lib/account-subtypes';
+  import {
+    BALANCE_SHEET_KIND_OPTIONS,
+    accountKindFromLedger,
+    accountSubtypeLabel,
+    describeAccountSubtype,
+    normalizeBalanceSheetKind,
+    subtypeMatchesKind,
+    subtypeOptionsForKind,
+    suggestedTrackedLedgerAccount
+  } from '$lib/account-subtypes';
   import { describeBalanceTrust } from '$lib/account-trust';
 
   type AppState = {
@@ -94,6 +103,7 @@
   };
 
   type AccountDraft = {
+    kind: 'asset' | 'liability';
     displayName: string;
     ledgerAccount: string;
     subtype: string;
@@ -149,8 +159,7 @@
   let loading = true;
   let saving = false;
   let inspecting = false;
-  let draftKind = 'other';
-  let draftSubtypePreview = 'Tracked account';
+  let draftSubtypePreview = 'Asset account';
 
   let editorMode: 'manual' | 'institution' | 'custom' = 'manual';
   let editingAccountId: string | null = null;
@@ -159,6 +168,7 @@
   let inspection: CsvInspection | null = null;
   let lastRouteKey = '';
   let needsSetupCount = 0;
+  let showAdvancedSettings = false;
 
   function defaultCurrencySymbol(value: string): string {
     switch (value.toUpperCase()) {
@@ -206,9 +216,15 @@
     };
   }
 
-  function newDraft(institutionId = ''): AccountDraft {
+  function templateKind(institutionId: string): 'asset' | 'liability' {
+    const template = templateById(institutionId);
+    return normalizeBalanceSheetKind(accountKindFromLedger(template?.suggestedLedgerPrefix));
+  }
+
+  function newDraft(institutionId = '', kind: 'asset' | 'liability' = institutionId ? templateKind(institutionId) : 'asset'): AccountDraft {
     const template = templateById(institutionId);
     return {
+      kind,
       displayName: template?.displayName ?? '',
       ledgerAccount: '',
       subtype: '',
@@ -224,30 +240,82 @@
     return institutionTemplates.find((template) => template.id === id);
   }
 
-  function ledgerSuffix(templateDisplayName: string, displayName: string): string {
-    let candidate = displayName.trim();
-    if (templateDisplayName && candidate.toLowerCase().startsWith(templateDisplayName.toLowerCase())) {
-      const remainder = candidate.slice(templateDisplayName.length).replace(/^[\s:._-]+/, '').trim();
-      if (remainder) candidate = remainder;
-    }
-    const parts = candidate
-      .split(/[^A-Za-z0-9]+/)
-      .filter(Boolean)
-      .map((part) => part[0].toUpperCase() + part.slice(1).toLowerCase());
-    return parts.join(':') || 'Account';
-  }
-
   function suggestedLedgerAccount(nextDraft: AccountDraft): string {
     const template = templateById(nextDraft.institutionId);
-    if (!template?.suggestedLedgerPrefix || !nextDraft.displayName.trim()) return '';
-    return `${template.suggestedLedgerPrefix}:${ledgerSuffix(template.displayName, nextDraft.displayName)}`;
+    return suggestedTrackedLedgerAccount({
+      kind: nextDraft.kind,
+      displayName: nextDraft.displayName,
+      institutionDisplayName: template?.displayName ?? null,
+      templateLedgerPrefix: editorMode === 'institution' ? template?.suggestedLedgerPrefix ?? null : null
+    });
   }
 
   function effectiveLedgerAccount(nextDraft: AccountDraft): string {
+    return nextDraft.ledgerAccount.trim() || suggestedLedgerAccount(nextDraft);
+  }
+
+  function accountKindHelp(kind: 'asset' | 'liability'): string {
+    return kind === 'liability'
+      ? 'Track something you owe, such as a credit card, car loan, mortgage, or line of credit.'
+      : 'Track something you own or hold, such as checking, savings, cash, investments, or property.';
+  }
+
+  function accountNamePlaceholder(): string {
     if (editorMode === 'institution') {
-      return nextDraft.ledgerAccount.trim() || suggestedLedgerAccount(nextDraft);
+      return draft.kind === 'liability' ? 'Wells Fargo Credit Card' : 'Wells Fargo Checking';
     }
-    return nextDraft.ledgerAccount.trim();
+    if (editorMode === 'custom') {
+      return draft.kind === 'liability' ? 'Capital One Card' : 'Brokerage Cash';
+    }
+    return draft.kind === 'liability' ? 'Car loan' : 'House savings';
+  }
+
+  function openingBalancePlaceholder(): string {
+    return draft.kind === 'liability' ? '-18500.00' : '1250.00';
+  }
+
+  function openingBalanceHint(kind: 'asset' | 'liability'): string {
+    return kind === 'liability'
+      ? 'Enter what you owed on the starting date. Liability opening balances are usually negative.'
+      : 'Enter what you owned or held on the starting date. Asset opening balances are usually positive.';
+  }
+
+  function subtypeHelperText() {
+    const subtypeState = describeAccountSubtype({
+      subtype: draft.subtype,
+      kind: draft.kind,
+      displayName: draft.displayName,
+      institutionDisplayName: templateById(draft.institutionId)?.displayName ?? null,
+      ledgerAccount: draft.ledgerAccount.trim()
+    });
+
+    if (subtypeState.source === 'saved') {
+      return `Saved as ${subtypeState.longLabel}. This stays separate from the advanced account name behind the scenes.`;
+    }
+    if (subtypeState.source === 'suggested') {
+      return `Suggested from the account name: ${subtypeState.longLabel}. Select it here if you want that subtype saved on the account.`;
+    }
+    return `Leave this broad for now, or pick a subtype so Accounts can show exactly what you own or owe.`;
+  }
+
+  function subtypeBadgeLabel(account: TrackedAccount): string {
+    const subtype = describeAccountSubtype(account);
+    if (subtype.source === 'suggested') return `Suggested: ${subtype.shortLabel}`;
+    return subtype.shortLabel;
+  }
+
+  function subtypeBadgeTone(account: TrackedAccount): string {
+    const subtype = describeAccountSubtype(account);
+    if (subtype.source === 'saved') return account.kind === 'liability' ? 'liability' : 'asset';
+    if (subtype.source === 'suggested') return 'suggested';
+    return 'broad';
+  }
+
+  function setDraftKind(kind: 'asset' | 'liability') {
+    updateDraft({
+      kind,
+      subtype: subtypeMatchesKind(draft.subtype, kind) ? draft.subtype : ''
+    });
   }
 
   function formatCurrency(value: number | null | undefined): string {
@@ -305,8 +373,9 @@
   function startManualAccount() {
     editorMode = 'manual';
     editingAccountId = null;
-    draft = newDraft();
+    draft = newDraft('', 'asset');
     draft.customProfile.currency = defaultCurrencySymbol(baseCurrency);
+    showAdvancedSettings = false;
     resetSampleState();
   }
 
@@ -315,14 +384,16 @@
     editingAccountId = null;
     draft = newDraft(institutionId);
     draft.customProfile.currency = defaultCurrencySymbol(baseCurrency);
+    showAdvancedSettings = false;
     resetSampleState();
   }
 
   function startCustomAccount() {
     editorMode = 'custom';
     editingAccountId = null;
-    draft = newDraft();
+    draft = newDraft('', 'asset');
     draft.customProfile.currency = defaultCurrencySymbol(baseCurrency);
+    showAdvancedSettings = false;
     resetSampleState();
   }
 
@@ -344,10 +415,21 @@
     const nextTemplate = templateById(institutionId);
     const previousTemplate = templateById(draft.institutionId);
     const previousSuggested = suggestedLedgerAccount(draft);
+    const nextTemplateKind = templateKind(institutionId);
 
     draft = {
       ...draft,
       institutionId,
+      kind:
+        draft.institutionId && draft.kind !== templateKind(draft.institutionId)
+          ? draft.kind
+          : nextTemplateKind,
+      subtype:
+        draft.institutionId && draft.kind !== templateKind(draft.institutionId)
+          ? draft.subtype
+          : subtypeMatchesKind(draft.subtype, nextTemplateKind)
+            ? draft.subtype
+            : '',
       displayName:
         !draft.displayName.trim() || draft.displayName === previousTemplate?.displayName
           ? nextTemplate?.displayName ?? ''
@@ -389,6 +471,7 @@
       : 'manual';
     editingAccountId = account.id;
     draft = {
+      kind: normalizeBalanceSheetKind(account.kind),
       displayName: account.displayName,
       ledgerAccount: account.ledgerAccount,
       subtype: account.subtype ?? '',
@@ -398,6 +481,7 @@
       openingBalanceDate: account.openingBalanceDate ?? '',
       customProfile: profileDraftFromAccount(account)
     };
+    showAdvancedSettings = false;
     inspection = null;
     selectedSampleFile = null;
   }
@@ -572,7 +656,7 @@
           accountId: payload.accountId,
           institutionId: payload.institutionId,
           displayName: payload.displayName,
-          ledgerAccount: draft.ledgerAccount.trim() || null,
+          ledgerAccount: payload.ledgerAccount,
           subtype: payload.subtype,
           last4: payload.last4,
           openingBalance: payload.openingBalance,
@@ -644,14 +728,14 @@
           editorMode === 'institution'
             ? 'supported import'
             : editorMode === 'custom'
-              ? 'custom CSV'
+          ? 'custom CSV'
               : 'manual'
         } account`;
-  $: draftKind = accountKindFromLedger(effectiveLedgerAccount(draft));
   $: draftSubtypePreview = accountSubtypeLabel({
     subtype: draft.subtype,
-    kind: draftKind,
+    kind: draft.kind,
     displayName: draft.displayName,
+    institutionDisplayName: templateById(draft.institutionId)?.displayName ?? null,
     ledgerAccount: effectiveLedgerAccount(draft)
   });
   $: needsSetupCount = trackedAccounts.filter((account) => balanceTrust(account).tone === 'warn').length;
@@ -700,8 +784,8 @@
       <p class="eyebrow">Account Setup</p>
       <h2 class="page-title">{workspaceName || 'Workspace'} configuration workspace</h2>
       <p class="subtitle">
-        Add manual accounts, supported statement imports, or custom CSV mappings here. The same accounts then roll back
-        into the overview, account inventory, and import workflow.
+        Create and edit the assets and liabilities you want reflected in balances and net worth here. Rules and Review
+        stay focused on income and expense categorization.
       </p>
     </div>
 
@@ -722,103 +806,23 @@
   </section>
 
   <section class="grid-2 accounts-layout">
-    <article class="view-card">
-      <div class="section-head">
+    <article class="view-card editor-card">
+      <div class="section-head editor-head">
         <div>
-          <p class="eyebrow">Inventory</p>
-          <h3>Tracked accounts</h3>
+          <p class="eyebrow">{editingAccountId ? 'Edit tracked account' : 'Create tracked account'}</p>
+          <h3>{editorTitle}</h3>
+          <p class="muted">
+            {#if editorMode === 'institution'}
+              Choose the statement source, then say whether this is something you own or something you owe.
+            {:else if editorMode === 'custom'}
+              Set up a CSV import for an asset or liability, then preview a real file in Import before applying it.
+            {:else}
+              Add something you own or owe even if you are tracking the balance manually for now.
+            {/if}
+          </p>
         </div>
         <a class="text-link" href="/accounts">Back to accounts</a>
       </div>
-
-      <div class="quick-actions">
-        <button class="btn btn-primary" type="button" on:click={startManualAccount}>Add manual account</button>
-        <button class="btn" type="button" on:click={() => startInstitutionAccount()}>Add supported account</button>
-        <button class="btn" type="button" on:click={startCustomAccount}>Add custom CSV</button>
-      </div>
-
-      {#if trackedAccounts.length === 0}
-        <div class="empty-panel">
-          <h4>No accounts yet</h4>
-          <p>Start with a supported institution, add a custom CSV import, or track an account manually with an opening balance.</p>
-        </div>
-      {:else}
-        <div class="account-list">
-          {#each trackedAccounts as account}
-            <article class="account-card">
-              <div class="account-card-head">
-                <div>
-                  <h4>{account.displayName}</h4>
-                  <p class="muted">{account.institutionDisplayName || 'Manual account'}</p>
-                </div>
-                <button class="inline-link" type="button" on:click={() => editAccount(account)}>Edit</button>
-              </div>
-
-              <div class="pill-row">
-                <span class={`pill ${balanceTrust(account).tone === 'warn' ? 'warn' : balanceTrust(account).tone === 'ok' ? 'ok' : ''}`}>
-                  {balanceTrust(account).shortLabel}
-                </span>
-                <span class:ok={account.importConfigured} class="pill">{modeLabel(account)}</span>
-                <span class="pill">{accountSubtypeLabel(account, 'short')}</span>
-                {#if account.last4}
-                  <span class="pill">••{account.last4}</span>
-                {/if}
-              </div>
-
-              <div class="account-metrics">
-                <div>
-                  <p class="metric-label">Current balance</p>
-                  <p class="metric-value">{formatCurrency(currentBalance(account.id))}</p>
-                </div>
-                <div>
-                  <p class="metric-label">Balance coverage</p>
-                  <p class="metric-value">{balanceTrust(account).label}</p>
-                </div>
-              </div>
-
-              <p class="muted small account-card-note">{balanceTrust(account).note}</p>
-              <p class="muted small account-card-note">
-                Starting balance:
-                {#if account.openingBalance}
-                  {formatStoredAmount(account.openingBalance)}
-                  {#if account.openingBalanceDate}
-                    on {shortDate(account.openingBalanceDate)}
-                  {/if}
-                {:else}
-                  Not set
-                {/if}
-              </p>
-
-              <details class="advanced-panel">
-                <summary>Account details</summary>
-                <p class="muted small">Ledger account: {account.ledgerAccount}</p>
-                {#if account.importAccountId}
-                  <p class="muted small">Import configuration: {account.importAccountId}</p>
-                {/if}
-                {#if account.importMode === 'custom' && account.importProfile}
-                  <p class="muted small">
-                    Custom CSV: {account.importProfile.displayName || 'Custom profile'} · {account.importProfile.currency || baseCurrency}
-                  </p>
-                {/if}
-              </details>
-            </article>
-          {/each}
-        </div>
-      {/if}
-    </article>
-
-    <article class="view-card editor-card">
-      <p class="eyebrow">{editingAccountId ? 'Edit account' : 'New account'}</p>
-      <h3>{editorTitle}</h3>
-      <p class="muted">
-        {#if editorMode === 'institution'}
-          Use this for a supported institution with a built-in parser.
-        {:else if editorMode === 'custom'}
-          Use this when you have a transaction CSV and want to control the mapping yourself.
-        {:else}
-          Use this for unsupported institutions, manual balances, or accounts you want in the overview before import automation exists.
-        {/if}
-      </p>
 
       <div class="mode-switch">
         <button class:active={editorMode === 'manual'} type="button" on:click={startManualAccount}>Manual</button>
@@ -827,6 +831,23 @@
         </button>
         <button class:active={editorMode === 'custom'} type="button" on:click={startCustomAccount}>Custom CSV</button>
       </div>
+
+      <section class="kind-panel">
+        <p class="selection-label">What are you tracking?</p>
+        <div class="kind-choice-grid">
+          {#each BALANCE_SHEET_KIND_OPTIONS as kindOption}
+            <button
+              class:active={draft.kind === kindOption.value}
+              class="kind-choice"
+              type="button"
+              on:click={() => setDraftKind(kindOption.value)}
+            >
+              <span class="kind-choice-label">{kindOption.label}</span>
+              <span class="kind-choice-note">{accountKindHelp(kindOption.value)}</span>
+            </button>
+          {/each}
+        </div>
+      </section>
 
       {#if editorMode === 'institution'}
         <div class="field">
@@ -837,47 +858,18 @@
               <option value={template.id}>{template.displayName}</option>
             {/each}
           </select>
+          <p class="muted small">The institution controls the parser. Asset vs liability is set above.</p>
         </div>
       {/if}
 
-      <div class="field">
-        <label for="displayName">Account name</label>
-        <input
-          id="displayName"
-          value={draft.displayName}
-          placeholder={editorMode === 'institution' ? 'Wells Fargo Checking' : editorMode === 'custom' ? 'Capital One Card' : 'Brokerage Cash'}
-          on:input={(e) => updateDraft({ displayName: (e.currentTarget as HTMLInputElement).value })}
-        />
-      </div>
-
-      <div class="field">
-        <label for="subtype">Account subtype</label>
-        <select id="subtype" value={draft.subtype} on:change={(e) => updateDraft({ subtype: (e.currentTarget as HTMLSelectElement).value })}>
-          <option value="">Use broad type for now</option>
-          {#each subtypeOptionsForKind(draftKind) as option}
-            <option value={option.value}>{option.label}</option>
-          {/each}
-        </select>
-        <p class="muted small">
-          Shows as {draftSubtypePreview} on Accounts. This stays separate from the underlying account name used behind
-          the scenes.
-        </p>
-      </div>
-
       <div class="field grid-2 compact">
         <div class="field">
-          <label for="ledgerAccount">Advanced account name</label>
+          <label for="displayName">Account name</label>
           <input
-            id="ledgerAccount"
-            value={draft.ledgerAccount}
-            placeholder={
-              editorMode === 'institution'
-                ? suggestedLedgerAccount(draft) || 'Assets:Bank:Institution:Account'
-                : editorMode === 'custom'
-                  ? 'Liabilities:Cards:Capital One'
-                  : 'Assets:Investments:Brokerage'
-            }
-            on:input={(e) => updateDraft({ ledgerAccount: (e.currentTarget as HTMLInputElement).value })}
+            id="displayName"
+            value={draft.displayName}
+            placeholder={accountNamePlaceholder()}
+            on:input={(e) => updateDraft({ displayName: (e.currentTarget as HTMLInputElement).value })}
           />
         </div>
         <div class="field">
@@ -891,13 +883,24 @@
         </div>
       </div>
 
+      <div class="field">
+        <label for="subtype">Account subtype</label>
+        <select id="subtype" value={draft.subtype} on:change={(e) => updateDraft({ subtype: (e.currentTarget as HTMLSelectElement).value })}>
+          <option value="">Keep it broad for now</option>
+          {#each subtypeOptionsForKind(draft.kind) as option}
+            <option value={option.value}>{option.label}</option>
+          {/each}
+        </select>
+        <p class="muted small">{subtypeHelperText()}</p>
+      </div>
+
       <div class="field grid-2 compact">
         <div class="field">
           <label for="openingBalance">Opening balance</label>
           <input
             id="openingBalance"
             value={draft.openingBalance}
-            placeholder="1250.00 or -850.00"
+            placeholder={openingBalancePlaceholder()}
             on:input={(e) => updateDraft({ openingBalance: (e.currentTarget as HTMLInputElement).value })}
           />
         </div>
@@ -911,6 +914,28 @@
           />
         </div>
       </div>
+
+      <p class="secondary-note">{openingBalanceHint(draft.kind)}</p>
+
+      <details class="advanced-panel" bind:open={showAdvancedSettings}>
+        <summary>Advanced account settings</summary>
+
+        <div class="field">
+          <label for="ledgerAccount">Advanced account name</label>
+          <input
+            id="ledgerAccount"
+            value={draft.ledgerAccount}
+            placeholder={suggestedLedgerAccount(draft) || (draft.kind === 'liability' ? 'Liabilities:Car:Loan' : 'Assets:House:Savings')}
+            on:input={(e) => updateDraft({ ledgerAccount: (e.currentTarget as HTMLInputElement).value })}
+          />
+        </div>
+
+        <div class="selection-summary compact-summary">
+          <p class="selection-label">Accounting name in use</p>
+          <p class="selection-value">{effectiveLedgerAccount(draft) || 'Choose an account name first'}</p>
+          <p class="muted">Leave this blank if the suggested name is good enough. You only need it when you want a custom internal account path.</p>
+        </div>
+      </details>
 
       {#if editorMode === 'custom'}
         <section class="custom-profile-panel">
@@ -1146,15 +1171,20 @@
       {/if}
 
       <div class="selection-summary">
-        <p class="selection-label">What this account adds</p>
-        <p class="selection-value">{draft.displayName.trim() || 'Fill in the account details to continue'}</p>
+        <p class="selection-label">What this adds to Accounts</p>
+        <p class="selection-value">
+          {draft.displayName.trim() || 'Fill in the account details to continue'}
+          {#if draft.displayName.trim()}
+            {` · ${draftSubtypePreview}`}
+          {/if}
+        </p>
         <p class="muted">
           {#if editorMode === 'institution'}
-            This account will be ready for statement imports and appear on Accounts as {draftSubtypePreview}.
+            Save this once, then use Import to bring in recent statement activity.
           {:else if editorMode === 'custom'}
             Save the mapping here, then use Import to preview a real statement before applying it.
           {:else}
-            Manual accounts appear in the overview even without import automation.
+            This account will show up in balances and net worth even before you attach import automation.
           {/if}
         </p>
       </div>
@@ -1173,10 +1203,96 @@
           </button>
         {/if}
       </div>
+    </article>
 
-      <p class="secondary-note">
-        Use signed opening balances. Assets are usually positive; liabilities such as credit-card debt should usually be negative.
-      </p>
+    <article class="view-card inventory-card">
+      <div class="section-head">
+        <div>
+          <p class="eyebrow">Inventory</p>
+          <h3>Tracked accounts</h3>
+          <p class="muted">Edit something you already track, or use the shortcuts below to start a new asset or liability.</p>
+        </div>
+      </div>
+
+      <div class="quick-actions">
+        <button class="btn btn-primary" type="button" on:click={startManualAccount}>Add manual account</button>
+        <button class="btn" type="button" on:click={() => startInstitutionAccount()}>Add supported account</button>
+        <button class="btn" type="button" on:click={startCustomAccount}>Add custom CSV</button>
+      </div>
+
+      {#if trackedAccounts.length === 0}
+        <div class="empty-panel">
+          <h4>No accounts yet</h4>
+          <p>Start with something you own or owe, then add a starting balance or import setup so totals are grounded.</p>
+        </div>
+      {:else}
+        <div class="account-list">
+          {#each trackedAccounts as account}
+            <article class="account-card">
+              <div class="account-card-head">
+                <div>
+                  <h4>{account.displayName}</h4>
+                  <p class="muted">{account.institutionDisplayName || 'Tracked manually'}</p>
+                </div>
+                <button class="inline-link" type="button" on:click={() => editAccount(account)}>Edit</button>
+              </div>
+
+              <div class="pill-row">
+                <span class={`pill ${balanceTrust(account).tone === 'warn' ? 'warn' : balanceTrust(account).tone === 'ok' ? 'ok' : ''}`}>
+                  {balanceTrust(account).shortLabel}
+                </span>
+                <span class:ok={account.importConfigured} class="pill">{modeLabel(account)}</span>
+                <span class={`pill subtype-pill ${subtypeBadgeTone(account)}`}>{subtypeBadgeLabel(account)}</span>
+                {#if account.last4}
+                  <span class="pill">••{account.last4}</span>
+                {/if}
+              </div>
+
+              <div class="account-metrics">
+                <div>
+                  <p class="metric-label">Current balance</p>
+                  <p class="metric-value">{formatCurrency(currentBalance(account.id))}</p>
+                </div>
+                <div>
+                  <p class="metric-label">Balance coverage</p>
+                  <p class="metric-value">{balanceTrust(account).label}</p>
+                </div>
+              </div>
+
+              <p class="muted small account-card-note">{balanceTrust(account).note}</p>
+              {#if describeAccountSubtype(account).source === 'suggested'}
+                <p class="muted small account-card-note">
+                  Subtype is only suggested right now. Save the account if you want that subtype stored explicitly.
+                </p>
+              {/if}
+              <p class="muted small account-card-note">
+                Starting balance:
+                {#if account.openingBalance}
+                  {formatStoredAmount(account.openingBalance)}
+                  {#if account.openingBalanceDate}
+                    on {shortDate(account.openingBalanceDate)}
+                  {/if}
+                {:else}
+                  Not set
+                {/if}
+              </p>
+
+              <details class="advanced-panel">
+                <summary>Accounting details</summary>
+                <p class="muted small">Ledger account: {account.ledgerAccount}</p>
+                {#if account.importAccountId}
+                  <p class="muted small">Import configuration: {account.importAccountId}</p>
+                {/if}
+                {#if account.importMode === 'custom' && account.importProfile}
+                  <p class="muted small">
+                    Custom CSV: {account.importProfile.displayName || 'Custom profile'} · {account.importProfile.currency || baseCurrency}
+                  </p>
+                {/if}
+              </details>
+            </article>
+          {/each}
+        </div>
+      {/if}
     </article>
   </section>
 {/if}
@@ -1224,6 +1340,8 @@
   }
 
   .accounts-layout {
+    display: grid;
+    grid-template-columns: minmax(0, 1.2fr) minmax(22rem, 0.88fr);
     align-items: start;
   }
 
@@ -1237,6 +1355,10 @@
 
   .compact-head {
     margin-bottom: 0.8rem;
+  }
+
+  .editor-head {
+    margin-bottom: 0;
   }
 
   .quick-actions {
@@ -1326,7 +1448,60 @@
 
   .editor-card {
     display: grid;
-    gap: 0.9rem;
+    gap: 1rem;
+    background:
+      radial-gradient(circle at top right, rgba(189, 231, 217, 0.28), transparent 34%),
+      linear-gradient(180deg, rgba(255, 255, 255, 0.94), rgba(247, 252, 249, 0.9));
+  }
+
+  .inventory-card {
+    display: grid;
+    gap: 0.95rem;
+  }
+
+  .kind-panel {
+    display: grid;
+    gap: 0.7rem;
+  }
+
+  .kind-choice-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.8rem;
+  }
+
+  .kind-choice {
+    display: grid;
+    gap: 0.28rem;
+    padding: 0.95rem 1rem;
+    border-radius: 1rem;
+    border: 1px solid rgba(10, 61, 89, 0.12);
+    background: rgba(255, 255, 255, 0.82);
+    color: inherit;
+    text-align: left;
+    cursor: pointer;
+    transition:
+      border-color 120ms ease,
+      box-shadow 120ms ease,
+      transform 120ms ease;
+  }
+
+  .kind-choice.active {
+    border-color: rgba(12, 103, 138, 0.36);
+    box-shadow: 0 14px 28px rgba(12, 103, 138, 0.12);
+    transform: translateY(-1px);
+  }
+
+  .kind-choice-label {
+    font-family: 'Space Grotesk', sans-serif;
+    font-size: 1rem;
+    color: var(--brand-strong);
+  }
+
+  .kind-choice-note {
+    color: var(--muted-foreground);
+    font-size: 0.92rem;
+    line-height: 1.5;
   }
 
   .mode-switch {
@@ -1353,6 +1528,19 @@
   .mode-switch button.active {
     background: #fff;
     box-shadow: 0 8px 20px rgba(17, 35, 52, 0.08);
+  }
+
+  .advanced-panel {
+    border: 1px solid rgba(10, 61, 89, 0.1);
+    border-radius: 1rem;
+    background: rgba(255, 255, 255, 0.72);
+    padding: 0.9rem 1rem;
+  }
+
+  .advanced-panel summary {
+    cursor: pointer;
+    font-weight: 700;
+    color: var(--brand-strong);
   }
 
   .compact {
@@ -1384,6 +1572,11 @@
     border-radius: 1rem;
     background: rgba(255, 255, 255, 0.72);
     padding: 0.9rem 1rem;
+  }
+
+  .compact-summary {
+    margin-top: 0.8rem;
+    padding: 0.8rem 0.9rem;
   }
 
   .selection-label {
@@ -1465,6 +1658,30 @@
     font-size: 0.84rem;
   }
 
+  .subtype-pill.asset {
+    background: rgba(15, 95, 136, 0.08);
+    color: var(--brand-strong);
+    border-color: rgba(15, 95, 136, 0.14);
+  }
+
+  .subtype-pill.liability {
+    background: rgba(154, 81, 41, 0.12);
+    color: #9a5129;
+    border-color: rgba(154, 81, 41, 0.18);
+  }
+
+  .subtype-pill.suggested {
+    background: rgba(199, 146, 43, 0.12);
+    color: #8a5b0f;
+    border-color: rgba(199, 146, 43, 0.2);
+  }
+
+  .subtype-pill.broad {
+    background: rgba(10, 61, 89, 0.06);
+    color: var(--muted-foreground);
+    border-color: rgba(10, 61, 89, 0.1);
+  }
+
   @media (max-width: 1200px) {
     .grid-4 {
       grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1477,6 +1694,8 @@
       align-items: stretch;
     }
 
+    .accounts-layout,
+    .kind-choice-grid,
     .hero-stats,
     .account-metrics,
     .mapping-grid,

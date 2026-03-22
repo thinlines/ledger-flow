@@ -16,6 +16,7 @@ Near-term work should prioritize:
 - finance-first copy and hierarchy on `/accounts` and `/accounts/configure`, especially for manual liabilities and opening balances
 - keeping Rules and Review focused on P&L categorization while Accounts remains the home for tracked balance-sheet accounts
 - the next bounded follow-on: paired financed asset + loan setup once the liability-account blocker is removed
+- define that follow-on narrowly: first guided support for creating a financed asset and the linked loan together from Accounts, without expanding into amortization, valuation automation, or broader transfer automation in the same cut
 
 ## Current Baseline
 
@@ -125,6 +126,7 @@ Expected outcome:
 - a user can trust what account subtype means and whether it was explicitly chosen or merely suggested
 - Accounts becomes credible as the home for balance-sheet setup rather than feeling like a thin wrapper over internal naming
 - the next bottleneck becomes the paired financed-asset workflow itself, not confusion about how to set up the liability account
+- the follow-on is now concrete: a guided "add the asset and its loan together" flow in Accounts, starting with vehicles and auto loans before broader pairing or valuation work
 
 ### 1. Setup and First-Run Flow
 

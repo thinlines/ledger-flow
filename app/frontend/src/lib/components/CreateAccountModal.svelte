@@ -2,12 +2,15 @@
   import { Dialog as DialogPrimitive } from 'bits-ui';
 
   export let open = false;
+  export let title = 'Create New Account';
   export let accountName = '';
   export let accountType = 'Expense';
   export let accountDescription = '';
   export let error = '';
   export let loading = false;
   export let description = 'Enter a fully qualified account name.';
+  export let accountNamePlaceholder = 'Assets:Transfers';
+  export let accountTypeLabel = 'Account Type';
   export let submitLabel = 'Create Account';
   export let allowedAccountTypes = ['Asset', 'Cash', 'Liability', 'Expense', 'Revenue', 'Equity'];
   export let onNameInput: () => void = () => {};
@@ -47,7 +50,7 @@
       aria-describedby="create-account-description"
       onOpenAutoFocus={handleOpenAutoFocus}
     >
-      <h3 id="create-account-title">Create New Account</h3>
+      <h3 id="create-account-title">{title}</h3>
       <p id="create-account-description" class="muted">{description}</p>
 
       <div class="field">
@@ -56,14 +59,14 @@
           id="newAccountName"
           bind:this={inputEl}
           bind:value={accountName}
-          placeholder="Assets:Transfers"
+          placeholder={accountNamePlaceholder}
           on:input={handleNameInput}
           on:keydown={handleEnterKey}
         />
       </div>
 
       <div class="field">
-        <label for="newAccountType">Account Type</label>
+        <label for="newAccountType">{accountTypeLabel}</label>
         <select id="newAccountType" bind:value={accountType}>
           {#each allowedAccountTypes as optionType (optionType)}
             <option value={optionType}>{optionType}</option>

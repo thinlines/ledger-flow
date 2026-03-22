@@ -1816,11 +1816,14 @@
   bind:accountName={newAccountName}
   bind:accountType={newAccountType}
   bind:accountDescription={newAccountDescription}
+  title="Create category"
   allowedAccountTypes={categoryAccountTypes}
   error={createAccountError}
   {loading}
-  description="Enter a fully qualified income or expense account name."
-  submitLabel={createAccountContext.mode === 'rule' ? 'Create Account and Save Rule' : 'Create Account'}
+  description="Create an income or expense category here. For tracked assets or liabilities such as loans, use Accounts instead."
+  accountNamePlaceholder="Expenses:Food:Dining"
+  accountTypeLabel="Category type"
+  submitLabel={createAccountContext.mode === 'rule' ? 'Create Category and Save Rule' : 'Create Category'}
   onNameInput={updateInferredTypeFromName}
   onClose={closeCreateAccountModal}
   onSubmit={createAccountAndContinue}

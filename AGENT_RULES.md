@@ -13,6 +13,7 @@ This file captures repo-specific rules for agents and contributors. Use it with 
 - Keep one dominant action per screen. Secondary actions should be sparse and obviously secondary.
 - Prefer summaries and action cues over dense diagnostics.
 - Advanced details belong in explicit reveals, secondary screens, or diagnostic surfaces.
+- When a user needs to create a tracked asset or liability, route that work into Accounts. Rules and Review may create income/expense categories, but they should not become the default place to create loans, credit cards, vehicles, or other balance-sheet accounts.
 
 ## Screen and Visual Rules
 
@@ -36,6 +37,7 @@ This file captures repo-specific rules for agents and contributors. Use it with 
 - Preserve the product distinction between tracked accounts as balance-sheet items and categories as income/expense classification.
 - Keep Accounts as the primary home for tracked balance-sheet account creation and management. Rules and review should not become the default path for creating liabilities or other tracked accounts.
 - Hide internal/system accounts such as equity or transfer-clearing accounts from default UI unless the user is in an advanced or audit-oriented path.
+- Treat the next paired financed-asset workflow as a follow-on to the explicit liability-account setup work, not as part of the same cut. First unblock clean liability creation; only then add guided pairing between something owned and the loan attached to it.
 
 ## Import Safety Rules
 

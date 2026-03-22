@@ -772,10 +772,14 @@
   bind:accountName={newAccountName}
   bind:accountType={newAccountType}
   bind:accountDescription={newAccountDescription}
+  title="Create category"
   allowedAccountTypes={categoryAccountTypes}
   error={createAccountError}
   {loading}
-  description="Enter a fully qualified income or expense account name."
+  description="Create an income or expense category here. For tracked assets or liabilities such as loans, use Accounts instead."
+  accountNamePlaceholder="Expenses:Auto:Fuel"
+  accountTypeLabel="Category type"
+  submitLabel="Create Category"
   onNameInput={updateInferredTypeFromName}
   onClose={closeCreateAccountModal}
   onSubmit={createAccountAndContinue}
