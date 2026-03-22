@@ -1,10 +1,12 @@
 from pathlib import Path
 
+from main import _tracked_account_ui
 from services.account_register_service import build_account_register
 from services.config_service import load_config
 from services.import_index import ImportIndex
 from services.import_service import _classify_transaction, _parse_transaction
 from services.import_service import scan_candidates
+from services.opening_balance_service import opening_balance_index
 from services.workspace_service import (
     WorkspaceManager,
     ensure_journal_includes,
@@ -321,6 +323,148 @@ def test_upsert_tracked_account_creates_manual_account_with_opening_balance(tmp_
     opening_content = opening_file.read_text(encoding="utf-8")
     assert "2026-01-15 Opening balance" in opening_content
     assert "Assets:Cash:Wallet  USD 250.00" in opening_content
+
+
+def test_upsert_tracked_account_can_offset_opening_balance_to_existing_tracked_account(tmp_path: Path) -> None:
+    manager = WorkspaceManager(tmp_path / "app")
+    workspace_root = tmp_path / "workspace"
+
+    manager.bootstrap_workspace(
+        workspace_path=workspace_root,
+        workspace_name="Test Books",
+        base_currency="USD",
+        start_year=2026,
+        import_accounts=[],
+    )
+
+    config = load_config(workspace_root / "settings" / "workspace.toml")
+    checking_id, _ = manager.upsert_tracked_account(
+        config,
+        {
+            "displayName": "Checking",
+            "ledgerAccount": "Assets:Bank:Checking",
+            "subtype": "checking",
+        },
+    )
+
+    config = load_config(workspace_root / "settings" / "workspace.toml")
+    loan_id, _ = manager.upsert_tracked_account(
+        config,
+        {
+            "displayName": "Car Loan",
+            "ledgerAccount": "Liabilities:Loans:Car",
+            "subtype": "loan",
+        },
+        opening_balance="-18500.00",
+        opening_balance_date="2026-01-15",
+        opening_balance_offset_account_id=checking_id,
+    )
+
+    opening_content = (workspace_root / "opening" / f"{loan_id}.journal").read_text(encoding="utf-8")
+    assert "2026-01-15 Opening balance" in opening_content
+    assert "Liabilities:Loans:Car  USD -18500.00" in opening_content
+    assert "Assets:Bank:Checking" in opening_content
+    assert "Equity:Opening-Balances" not in opening_content
+
+
+def test_upsert_tracked_account_keeps_offset_opening_balance_in_sync_when_offset_account_is_renamed(tmp_path: Path) -> None:
+    manager = WorkspaceManager(tmp_path / "app")
+    workspace_root = tmp_path / "workspace"
+
+    manager.bootstrap_workspace(
+        workspace_path=workspace_root,
+        workspace_name="Test Books",
+        base_currency="USD",
+        start_year=2026,
+        import_accounts=[],
+    )
+
+    config = load_config(workspace_root / "settings" / "workspace.toml")
+    checking_id, _ = manager.upsert_tracked_account(
+        config,
+        {
+            "displayName": "Checking",
+            "ledgerAccount": "Assets:Bank:Checking",
+            "subtype": "checking",
+        },
+    )
+
+    config = load_config(workspace_root / "settings" / "workspace.toml")
+    loan_id, _ = manager.upsert_tracked_account(
+        config,
+        {
+            "displayName": "Car Loan",
+            "ledgerAccount": "Liabilities:Loans:Car",
+            "subtype": "loan",
+        },
+        opening_balance="-18500.00",
+        opening_balance_date="2026-01-15",
+        opening_balance_offset_account_id=checking_id,
+    )
+
+    config = load_config(workspace_root / "settings" / "workspace.toml")
+    manager.upsert_tracked_account(
+        config,
+        {
+            "displayName": "Household Checking",
+            "ledgerAccount": "Assets:Bank:Household:Checking",
+            "subtype": "checking",
+        },
+        account_id=checking_id,
+    )
+
+    opening_content = (workspace_root / "opening" / f"{loan_id}.journal").read_text(encoding="utf-8")
+    assert "Liabilities:Loans:Car  USD -18500.00" in opening_content
+    assert "Assets:Bank:Household:Checking" in opening_content
+    assert "Assets:Bank:Checking" not in opening_content
+
+
+def test_tracked_account_ui_derives_opening_balance_offset_account_id_from_entry(tmp_path: Path) -> None:
+    manager = WorkspaceManager(tmp_path / "app")
+    workspace_root = tmp_path / "workspace"
+
+    manager.bootstrap_workspace(
+        workspace_path=workspace_root,
+        workspace_name="Test Books",
+        base_currency="USD",
+        start_year=2026,
+        import_accounts=[],
+    )
+
+    config = load_config(workspace_root / "settings" / "workspace.toml")
+    checking_id, _ = manager.upsert_tracked_account(
+        config,
+        {
+            "displayName": "Checking",
+            "ledgerAccount": "Assets:Bank:Checking",
+            "subtype": "checking",
+        },
+    )
+
+    config = load_config(workspace_root / "settings" / "workspace.toml")
+    loan_id, _ = manager.upsert_tracked_account(
+        config,
+        {
+            "displayName": "Car Loan",
+            "ledgerAccount": "Liabilities:Loans:Car",
+            "subtype": "loan",
+        },
+        opening_balance="-18500.00",
+        opening_balance_date="2026-01-15",
+        opening_balance_offset_account_id=checking_id,
+    )
+
+    refreshed = load_config(workspace_root / "settings" / "workspace.toml")
+    opening_by_id, opening_by_ledger = opening_balance_index(refreshed)
+    tracked_account_ui = _tracked_account_ui(
+        refreshed,
+        loan_id,
+        refreshed.tracked_accounts[loan_id],
+        opening_by_id,
+        opening_by_ledger,
+    )
+
+    assert tracked_account_ui["openingBalanceOffsetAccountId"] == checking_id
 
 
 def test_upsert_tracked_account_accepts_null_institution_id(tmp_path: Path) -> None:

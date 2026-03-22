@@ -17,12 +17,14 @@ HEADER_RE = re.compile(
 )
 POSTING_RE = re.compile(r"^\s+([^\s].*?)(?:(?:\s{2,}|\t+)(.+))?$")
 META_RE = re.compile(r"^\s*;\s*([^:]+):\s*(.*)$")
+OPENING_BALANCES_EQUITY = "Equity:Opening-Balances"
 
 
 @dataclass(frozen=True)
 class OpeningBalanceEntry:
     tracked_account_id: str | None
     ledger_account: str
+    offset_account: str
     amount: Decimal
     date: str
 
@@ -64,7 +66,7 @@ def _entry_from_transaction(lines: list[str]) -> OpeningBalanceEntry | None:
         return None
 
     tracked_account_id: str | None = None
-    primary_posting: tuple[str, Decimal] | None = None
+    postings: list[tuple[str, Decimal | None]] = []
 
     for line in lines[1:]:
         meta_match = META_RE.match(line)
@@ -79,21 +81,34 @@ def _entry_from_transaction(lines: list[str]) -> OpeningBalanceEntry | None:
             continue
 
         account = posting_match.group(1).strip()
-        amount = _parse_amount(posting_match.group(2) or "")
-        if amount is None:
-            continue
-        if infer_account_kind(account) not in {"asset", "liability"}:
-            continue
-        primary_posting = (account, amount)
-        break
+        postings.append((account, _parse_amount(posting_match.group(2) or "")))
 
-    if primary_posting is None:
+    primary_index = next(
+        (
+            idx
+            for idx, (account, amount) in enumerate(postings)
+            if amount is not None and infer_account_kind(account) in {"asset", "liability"}
+        ),
+        None,
+    )
+    if primary_index is None:
         return None
+
+    primary_account, primary_amount = postings[primary_index]
+    offset_account = next(
+        (
+            account
+            for idx, (account, _) in enumerate(postings)
+            if idx != primary_index
+        ),
+        OPENING_BALANCES_EQUITY,
+    )
 
     return OpeningBalanceEntry(
         tracked_account_id=tracked_account_id,
-        ledger_account=primary_posting[0],
-        amount=primary_posting[1],
+        ledger_account=primary_account,
+        offset_account=offset_account,
+        amount=primary_amount,
         date=header_match.group("date").replace("/", "-"),
     )
 
@@ -135,6 +150,7 @@ def write_opening_balance(
     ledger_account: str,
     amount_text: str,
     opening_date: str | None = None,
+    offset_account: str = OPENING_BALANCES_EQUITY,
 ) -> None:
     cleaned_amount = amount_text.strip()
     target_path = config.opening_bal_dir / f"{tracked_account_id}.journal"
@@ -151,6 +167,7 @@ def write_opening_balance(
         return
 
     date = (opening_date or "").strip() or _default_opening_date(config)
+    offset_ledger_account = offset_account.strip() or OPENING_BALANCES_EQUITY
     currency = str(config.workspace.get("base_currency", "USD")).strip() or "USD"
     target_path.parent.mkdir(parents=True, exist_ok=True)
     target_path.write_text(
@@ -159,7 +176,7 @@ def write_opening_balance(
                 f"{date} Opening balance",
                 f"    ; tracked_account_id: {tracked_account_id}",
                 f"    {ledger_account}  {currency} {_format_amount(amount)}",
-                "    Equity:Opening-Balances",
+                f"    {offset_ledger_account}",
                 "",
             ]
         ),

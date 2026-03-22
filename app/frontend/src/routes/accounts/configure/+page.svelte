@@ -62,6 +62,7 @@
     importProfile?: CustomImportProfile | null;
     openingBalance?: string | null;
     openingBalanceDate?: string | null;
+    openingBalanceOffsetAccountId?: string | null;
   };
 
   type DashboardOverview = {
@@ -111,6 +112,7 @@
     last4: string;
     openingBalance: string;
     openingBalanceDate: string;
+    openingBalanceOffsetAccountId: string;
     customProfile: CustomProfileDraft;
   };
 
@@ -232,6 +234,7 @@
       last4: '',
       openingBalance: '',
       openingBalanceDate: '',
+      openingBalanceOffsetAccountId: '',
       customProfile: newCustomProfileDraft()
     };
   }
@@ -278,6 +281,37 @@
     return kind === 'liability'
       ? 'Enter what you owed on the starting date. Liability opening balances are usually negative.'
       : 'Enter what you owned or held on the starting date. Asset opening balances are usually positive.';
+  }
+
+  function openingBalanceOffsetLabel(): string {
+    return 'Where should this starting balance come from?';
+  }
+
+  function openingBalanceOffsetOptions(): TrackedAccount[] {
+    return trackedAccounts
+      .filter((account) => account.id !== editingAccountId)
+      .sort((left, right) => left.displayName.localeCompare(right.displayName));
+  }
+
+  function openingBalanceOffsetOptionLabel(account: TrackedAccount): string {
+    return account.last4 ? `${account.displayName} ••${account.last4}` : account.displayName;
+  }
+
+  function selectedOpeningBalanceOffsetAccount(): TrackedAccount | null {
+    return openingBalanceOffsetOptions().find((account) => account.id === draft.openingBalanceOffsetAccountId) ?? null;
+  }
+
+  function openingBalanceOffsetHint(): string {
+    const selected = selectedOpeningBalanceOffsetAccount();
+    if (selected) {
+      return `Saving this starting balance will also adjust ${selected.displayName}. Use this only when that account is already tracked in Accounts.`;
+    }
+    if (openingBalanceOffsetOptions().length === 0) {
+      return 'Use the starting point option for now. Add the other tracked account first if this balance should reduce or increase something you already track.';
+    }
+    return draft.kind === 'liability'
+      ? 'Use the starting point option unless this debt began by reducing cash or another tracked account you already have here.'
+      : 'Use the starting point option unless the other side of this starting balance is another tracked account you already have here.';
   }
 
   function subtypeHelperText() {
@@ -479,6 +513,7 @@
       last4: account.last4 ?? '',
       openingBalance: account.openingBalance ?? '',
       openingBalanceDate: account.openingBalanceDate ?? '',
+      openingBalanceOffsetAccountId: account.openingBalanceOffsetAccountId ?? '',
       customProfile: profileDraftFromAccount(account)
     };
     showAdvancedSettings = false;
@@ -645,7 +680,8 @@
       institutionId: draft.institutionId || null,
       last4: draft.last4.trim() || null,
       openingBalance: draft.openingBalance,
-      openingBalanceDate: draft.openingBalanceDate || null
+      openingBalanceDate: draft.openingBalanceDate || null,
+      openingBalanceOffsetAccountId: draft.openingBalanceOffsetAccountId || null
     };
 
     saving = true;
@@ -916,6 +952,21 @@
       </div>
 
       <p class="secondary-note">{openingBalanceHint(draft.kind)}</p>
+
+      <div class="field">
+        <label for="openingBalanceOffset">{openingBalanceOffsetLabel()}</label>
+        <select
+          id="openingBalanceOffset"
+          value={draft.openingBalanceOffsetAccountId}
+          on:change={(e) => updateDraft({ openingBalanceOffsetAccountId: (e.currentTarget as HTMLSelectElement).value })}
+        >
+          <option value="">Starting point only (opening balances equity)</option>
+          {#each openingBalanceOffsetOptions() as account (account.id)}
+            <option value={account.id}>{openingBalanceOffsetOptionLabel(account)}</option>
+          {/each}
+        </select>
+        <p class="muted small">{openingBalanceOffsetHint()}</p>
+      </div>
 
       <details class="advanced-panel" bind:open={showAdvancedSettings}>
         <summary>Advanced account settings</summary>

@@ -37,7 +37,7 @@ from services.import_service import apply_import, archive_inbox_csv, preview_imp
 from services.import_profile_service import import_source_summary
 from services.institution_registry import canonical_template_id, display_name_for, list_templates
 from services.ledger_runner import CommandError, run_cmd
-from services.opening_balance_service import opening_balance_index
+from services.opening_balance_service import OPENING_BALANCES_EQUITY, opening_balance_index
 from services.rule_reapply_service import apply_rule_reapply, scan_rule_reapply
 from services.stage_store import StageStore
 from services.rules_service import (
@@ -57,7 +57,7 @@ from services.unknowns_service import (
     list_known_accounts,
     scan_unknowns,
 )
-from services.workspace_service import WorkspaceManager
+from services.workspace_service import OPENING_BALANCE_OFFSET_ACCOUNT_UNSET, WorkspaceManager
 
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
@@ -150,6 +150,13 @@ def _tracked_account_ui(
     ledger_account = str(account_cfg.get("ledger_account", "")).strip()
     if opening_entry is None and ledger_account:
         opening_entry = opening_by_ledger.get(ledger_account)
+    opening_balance_offset_account_id = None
+    if opening_entry is not None:
+        opening_balance_offset_account_id = _tracked_account_id_for_ledger_account(
+            config,
+            opening_entry.offset_account,
+            exclude_account_id=account_id,
+        )
 
     return {
         "id": account_id,
@@ -167,7 +174,31 @@ def _tracked_account_ui(
         "importProfile": _custom_profile_ui(source.get("profile")) if source and source["mode"] == "custom" else None,
         "openingBalance": str(opening_entry.amount) if opening_entry is not None else None,
         "openingBalanceDate": opening_entry.date if opening_entry is not None else None,
+        "openingBalanceOffsetAccountId": opening_balance_offset_account_id,
     }
+
+
+def _tracked_account_id_for_ledger_account(
+    config,
+    ledger_account: str | None,
+    *,
+    exclude_account_id: str | None = None,
+) -> str | None:
+    target = str(ledger_account or "").strip()
+    if not target or target == OPENING_BALANCES_EQUITY:
+        return None
+    for tracked_account_id, tracked_account in config.tracked_accounts.items():
+        if tracked_account_id == exclude_account_id:
+            continue
+        if str(tracked_account.get("ledger_account", "")).strip() == target:
+            return tracked_account_id
+    return None
+
+
+def _opening_balance_offset_request_value(req) -> object:
+    if "openingBalanceOffsetAccountId" not in req.model_fields_set:
+        return OPENING_BALANCE_OFFSET_ACCOUNT_UNSET
+    return req.openingBalanceOffsetAccountId
 
 
 @asynccontextmanager
@@ -367,6 +398,7 @@ def workspace_import_account_upsert(req: WorkspaceImportAccountUpsertRequest) ->
             account_id=req.accountId,
             opening_balance=req.openingBalance,
             opening_balance_date=req.openingBalanceDate,
+            opening_balance_offset_account_id=_opening_balance_offset_request_value(req),
         )
     except (OSError, ValueError) as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
@@ -403,6 +435,7 @@ def workspace_custom_import_account_upsert(req: CustomImportAccountUpsertRequest
             account_id=req.accountId,
             opening_balance=req.openingBalance,
             opening_balance_date=req.openingBalanceDate,
+            opening_balance_offset_account_id=_opening_balance_offset_request_value(req),
         )
     except (OSError, ValueError) as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
@@ -453,6 +486,7 @@ def tracked_account_upsert(req: TrackedAccountUpsertRequest) -> dict:
             account_id=req.accountId,
             opening_balance=req.openingBalance,
             opening_balance_date=req.openingBalanceDate,
+            opening_balance_offset_account_id=_opening_balance_offset_request_value(req),
         )
     except (OSError, ValueError) as e:
         raise HTTPException(status_code=400, detail=str(e)) from e

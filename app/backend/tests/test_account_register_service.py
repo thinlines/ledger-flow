@@ -160,6 +160,32 @@ def test_account_register_preserves_liability_signs_in_running_balance(tmp_path:
     assert first_charge["runningBalance"] == -83.21
 
 
+def test_account_register_shows_selected_tracked_account_for_opening_balance_detail(tmp_path: Path) -> None:
+    config = _make_config(tmp_path / "workspace")
+    (config.opening_bal_dir / "visa.journal").write_text(
+        """
+2026-02-01 Opening balance
+    ; tracked_account_id: visa
+    Liabilities:Cards:Visa  USD -850.00
+    Assets:Bank:Checking
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    register = build_account_register(config, "visa")
+
+    opening = register["entries"][0]
+    assert opening["payee"] == "Opening balance"
+    assert opening["detailLines"] == [
+        {
+            "label": "Wells Fargo Checking",
+            "account": "Assets:Bank:Checking",
+            "kind": "asset",
+        }
+    ]
+
+
 def test_account_register_uses_transfer_peer_metadata_for_pending_transfers(tmp_path: Path) -> None:
     config = _make_config(tmp_path / "workspace")
     (config.journal_dir / "2026.journal").write_text(

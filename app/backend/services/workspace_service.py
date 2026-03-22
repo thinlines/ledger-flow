@@ -10,7 +10,11 @@ from .custom_csv_service import normalize_custom_profile
 from .import_identity_service import source_payload_hash_for_lines
 from .import_index import ImportIndex
 from .institution_registry import get_template
-from .opening_balance_service import opening_balance_index, write_opening_balance
+from .opening_balance_service import (
+    OPENING_BALANCES_EQUITY,
+    opening_balance_index,
+    write_opening_balance,
+)
 
 TXN_START_RE = re.compile(r"^\d{4}[-/]\d{2}[-/]\d{2}")
 ACCOUNT_LINE_RE = re.compile(r"^(\s+)([^\s].*?)(\s{2,}|\t+)(.*)$")
@@ -41,6 +45,7 @@ ACCOUNT_SUBTYPE_KIND = {
     "mortgage": "liability",
     "other_liability": "liability",
 }
+OPENING_BALANCE_OFFSET_ACCOUNT_UNSET = object()
 
 
 def standard_commodity_blocks(base_currency: str) -> list[tuple[str, list[str]]]:
@@ -609,13 +614,29 @@ class WorkspaceManager:
         ledger_account: str,
         opening_balance: str | None = None,
         opening_balance_date: str | None = None,
+        opening_balance_offset_account_id: object = OPENING_BALANCE_OFFSET_ACCOUNT_UNSET,
     ) -> None:
         openings_by_id, _ = opening_balance_index(config)
+        existing = openings_by_id.get(tracked_account_id)
+        offset_account = self._resolve_opening_balance_offset_account(
+            config,
+            tracked_account_id=tracked_account_id,
+            ledger_account=ledger_account,
+            existing_offset_account=existing.offset_account if existing is not None else None,
+            opening_balance_offset_account_id=opening_balance_offset_account_id,
+        )
+
         if opening_balance is not None:
-            write_opening_balance(config, tracked_account_id, ledger_account, opening_balance, opening_balance_date)
+            write_opening_balance(
+                config,
+                tracked_account_id,
+                ledger_account,
+                opening_balance,
+                opening_balance_date,
+                offset_account=offset_account,
+            )
             return
 
-        existing = openings_by_id.get(tracked_account_id)
         if existing is None:
             return
 
@@ -625,7 +646,37 @@ class WorkspaceManager:
             ledger_account,
             str(existing.amount),
             opening_balance_date or existing.date,
+            offset_account=offset_account,
         )
+
+    def _resolve_opening_balance_offset_account(
+        self,
+        config: AppConfig,
+        *,
+        tracked_account_id: str,
+        ledger_account: str,
+        existing_offset_account: str | None,
+        opening_balance_offset_account_id: object = OPENING_BALANCE_OFFSET_ACCOUNT_UNSET,
+    ) -> str:
+        if opening_balance_offset_account_id is OPENING_BALANCE_OFFSET_ACCOUNT_UNSET:
+            return (existing_offset_account or OPENING_BALANCES_EQUITY).strip() or OPENING_BALANCES_EQUITY
+
+        selected_account_id = self._clean_optional_string(opening_balance_offset_account_id)
+        if selected_account_id is None:
+            return OPENING_BALANCES_EQUITY
+        if selected_account_id == tracked_account_id:
+            raise ValueError("Opening balance offset must be a different tracked account")
+
+        selected_account = config.tracked_accounts.get(selected_account_id)
+        if selected_account is None:
+            raise ValueError(f"Unknown tracked account for opening balance offset: {selected_account_id}")
+
+        offset_account = str(selected_account.get("ledger_account", "")).strip()
+        if not offset_account:
+            raise ValueError(f"Tracked account is missing a ledger account: {selected_account_id}")
+        if offset_account == ledger_account:
+            raise ValueError("Opening balance offset must be a different account")
+        return offset_account
 
     def _rewrite_posting_account(
         self,
@@ -762,6 +813,31 @@ class WorkspaceManager:
                         txns=txns,
                     )
 
+    def _migrate_opening_balance_postings(
+        self,
+        config: AppConfig,
+        source_ledger_account: str,
+        target_ledger_account: str,
+    ) -> None:
+        source = source_ledger_account.strip()
+        target = target_ledger_account.strip()
+        if not source or not target or source == target:
+            return
+
+        for journal_path in sorted(config.opening_bal_dir.glob("*.journal")):
+            if not journal_path.exists():
+                continue
+
+            updated_lines: list[str] = []
+            changed = False
+            for line in journal_path.read_text(encoding="utf-8").splitlines():
+                rewritten, replaced = self._rewrite_posting_account(line, source, target)
+                updated_lines.append(rewritten)
+                changed = changed or replaced
+
+            if changed:
+                journal_path.write_text("\n".join(updated_lines).rstrip() + "\n", encoding="utf-8")
+
     def bootstrap_workspace(
         self,
         workspace_path: Path,
@@ -883,6 +959,7 @@ class WorkspaceManager:
         *,
         opening_balance: str | None = None,
         opening_balance_date: str | None = None,
+        opening_balance_offset_account_id: object = OPENING_BALANCE_OFFSET_ACCOUNT_UNSET,
     ) -> tuple[str, dict]:
         existing_accounts = {
             key: dict(value)
@@ -959,12 +1036,18 @@ class WorkspaceManager:
             existing_accounts[normalized["id"]]["ledger_account"],
             import_account_id=normalized["id"],
         )
+        self._migrate_opening_balance_postings(
+            refreshed,
+            previous_ledger_account,
+            existing_accounts[normalized["id"]]["ledger_account"],
+        )
         self._sync_opening_balance(
             refreshed,
             tracked_account_id,
             existing_accounts[normalized["id"]]["ledger_account"],
             opening_balance=opening_balance,
             opening_balance_date=opening_balance_date,
+            opening_balance_offset_account_id=opening_balance_offset_account_id,
         )
 
         return normalized["id"], existing_accounts[normalized["id"]]
@@ -977,6 +1060,7 @@ class WorkspaceManager:
         *,
         opening_balance: str | None = None,
         opening_balance_date: str | None = None,
+        opening_balance_offset_account_id: object = OPENING_BALANCE_OFFSET_ACCOUNT_UNSET,
     ) -> tuple[str, dict]:
         existing_accounts = {
             key: dict(value)
@@ -1054,12 +1138,18 @@ class WorkspaceManager:
             existing_accounts[normalized["id"]]["ledger_account"],
             import_account_id=normalized["id"],
         )
+        self._migrate_opening_balance_postings(
+            refreshed,
+            previous_ledger_account,
+            existing_accounts[normalized["id"]]["ledger_account"],
+        )
         self._sync_opening_balance(
             refreshed,
             tracked_account_id,
             existing_accounts[normalized["id"]]["ledger_account"],
             opening_balance=opening_balance,
             opening_balance_date=opening_balance_date,
+            opening_balance_offset_account_id=opening_balance_offset_account_id,
         )
 
         return normalized["id"], existing_accounts[normalized["id"]]
@@ -1072,6 +1162,7 @@ class WorkspaceManager:
         *,
         opening_balance: str | None = None,
         opening_balance_date: str | None = None,
+        opening_balance_offset_account_id: object = OPENING_BALANCE_OFFSET_ACCOUNT_UNSET,
     ) -> tuple[str, dict]:
         existing_tracked_accounts = {
             key: dict(value)
@@ -1124,11 +1215,17 @@ class WorkspaceManager:
             previous_ledger_account,
             normalized["ledger_account"],
         )
+        self._migrate_opening_balance_postings(
+            refreshed,
+            previous_ledger_account,
+            normalized["ledger_account"],
+        )
         self._sync_opening_balance(
             refreshed,
             normalized["id"],
             normalized["ledger_account"],
             opening_balance=opening_balance,
             opening_balance_date=opening_balance_date,
+            opening_balance_offset_account_id=opening_balance_offset_account_id,
         )
         return normalized["id"], existing_tracked_accounts[normalized["id"]]

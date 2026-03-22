@@ -48,6 +48,23 @@ def _tracked_account_display(config: AppConfig, tracked_account_id: str | None) 
     )
 
 
+def _tracked_account_by_ledger_account(
+    config: AppConfig,
+    ledger_account: str,
+) -> tuple[str | None, str | None, str | None]:
+    target = ledger_account.strip()
+    for tracked_account_id, tracked_account in config.tracked_accounts.items():
+        tracked_ledger_account = str(tracked_account.get("ledger_account", "")).strip()
+        if tracked_ledger_account != target:
+            continue
+        return (
+            tracked_account_id,
+            str(tracked_account.get("display_name", tracked_account_id)),
+            infer_account_kind(tracked_ledger_account),
+        )
+    return (None, None, None)
+
+
 def _source_tracked_account_details(
     config: AppConfig,
     transaction,
@@ -185,6 +202,22 @@ def _pending_transfer_event_for_peer_account(
     )
 
 
+def _opening_balance_detail_line(config: AppConfig, offset_account: str) -> dict[str, str]:
+    tracked_account_id, tracked_name, tracked_kind = _tracked_account_by_ledger_account(config, offset_account)
+    if tracked_name:
+        return {
+            "label": tracked_name,
+            "account": offset_account,
+            "kind": tracked_kind or infer_account_kind(offset_account),
+        }
+
+    return {
+        "label": pretty_account_name(offset_account),
+        "account": offset_account,
+        "kind": infer_account_kind(offset_account),
+    }
+
+
 def build_account_register(config: AppConfig, account_id: str) -> dict:
     tracked_account = config.tracked_accounts.get(account_id)
     if tracked_account is None:
@@ -210,13 +243,7 @@ def build_account_register(config: AppConfig, account_id: str) -> dict:
                 summary="Starting point for this account",
                 is_unknown=False,
                 is_opening_balance=True,
-                detail_lines=[
-                    {
-                        "label": "Opening balances",
-                        "account": "Equity:Opening-Balances",
-                        "kind": "equity",
-                    }
-                ],
+                detail_lines=[_opening_balance_detail_line(config, opening_entry.offset_account)],
             )
         )
 

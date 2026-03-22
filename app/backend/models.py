@@ -115,6 +115,7 @@ class WorkspaceImportAccountRequest(BaseModel):
     last4: str | None = None
     openingBalance: str | None = None
     openingBalanceDate: str | None = Field(default=None, pattern=DATE_PATTERN)
+    openingBalanceOffsetAccountId: str | None = None
 
 
 class WorkspaceBootstrapRequest(BaseModel):
@@ -162,6 +163,7 @@ class CustomImportAccountUpsertRequest(BaseModel):
     last4: str | None = None
     openingBalance: str | None = None
     openingBalanceDate: str | None = Field(default=None, pattern=DATE_PATTERN)
+    openingBalanceOffsetAccountId: str | None = None
     customProfile: CustomCsvProfileRequest
 
 
@@ -174,3 +176,4 @@ class TrackedAccountUpsertRequest(BaseModel):
     last4: str | None = None
     openingBalance: str | None = None
     openingBalanceDate: str | None = Field(default=None, pattern=DATE_PATTERN)
+    openingBalanceOffsetAccountId: str | None = None
