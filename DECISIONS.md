@@ -68,4 +68,12 @@ This document records stable product and architecture choices that explain why t
 
 **Why:** Once the product separates tracked accounts from categories, users need a first-class, finance-first way to create liabilities such as car loans without learning ledger prefixes or accounting internals.
 
-**Implication:** Accounts UI must expose asset-vs-liability choice directly, subtype state must be trustworthy instead of silently inferred, and financed asset-plus-loan workflows belong in Accounts rather than being pushed into rules or review. The immediate next workflow after this cut is a guided pairing path for something owned plus the liability financing it, such as a vehicle with its auto loan.
+**Implication:** Accounts UI must expose asset-vs-liability choice directly, subtype state must be trustworthy instead of silently inferred, and balance-sheet workflows belong in Accounts rather than being pushed into rules or review.
+
+## 9. Prefer Journal-Derived Opening Balance Offsets Over New Link State
+
+**Decision:** For the current financed-liability cut, the product should let users choose an opening-balance offset account without introducing a new persistent pairing or account-relationship model.
+
+**Why:** The user problem is immediate accounting correctness for the starting entry, not long-term account-link semantics. A lighter implementation solves the blocker faster and avoids prematurely hardening a product concept the app may not need yet.
+
+**Implication:** Opening-balance edit flows should derive the current offset from the existing opening-balance transaction, default to `Equity:Opening-Balances`, and only branch to another tracked account when the user explicitly chooses that accounting treatment.

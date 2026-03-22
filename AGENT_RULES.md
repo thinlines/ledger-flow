@@ -14,6 +14,7 @@ This file captures repo-specific rules for agents and contributors. Use it with 
 - Prefer summaries and action cues over dense diagnostics.
 - Advanced details belong in explicit reveals, secondary screens, or diagnostic surfaces.
 - When a user needs to create a tracked asset or liability, route that work into Accounts. Rules and Review may create income/expense categories, but they should not become the default place to create loans, credit cards, vehicles, or other balance-sheet accounts.
+- For the opening-balance offset task, use plain-language labels such as where the starting balance comes from or what it offsets. Do not imply a durable account link if the product is only choosing how to write the opening entry.
 
 ## Screen and Visual Rules
 
@@ -37,7 +38,7 @@ This file captures repo-specific rules for agents and contributors. Use it with 
 - Preserve the product distinction between tracked accounts as balance-sheet items and categories as income/expense classification.
 - Keep Accounts as the primary home for tracked balance-sheet account creation and management. Rules and review should not become the default path for creating liabilities or other tracked accounts.
 - Hide internal/system accounts such as equity or transfer-clearing accounts from default UI unless the user is in an advanced or audit-oriented path.
-- Treat the next paired financed-asset workflow as a follow-on to the explicit liability-account setup work, not as part of the same cut. First unblock clean liability creation; only then add guided pairing between something owned and the loan attached to it.
+- For the current opening-balance offset cut, do not add a persistent paired-account or relationship field unless the task explicitly expands. Derive edit state from the opening-balance transaction itself and keep the scope focused on writing the correct starting entry.
 
 ## Import Safety Rules
 

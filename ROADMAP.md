@@ -7,16 +7,15 @@ It is a planning document, not a strict delivery contract.
 
 ## Current Delivery Focus
 
-As of March 21, 2026, Ledger Flow has the core setup, dashboard, accounts, import, review, and rules surfaces in place. The main delivery risk is no longer generic missing surface area; it is that balance-sheet account setup in Accounts is not yet clear or trustworthy enough for real use.
+As of March 21, 2026, Ledger Flow has the core setup, dashboard, accounts, import, review, and rules surfaces in place. Explicit asset-versus-liability setup in Accounts now appears substantially landed. The immediate blocker has narrowed: opening balances for financed liabilities still need a way to offset an existing tracked account instead of always posting to opening-balances equity.
 
 Near-term work should prioritize:
 
-- explicit asset-vs-liability account creation in Accounts without requiring advanced ledger knowledge
-- consistent, trustworthy subtype behavior instead of mixing saved subtype state with inferred UI badges
-- finance-first copy and hierarchy on `/accounts` and `/accounts/configure`, especially for manual liabilities and opening balances
+- a plain-language opening-balance offset selector in Accounts create and edit flows
+- defaulting that selector to opening-balances equity while allowing an existing tracked account as the offset when needed
+- deriving edit state from the existing opening-balance transaction instead of introducing a new persistent account-link model
 - keeping Rules and Review focused on P&L categorization while Accounts remains the home for tracked balance-sheet accounts
-- the next bounded follow-on: paired financed asset + loan setup once the liability-account blocker is removed
-- define that follow-on narrowly: first guided support for creating a financed asset and the linked loan together from Accounts, without expanding into amortization, valuation automation, or broader transfer automation in the same cut
+- deferring broader paired asset-plus-loan workflows until this accounting-correctness cut lands cleanly
 
 ## Current Baseline
 
@@ -34,9 +33,9 @@ The app already has a usable bookkeeping workflow:
 
 Important limitations in the current baseline:
 
-- the manual account editor still hides asset-vs-liability choice behind advanced account naming, which blocks clean liability setup for users such as someone adding a car loan
-- account subtype can appear authoritative in the UI even when the saved subtype is unset, because the product can infer badges from naming
-- the product does not yet offer a first-class paired financed-asset workflow for cases such as a vehicle plus its auto loan
+- opening balances still default to `Equity:Opening-Balances`, which does not work for cases where a new liability should offset an already tracked asset
+- the product does not yet let the user choose an existing tracked account as the opening-balance offset from Accounts create and edit flows
+- the product does not yet offer a broader financed-asset workflow for cases such as a vehicle plus its auto loan
 - review and rule flows still need clearer guardrails when the user is creating a category versus a tracked balance-sheet account
 - setup completion, import results, and review handoffs still need more polish to feel like one continuous finance workflow
 - the sectioned shell is in place, but cross-route consistency and presentation polish still need work as the product surface grows
@@ -99,34 +98,32 @@ Merchant management remains desirable, but it is not an active priority right no
 
 ## Priorities
 
-### 0. Account Setup Clarity and Trust
+### 0. Opening Balance Offset Selection
 
-Treat the current product surface as the primary milestone, but focus the immediate cut line on Accounts. Before broader new workflows land, the user must be able to create tracked assets and liabilities confidently enough to trust balances and net worth.
+Treat the current product surface as the primary milestone, but focus the immediate cut line on accounting correctness for opening balances in Accounts. Before broader financed-asset workflows land, the user must be able to create a liability and point its starting balance at the correct existing tracked account.
 
 Current status:
 
 - the sectioned app shell, overview dashboard, accounts inventory and configuration, staged setup, import flow, unknown review, and rules editor are all implemented
-- the highest-leverage remaining blocker is no longer generic surface polish; it is that Accounts does not yet make asset-vs-liability setup explicit or trustworthy enough for real balance-sheet use
-- the product now has enough breadth that the next work should sharpen the current account model before adding broader workflow surface area
+- explicit asset-versus-liability setup now appears to be in place in Accounts
+- the highest-leverage remaining blocker is that opening balances still always offset opening-balances equity instead of optionally offsetting an existing tracked account
+- the product now has enough breadth that the next work should solve this accounting-correctness gap before adding broader financed-asset workflow surface area
 
 Scope:
 
-- add an explicit asset-vs-liability choice to account creation and edit flows instead of making users rely on advanced account naming
-- make subtype behavior trustworthy:
-  - explicit subtype selection should persist as product state
-  - inferred subtype presentation should be clearly labeled as suggested or deliberately persisted
-- rewrite manual-account copy, placeholders, and summaries so the main path is finance-first instead of ledger-first
-- improve `/accounts/configure` hierarchy on desktop and mobile so the active create/edit flow is the dominant task
+- add a plain-language opening-balance offset selector near the opening-balance controls in Accounts create and edit flows
+- default the selector to `Equity:Opening-Balances`, but allow the user to choose an existing tracked account when the starting balance should offset something already tracked
+- derive the current offset from the existing opening-balance transaction when editing instead of introducing a new persistent relationship model
+- disallow invalid choices such as offsetting an account against itself
+- keep copy finance-first and explicit about what the starting balance will offset
 - keep Rules and Review focused on P&L categorization while Accounts remains the primary home for tracked balance-sheet accounts
-- define the next bounded follow-on for paired financed asset + loan setup once liability-account setup is unblocked
 
 Expected outcome:
 
-- a user can create a manual liability tracked account such as a car loan without editing advanced account names
-- a user can trust what account subtype means and whether it was explicitly chosen or merely suggested
-- Accounts becomes credible as the home for balance-sheet setup rather than feeling like a thin wrapper over internal naming
-- the next bottleneck becomes the paired financed-asset workflow itself, not confusion about how to set up the liability account
-- the follow-on is now concrete: a guided "add the asset and its loan together" flow in Accounts, starting with vehicles and auto loans before broader pairing or valuation work
+- a user can create a liability such as a car loan and set its starting balance against the correct existing tracked account
+- the resulting opening-balance transaction is accounting-correct without requiring a new persistent account-pairing concept
+- Accounts stays credible as the home for balance-sheet setup while the product avoids premature relationship modeling
+- the next bottleneck becomes whether to add a broader guided financed-asset workflow, not whether the initial opening entry lands in the right place
 
 ### 1. Setup and First-Run Flow
 
@@ -170,7 +167,7 @@ Current status:
 - tracked accounts can be added and edited after workspace bootstrap through dedicated Accounts surfaces
 - manual accounts, supported institutions, custom CSV accounts, opening balances, and user-facing account subtypes are implemented
 - the dashboard and register views already include opening-balance-backed balances and balance-source cues
-- the remaining work is now centered on making account type explicit, making subtype state trustworthy, and defining the next paired financed-asset workflow
+- the remaining work is now centered on opening-balance offset selection, then deciding whether a broader financed-asset workflow is worth adding afterward
 
 Product model direction:
 
@@ -185,9 +182,9 @@ Product model direction:
 
 Remaining scope:
 
-- explicit account-type choice in Accounts flows so liabilities do not require advanced ledger naming
-- clearer subtype persistence rules so badges do not silently imply saved state when the subtype is only inferred
-- a paired financed asset + loan setup flow for cases such as a vehicle and its auto loan
+- opening-balance offset selection so liabilities can start against an existing tracked asset instead of always offsetting equity
+- edit-time derivation of that offset from the existing opening-balance transaction instead of a new persistent account-link field
+- a broader financed asset + loan setup flow for cases such as a vehicle and its auto loan, if the smaller opening-balance cut proves insufficient
 - valuation workflow for manually tracked assets such as vehicles and real estate, including an as-of date and clear freshness cues
 - optional linking between related balance-sheet accounts such as a home and its mortgage or a vehicle and its auto loan
 - add/delete/archive/reorder account management as appropriate

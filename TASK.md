@@ -2,33 +2,34 @@
 
 ## Objective
 
-Unblock balance-sheet account setup in Accounts so a user can create liability accounts such as car loans and place opening balances correctly without editing advanced account names or relying on inferred UI labels.
+Unblock financed liability opening balances in Accounts so a user can create a liability such as a car loan and have its starting balance offset the correct existing tracked account instead of always posting to opening-balances equity.
 
 ## Deliverables
 
-- Make asset vs liability an explicit primary choice in Accounts setup and edit flows.
-- Make subtype behavior trustworthy across account creation and account inventory:
-  - explicit subtype selection should be saved as product state
-  - inferred subtype presentation should either be persisted deliberately or clearly labeled as suggested, not shown as authoritative state
-- Rewrite manual-account copy, placeholders, and summaries so the main path talks about what the user owns or owes, not ledger internals.
-- Improve `/accounts/configure` hierarchy on desktop and mobile so the active create/edit flow is dominant.
-- Keep Rules and Review focused on P&L categorization; Accounts remains the home for tracked balance-sheet accounts.
-- Define the immediate follow-on for a paired financed asset + loan flow once liability account setup is unblocked.
-- Keep roadmap, decisions, and agent rules aligned with this cut line while the work lands.
+- Add a plain-language selector near opening balance in Accounts create and edit flows so the user can choose where the starting balance comes from.
+- Default that selector to opening-balances equity, but allow the user to pick an existing tracked account when the starting liability should offset something already tracked.
+- Limit this cut to accounting correctness for the opening entry:
+  - do not introduce a durable paired-account or relationship model
+  - do not frame the selector as a long-term account link
+- Write the opening-balance transaction against the selected offset account instead of `Equity:Opening-Balances` when a tracked account is chosen.
+- Make edit flows derive the selected offset from the existing opening-balance transaction itself instead of storing new relationship state on the tracked account.
+- Keep copy finance-first and concrete so a user understands what account the starting balance will reduce or increase.
+- Keep roadmap, decisions, and agent rules aligned with this narrower cut line while the work lands.
 
 ## Success Criteria
 
-- A user can create a manual liability tracked account such as a car loan from Accounts without editing the advanced account name.
-- A user can enter an opening balance for that liability confidently and understand how it will affect balances.
-- The product no longer presents inferred account subtypes as if they were saved state.
-- The next bottleneck after this task is the paired financed-asset workflow itself, not confusion about how to create the liability account.
+- A user can create or edit a liability tracked account such as a car loan and choose an existing tracked account as the starting-balance offset.
+- The resulting opening-balance journal entry posts against the selected account instead of `Equity:Opening-Balances`.
+- The default path still works for ordinary opening balances that should continue to offset equity.
+- The product does not add a new persistent account-pairing model just to support this starting-balance fix.
 
 ## Out of Scope
 
+- Durable account-link or paired-account state on tracked accounts
+- Guided vehicle-plus-loan or property-plus-mortgage creation flows
 - Full amortization schedules or payoff planning
 - Automated valuation or depreciation for vehicles or real estate
 - Broad reporting, budgeting, or forecasting expansion
-- General transfer automation beyond the bounded financed-asset follow-on
 
 ## Replacement Rule
 
