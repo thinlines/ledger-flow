@@ -9,6 +9,7 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 
 from models import (
+    ImportCandidateRemoveRequest,
     CustomImportAccountUpsertRequest,
     CreateAccountRequest,
     ImportPreviewRequest,
@@ -33,7 +34,14 @@ from services.custom_csv_service import inspect_csv_bytes
 from services.dashboard_service import build_dashboard_overview
 from services.import_history_service import list_import_history, record_applied_import, undo_import
 from services.import_index import ImportIndex
-from services.import_service import apply_import, archive_inbox_csv, preview_import, scan_candidates
+from services.import_service import (
+    ImportPreviewBlockedError,
+    apply_import,
+    archive_inbox_csv,
+    preview_import_safely,
+    remove_inbox_csv,
+    scan_candidates,
+)
 from services.import_profile_service import import_source_summary
 from services.institution_registry import canonical_template_id, display_name_for, list_templates
 from services.ledger_runner import CommandError, run_cmd
@@ -239,6 +247,24 @@ def _same_resolved_path(left: str | None, right: Path) -> bool:
         return Path(left).resolve() == right.resolve()
     except OSError:
         return False
+
+
+def _import_stage_payload(csv_path: str, year: str, import_account_id: str, data: dict) -> dict:
+    payload = {
+        "kind": "import",
+        "status": "ready",
+        "csvPath": csv_path,
+        "year": year,
+        "importAccountId": import_account_id,
+        **data,
+    }
+    stage_id = stages.create(payload)
+    payload["stageId"] = stage_id
+    return payload
+
+
+def _raise_import_preview_blocked(error: ImportPreviewBlockedError) -> None:
+    raise HTTPException(status_code=400, detail=error.as_detail()) from error
 
 
 def _unknown_stage_summary(groups: list[dict], selections: dict[str, dict]) -> dict:
@@ -562,6 +588,7 @@ async def import_upload(
     file: UploadFile = File(...),
     year: str = Form(...),
     importAccountId: str = Form(...),
+    preview: bool = Form(default=False),
 ) -> dict:
     config = _require_workspace_config()
 
@@ -581,6 +608,25 @@ async def import_upload(
     if not content:
         raise HTTPException(status_code=400, detail="Uploaded file is empty")
     dest.write_bytes(content)
+
+    if preview:
+        try:
+            data = preview_import_safely(
+                config,
+                dest,
+                year,
+                importAccountId,
+                keep_file_on_failure=False,
+            )
+        except ImportPreviewBlockedError as e:
+            _raise_import_preview_blocked(e)
+        return {
+            "uploaded": True,
+            "fileName": safe_name,
+            "absPath": str(dest.resolve()),
+            "sizeBytes": len(content),
+            **_import_stage_payload(str(dest.resolve()), year, importAccountId, data),
+        }
 
     return {
         "uploaded": True,
@@ -663,27 +709,38 @@ def accounts_create(req: CreateAccountRequest) -> dict:
 @app.post("/api/import/preview")
 def import_preview(req: ImportPreviewRequest) -> dict:
     config = _require_workspace_config()
+    if req.importAccountId not in config.import_accounts:
+        raise HTTPException(status_code=400, detail="Unknown import account selected")
     try:
-        data = preview_import(
+        data = preview_import_safely(
             config,
             Path(req.csvPath),
             req.year,
             req.importAccountId,
+            keep_file_on_failure=True,
         )
-    except (FileNotFoundError, ValueError, CommandError) as e:
+    except ImportPreviewBlockedError as e:
+        _raise_import_preview_blocked(e)
+    except FileNotFoundError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
 
-    payload = {
-        "kind": "import",
-        "status": "ready",
-        "csvPath": req.csvPath,
-        "year": req.year,
-        "importAccountId": req.importAccountId,
-        **data,
+    return _import_stage_payload(req.csvPath, req.year, req.importAccountId, data)
+
+
+@app.post("/api/import/remove")
+def import_remove(req: ImportCandidateRemoveRequest) -> dict:
+    config = _require_workspace_config()
+    try:
+        removed_path = remove_inbox_csv(config, Path(req.csvPath))
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail="Statement not found") from e
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return {
+        "removed": True,
+        "csvPath": removed_path,
+        "fileName": Path(removed_path).name,
     }
-    stage_id = stages.create(payload)
-    payload["stageId"] = stage_id
-    return payload
 
 
 @app.post("/api/import/apply")

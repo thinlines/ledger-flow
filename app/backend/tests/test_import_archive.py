@@ -1,7 +1,16 @@
 from pathlib import Path
 
+import pytest
+
+import services.import_service as import_service
 from services.config_service import AppConfig
-from services.import_service import apply_import, archive_inbox_csv
+from services.import_service import (
+    ImportPreviewBlockedError,
+    apply_import,
+    archive_inbox_csv,
+    preview_import_safely,
+    remove_inbox_csv,
+)
 
 
 def _make_config(workspace: Path) -> AppConfig:
@@ -125,6 +134,77 @@ def test_archive_inbox_csv_leaves_external_files_untouched(tmp_path: Path) -> No
     )
 
     assert archived_csv_path is None
+    assert external_csv.exists()
+
+
+def test_preview_import_safely_removes_failed_upload_before_inbox_commit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    config = _make_config(tmp_path / "workspace")
+    inbox_csv = config.csv_dir / "2026__wf_checking__statement.csv"
+    inbox_csv.write_text("date,amount\n2026-03-01,-7.50\n", encoding="utf-8")
+
+    def blocked_preview(*_args, **_kwargs):
+        raise ValueError("wrong account")
+
+    monkeypatch.setattr(import_service, "preview_import", blocked_preview)
+
+    with pytest.raises(ImportPreviewBlockedError) as exc_info:
+        preview_import_safely(
+            config,
+            inbox_csv,
+            year="2026",
+            import_account_id="wf_checking",
+            keep_file_on_failure=False,
+        )
+
+    assert not inbox_csv.exists()
+    assert exc_info.value.file_kept_in_inbox is False
+    assert "Nothing was added to the inbox." in str(exc_info.value)
+
+
+def test_preview_import_safely_keeps_existing_inbox_file_for_recovery(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    config = _make_config(tmp_path / "workspace")
+    inbox_csv = config.csv_dir / "2026__wf_checking__statement.csv"
+    inbox_csv.write_text("date,amount\n2026-03-01,-7.50\n", encoding="utf-8")
+
+    def blocked_preview(*_args, **_kwargs):
+        raise ValueError("wrong account")
+
+    monkeypatch.setattr(import_service, "preview_import", blocked_preview)
+
+    with pytest.raises(ImportPreviewBlockedError) as exc_info:
+        preview_import_safely(
+            config,
+            inbox_csv,
+            year="2026",
+            import_account_id="wf_checking",
+            keep_file_on_failure=True,
+        )
+
+    assert inbox_csv.exists()
+    assert exc_info.value.file_kept_in_inbox is True
+    assert "remove this file from the inbox" in str(exc_info.value)
+
+
+def test_remove_inbox_csv_deletes_waiting_statement(tmp_path: Path) -> None:
+    config = _make_config(tmp_path / "workspace")
+    inbox_csv = config.csv_dir / "2026__wf_checking__statement.csv"
+    inbox_csv.write_text("date,amount\n2026-03-01,-7.50\n", encoding="utf-8")
+
+    removed_path = remove_inbox_csv(config, inbox_csv)
+
+    assert removed_path == str(inbox_csv.resolve())
+    assert not inbox_csv.exists()
+
+
+def test_remove_inbox_csv_rejects_external_file(tmp_path: Path) -> None:
+    config = _make_config(tmp_path / "workspace")
+    external_csv = tmp_path / "downloads" / "statement.csv"
+    external_csv.parent.mkdir(parents=True, exist_ok=True)
+    external_csv.write_text("date,amount\n2026-03-01,-7.50\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="Only statements waiting in the inbox can be removed here."):
+        remove_inbox_csv(config, external_csv)
+
     assert external_csv.exists()
 
 

@@ -43,6 +43,10 @@
     };
   };
 
+  type UploadPreviewResult = PreviewResult & {
+    absPath: string;
+  };
+
   type ImportHistoryEntry = {
     id: string;
     status: 'applied' | 'undone';
@@ -75,7 +79,7 @@
   };
 
   type WorkflowStep = 'prepare' | 'preview' | 'apply' | 'complete';
-  type LoadingState = 'idle' | 'upload' | 'preview' | 'apply' | 'undo';
+  type LoadingState = 'idle' | 'upload' | 'preview' | 'apply' | 'undo' | 'remove';
   type FollowUpAction = {
     href: string;
     label: string;
@@ -84,6 +88,19 @@
       href: string;
       label: string;
     };
+  };
+
+  type ImportRecoveryState = {
+    code: string;
+    message: string;
+    csvPath: string | null;
+    fileName: string | null;
+    fileKeptInInbox: boolean;
+  };
+
+  type ParsedApiFailure = {
+    message: string;
+    detail: unknown;
   };
 
   export let mode: 'standalone' | 'setup' = 'standalone';
@@ -101,6 +118,7 @@
   let historyEntries: ImportHistoryEntry[] = [];
   let historyMessage = '';
   let error = '';
+  let recoveryState: ImportRecoveryState | null = null;
   let loading = false;
   let loadingState: LoadingState = 'idle';
   let hydrated = false;
@@ -109,14 +127,12 @@
   let workflowStep: WorkflowStep = 'prepare';
   let selectedImportAccount: ImportAccountOption | null = null;
   let selectedCandidate: Candidate | null = null;
-  let uploadReady = false;
-  let previewReady = false;
+  let actionReady = false;
 
   $: selectedImportAccount = importAccounts.find((account) => account.id === importAccountId) ?? null;
   $: selectedCandidate = candidates.find((candidate) => candidate.abs_path === selectedPath) ?? null;
-  $: uploadReady = Boolean(selectedFile && importAccountId && year);
-  $: previewReady = Boolean(selectedPath && importAccountId && year);
-  $: workflowStep = preview?.result ? 'complete' : preview ? 'apply' : selectedPath ? 'preview' : 'prepare';
+  $: actionReady = Boolean(importAccountId && year && (selectedFile || selectedPath));
+  $: workflowStep = preview?.result ? 'complete' : preview ? 'apply' : selectedPath || selectedFile ? 'preview' : 'prepare';
   $: loading = loadingState !== 'idle';
   $: if (hydrated && refreshToken !== lastRefreshToken) {
     lastRefreshToken = refreshToken;
@@ -171,6 +187,147 @@
       : new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(date);
   }
 
+  function errorMessage(value: unknown): string {
+    return value instanceof Error ? value.message : String(value);
+  }
+
+  function currentStatementLabel(): string {
+    if (selectedFile) return selectedFile.name;
+    if (selectedPath) return pathLabel(selectedPath);
+    return 'No statement selected yet';
+  }
+
+  function statementStatusNote(): string {
+    if (selectedFile) {
+      return "Ready to preview. If the file doesn't match this account, it will not be added to the inbox.";
+    }
+    if (selectedCandidate) {
+      return 'Chosen from the inbox.';
+    }
+    return 'Pick a waiting statement or choose a CSV above.';
+  }
+
+  function primaryActionLabel(): string {
+    if (loadingState === 'upload' || loadingState === 'preview') {
+      return 'Preparing preview...';
+    }
+    if (selectedFile) {
+      return recoveryState ? 'Try Another Account' : 'Preview Statement';
+    }
+    if (recoveryState) {
+      return 'Preview Again';
+    }
+    return preview && !preview.result ? 'Refresh Preview' : 'Preview Import';
+  }
+
+  function clearSelectedFile() {
+    selectedFile = null;
+    if (statementFileInput) statementFileInput.value = '';
+  }
+
+  function resetImportState() {
+    error = '';
+    historyMessage = '';
+    recoveryState = null;
+    preview = null;
+  }
+
+  function parseApiFailure(path: string, status: number, text: string): ParsedApiFailure {
+    let detail: unknown = null;
+    try {
+      const parsed = JSON.parse(text) as { detail?: unknown };
+      detail = parsed.detail;
+      if (detail === 'workspace_not_initialized') {
+        return {
+          message: 'Workspace not initialized. Complete setup before using this feature.',
+          detail
+        };
+      }
+      if (typeof detail === 'string') {
+        if (detail.includes('Traceback')) {
+          return {
+            message: 'The operation failed while processing this file. Please verify the selected institution and input format.',
+            detail
+          };
+        }
+        return { message: detail, detail };
+      }
+      if (detail && typeof detail === 'object' && typeof (detail as { message?: unknown }).message === 'string') {
+        return { message: (detail as { message: string }).message, detail };
+      }
+    } catch {
+      // no-op
+    }
+
+    if (!text.trim()) {
+      return { message: `${path} failed (${status})`, detail };
+    }
+    return { message: text, detail };
+  }
+
+  function parseImportRecovery(detail: unknown): ImportRecoveryState | null {
+    if (!detail || typeof detail !== 'object') return null;
+    const candidate = detail as Record<string, unknown>;
+    if (candidate.code !== 'statement_preview_blocked' || typeof candidate.message !== 'string') {
+      return null;
+    }
+    return {
+      code: 'statement_preview_blocked',
+      message: candidate.message,
+      csvPath: typeof candidate.csvPath === 'string' ? candidate.csvPath : null,
+      fileName: typeof candidate.fileName === 'string' ? candidate.fileName : null,
+      fileKeptInInbox: candidate.fileKeptInInbox === true
+    };
+  }
+
+  async function sendImportRequest<T>(path: string, init: RequestInit): Promise<T | null> {
+    const res = await fetch(path, init);
+    if (!res.ok) {
+      const text = await res.text();
+      const failure = parseApiFailure(path, res.status, text);
+      const recovery = parseImportRecovery(failure.detail);
+      if (recovery) {
+        recoveryState = recovery;
+        error = '';
+        return null;
+      }
+      throw new Error(failure.message);
+    }
+
+    recoveryState = null;
+    return (await res.json()) as T;
+  }
+
+  function setImportAccount(nextId: string) {
+    if (nextId === importAccountId) return;
+    importAccountId = nextId;
+    resetImportState();
+  }
+
+  function setYear(nextYear: string) {
+    if (nextYear === year) return;
+    year = nextYear;
+    resetImportState();
+  }
+
+  function onStatementFileChange(event: Event) {
+    const file = (event.currentTarget as HTMLInputElement).files?.[0] ?? null;
+    if (file) {
+      selectedFile = file;
+      selectedPath = '';
+    } else {
+      selectedFile = null;
+    }
+    resetImportState();
+  }
+
+  function setSelectedPath(nextPath: string) {
+    if (nextPath === selectedPath) return;
+    clearSelectedFile();
+    selectedPath = nextPath;
+    resetImportState();
+  }
+
   async function loadImportData() {
     try {
       const state = await apiGet<{ initialized: boolean }>('/api/app/state');
@@ -180,6 +337,7 @@
         importAccounts = [];
         historyEntries = [];
         preview = null;
+        recoveryState = null;
         return;
       }
 
@@ -199,57 +357,74 @@
       if (importAccountId && !importAccounts.some((account) => account.id === importAccountId)) {
         importAccountId = '';
       }
+
+      if (selectedPath && !candidates.some((candidate) => candidate.abs_path === selectedPath)) {
+        const removedPath = selectedPath;
+        selectedPath = '';
+        preview = null;
+        if (recoveryState?.csvPath === removedPath) {
+          recoveryState = null;
+        }
+      }
     } catch (e) {
-      error = String(e);
+      error = errorMessage(e);
     }
   }
 
-  async function uploadFile() {
+  async function uploadAndPreviewFile() {
     if (!selectedFile || !importAccountId || !year) return;
 
     loadingState = 'upload';
-    error = '';
-    historyMessage = '';
-    preview = null;
+    resetImportState();
 
     try {
       const form = new FormData();
       form.append('file', selectedFile);
       form.append('year', year);
       form.append('importAccountId', importAccountId);
+      form.append('preview', 'true');
 
-      const res = await fetch('/api/import/upload', { method: 'POST', body: form });
-      if (!res.ok) {
-        const text = await res.text();
-        throw new Error(text || 'Upload failed');
-      }
+      const data = await sendImportRequest<UploadPreviewResult>('/api/import/upload', {
+        method: 'POST',
+        body: form
+      });
+      if (!data) return;
 
-      const data = (await res.json()) as { absPath: string };
+      preview = data;
       selectedPath = data.absPath;
-      selectedFile = null;
-      if (statementFileInput) statementFileInput.value = '';
+      clearSelectedFile();
       await loadImportData();
     } catch (e) {
-      error = String(e);
+      error = errorMessage(e);
     } finally {
       loadingState = 'idle';
     }
   }
 
   async function runPreview() {
-    error = '';
-    historyMessage = '';
-    preview = null;
+    if (selectedFile) {
+      await uploadAndPreviewFile();
+      return;
+    }
+    if (!selectedPath || !importAccountId || !year) return;
+
     loadingState = 'preview';
+    resetImportState();
 
     try {
-      preview = await apiPost<PreviewResult>('/api/import/preview', {
-        csvPath: selectedPath,
-        year,
-        importAccountId
+      const data = await sendImportRequest<PreviewResult>('/api/import/preview', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          csvPath: selectedPath,
+          year,
+          importAccountId
+        })
       });
+      if (!data) return;
+      preview = data;
     } catch (e) {
-      error = String(e);
+      error = errorMessage(e);
     } finally {
       loadingState = 'idle';
     }
@@ -260,6 +435,7 @@
 
     error = '';
     historyMessage = '';
+    recoveryState = null;
     loadingState = 'apply';
 
     try {
@@ -271,17 +447,46 @@
         await onApplied(preview);
       }
     } catch (e) {
-      error = String(e);
+      error = errorMessage(e);
     } finally {
       loadingState = 'idle';
     }
   }
 
   function pickCandidate(candidate: Candidate) {
+    clearSelectedFile();
     selectedPath = candidate.abs_path;
     year = candidate.detected_year ?? year;
-    importAccountId = candidate.detected_import_account_id ?? '';
-    preview = null;
+    importAccountId = candidate.detected_import_account_id ?? importAccountId;
+    resetImportState();
+  }
+
+  async function removeSelectedCandidate() {
+    if (!selectedCandidate) return;
+
+    const confirmed = window.confirm(
+      `Remove ${selectedCandidate.file_name} from the inbox? This only deletes the waiting statement and will not change imported activity.`
+    );
+    if (!confirmed) return;
+
+    loadingState = 'remove';
+    error = '';
+    historyMessage = '';
+    recoveryState = null;
+
+    try {
+      await apiPost('/api/import/remove', {
+        csvPath: selectedCandidate.abs_path
+      });
+      historyMessage = `${selectedCandidate.file_name} was removed from the inbox.`;
+      selectedPath = '';
+      preview = null;
+      await loadImportData();
+    } catch (e) {
+      error = errorMessage(e);
+    } finally {
+      loadingState = 'idle';
+    }
   }
 
   async function undoHistoryEntry(entry: ImportHistoryEntry) {
@@ -294,6 +499,7 @@
 
     error = '';
     historyMessage = '';
+    recoveryState = null;
     loadingState = 'undo';
 
     try {
@@ -306,7 +512,7 @@
         ? 'Import undone, its transactions were removed, and the source statement was restored to the inbox.'
         : 'Import undone and its transactions were removed.';
     } catch (e) {
-      error = String(e);
+      error = errorMessage(e);
     } finally {
       loadingState = 'idle';
     }
@@ -324,7 +530,7 @@
     <section class="view-card hero import-hero">
       <p class="eyebrow">Import</p>
       <h2 class="page-title">Bring in new statement activity</h2>
-      <p class="subtitle">Work through one statement at a time: upload it, preview the append, and only then write changes.</p>
+      <p class="subtitle">Choose a statement, confirm the preview, and only then write changes. New uploads are checked before they stay in the inbox.</p>
     </section>
   {/if}
 
@@ -356,7 +562,7 @@
           <div>
             <p class="eyebrow">Prepare</p>
             <h3>Upload and preview your first statement</h3>
-            <p class="muted">Use one vertical flow for the first import. Nothing is written until you apply the preview.</p>
+            <p class="muted">Use one vertical flow for the first import. New files go straight into preview if they match the selected account.</p>
           </div>
           {#if candidates.length > 0}
             <span class="pill">{candidates.length} waiting</span>
@@ -366,7 +572,7 @@
         <div class="workflow-field-grid">
           <div class="field">
             <label for={`importAccountId-${mode}`}>Import account</label>
-            <select id={`importAccountId-${mode}`} bind:value={importAccountId}>
+            <select id={`importAccountId-${mode}`} value={importAccountId} on:change={(e) => setImportAccount((e.currentTarget as HTMLSelectElement).value)}>
               <option value="">Select...</option>
               {#each importAccounts as account}
                 <option value={account.id}>{accountLabel(account)}</option>
@@ -376,30 +582,31 @@
 
           <div class="field">
             <label for={`year-${mode}`}>Statement year</label>
-            <input id={`year-${mode}`} bind:value={year} inputmode="numeric" />
+            <input
+              id={`year-${mode}`}
+              value={year}
+              inputmode="numeric"
+              on:input={(e) => setYear((e.currentTarget as HTMLInputElement).value)}
+            />
           </div>
         </div>
 
-        <div class="upload-row">
+        <div class="upload-row upload-row-single">
           <div class="field upload-field">
-            <label for={`statementFile-${mode}`}>Upload a CSV</label>
+            <label for={`statementFile-${mode}`}>Statement CSV</label>
             <input
               id={`statementFile-${mode}`}
               bind:this={statementFileInput}
               type="file"
               accept=".csv,text/csv"
-              on:change={(e) => (selectedFile = (e.currentTarget as HTMLInputElement).files?.[0] ?? null)}
+              on:change={onStatementFileChange}
             />
             {#if selectedFile}
-              <p class="muted small">Ready to upload: {selectedFile.name}</p>
+              <p class="muted small">Selected: {selectedFile.name}. Preview is the next step.</p>
             {:else}
-              <p class="muted small">Upload a new statement or pick one already waiting in the inbox.</p>
+              <p class="muted small">Choose a new CSV or keep working from a statement that is already waiting in the inbox.</p>
             {/if}
           </div>
-
-          <button class="btn" type="button" disabled={loading || !uploadReady} on:click={uploadFile}>
-            {loadingState === 'upload' ? 'Uploading...' : 'Upload Statement'}
-          </button>
         </div>
 
         <section class="setup-inbox-section">
@@ -407,7 +614,7 @@
             <div>
               <p class="eyebrow">Inbox</p>
               <h3>Pick a statement to continue</h3>
-              <p class="muted">Uploaded statements appear here immediately and can be previewed when you are ready.</p>
+              <p class="muted">Files that already passed validation wait here until you preview, apply, or remove them.</p>
             </div>
             {#if candidates.length > 0}
               <span class="pill">{candidates.length} waiting</span>
@@ -417,7 +624,7 @@
           {#if candidates.length === 0}
             <div class="empty-panel">
               <h4>No statements in the inbox</h4>
-              <p>Upload a CSV to start the first import.</p>
+              <p>Choose a CSV above to start the first import.</p>
             </div>
           {:else}
             <div class="list">
@@ -464,16 +671,8 @@
         <div class="workflow-status-grid">
           <section class="status-card">
             <p class="status-label">Selected statement</p>
-            <p class="status-value">{selectedPath ? pathLabel(selectedPath) : 'No statement selected yet'}</p>
-            <p class="muted small">
-              {#if selectedCandidate}
-                Chosen from the inbox.
-              {:else if selectedFile}
-                Upload the selected CSV to move it into the inbox.
-              {:else}
-                Pick a waiting statement or upload one above.
-              {/if}
-            </p>
+            <p class="status-value">{currentStatementLabel()}</p>
+            <p class="muted small">{statementStatusNote()}</p>
           </section>
 
           <section class="status-card">
@@ -489,25 +688,52 @@
           </section>
         </div>
 
-        {#if selectedCandidate && !selectedCandidate.is_configured_import_account}
+        {#if selectedCandidate && !selectedCandidate.is_configured_import_account && !selectedImportAccount}
           <p class="error-text inline-message">
-            This statement needs account setup before it can be previewed. Configure the account or choose another statement.
+            This inbox file is no longer linked to a saved account. Choose an account above before previewing it.
           </p>
+        {/if}
+
+        {#if recoveryState}
+          <section class="recovery-card">
+            <div>
+              <p class="eyebrow">Recovery</p>
+              <h4>{recoveryState.fileKeptInInbox ? 'This statement needs a different account' : 'This upload was blocked before it reached the inbox'}</h4>
+              <p class="muted">{recoveryState.message}</p>
+            </div>
+          </section>
         {/if}
 
         <details class="advanced-panel">
           <summary>Advanced file selection</summary>
           <div class="field advanced-field">
             <label for={`csvPath-${mode}`}>Statement path</label>
-            <input id={`csvPath-${mode}`} bind:value={selectedPath} />
+            <input
+              id={`csvPath-${mode}`}
+              value={selectedPath}
+              on:input={(e) => setSelectedPath((e.currentTarget as HTMLInputElement).value)}
+            />
           </div>
         </details>
 
         <div class="workflow-footer">
-          <p class="muted">Nothing is written until you apply the preview. Duplicate transactions are skipped automatically.</p>
-          <button class="btn btn-primary" type="button" disabled={loading || !previewReady} on:click={runPreview}>
-            {loadingState === 'preview' ? 'Preparing preview...' : preview && !preview.result ? 'Refresh Preview' : 'Preview Import'}
-          </button>
+          <p class="muted">
+            {#if selectedFile}
+              Preview is the next step. The file will only stay in the inbox if the preview succeeds.
+            {:else}
+              Nothing is written until you apply the preview. Duplicate transactions are skipped automatically.
+            {/if}
+          </p>
+          <div class="actions">
+            {#if selectedCandidate}
+              <button class="btn" type="button" disabled={loading} on:click={removeSelectedCandidate}>
+                {loadingState === 'remove' ? 'Removing...' : 'Remove from Inbox'}
+              </button>
+            {/if}
+            <button class="btn btn-primary" type="button" disabled={loading || !actionReady} on:click={runPreview}>
+              {primaryActionLabel()}
+            </button>
+          </div>
         </div>
       </section>
 
@@ -601,16 +827,16 @@
         <article class="view-card workflow-card">
           <div class="workflow-head">
             <div class="workflow-copy">
-              <p class="eyebrow">Current Workflow</p>
-              <h3>Upload, preview, then import</h3>
-              <p class="muted">Keep the current statement in one place instead of splitting the task across multiple cards.</p>
+              <p class="eyebrow">Current Import</p>
+              <h3>Preview the next statement before you import it</h3>
+              <p class="muted">Use one obvious action to move from a new file or inbox statement into a safe preview.</p>
             </div>
 
             <div class="workflow-steps" aria-label="Import progress">
               <div
                 class="workflow-step"
                 class:workflow-step-active={workflowStep === 'prepare'}
-                class:workflow-step-complete={Boolean(selectedPath || preview)}
+                class:workflow-step-complete={Boolean(selectedPath || selectedFile || preview)}
               >
                 <span class="step-index">1</span>
                 <div class="workflow-step-copy">
@@ -648,7 +874,7 @@
           <div class="workflow-field-grid">
             <div class="field">
               <label for={`importAccountId-${mode}`}>Import account</label>
-              <select id={`importAccountId-${mode}`} bind:value={importAccountId}>
+              <select id={`importAccountId-${mode}`} value={importAccountId} on:change={(e) => setImportAccount((e.currentTarget as HTMLSelectElement).value)}>
                 <option value="">Select...</option>
                 {#each importAccounts as account}
                   <option value={account.id}>{accountLabel(account)}</option>
@@ -658,45 +884,38 @@
 
             <div class="field">
               <label for={`year-${mode}`}>Statement year</label>
-              <input id={`year-${mode}`} bind:value={year} inputmode="numeric" />
+              <input
+                id={`year-${mode}`}
+                value={year}
+                inputmode="numeric"
+                on:input={(e) => setYear((e.currentTarget as HTMLInputElement).value)}
+              />
             </div>
           </div>
 
-          <div class="upload-row">
+          <div class="upload-row upload-row-single">
             <div class="field upload-field">
-              <label for={`statementFile-${mode}`}>Upload a CSV</label>
+              <label for={`statementFile-${mode}`}>Statement CSV</label>
               <input
                 id={`statementFile-${mode}`}
                 bind:this={statementFileInput}
                 type="file"
                 accept=".csv,text/csv"
-                on:change={(e) => (selectedFile = (e.currentTarget as HTMLInputElement).files?.[0] ?? null)}
+                on:change={onStatementFileChange}
               />
               {#if selectedFile}
-                <p class="muted small">Ready to upload: {selectedFile.name}</p>
+                <p class="muted small">Selected: {selectedFile.name}. Preview is the next step.</p>
               {:else}
-                <p class="muted small">Upload a new statement or pick one already waiting in the inbox.</p>
+                <p class="muted small">Choose a new CSV or keep working from a statement that is already waiting in the inbox.</p>
               {/if}
             </div>
-
-            <button class="btn" type="button" disabled={loading || !uploadReady} on:click={uploadFile}>
-              {loadingState === 'upload' ? 'Uploading...' : 'Upload Statement'}
-            </button>
           </div>
 
           <div class="workflow-status-grid">
             <section class="status-card">
               <p class="status-label">Selected statement</p>
-              <p class="status-value">{selectedPath ? pathLabel(selectedPath) : 'No statement selected yet'}</p>
-              <p class="muted small">
-                {#if selectedCandidate}
-                  Chosen from the inbox.
-                {:else if selectedFile}
-                  Upload the selected CSV to move it into the inbox.
-                {:else}
-                  Pick a waiting statement or upload one above.
-                {/if}
-              </p>
+              <p class="status-value">{currentStatementLabel()}</p>
+              <p class="muted small">{statementStatusNote()}</p>
             </section>
 
             <section class="status-card">
@@ -712,25 +931,52 @@
             </section>
           </div>
 
-          {#if selectedCandidate && !selectedCandidate.is_configured_import_account}
+          {#if selectedCandidate && !selectedCandidate.is_configured_import_account && !selectedImportAccount}
             <p class="error-text inline-message">
-              This statement needs account setup before it can be previewed. Configure the account or choose another statement.
+              This inbox file is no longer linked to a saved account. Choose an account above before previewing it.
             </p>
+          {/if}
+
+          {#if recoveryState}
+            <section class="recovery-card">
+              <div>
+                <p class="eyebrow">Recovery</p>
+                <h4>{recoveryState.fileKeptInInbox ? 'This statement needs a different account' : 'This upload was blocked before it reached the inbox'}</h4>
+                <p class="muted">{recoveryState.message}</p>
+              </div>
+            </section>
           {/if}
 
           <details class="advanced-panel compact-panel">
             <summary>Advanced file selection</summary>
             <div class="field advanced-field">
               <label for={`csvPath-${mode}`}>Statement path</label>
-              <input id={`csvPath-${mode}`} bind:value={selectedPath} />
+              <input
+                id={`csvPath-${mode}`}
+                value={selectedPath}
+                on:input={(e) => setSelectedPath((e.currentTarget as HTMLInputElement).value)}
+              />
             </div>
           </details>
 
           <div class="workflow-footer">
-            <p class="muted">Nothing is written until you apply the preview. Duplicate transactions are skipped automatically.</p>
-            <button class="btn btn-primary" type="button" disabled={loading || !previewReady} on:click={runPreview}>
-              {loadingState === 'preview' ? 'Preparing preview...' : preview && !preview.result ? 'Refresh Preview' : 'Preview Import'}
-            </button>
+            <p class="muted">
+              {#if selectedFile}
+                Preview is the next step. The file will only stay in the inbox if the preview succeeds.
+              {:else}
+                Nothing is written until you apply the preview. Duplicate transactions are skipped automatically.
+              {/if}
+            </p>
+            <div class="actions">
+              {#if selectedCandidate}
+                <button class="btn" type="button" disabled={loading} on:click={removeSelectedCandidate}>
+                  {loadingState === 'remove' ? 'Removing...' : 'Remove from Inbox'}
+                </button>
+              {/if}
+              <button class="btn btn-primary" type="button" disabled={loading || !actionReady} on:click={runPreview}>
+                {primaryActionLabel()}
+              </button>
+            </div>
           </div>
 
           {#if preview}
@@ -835,7 +1081,7 @@
               <div>
                 <p class="eyebrow">Waiting Statements</p>
                 <h3>Pick a statement to continue</h3>
-                <p class="muted">The inbox stays available while you upload, preview, and decide what to import.</p>
+                <p class="muted">Validated statements stay here while you preview, apply, or remove them.</p>
               </div>
               {#if candidates.length > 0}
                 <span class="pill">{candidates.length} waiting</span>
@@ -845,7 +1091,7 @@
             {#if candidates.length === 0}
               <div class="empty-panel">
                 <h4>No statements in the inbox</h4>
-                <p>Upload a CSV to start a new import.</p>
+                <p>Choose a CSV above to start a new import.</p>
               </div>
             {:else}
               <div class="list">
@@ -1036,7 +1282,8 @@
   .workflow-step-copy,
   .preview-header > div,
   .row-main,
-  .history-main {
+  .history-main,
+  .recovery-card > div {
     min-width: 0;
   }
 
@@ -1129,6 +1376,10 @@
     align-items: end;
   }
 
+  .upload-row-single {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
   .upload-field p,
   .status-card p,
   .workflow-footer p,
@@ -1190,6 +1441,21 @@
 
   .inline-message {
     margin: 0;
+  }
+
+  .recovery-card {
+    display: flex;
+    justify-content: space-between;
+    gap: 1rem;
+    align-items: start;
+    border: 1px solid rgba(176, 117, 14, 0.22);
+    border-radius: 14px;
+    background: linear-gradient(145deg, rgba(255, 252, 241, 0.96), rgba(255, 246, 225, 0.94));
+    padding: 0.85rem 0.9rem;
+  }
+
+  .recovery-card p {
+    margin: 0.25rem 0 0;
   }
 
   .preview-panel {
@@ -1434,7 +1700,8 @@
     }
 
     .result-banner,
-    .next-step-banner {
+    .next-step-banner,
+    .recovery-card {
       flex-direction: column;
     }
   }

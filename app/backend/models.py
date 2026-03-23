@@ -35,6 +35,10 @@ class ImportUndoRequest(BaseModel):
     historyId: str
 
 
+class ImportCandidateRemoveRequest(BaseModel):
+    csvPath: str
+
+
 class UnknownScanRequest(BaseModel):
     journalPath: str
 

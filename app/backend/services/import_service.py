@@ -11,7 +11,7 @@ from .csv_normalizer import normalize_csv_to_intermediate
 from .import_index import ImportIndex
 from .import_identity_service import source_payload_hash_for_lines
 from .import_profile_service import import_source_summary, resolve_import_source
-from .ledger_runner import run_cmd
+from .ledger_runner import CommandError, run_cmd
 from .payee_alias_service import ensure_payee_alias_dat
 from .workspace_service import ensure_journal_includes, ensure_standard_commodities_file
 
@@ -44,6 +44,32 @@ class ImportCandidate:
     is_configured_import_account: bool
 
 
+class ImportPreviewBlockedError(Exception):
+    def __init__(
+        self,
+        message: str,
+        *,
+        csv_path: Path | None = None,
+        file_kept_in_inbox: bool = False,
+        code: str = "statement_preview_blocked",
+    ) -> None:
+        super().__init__(message)
+        self.message = message
+        self.code = code
+        self.csv_path = str(csv_path.resolve()) if csv_path is not None else None
+        self.file_name = csv_path.name if csv_path is not None else None
+        self.file_kept_in_inbox = file_kept_in_inbox
+
+    def as_detail(self) -> dict:
+        return {
+            "code": self.code,
+            "message": self.message,
+            "csvPath": self.csv_path,
+            "fileName": self.file_name,
+            "fileKeptInInbox": self.file_kept_in_inbox,
+        }
+
+
 def scan_candidates(config: AppConfig) -> list[ImportCandidate]:
     rows: list[ImportCandidate] = []
     for csv_path in sorted(config.csv_dir.glob("*.csv")):
@@ -69,6 +95,76 @@ def scan_candidates(config: AppConfig) -> list[ImportCandidate]:
             )
         )
     return rows
+
+
+def _is_inbox_path(config: AppConfig, csv_path: Path) -> bool:
+    try:
+        return csv_path.resolve().is_relative_to(config.csv_dir.resolve())
+    except OSError:
+        return False
+
+
+def _preview_blocked_message(
+    config: AppConfig,
+    import_account_id: str,
+    *,
+    file_kept_in_inbox: bool,
+    was_inbox_path: bool,
+) -> str:
+    account_cfg = config.import_accounts.get(import_account_id, {})
+    display_name = str(account_cfg.get("display_name") or import_account_id)
+    if file_kept_in_inbox:
+        return (
+            f"This file doesn't look like it matches {display_name}. "
+            "Choose the matching account and preview again, or remove this file from the inbox."
+        )
+    if was_inbox_path:
+        return (
+            f"This file doesn't look like it matches {display_name}. "
+            "Choose the matching account and preview again. Nothing was added to the inbox."
+        )
+    return f"This file doesn't look like it matches {display_name}. Choose the matching account and preview again."
+
+
+def preview_import_safely(
+    config: AppConfig,
+    csv_path: Path,
+    year: str,
+    import_account_id: str,
+    *,
+    keep_file_on_failure: bool,
+) -> dict:
+    was_inbox_path = _is_inbox_path(config, csv_path)
+    try:
+        return preview_import(config, csv_path, year, import_account_id)
+    except (ValueError, CommandError) as e:
+        if was_inbox_path and not keep_file_on_failure and csv_path.exists():
+            try:
+                csv_path.unlink()
+            except OSError:
+                pass
+        file_kept_in_inbox = was_inbox_path and csv_path.exists()
+        raise ImportPreviewBlockedError(
+            _preview_blocked_message(
+                config,
+                import_account_id,
+                file_kept_in_inbox=file_kept_in_inbox,
+                was_inbox_path=was_inbox_path,
+            ),
+            csv_path=csv_path,
+            file_kept_in_inbox=file_kept_in_inbox,
+        ) from e
+
+
+def remove_inbox_csv(config: AppConfig, csv_path: Path) -> str:
+    if not csv_path.exists():
+        raise FileNotFoundError(str(csv_path))
+    if not _is_inbox_path(config, csv_path):
+        raise ValueError("Only statements waiting in the inbox can be removed here.")
+
+    resolved = csv_path.resolve()
+    csv_path.unlink()
+    return str(resolved)
 
 
 def archive_inbox_csv(
