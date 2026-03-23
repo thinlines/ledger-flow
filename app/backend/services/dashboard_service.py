@@ -9,6 +9,7 @@ from .journal_query_service import (
     ParsedTransaction,
     Posting,
     amount_to_number,
+    is_generated_opening_balance_transaction,
     load_transactions,
     pretty_account_name,
 )
@@ -103,17 +104,17 @@ def build_dashboard_overview(config: AppConfig, *, today: date | None = None) ->
     _, opening_by_ledger_account = opening_balance_index(config)
     opening_balance_accounts = set(opening_by_ledger_account)
     account_balances: defaultdict[str, Decimal] = defaultdict(lambda: Decimal("0"))
+    accounts_with_balance_source: set[str] = set()
     accounts_with_activity: set[str] = set()
     monthly_income: defaultdict[str, Decimal] = defaultdict(lambda: Decimal("0"))
     monthly_spending: defaultdict[str, Decimal] = defaultdict(lambda: Decimal("0"))
     category_spending: defaultdict[tuple[str, str], Decimal] = defaultdict(lambda: Decimal("0"))
     unknown_transaction_count = 0
     recent_rows: list[dict] = []
-
-    for entry in opening_by_ledger_account.values():
-        account_balances[entry.ledger_account] += entry.amount
+    activity_transactions: list[ParsedTransaction] = []
 
     for transaction in transactions:
+        is_opening_balance = is_generated_opening_balance_transaction(transaction)
         month = _month_key(transaction.posted_on)
 
         for posting in transaction.postings:
@@ -123,13 +124,21 @@ def build_dashboard_overview(config: AppConfig, *, today: date | None = None) ->
             kind = _account_kind(posting.account)
             if kind in {"asset", "liability"}:
                 account_balances[posting.account] += posting.amount
-                accounts_with_activity.add(posting.account)
+                accounts_with_balance_source.add(posting.account)
+                if not is_opening_balance:
+                    accounts_with_activity.add(posting.account)
+            elif is_opening_balance:
+                continue
             elif kind == "expense":
                 monthly_spending[month] += posting.amount
                 category_spending[(month, posting.account)] += posting.amount
             elif kind == "income":
                 monthly_income[month] += -posting.amount
 
+        if is_opening_balance:
+            continue
+
+        activity_transactions.append(transaction)
         category_label, is_unknown = _transaction_category(transaction)
         if is_unknown:
             unknown_transaction_count += 1
@@ -177,7 +186,7 @@ def build_dashboard_overview(config: AppConfig, *, today: date | None = None) ->
                 "importConfigured": bool(account_cfg.get("import_account_id")),
                 "hasOpeningBalance": has_opening_balance,
                 "hasTransactionActivity": has_transaction_activity,
-                "hasBalanceSource": has_opening_balance or has_transaction_activity,
+                "hasBalanceSource": ledger_account in accounts_with_balance_source,
             }
         )
 
@@ -245,13 +254,13 @@ def build_dashboard_overview(config: AppConfig, *, today: date | None = None) ->
             }
         )
 
-    last_updated = transactions[-1].posted_on.isoformat() if transactions else None
+    last_updated = activity_transactions[-1].posted_on.isoformat() if activity_transactions else None
     income_this_month = monthly_income.get(current_month, Decimal("0"))
     spending_this_month = monthly_spending.get(current_month, Decimal("0"))
 
     return {
         "baseCurrency": str(config.workspace.get("base_currency", "USD")),
-        "hasData": bool(transactions),
+        "hasData": bool(activity_transactions),
         "lastUpdated": last_updated,
         "summary": {
             "netWorth": amount_to_number(net_worth),
@@ -259,7 +268,7 @@ def build_dashboard_overview(config: AppConfig, *, today: date | None = None) ->
             "incomeThisMonth": amount_to_number(income_this_month),
             "spendingThisMonth": amount_to_number(spending_this_month),
             "savingsThisMonth": amount_to_number(income_this_month - spending_this_month),
-            "transactionCount": len(transactions),
+            "transactionCount": len(activity_transactions),
             "unknownTransactionCount": unknown_transaction_count,
         },
         "balances": balances,

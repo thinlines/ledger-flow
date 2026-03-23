@@ -46,7 +46,11 @@
     currentBalance: number;
     entryCount: number;
     transactionCount: number;
+    latestTransactionDate: string | null;
     latestActivityDate: string | null;
+    hasOpeningBalance: boolean;
+    hasTransactionActivity: boolean;
+    hasBalanceSource: boolean;
     entries: RegisterEntry[];
   };
 
@@ -120,9 +124,10 @@
   function selectedAccountTrust() {
     if (!selectedAccount) return null;
     return describeBalanceTrust({
-      hasOpeningBalance: Boolean(selectedAccount.openingBalance),
-      hasTransactionActivity: Boolean(register?.transactionCount ?? 0),
-      hasBalanceSource: Boolean(selectedAccount.openingBalance) || Boolean(register?.transactionCount ?? 0),
+      hasOpeningBalance: register?.hasOpeningBalance ?? Boolean(selectedAccount.openingBalance),
+      hasTransactionActivity: register?.hasTransactionActivity ?? Boolean(register?.transactionCount ?? 0),
+      hasBalanceSource:
+        register?.hasBalanceSource ?? (Boolean(selectedAccount.openingBalance) || Boolean(register?.transactionCount ?? 0)),
       importConfigured: selectedAccount.importConfigured,
       openingBalanceDate: selectedAccount.openingBalanceDate,
       latestActivityDate: latestPostedActivityDate
@@ -242,7 +247,7 @@
   $: pendingTransferCount = pendingEntries.length;
   $: pendingTransferTotal = pendingEntries.reduce((sum, entry) => sum + entry.amount, 0);
   $: balanceWithPending = register ? register.currentBalance + pendingTransferTotal : null;
-  $: latestPostedActivityDate = postedEntries[0]?.date ?? null;
+  $: latestPostedActivityDate = register?.latestTransactionDate ?? null;
   $: registerUnknownCount = postedEntries.filter((entry) => entry.isUnknown).length;
   $: primaryAction = registerPrimaryAction(selectedAccount, registerUnknownCount);
   $: secondaryActions = registerSecondaryActions(selectedAccount);

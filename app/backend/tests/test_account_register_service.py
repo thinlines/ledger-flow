@@ -4,6 +4,7 @@ from pathlib import Path
 
 from services.account_register_service import build_account_register
 from services.config_service import AppConfig
+from services.workspace_service import ensure_workspace_journal_includes
 
 
 def _make_config(workspace: Path) -> AppConfig:
@@ -64,6 +65,11 @@ def _make_config(workspace: Path) -> AppConfig:
     )
 
 
+def _write_year_journal(config: AppConfig, body: str = "") -> None:
+    (config.journal_dir / "2026.journal").write_text(body, encoding="utf-8")
+    ensure_workspace_journal_includes(config)
+
+
 def test_account_register_returns_latest_first_rows_with_running_balances(tmp_path: Path) -> None:
     config = _make_config(tmp_path / "workspace")
     (config.opening_bal_dir / "checking.journal").write_text(
@@ -76,7 +82,8 @@ def test_account_register_returns_latest_first_rows_with_running_balances(tmp_pa
         + "\n",
         encoding="utf-8",
     )
-    (config.journal_dir / "2026.journal").write_text(
+    _write_year_journal(
+        config,
         """
 2026/02/02 Grocer
     ; import_account_id: checking
@@ -94,7 +101,6 @@ def test_account_register_returns_latest_first_rows_with_running_balances(tmp_pa
     Assets:Bank:Checking
 """.strip()
         + "\n",
-        encoding="utf-8",
     )
 
     register = build_account_register(config, "checking")
@@ -127,7 +133,8 @@ def test_account_register_returns_latest_first_rows_with_running_balances(tmp_pa
 
 def test_account_register_preserves_liability_signs_in_running_balance(tmp_path: Path) -> None:
     config = _make_config(tmp_path / "workspace")
-    (config.journal_dir / "2026.journal").write_text(
+    _write_year_journal(
+        config,
         """
 2026/03/04 Online Shop
     ; import_account_id: visa
@@ -140,7 +147,6 @@ def test_account_register_preserves_liability_signs_in_running_balance(tmp_path:
     Assets:Bank:Checking
 """.strip()
         + "\n",
-        encoding="utf-8",
     )
 
     register = build_account_register(config, "visa")
@@ -172,6 +178,7 @@ def test_account_register_shows_selected_tracked_account_for_opening_balance_det
         + "\n",
         encoding="utf-8",
     )
+    _write_year_journal(config)
 
     register = build_account_register(config, "visa")
 
@@ -188,7 +195,8 @@ def test_account_register_shows_selected_tracked_account_for_opening_balance_det
 
 def test_account_register_uses_transfer_peer_metadata_for_pending_transfers(tmp_path: Path) -> None:
     config = _make_config(tmp_path / "workspace")
-    (config.journal_dir / "2026.journal").write_text(
+    _write_year_journal(
+        config,
         """
 2026/02/04 Transfer to savings
     ; import_account_id: checking
@@ -199,7 +207,6 @@ def test_account_register_uses_transfer_peer_metadata_for_pending_transfers(tmp_
     Assets:Bank:Checking
 """.strip()
         + "\n",
-        encoding="utf-8",
     )
 
     register = build_account_register(config, "checking")
@@ -230,7 +237,8 @@ def test_account_register_shows_pending_transfer_on_peer_account_without_changin
         + "\n",
         encoding="utf-8",
     )
-    (config.journal_dir / "2026.journal").write_text(
+    _write_year_journal(
+        config,
         """
 2026/02/04 Transfer to savings
     ; import_account_id: checking
@@ -241,7 +249,6 @@ def test_account_register_shows_pending_transfer_on_peer_account_without_changin
     Assets:Bank:Checking
 """.strip()
         + "\n",
-        encoding="utf-8",
     )
 
     register = build_account_register(config, "savings")
@@ -271,7 +278,8 @@ def test_account_register_shows_pending_transfer_on_peer_account_without_changin
 
 def test_account_register_shows_pending_transfer_on_liability_peer_account_without_changing_balance(tmp_path: Path) -> None:
     config = _make_config(tmp_path / "workspace")
-    (config.journal_dir / "2026.journal").write_text(
+    _write_year_journal(
+        config,
         """
 2026/02/04 Credit card payment
     ; import_account_id: checking
@@ -282,7 +290,6 @@ def test_account_register_shows_pending_transfer_on_liability_peer_account_witho
     Assets:Bank:Checking
 """.strip()
         + "\n",
-        encoding="utf-8",
     )
 
     register = build_account_register(config, "visa")
@@ -308,3 +315,38 @@ def test_account_register_shows_pending_transfer_on_liability_peer_account_witho
             "kind": "asset",
         }
     ]
+
+
+def test_account_register_reflects_offsetting_tracked_account_opening_balance_on_peer_account(tmp_path: Path) -> None:
+    config = _make_config(tmp_path / "workspace")
+    config.tracked_accounts["loan"] = {
+        "display_name": "Car Loan",
+        "ledger_account": "Liabilities:Loans:Car",
+    }
+    (config.opening_bal_dir / "loan.journal").write_text(
+        """
+2026-01-15 Opening balance
+    ; tracked_account_id: loan
+    Liabilities:Loans:Car  USD -18500.00
+    Assets:Bank:Checking
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    _write_year_journal(config)
+
+    register = build_account_register(config, "checking")
+
+    assert register["currentBalance"] == 18500.0
+    assert register["transactionCount"] == 0
+    assert register["hasOpeningBalance"] is False
+    assert register["hasTransactionActivity"] is False
+    assert register["hasBalanceSource"] is True
+    assert register["latestTransactionDate"] is None
+    assert register["entryCount"] == 1
+
+    opening_offset = register["entries"][0]
+    assert opening_offset["payee"] == "Opening balance"
+    assert opening_offset["amount"] == 18500.0
+    assert opening_offset["runningBalance"] == 18500.0
+    assert opening_offset["isOpeningBalance"] is False

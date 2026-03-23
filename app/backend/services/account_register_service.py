@@ -5,8 +5,12 @@ from datetime import date
 from decimal import Decimal
 
 from .config_service import AppConfig, infer_account_kind
-from .journal_query_service import amount_to_number, load_transactions, pretty_account_name
-from .opening_balance_service import opening_balance_index
+from .journal_query_service import (
+    amount_to_number,
+    is_generated_opening_balance_transaction,
+    load_transactions,
+    pretty_account_name,
+)
 from .transfer_service import is_transfer_account
 
 
@@ -227,31 +231,30 @@ def build_account_register(config: AppConfig, account_id: str) -> dict:
     if not ledger_account:
         raise ValueError(f"Tracked account is missing a ledger account: {account_id}")
 
-    opening_by_id, opening_by_ledger = opening_balance_index(config)
-    opening_entry = opening_by_id.get(account_id)
-    if opening_entry is None:
-        opening_entry = opening_by_ledger.get(ledger_account)
-
     events: list[RegisterEvent] = []
-    if opening_entry is not None:
-        events.append(
-            RegisterEvent(
-                posted_on=date.fromisoformat(opening_entry.date),
-                order=-1,
-                amount=opening_entry.amount,
-                payee="Opening balance",
-                summary="Starting point for this account",
-                is_unknown=False,
-                is_opening_balance=True,
-                detail_lines=[_opening_balance_detail_line(config, opening_entry.offset_account)],
-            )
-        )
-
     for order, transaction in enumerate(load_transactions(config)):
         amount = _account_amount(transaction, ledger_account)
         if amount is not None:
             other_postings = [posting for posting in transaction.postings if posting.account != ledger_account]
-            summary, is_unknown, transfer_state, transfer_peer_name = _transaction_summary(config, transaction, other_postings)
+            is_generated_opening = is_generated_opening_balance_transaction(transaction)
+            opening_account_id = str(transaction.metadata.get("tracked_account_id", "")).strip() or None
+            is_primary_opening = is_generated_opening and opening_account_id == account_id
+            if is_primary_opening:
+                offset_account = other_postings[0].account if other_postings else ""
+                summary = "Starting point for this account"
+                is_unknown = False
+                transfer_state = None
+                transfer_peer_name = None
+                detail_lines = [_opening_balance_detail_line(config, offset_account)]
+            else:
+                summary, is_unknown, transfer_state, transfer_peer_name = _transaction_summary(
+                    config,
+                    transaction,
+                    other_postings,
+                )
+                if is_generated_opening:
+                    is_unknown = False
+                detail_lines = _detail_lines(config, transaction, other_postings)
             events.append(
                 RegisterEvent(
                     posted_on=transaction.posted_on,
@@ -260,11 +263,12 @@ def build_account_register(config: AppConfig, account_id: str) -> dict:
                     payee=transaction.payee,
                     summary=summary,
                     is_unknown=is_unknown,
-                    is_opening_balance=False,
-                    detail_lines=_detail_lines(config, transaction, other_postings),
+                    is_opening_balance=is_primary_opening,
+                    detail_lines=detail_lines,
                     transfer_state=transfer_state,
                     transfer_peer_account_id=str(transaction.metadata.get("transfer_peer_account_id") or "").strip() or None,
                     transfer_peer_account_name=transfer_peer_name,
+                    counts_as_transaction=not is_generated_opening,
                 )
             )
             continue
@@ -278,6 +282,7 @@ def build_account_register(config: AppConfig, account_id: str) -> dict:
     balance = Decimal("0")
     rows: list[dict] = []
     transaction_count = 0
+    latest_transaction_date: str | None = None
     for index, event in enumerate(events):
         if event.affects_balance:
             balance += event.amount
@@ -299,9 +304,12 @@ def build_account_register(config: AppConfig, account_id: str) -> dict:
         )
         if event.counts_as_transaction and not event.is_opening_balance:
             transaction_count += 1
+            latest_transaction_date = event.posted_on.isoformat()
 
     entries = list(reversed(rows))
     latest_activity_date = entries[0]["date"] if entries else None
+    has_opening_balance = any(event.is_opening_balance for event in events)
+    has_balance_source = any(event.affects_balance for event in events)
 
     return {
         "baseCurrency": str(config.workspace.get("base_currency", "USD")),
@@ -309,6 +317,10 @@ def build_account_register(config: AppConfig, account_id: str) -> dict:
         "currentBalance": amount_to_number(balance),
         "entryCount": len(entries),
         "transactionCount": transaction_count,
+        "latestTransactionDate": latest_transaction_date,
         "latestActivityDate": latest_activity_date,
+        "hasOpeningBalance": has_opening_balance,
+        "hasTransactionActivity": transaction_count > 0,
+        "hasBalanceSource": has_balance_source,
         "entries": entries,
     }

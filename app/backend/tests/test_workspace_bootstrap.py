@@ -68,8 +68,10 @@ def test_bootstrap_workspace_writes_import_accounts_and_templates(tmp_path: Path
         "include ../rules/10-accounts.dat\n"
         "include ../rules/12-tags.dat\n"
         "include ../rules/13-commodities.dat\n"
+        "include ../opening/_opening_balances.journal\n"
     )
     assert "; Test Books financial journal" in journal_content
+    assert (workspace_root / "opening" / "_opening_balances.journal").exists()
 
     commodities_dat = workspace_root / "rules" / "13-commodities.dat"
     commodities_content = commodities_dat.read_text(encoding="utf-8")
@@ -949,6 +951,74 @@ def test_ensure_journal_includes_prepends_standard_include_block(tmp_path: Path)
     assert content.count("include ../rules/13-commodities.dat") == 1
     assert "; Existing journal" in content
     assert "2026/03/01 Coffee Shop" in content
+
+
+def test_ensure_workspace_journal_includes_repairs_legacy_workspace_and_only_adds_opening_index_to_start_year(
+    tmp_path: Path,
+) -> None:
+    manager = WorkspaceManager(tmp_path / "app")
+    workspace_root = tmp_path / "workspace"
+    settings = workspace_root / "settings"
+    journals = workspace_root / "journals"
+    opening = workspace_root / "opening"
+    rules = workspace_root / "rules"
+    imports = workspace_root / "imports"
+    inbox = workspace_root / "inbox"
+
+    for directory in [settings, journals, opening, rules, imports, inbox]:
+        directory.mkdir(parents=True, exist_ok=True)
+
+    (settings / "workspace.toml").write_text(
+        """
+payee_aliases = "payee_aliases.csv"
+
+[workspace]
+name = "Test Books"
+base_currency = "USD"
+start_year = 2026
+
+[dirs]
+csv_dir = "inbox"
+journal_dir = "journals"
+init_dir = "rules"
+opening_bal_dir = "opening"
+imports_dir = "imports"
+
+[tracked_accounts.checking]
+display_name = "Checking"
+ledger_account = "Assets:Bank:Checking"
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    (rules / "10-accounts.dat").write_text("", encoding="utf-8")
+    (rules / "12-tags.dat").write_text("", encoding="utf-8")
+    (rules / "13-commodities.dat").write_text("", encoding="utf-8")
+    (opening / "checking.journal").write_text(
+        """
+2026-01-15 Opening balance
+    ; tracked_account_id: checking
+    Assets:Bank:Checking  USD 250.00
+    Equity:Opening-Balances
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    (journals / "2026.journal").write_text("; Existing 2026 journal\n", encoding="utf-8")
+    (journals / "2027.journal").write_text("; Existing 2027 journal\n", encoding="utf-8")
+
+    manager.set_active_workspace(workspace_root)
+    config = manager.load_active_config()
+
+    assert config is not None
+    index_content = (opening / "_opening_balances.journal").read_text(encoding="utf-8")
+    assert index_content == "include checking.journal\n"
+
+    start_year_content = (journals / "2026.journal").read_text(encoding="utf-8")
+    assert "include ../opening/_opening_balances.journal" in start_year_content
+
+    next_year_content = (journals / "2027.journal").read_text(encoding="utf-8")
+    assert "include ../opening/_opening_balances.journal" not in next_year_content
 
 
 def test_ensure_standard_commodities_file_appends_symbol_format_for_base_currency(tmp_path: Path) -> None:

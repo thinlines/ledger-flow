@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -12,7 +13,9 @@ from .import_index import ImportIndex
 from .institution_registry import get_template
 from .opening_balance_service import (
     OPENING_BALANCES_EQUITY,
+    opening_balance_index_path,
     opening_balance_index,
+    sync_opening_balance_include_index,
     write_opening_balance,
 )
 
@@ -103,12 +106,18 @@ def ensure_standard_commodities_file(commodities_path: Path, base_currency: str)
     commodities_path.write_text(text, encoding="utf-8")
 
 
-def ensure_journal_includes(journal_path: Path) -> None:
+def ensure_journal_includes(
+    journal_path: Path,
+    *,
+    extra_include_lines: tuple[str, ...] = (),
+    remove_include_lines: tuple[str, ...] = (),
+) -> None:
     existing_lines = journal_path.read_text(encoding="utf-8").splitlines() if journal_path.exists() else []
-    include_set = set(JOURNAL_INCLUDE_LINES)
+    include_lines = (*JOURNAL_INCLUDE_LINES, *extra_include_lines)
+    include_set = set(include_lines) | set(remove_include_lines)
     filtered_lines = [line for line in existing_lines if line.strip() not in include_set]
 
-    normalized_lines: list[str] = [*JOURNAL_INCLUDE_LINES]
+    normalized_lines: list[str] = [*include_lines]
     if filtered_lines:
         if filtered_lines[0].strip():
             normalized_lines.append("")
@@ -120,6 +129,28 @@ def ensure_journal_includes(journal_path: Path) -> None:
 
     journal_path.parent.mkdir(parents=True, exist_ok=True)
     journal_path.write_text(text, encoding="utf-8")
+
+
+def _relative_include_path(from_dir: Path, target_path: Path) -> str:
+    return Path(os.path.relpath(target_path, start=from_dir)).as_posix()
+
+
+def ensure_workspace_journal_includes(config: AppConfig) -> None:
+    sync_opening_balance_include_index(config)
+    start_year = f"{config.start_year:04d}"
+
+    for journal_path in sorted(config.journal_dir.glob("*.journal")):
+        opening_index_include_line = (
+            f"include {_relative_include_path(journal_path.parent, opening_balance_index_path(config))}"
+        )
+        legacy_opening_glob_line = (
+            f"include {_relative_include_path(journal_path.parent, config.opening_bal_dir)}/" + "*.journal"
+        )
+        ensure_journal_includes(
+            journal_path,
+            extra_include_lines=(opening_index_include_line,) if journal_path.stem == start_year else (),
+            remove_include_lines=(opening_index_include_line, legacy_opening_glob_line),
+        )
 
 
 def _iter_transaction_ranges(lines: list[str]) -> list[tuple[int, int]]:
@@ -166,7 +197,9 @@ class WorkspaceManager:
         config_path = workspace / "settings" / "workspace.toml"
         if not config_path.exists():
             return None
-        return load_config(config_path)
+        config = load_config(config_path)
+        ensure_workspace_journal_includes(config)
+        return config
 
     def get_setup_state(self, config: AppConfig | None) -> dict:
         if config is None:
@@ -933,9 +966,9 @@ class WorkspaceManager:
                 ),
                 encoding="utf-8",
             )
-        ensure_journal_includes(year_journal)
 
         config = load_config(settings / "workspace.toml")
+        ensure_workspace_journal_includes(config)
         for raw, normalized_account in normalized_input_rows:
             opening_balance = raw.get("openingBalance")
             if opening_balance is None:
@@ -1029,6 +1062,7 @@ class WorkspaceManager:
             import_accounts=existing_accounts,
         )
         refreshed = load_config(config.config_toml)
+        ensure_workspace_journal_includes(refreshed)
         self._ensure_seeded_accounts(config.init_dir / "10-accounts.dat", list(existing_tracked_accounts.values()))
         self._migrate_journal_postings(
             refreshed,
@@ -1131,6 +1165,7 @@ class WorkspaceManager:
             import_accounts=existing_accounts,
         )
         refreshed = load_config(config.config_toml)
+        ensure_workspace_journal_includes(refreshed)
         self._ensure_seeded_accounts(config.init_dir / "10-accounts.dat", list(existing_tracked_accounts.values()))
         self._migrate_journal_postings(
             refreshed,
@@ -1209,6 +1244,7 @@ class WorkspaceManager:
             },
         )
         refreshed = load_config(config.config_toml)
+        ensure_workspace_journal_includes(refreshed)
         self._ensure_seeded_accounts(config.init_dir / "10-accounts.dat", list(existing_tracked_accounts.values()))
         self._migrate_journal_postings(
             refreshed,

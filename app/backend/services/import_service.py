@@ -13,7 +13,7 @@ from .import_identity_service import source_payload_hash_for_lines
 from .import_profile_service import import_source_summary, resolve_import_source
 from .ledger_runner import CommandError, run_cmd
 from .payee_alias_service import ensure_payee_alias_dat
-from .workspace_service import ensure_journal_includes, ensure_standard_commodities_file
+from .workspace_service import ensure_standard_commodities_file, ensure_workspace_journal_includes
 
 
 INBOX_FILE_RE = re.compile(
@@ -466,7 +466,7 @@ def preview_import(
     year_journal = config.journal_dir / f"{year}.journal"
     if not year_journal.exists():
         year_journal.write_text("", encoding="utf-8")
-    ensure_journal_includes(year_journal)
+    ensure_workspace_journal_includes(config)
 
     converted_journal = run_cmd(
         [

@@ -66,6 +66,15 @@ export function describeBalanceTrust(input: BalanceTrustInput): BalanceTrustStat
 		};
 	}
 
+	if (!input.hasOpeningBalance) {
+		return {
+			shortLabel: 'Balance on file',
+			label: 'Journal-backed balance',
+			note: 'This balance is already reflected in the journal even though no imported history is on file yet.',
+			tone: 'neutral'
+		};
+	}
+
 	return {
 		shortLabel: 'Starting balance',
 		label: input.importConfigured ? 'Starting balance only' : 'Manual starting balance',

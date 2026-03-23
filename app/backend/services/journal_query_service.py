@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal, InvalidOperation
+import glob
+from pathlib import Path
 import re
 
 from .config_service import AppConfig
@@ -17,6 +19,7 @@ HEADER_RE = re.compile(
 )
 POSTING_RE = re.compile(r"^\s+([^\s].*?)(?:(?:\s{2,}|\t+)(.+))?$")
 META_RE = re.compile(r"^\s*;\s*([^:]+):\s*(.*)$")
+INCLUDE_RE = re.compile(r"^\s*include\s+(.+?)\s*$")
 
 
 @dataclass(frozen=True)
@@ -78,6 +81,47 @@ def _split_transactions(journal_text: str) -> list[list[str]]:
     return transactions
 
 
+def _normalize_include_target(raw: str) -> str:
+    target = raw.split(";", 1)[0].strip()
+    if len(target) >= 2 and target[0] == target[-1] and target[0] in {'"', "'"}:
+        return target[1:-1].strip()
+    return target
+
+
+def _resolve_include_paths(base_dir: Path, target: str) -> list[Path]:
+    if not target:
+        return []
+    pattern = base_dir / target
+    matches = [Path(match) for match in sorted(glob.glob(str(pattern), recursive=True))]
+    if matches:
+        return matches
+    if pattern.exists():
+        return [pattern]
+    return []
+
+
+def _expand_journal_lines(path: Path, stack: tuple[Path, ...] = ()) -> list[str]:
+    resolved_path = path.resolve()
+    if resolved_path in stack or not path.exists():
+        return []
+
+    lines: list[str] = []
+    next_stack = (*stack, resolved_path)
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        include_match = INCLUDE_RE.match(raw)
+        if not include_match:
+            lines.append(raw)
+            continue
+
+        include_target = _normalize_include_target(include_match.group(1))
+        include_paths = _resolve_include_paths(path.parent, include_target)
+        if not include_paths:
+            continue
+        for include_path in include_paths:
+            lines.extend(_expand_journal_lines(include_path, next_stack))
+    return lines
+
+
 def _parse_transaction(lines: list[str]) -> ParsedTransaction | None:
     header_match = HEADER_RE.match(lines[0])
     if not header_match:
@@ -122,12 +166,16 @@ def _parse_transaction(lines: list[str]) -> ParsedTransaction | None:
     )
 
 
+def is_generated_opening_balance_transaction(transaction: ParsedTransaction) -> bool:
+    return bool(str(transaction.metadata.get("tracked_account_id", "")).strip())
+
+
 def load_transactions(config: AppConfig) -> list[ParsedTransaction]:
     transactions: list[ParsedTransaction] = []
     for journal_path in sorted(config.journal_dir.glob("*.journal")):
         if not journal_path.exists():
             continue
-        text = journal_path.read_text(encoding="utf-8")
+        text = "\n".join(_expand_journal_lines(journal_path))
         for lines in _split_transactions(text):
             transaction = _parse_transaction(lines)
             if transaction is not None:

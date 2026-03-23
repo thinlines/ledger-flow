@@ -5,6 +5,7 @@ from pathlib import Path
 
 from services.config_service import AppConfig
 from services.dashboard_service import build_dashboard_overview
+from services.workspace_service import ensure_workspace_journal_includes
 
 
 def _make_config(workspace: Path) -> AppConfig:
@@ -70,9 +71,15 @@ def _make_config(workspace: Path) -> AppConfig:
     )
 
 
+def _write_year_journal(config: AppConfig, body: str = "") -> None:
+    (config.journal_dir / "2026.journal").write_text(body, encoding="utf-8")
+    ensure_workspace_journal_includes(config)
+
+
 def test_dashboard_overview_summarizes_financial_state(tmp_path: Path) -> None:
     config = _make_config(tmp_path / "workspace")
-    (config.journal_dir / "2026.journal").write_text(
+    _write_year_journal(
+        config,
         """
 2026/02/12 Paycheck
     ; import_account_id: checking
@@ -120,7 +127,6 @@ def test_dashboard_overview_summarizes_financial_state(tmp_path: Path) -> None:
     Expenses:Unknown
 """.strip()
         + "\n",
-        encoding="utf-8",
     )
 
     overview = build_dashboard_overview(config, today=date(2026, 3, 9))
@@ -169,7 +175,7 @@ def test_dashboard_overview_summarizes_financial_state(tmp_path: Path) -> None:
 
 def test_dashboard_overview_handles_empty_journals(tmp_path: Path) -> None:
     config = _make_config(tmp_path / "workspace")
-    (config.journal_dir / "2026.journal").write_text("", encoding="utf-8")
+    _write_year_journal(config)
 
     overview = build_dashboard_overview(config, today=date(2026, 3, 9))
 
@@ -197,7 +203,7 @@ def test_dashboard_overview_includes_opening_balances_without_counting_them_as_a
         + "\n",
         encoding="utf-8",
     )
-    (config.journal_dir / "2026.journal").write_text("", encoding="utf-8")
+    _write_year_journal(config)
 
     overview = build_dashboard_overview(config, today=date(2026, 3, 9))
 
@@ -210,3 +216,37 @@ def test_dashboard_overview_includes_opening_balances_without_counting_them_as_a
     assert overview["summary"]["netWorth"] == 250.0
     assert overview["summary"]["transactionCount"] == 0
     assert overview["recentTransactions"] == []
+
+
+def test_dashboard_overview_reflects_tracked_account_offset_opening_balances_on_both_accounts(tmp_path: Path) -> None:
+    config = _make_config(tmp_path / "workspace")
+    config.tracked_accounts["loan"] = {
+        "display_name": "Car Loan",
+        "ledger_account": "Liabilities:Loans:Car",
+    }
+    (config.opening_bal_dir / "loan.journal").write_text(
+        """
+2026-01-15 Opening balance
+    ; tracked_account_id: loan
+    Liabilities:Loans:Car  USD -18500.00
+    Assets:Bank:Checking
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    _write_year_journal(config)
+
+    overview = build_dashboard_overview(config, today=date(2026, 3, 9))
+
+    balances = {row["id"]: row for row in overview["balances"]}
+    assert balances["checking"]["balance"] == 18500.0
+    assert balances["checking"]["hasOpeningBalance"] is False
+    assert balances["checking"]["hasTransactionActivity"] is False
+    assert balances["checking"]["hasBalanceSource"] is True
+    assert balances["loan"]["balance"] == -18500.0
+    assert balances["loan"]["hasOpeningBalance"] is True
+    assert balances["loan"]["hasTransactionActivity"] is False
+    assert balances["loan"]["hasBalanceSource"] is True
+    assert overview["summary"]["trackedBalanceTotal"] == 0.0
+    assert overview["summary"]["netWorth"] == 0.0
+    assert overview["summary"]["transactionCount"] == 0

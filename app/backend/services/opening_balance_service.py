@@ -18,6 +18,7 @@ HEADER_RE = re.compile(
 POSTING_RE = re.compile(r"^\s+([^\s].*?)(?:(?:\s{2,}|\t+)(.+))?$")
 META_RE = re.compile(r"^\s*;\s*([^:]+):\s*(.*)$")
 OPENING_BALANCES_EQUITY = "Equity:Opening-Balances"
+OPENING_BALANCES_INDEX = "_opening_balances.journal"
 
 
 @dataclass(frozen=True)
@@ -144,6 +145,24 @@ def _default_opening_date(config: AppConfig) -> str:
     return f"{config.start_year:04d}-01-01"
 
 
+def opening_balance_index_path(config: AppConfig) -> Path:
+    return config.opening_bal_dir / OPENING_BALANCES_INDEX
+
+
+def sync_opening_balance_include_index(config: AppConfig) -> None:
+    index_path = opening_balance_index_path(config)
+    include_lines = [
+        f"include {journal_path.name}"
+        for journal_path in sorted(config.opening_bal_dir.glob("*.journal"))
+        if journal_path.name != OPENING_BALANCES_INDEX
+    ]
+    text = ("\n".join(include_lines) + "\n") if include_lines else ""
+    if index_path.exists() and index_path.read_text(encoding="utf-8") == text:
+        return
+    index_path.parent.mkdir(parents=True, exist_ok=True)
+    index_path.write_text(text, encoding="utf-8")
+
+
 def write_opening_balance(
     config: AppConfig,
     tracked_account_id: str,
@@ -158,12 +177,14 @@ def write_opening_balance(
     if not cleaned_amount:
         if target_path.exists():
             target_path.unlink()
+        sync_opening_balance_include_index(config)
         return
 
     amount = _parse_amount(cleaned_amount)
     if amount is None:
         if target_path.exists():
             target_path.unlink()
+        sync_opening_balance_include_index(config)
         return
 
     date = (opening_date or "").strip() or _default_opening_date(config)
@@ -182,9 +203,11 @@ def write_opening_balance(
         ),
         encoding="utf-8",
     )
+    sync_opening_balance_include_index(config)
 
 
 def delete_opening_balance(config: AppConfig, tracked_account_id: str) -> None:
     target_path = config.opening_bal_dir / f"{tracked_account_id}.journal"
     if target_path.exists():
         target_path.unlink()
+    sync_opening_balance_include_index(config)
