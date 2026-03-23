@@ -2,35 +2,66 @@
 
 ## Objective
 
-Reduce friction in Accounts setup by choosing sensible defaults automatically. A user adding or editing an account should not have to resolve obvious starting-date or subtype choices manually when the product can infer them confidently.
+Make the import flow safe and recoverable when a user picks the wrong account for a CSV. A mismatched statement should be caught before it strands the user in the inbox, and the upload path should feel simpler with fewer clicks and one obvious next action.
 
-## Deliverables
+## Current Failure
 
-- Default the opening date in Accounts configuration to January 1 of the current calendar year for fresh account drafts.
-- Preserve any saved opening date on edit. If an existing account has an opening balance but no saved date, present the same sensible default instead of leaving the field blank.
-- Remove copy that asks the user to add a starting date manually when the product can now supply that default for the common case.
-- Review Accounts inventory and balance-trust messaging so warnings are reserved for accounts that truly lack any starting balance or imported history, not merely a defaultable date detail.
-- Auto-sync the subtype dropdown in Accounts configuration with the existing name heuristic as the user types.
-- Only auto-apply the heuristic while subtype is still broad or still matches the last automatic suggestion. If the user deliberately picks a different subtype, preserve that choice.
-- Keep asset vs liability selection explicit for this cut. Do not silently flip the balance-sheet kind just because the name heuristic points at a subtype in the other group.
-- Keep behavior aligned across manual, supported-institution, and custom CSV account setup modes.
+- On March 22, 2026, a user can move from import preview to upload successfully even when the selected account does not match the CSV.
+- The later inbox-to-import step then fails because the file is invalid for that account.
+- The user cannot remove the bad file from the inbox through the product UI, which leaves a dead-end recovery path.
+- The current upload path asks the user to move through too many steps before the product confirms that the file and account actually belong together.
+
+## Scope Cut Line
+
+### Must Have
+
+- Validate account-to-CSV compatibility before a file is committed to the inbox, or block the upload with clear recovery guidance before the user reaches a dead end.
+- Preserve preview-before-apply safety while reducing unnecessary clicks between file selection, account selection, validation, and preview.
+- Let the user remove an invalid or unwanted file from the inbox inside the UI without touching workspace files manually.
+- If a mismatch is only discovered after inbox entry, show a clear recovery state with remove and retry actions instead of a generic import error.
+- Keep idempotent import, conflict visibility, archive behavior, and undo support intact.
+- Keep setup's inline first-import path aligned with `/import` so the same mistake does not survive in one flow but not the other.
+
+### Should Have
+
+- Make the import screen hierarchy clearer so one dominant action carries the user from upload into a valid preview state.
+- Use plain-language error copy that explains what is wrong with the file or account choice and what to do next.
+- Offer a more direct retry path after a mismatch so the user can correct the account choice without rethinking the whole workflow.
+
+### Later
+
+- Automatic account detection across all CSV formats
+- Broader inbox management beyond the remove-and-retry actions needed for this recovery path
+- A wider redesign of import history, archive browsing, or importer configuration
 
 ## Success Criteria
 
-- On March 22, 2026, a fresh account draft would prefill the opening date as January 1, 2026. The implementation should keep that behavior dynamic for future years.
-- A user can save a starting balance without first choosing an opening date manually unless they want a different date.
-- Accounts surfaces no longer nudge users to add a starting date when the default already covers the common case.
-- Typing a liability account name that matches the current heuristic, such as a credit card name, updates the subtype dropdown to the matching subtype automatically.
-- A manual subtype override is not repeatedly overwritten by later keystrokes.
-- This work lands without introducing a broader onboarding redesign or a new persistent relationship model.
+- A user cannot strand a mismatched CSV in the inbox by choosing the wrong account during upload.
+- A bad file is either blocked before inbox commit or can be removed from the inbox in one obvious in-product action.
+- The default upload path uses fewer clicks than the current preview-to-upload flow while still preserving preview before apply.
+- Error states explain what happened and how to recover without exposing workspace-file or ledger internals.
+- Wrong-account, valid-account, duplicate, and conflict cases all remain understandable and safe in both `/import` and setup's inline first-import flow.
+- This work lands without weakening the existing audit trail or changing the `new` / `duplicate` / `conflict` model.
+
+## Risks and Open Questions
+
+- Confirm where account-to-CSV mismatch validation can run reliably today: before inbox write, during preview normalization, or only during import preparation for some profiles.
+- Decide whether removing a bad inbox file should delete it, move it to a rejected/archive location, or mark it failed while preserving provenance.
+- Confirm whether fewer clicks should come from collapsing preview and upload into one guided step or from removing secondary confirmation states around the existing flow.
+
+## Proposed Sequence
+
+1. Map the current failure path in `/import` and setup's inline import so validation, inbox write, and error handling happen at the same points in both flows.
+2. Add the minimum product and backend behavior that prevents or recovers from wrong-account uploads without weakening import safety invariants.
+3. Tighten the upload UI so the next action is obvious and the user reaches either a valid preview or a clear recovery state with less friction.
+4. Verify the main cases end to end: valid upload, wrong-account mismatch, inbox removal, duplicate import, and conflict handling.
 
 ## Out of Scope
 
-- New subtype heuristics beyond the current keyword-based matcher
-- Automatic switching of asset vs liability kind
-- Broad redesign of the Accounts dashboard or onboarding flow outside this defaults pass
-- Data-model changes that exist only to support UI defaults
-- Bulk backfill or migration of existing accounts beyond normal edit behavior
+- Replacing the import pipeline architecture
+- Changing import identity or provenance metadata
+- Broad setup redesign outside the shared import interaction
+- New importer/profile systems that are not required to solve this recovery gap
 
 ## Replacement Rule
 
