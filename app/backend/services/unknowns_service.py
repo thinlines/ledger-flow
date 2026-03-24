@@ -10,9 +10,15 @@ from uuid import uuid4
 from .config_service import infer_account_kind
 from .rules_service import extract_set_account, find_matching_rule
 from .transfer_service import (
+    TRANSFER_MATCH_STATE_MATCHED,
+    TRANSFER_MATCH_STATE_PENDING,
+    build_direct_transfer_metadata_updates,
+    build_import_match_transfer_metadata_updates,
+    clear_transfer_metadata_updates,
     ensure_transfer_account,
     infer_blank_posting_amounts,
     is_transfer_account,
+    parse_transfer_metadata,
     parse_amount,
     rewrite_posting_account,
     upsert_transaction_metadata,
@@ -228,6 +234,7 @@ def _build_transaction_records(
         unknown_postings = [posting for posting in postings if "Unknown" in posting["account"]]
         counterparty = next((posting["account"] for posting in postings if "Unknown" not in posting["account"]), "")
         context = _tracked_account_context(metadata, postings, import_accounts, tracked_accounts, counterparty)
+        transfer = parse_transfer_metadata(metadata, tracked_accounts)
         base_txn_id = _transaction_base_id(journal_path, start + 1, metadata)
         record = {
             "txnId": base_txn_id,
@@ -239,9 +246,12 @@ def _build_transaction_records(
             "unknownPostingCount": len(unknown_postings),
             "postings": postings,
             "metadata": metadata,
-            "transferId": metadata.get("transfer_id"),
-            "transferState": metadata.get("transfer_state"),
-            "transferPeerAccountId": metadata.get("transfer_peer_account_id"),
+            "transferId": transfer.transfer_id,
+            "transferType": transfer.transfer_type,
+            "transferMatchState": transfer.transfer_match_state,
+            "transferState": transfer.transfer_state_for_ui,
+            "transferPeerAccountId": transfer.peer_account_id,
+            "hasTransferMetadata": transfer.has_any_transfer_metadata,
             **context,
         }
 
@@ -323,12 +333,13 @@ def _populate_transfer_suggestions(transaction_records: list[dict]) -> None:
         if record.get("importAccountId")
         and record.get("sourceTrackedAccountId")
         and record.get("unknownPostingCount") == 1
-        and not record.get("transferState")
+        and not record.get("hasTransferMetadata")
     ]
     pending_transfers = [
         record
         for record in transaction_records
-        if record.get("transferState") == "pending"
+        if record.get("transferType") == "import_match"
+        and record.get("transferMatchState") == "pending"
         and record.get("sourceTrackedAccountId")
         and record.get("transferPeerAccountId")
     ]
@@ -412,7 +423,8 @@ def _target_ledger_account(tracked_accounts: dict[str, dict], target_tracked_acc
 
 def _target_requires_import_match(tracked_accounts: dict[str, dict], target_tracked_account_id: str) -> bool:
     target_account = tracked_accounts.get(target_tracked_account_id, {})
-    return bool(str(target_account.get("import_account_id", "")).strip())
+    import_account_id = target_account.get("import_account_id")
+    return bool(str(import_account_id or "").strip())
 
 
 def _build_operation(
@@ -549,6 +561,7 @@ def apply_unknown_mappings(
             )
 
             if not target_requires_import_match:
+                transfer_id = str(txn.get("transferId") or "").strip() or str(uuid4().hex)
                 _queue_operation(
                     operations_by_start,
                     _build_operation(
@@ -558,29 +571,28 @@ def apply_unknown_mappings(
                         posting_line_no=int(txn["lineNo"]),
                         target_account=target_ledger_account,
                         expected_unknown=True,
-                        metadata_updates={
-                            "transfer_id": None,
-                            "transfer_state": None,
-                            "transfer_peer_account_id": None,
-                        },
+                        metadata_updates=build_direct_transfer_metadata_updates(
+                            transfer_id=transfer_id,
+                            peer_account_id=target_tracked_account_id,
+                        ),
                     ),
                 )
                 processed_line_nos.add(int(txn["lineNo"]))
                 continue
 
             transfer_account = ensure_transfer_account(accounts_dat, source_tracked_account_id, target_tracked_account_id)
-            transfer_id = str(uuid4().hex)
-            current_state = "pending"
+            transfer_id = str(txn.get("transferId") or "").strip() or str(uuid4().hex)
+            current_state = TRANSFER_MATCH_STATE_PENDING
 
             if matched_suggestion:
-                current_state = "matched"
+                current_state = TRANSFER_MATCH_STATE_MATCHED
                 if matched_suggestion.get("candidateState") == "pending":
                     transfer_id = str(matched_suggestion.get("candidateTransferId") or transfer_id)
-                    transfer_metadata = {
-                        "transfer_id": transfer_id,
-                        "transfer_state": "matched",
-                        "transfer_peer_account_id": source_tracked_account_id,
-                    }
+                    transfer_metadata = build_import_match_transfer_metadata_updates(
+                        transfer_id=transfer_id,
+                        peer_account_id=source_tracked_account_id,
+                        transfer_match_state=TRANSFER_MATCH_STATE_MATCHED,
+                    )
                     _queue_operation(
                         operations_by_start,
                         _build_operation(
@@ -621,11 +633,11 @@ def apply_unknown_mappings(
                             posting_line_no=int(candidate_txn["lineNo"]),
                             target_account=transfer_account,
                             expected_unknown=True,
-                            metadata_updates={
-                                "transfer_id": transfer_id,
-                                "transfer_state": "matched",
-                                "transfer_peer_account_id": source_tracked_account_id,
-                            },
+                            metadata_updates=build_import_match_transfer_metadata_updates(
+                                transfer_id=transfer_id,
+                                peer_account_id=source_tracked_account_id,
+                                transfer_match_state=TRANSFER_MATCH_STATE_MATCHED,
+                            ),
                         ),
                     )
                     processed_line_nos.add(int(candidate_txn["lineNo"]))
@@ -639,11 +651,11 @@ def apply_unknown_mappings(
                     posting_line_no=int(txn["lineNo"]),
                     target_account=transfer_account,
                     expected_unknown=True,
-                    metadata_updates={
-                        "transfer_id": transfer_id,
-                        "transfer_state": current_state,
-                        "transfer_peer_account_id": target_tracked_account_id,
-                    },
+                    metadata_updates=build_import_match_transfer_metadata_updates(
+                        transfer_id=transfer_id,
+                        peer_account_id=target_tracked_account_id,
+                        transfer_match_state=current_state,
+                    ),
                 ),
             )
             processed_line_nos.add(int(txn["lineNo"]))
@@ -673,7 +685,7 @@ def apply_unknown_mappings(
                     posting_line_no=int(txn["lineNo"]),
                     target_account=category_account,
                     expected_unknown=True,
-                    metadata_updates={},
+                    metadata_updates=clear_transfer_metadata_updates(),
                 ),
             )
             processed_line_nos.add(int(txn["lineNo"]))

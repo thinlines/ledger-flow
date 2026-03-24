@@ -10,6 +10,12 @@ from uuid import uuid4
 from .backup_service import backup_file
 from .config_service import AppConfig
 from .import_index import ImportIndex
+from .transfer_service import (
+    TRANSFER_MATCH_STATE_PENDING,
+    build_import_match_transfer_metadata_updates,
+    parse_transfer_metadata,
+    upsert_transaction_metadata,
+)
 
 
 APPLIED_STATUS = "applied"
@@ -105,28 +111,13 @@ def _load_journal_transactions(journal_path: Path) -> tuple[list[str], list[Jour
     return lines, _scan_journal_transactions(lines)
 
 
-def _upsert_transaction_metadata(lines: list[str], transaction: JournalTransaction, updates: dict[str, str]) -> list[str]:
+def _upsert_transaction_metadata(
+    lines: list[str],
+    transaction: JournalTransaction,
+    updates: dict[str, str | None],
+) -> list[str]:
     txn_lines = list(lines[transaction.start:transaction.end])
-    existing_indexes: dict[str, int] = {}
-    insert_at = 1
-    for index, line in enumerate(txn_lines[1:], start=1):
-        match = META_RE.match(line)
-        if not match:
-            break
-        existing_indexes[match.group(1).strip().lower()] = index
-        insert_at = index + 1
-
-    inserts: list[str] = []
-    for key, value in updates.items():
-        line = f"    ; {key}: {value}"
-        if key in existing_indexes:
-            txn_lines[existing_indexes[key]] = line
-        else:
-            inserts.append(line)
-
-    if inserts:
-        txn_lines[insert_at:insert_at] = inserts
-
+    txn_lines = upsert_transaction_metadata(txn_lines, updates)
     updated_lines = list(lines)
     updated_lines[transaction.start:transaction.end] = txn_lines
     return updated_lines
@@ -153,10 +144,22 @@ def _downgrade_remaining_transfer_peers(lines: list[str], removed_transactions: 
             raise ValueError("Transfer-linked transactions are no longer in a valid state for undo.")
         if len(remaining) != 1:
             continue
+        remaining_transfer = parse_transfer_metadata(remaining[0].metadata)
+        if remaining_transfer.transfer_id is None or remaining_transfer.peer_account_id is None:
+            raise ValueError("Transfer-linked transactions are no longer in a valid state for undo.")
+        if not (
+            remaining_transfer.is_import_match
+            or remaining_transfer.raw_transfer_state in {"pending", "matched"}
+        ):
+            raise ValueError("Only counterpart-aware transfers can be downgraded during undo.")
         updated_lines = _upsert_transaction_metadata(
             updated_lines,
             remaining[0],
-            {"transfer_state": "pending"},
+            build_import_match_transfer_metadata_updates(
+                transfer_id=remaining_transfer.transfer_id,
+                peer_account_id=remaining_transfer.peer_account_id,
+                transfer_match_state=TRANSFER_MATCH_STATE_PENDING,
+            ),
         )
         journal_transactions = _scan_journal_transactions(updated_lines)
 

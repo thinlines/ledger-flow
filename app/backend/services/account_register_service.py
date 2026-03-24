@@ -11,7 +11,7 @@ from .journal_query_service import (
     load_transactions,
     pretty_account_name,
 )
-from .transfer_service import is_transfer_account
+from .transfer_service import is_transfer_account, parse_transfer_metadata
 
 
 @dataclass(frozen=True)
@@ -105,16 +105,22 @@ def _source_tracked_account_details(
     return (None, None, None, None)
 
 
-def _detail_lines(config: AppConfig, transaction, postings) -> list[dict[str, str]]:
-    transfer_peer_account_id = str(transaction.metadata.get("transfer_peer_account_id") or "").strip() or None
-    transfer_peer_name, transfer_peer_ledger_account, transfer_peer_kind = _tracked_account_display(
+def _detail_lines(
+    config: AppConfig,
+    transaction,
+    postings,
+    current_account_id: str | None,
+) -> list[dict[str, str]]:
+    transfer_peer_account_id, transfer_peer_name, transfer_peer_ledger_account, transfer_peer_kind = _transfer_peer_details(
         config,
-        transfer_peer_account_id,
+        transaction,
+        current_account_id,
     )
-    if transfer_peer_name:
+    if transfer_peer_account_id:
+        label = transfer_peer_name or transfer_peer_account_id
         return [
             {
-                "label": transfer_peer_name,
+                "label": label,
                 "account": transfer_peer_ledger_account or transfer_peer_account_id or "",
                 "kind": transfer_peer_kind or "other",
             }
@@ -131,33 +137,85 @@ def _detail_lines(config: AppConfig, transaction, postings) -> list[dict[str, st
     ]
 
 
-def _transaction_summary(config: AppConfig, transaction, other_postings) -> tuple[str, bool, str | None, str | None]:
-    transfer_peer_account_id = str(transaction.metadata.get("transfer_peer_account_id") or "").strip() or None
-    transfer_state = str(transaction.metadata.get("transfer_state") or "").strip() or None
-    transfer_peer_name, _, _ = _tracked_account_display(config, transfer_peer_account_id)
-    if transfer_peer_name:
-        summary = f"Transfer · {transfer_peer_name}"
-        if transfer_state == "pending":
+def _other_tracked_posting_details(
+    config: AppConfig,
+    postings,
+    current_account_id: str | None,
+) -> tuple[str | None, str | None, str | None, str | None]:
+    for posting in postings:
+        if is_transfer_account(posting.account):
+            continue
+        tracked_account_id, tracked_name, tracked_kind = _tracked_account_by_ledger_account(config, posting.account)
+        if tracked_account_id is None or tracked_account_id == current_account_id:
+            continue
+        return (tracked_account_id, tracked_name, posting.account, tracked_kind)
+    return (None, None, None, None)
+
+
+def _transfer_peer_details(
+    config: AppConfig,
+    transaction,
+    current_account_id: str | None,
+) -> tuple[str | None, str | None, str | None, str | None]:
+    transfer = parse_transfer_metadata(transaction.metadata, config.tracked_accounts)
+    if not transfer.peer_account_id:
+        return (None, None, None, None)
+
+    if current_account_id is None or transfer.peer_account_id != current_account_id:
+        transfer_peer_name, transfer_peer_ledger_account, transfer_peer_kind = _tracked_account_display(
+            config,
+            transfer.peer_account_id,
+        )
+        return (
+            transfer.peer_account_id,
+            transfer_peer_name,
+            transfer_peer_ledger_account,
+            transfer_peer_kind,
+        )
+
+    source_account_id, source_name, source_ledger_account, source_kind = _source_tracked_account_details(config, transaction)
+    if source_account_id is not None and source_account_id != current_account_id:
+        return (source_account_id, source_name, source_ledger_account, source_kind)
+
+    return _other_tracked_posting_details(config, transaction.postings, current_account_id)
+
+
+def _transaction_summary(
+    config: AppConfig,
+    transaction,
+    other_postings,
+    current_account_id: str,
+) -> tuple[str, bool, str | None, str | None, str | None]:
+    transfer = parse_transfer_metadata(transaction.metadata, config.tracked_accounts)
+    transfer_peer_account_id, transfer_peer_name, _, _ = _transfer_peer_details(
+        config,
+        transaction,
+        current_account_id,
+    )
+    if transfer_peer_account_id:
+        label = transfer_peer_name or transfer_peer_account_id
+        summary = f"Transfer · {label}"
+        if transfer.is_pending:
             summary = f"{summary} (Pending)"
-        return (summary, False, transfer_state, transfer_peer_name)
+        return (summary, False, transfer.transfer_state_for_ui, transfer_peer_account_id, label)
 
     if not other_postings:
-        return ("No category details", False, None, None)
+        return ("No category details", False, None, None, None)
 
     expense_postings = [posting for posting in other_postings if infer_account_kind(posting.account) == "expense"]
     income_postings = [posting for posting in other_postings if infer_account_kind(posting.account) == "income"]
     is_unknown = any(posting.account.lower().startswith("expenses:unknown") for posting in expense_postings)
 
     if len(other_postings) > 1:
-        return (f"Split · {len(other_postings)} lines", is_unknown, None, None)
+        return (f"Split · {len(other_postings)} lines", is_unknown, None, None, None)
 
     primary = other_postings[0]
     label = pretty_account_name(primary.account)
     if infer_account_kind(primary.account) in {"asset", "liability"}:
-        return (f"Transfer · {label}", is_unknown, None, None)
+        return (f"Transfer · {label}", is_unknown, None, None, None)
     if expense_postings or income_postings:
-        return (label, is_unknown, None, None)
-    return (f"Matched with {label}", is_unknown, None, None)
+        return (label, is_unknown, None, None, None)
+    return (f"Matched with {label}", is_unknown, None, None, None)
 
 
 def _pending_transfer_event_for_peer_account(
@@ -166,11 +224,11 @@ def _pending_transfer_event_for_peer_account(
     account_id: str,
     order: int,
 ) -> RegisterEvent | None:
-    transfer_state = str(transaction.metadata.get("transfer_state") or "").strip() or None
-    if transfer_state != "pending":
+    transfer = parse_transfer_metadata(transaction.metadata, config.tracked_accounts)
+    if not transfer.is_pending:
         return None
 
-    target_account_id = str(transaction.metadata.get("transfer_peer_account_id") or "").strip() or None
+    target_account_id = transfer.peer_account_id
     if target_account_id != account_id:
         return None
 
@@ -198,11 +256,53 @@ def _pending_transfer_event_for_peer_account(
                 "kind": source_kind or infer_account_kind(source_ledger_account),
             }
         ],
-        transfer_state=transfer_state,
+        transfer_state=transfer.transfer_state_for_ui,
         transfer_peer_account_id=source_account_id,
         transfer_peer_account_name=source_name or label,
         affects_balance=False,
         counts_as_transaction=False,
+    )
+
+
+def _direct_transfer_event_for_peer_account(
+    config: AppConfig,
+    transaction,
+    account_id: str,
+    order: int,
+) -> RegisterEvent | None:
+    transfer = parse_transfer_metadata(transaction.metadata, config.tracked_accounts)
+    if transfer.is_import_match or transfer.peer_account_id != account_id:
+        return None
+
+    source_account_id, source_name, source_ledger_account, source_kind = _source_tracked_account_details(config, transaction)
+    if not source_ledger_account:
+        return None
+
+    source_amount = _account_amount(transaction, source_ledger_account)
+    if source_amount is None:
+        return None
+
+    label = source_name or pretty_account_name(source_ledger_account)
+    return RegisterEvent(
+        posted_on=transaction.posted_on,
+        order=order,
+        amount=-source_amount,
+        payee=transaction.payee,
+        summary=f"Transfer · {label}",
+        is_unknown=False,
+        is_opening_balance=False,
+        detail_lines=[
+            {
+                "label": label,
+                "account": source_ledger_account,
+                "kind": source_kind or infer_account_kind(source_ledger_account),
+            }
+        ],
+        transfer_state=None,
+        transfer_peer_account_id=source_account_id,
+        transfer_peer_account_name=source_name or label,
+        affects_balance=True,
+        counts_as_transaction=True,
     )
 
 
@@ -244,17 +344,19 @@ def build_account_register(config: AppConfig, account_id: str) -> dict:
                 summary = "Starting point for this account"
                 is_unknown = False
                 transfer_state = None
+                transfer_peer_account_id = None
                 transfer_peer_name = None
                 detail_lines = [_opening_balance_detail_line(config, offset_account)]
             else:
-                summary, is_unknown, transfer_state, transfer_peer_name = _transaction_summary(
+                summary, is_unknown, transfer_state, transfer_peer_account_id, transfer_peer_name = _transaction_summary(
                     config,
                     transaction,
                     other_postings,
+                    account_id,
                 )
                 if is_generated_opening:
                     is_unknown = False
-                detail_lines = _detail_lines(config, transaction, other_postings)
+                detail_lines = _detail_lines(config, transaction, other_postings, account_id)
             events.append(
                 RegisterEvent(
                     posted_on=transaction.posted_on,
@@ -266,7 +368,7 @@ def build_account_register(config: AppConfig, account_id: str) -> dict:
                     is_opening_balance=is_primary_opening,
                     detail_lines=detail_lines,
                     transfer_state=transfer_state,
-                    transfer_peer_account_id=str(transaction.metadata.get("transfer_peer_account_id") or "").strip() or None,
+                    transfer_peer_account_id=transfer_peer_account_id,
                     transfer_peer_account_name=transfer_peer_name,
                     counts_as_transaction=not is_generated_opening,
                 )
@@ -276,6 +378,11 @@ def build_account_register(config: AppConfig, account_id: str) -> dict:
         pending_peer_event = _pending_transfer_event_for_peer_account(config, transaction, account_id, order)
         if pending_peer_event is not None:
             events.append(pending_peer_event)
+            continue
+
+        direct_peer_event = _direct_transfer_event_for_peer_account(config, transaction, account_id, order)
+        if direct_peer_event is not None:
+            events.append(direct_peer_event)
 
     events.sort(key=lambda event: (event.posted_on, event.order))
 

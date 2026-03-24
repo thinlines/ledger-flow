@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
+from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 import re
@@ -7,9 +9,58 @@ import re
 
 TRANSFER_ROOT_ACCOUNT = "Assets:Transfers"
 PAIR_SEPARATOR = "__"
+TRANSFER_TYPE_DIRECT = "direct"
+TRANSFER_TYPE_IMPORT_MATCH = "import_match"
+TRANSFER_MATCH_STATE_NONE = "none"
+TRANSFER_MATCH_STATE_PENDING = "pending"
+TRANSFER_MATCH_STATE_MATCHED = "matched"
+VALID_TRANSFER_TYPES = {TRANSFER_TYPE_DIRECT, TRANSFER_TYPE_IMPORT_MATCH}
+VALID_TRANSFER_MATCH_STATES = {
+    TRANSFER_MATCH_STATE_NONE,
+    TRANSFER_MATCH_STATE_PENDING,
+    TRANSFER_MATCH_STATE_MATCHED,
+}
+ACTIVE_TRANSFER_MATCH_STATES = {
+    TRANSFER_MATCH_STATE_PENDING,
+    TRANSFER_MATCH_STATE_MATCHED,
+}
 ACCOUNT_LINE_RE = re.compile(r"^(\s+)([^\s].*?)(\s{2,}|\t+)(.*)$")
 ACCOUNT_ONLY_RE = re.compile(r"^(\s+)([^\s].*?)\s*$")
 META_RE = re.compile(r"^\s*;\s*([^:]+):\s*(.*)$")
+
+
+@dataclass(frozen=True)
+class ParsedTransferMetadata:
+    transfer_id: str | None
+    peer_account_id: str | None
+    transfer_type: str | None
+    transfer_match_state: str | None
+    transfer_state_for_ui: str | None
+    raw_transfer_type: str | None
+    raw_transfer_match_state: str | None
+    raw_transfer_state: str | None
+
+    @property
+    def has_linkage(self) -> bool:
+        return bool(self.transfer_id or self.peer_account_id)
+
+    @property
+    def has_any_transfer_metadata(self) -> bool:
+        return bool(
+            self.transfer_id
+            or self.peer_account_id
+            or self.raw_transfer_type
+            or self.raw_transfer_match_state
+            or self.raw_transfer_state
+        )
+
+    @property
+    def is_pending(self) -> bool:
+        return self.transfer_state_for_ui == TRANSFER_MATCH_STATE_PENDING
+
+    @property
+    def is_import_match(self) -> bool:
+        return self.transfer_type == TRANSFER_TYPE_IMPORT_MATCH
 
 
 def is_transfer_account(account: str) -> bool:
@@ -20,6 +71,158 @@ def is_transfer_account(account: str) -> bool:
 def transfer_pair_account(source_tracked_account_id: str, target_tracked_account_id: str) -> str:
     left, right = sorted([source_tracked_account_id.strip(), target_tracked_account_id.strip()])
     return f"{TRANSFER_ROOT_ACCOUNT}:{left}{PAIR_SEPARATOR}{right}"
+
+
+def _metadata_value(metadata: Mapping[str, object], key: str) -> str | None:
+    return str(metadata.get(key) or "").strip() or None
+
+
+def _peer_requires_import_match(
+    tracked_accounts: Mapping[str, dict] | None,
+    peer_account_id: str | None,
+) -> bool | None:
+    if tracked_accounts is None or peer_account_id is None:
+        return None
+    peer_account = tracked_accounts.get(peer_account_id, {})
+    import_account_id = peer_account.get("import_account_id")
+    return bool(str(import_account_id or "").strip())
+
+
+def parse_transfer_metadata(
+    metadata: Mapping[str, object],
+    tracked_accounts: Mapping[str, dict] | None = None,
+) -> ParsedTransferMetadata:
+    transfer_id = _metadata_value(metadata, "transfer_id")
+    peer_account_id = _metadata_value(metadata, "transfer_peer_account_id")
+    raw_transfer_type = _metadata_value(metadata, "transfer_type")
+    raw_transfer_match_state = _metadata_value(metadata, "transfer_match_state")
+    raw_transfer_state = _metadata_value(metadata, "transfer_state")
+
+    explicit_transfer_type = raw_transfer_type if raw_transfer_type in VALID_TRANSFER_TYPES else None
+    explicit_match_state = raw_transfer_match_state if raw_transfer_match_state in VALID_TRANSFER_MATCH_STATES else None
+    legacy_match_state = raw_transfer_state if raw_transfer_state in ACTIVE_TRANSFER_MATCH_STATES else None
+
+    transfer_type: str | None = None
+    transfer_match_state: str | None = None
+
+    if explicit_transfer_type is not None or explicit_match_state is not None:
+        transfer_type = explicit_transfer_type
+        transfer_match_state = explicit_match_state
+        if transfer_type is None:
+            if transfer_match_state in ACTIVE_TRANSFER_MATCH_STATES:
+                transfer_type = TRANSFER_TYPE_IMPORT_MATCH
+            elif transfer_id or peer_account_id:
+                transfer_type = TRANSFER_TYPE_DIRECT
+        if transfer_type == TRANSFER_TYPE_DIRECT:
+            transfer_match_state = TRANSFER_MATCH_STATE_NONE
+        elif transfer_type == TRANSFER_TYPE_IMPORT_MATCH and transfer_match_state not in ACTIVE_TRANSFER_MATCH_STATES:
+            transfer_match_state = TRANSFER_MATCH_STATE_NONE
+    elif legacy_match_state is not None:
+        if _peer_requires_import_match(tracked_accounts, peer_account_id):
+            transfer_type = TRANSFER_TYPE_IMPORT_MATCH
+            transfer_match_state = legacy_match_state
+        elif transfer_id or peer_account_id:
+            transfer_type = TRANSFER_TYPE_DIRECT
+            transfer_match_state = TRANSFER_MATCH_STATE_NONE
+    elif transfer_id or peer_account_id:
+        transfer_type = TRANSFER_TYPE_DIRECT
+        transfer_match_state = TRANSFER_MATCH_STATE_NONE
+
+    peer_requires_import_match = _peer_requires_import_match(tracked_accounts, peer_account_id)
+    if (
+        transfer_type == TRANSFER_TYPE_IMPORT_MATCH
+        and transfer_match_state in ACTIVE_TRANSFER_MATCH_STATES
+        and peer_requires_import_match is False
+    ):
+        transfer_type = TRANSFER_TYPE_DIRECT if (transfer_id or peer_account_id) else None
+        transfer_match_state = TRANSFER_MATCH_STATE_NONE if transfer_type is not None else None
+
+    transfer_state_for_ui = (
+        transfer_match_state
+        if transfer_type == TRANSFER_TYPE_IMPORT_MATCH and transfer_match_state in ACTIVE_TRANSFER_MATCH_STATES
+        else None
+    )
+
+    return ParsedTransferMetadata(
+        transfer_id=transfer_id,
+        peer_account_id=peer_account_id,
+        transfer_type=transfer_type,
+        transfer_match_state=transfer_match_state,
+        transfer_state_for_ui=transfer_state_for_ui,
+        raw_transfer_type=raw_transfer_type,
+        raw_transfer_match_state=raw_transfer_match_state,
+        raw_transfer_state=raw_transfer_state,
+    )
+
+
+def clear_transfer_metadata_updates() -> dict[str, str | None]:
+    return {
+        "transfer_id": None,
+        "transfer_peer_account_id": None,
+        "transfer_type": None,
+        "transfer_match_state": None,
+        "transfer_state": None,
+    }
+
+
+def build_transfer_metadata_updates(
+    *,
+    transfer_id: str | None,
+    peer_account_id: str | None,
+    transfer_type: str,
+    transfer_match_state: str | None,
+) -> dict[str, str | None]:
+    transfer_id_clean = (transfer_id or "").strip() or None
+    peer_account_id_clean = (peer_account_id or "").strip() or None
+    transfer_type_clean = transfer_type.strip()
+    transfer_match_state_clean = (transfer_match_state or "").strip() or None
+
+    if transfer_type_clean not in VALID_TRANSFER_TYPES:
+        raise ValueError(f"Unsupported transfer type: {transfer_type_clean}")
+    if transfer_id_clean is None or peer_account_id_clean is None:
+        raise ValueError("Transfer metadata requires both transfer_id and transfer_peer_account_id.")
+
+    if transfer_type_clean == TRANSFER_TYPE_DIRECT:
+        transfer_match_state_clean = TRANSFER_MATCH_STATE_NONE
+    elif transfer_match_state_clean not in ACTIVE_TRANSFER_MATCH_STATES:
+        raise ValueError(
+            "Import-match transfers require transfer_match_state to be 'pending' or 'matched'."
+        )
+
+    return {
+        "transfer_id": transfer_id_clean,
+        "transfer_peer_account_id": peer_account_id_clean,
+        "transfer_type": transfer_type_clean,
+        "transfer_match_state": transfer_match_state_clean,
+        "transfer_state": None,
+    }
+
+
+def build_direct_transfer_metadata_updates(
+    *,
+    transfer_id: str | None,
+    peer_account_id: str | None,
+) -> dict[str, str | None]:
+    return build_transfer_metadata_updates(
+        transfer_id=transfer_id,
+        peer_account_id=peer_account_id,
+        transfer_type=TRANSFER_TYPE_DIRECT,
+        transfer_match_state=TRANSFER_MATCH_STATE_NONE,
+    )
+
+
+def build_import_match_transfer_metadata_updates(
+    *,
+    transfer_id: str | None,
+    peer_account_id: str | None,
+    transfer_match_state: str,
+) -> dict[str, str | None]:
+    return build_transfer_metadata_updates(
+        transfer_id=transfer_id,
+        peer_account_id=peer_account_id,
+        transfer_type=TRANSFER_TYPE_IMPORT_MATCH,
+        transfer_match_state=transfer_match_state,
+    )
 
 
 def parse_amount(raw: str) -> Decimal | None:

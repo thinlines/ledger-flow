@@ -44,10 +44,12 @@ def _tracked_accounts() -> dict[str, dict]:
         "vehicle": {
             "display_name": "Vehicle",
             "ledger_account": "Assets:Vehicle:Subaru",
+            "import_account_id": None,
         },
         "auto_loan": {
             "display_name": "Auto Loan",
             "ledger_account": "Liabilities:Loans:Auto",
+            "import_account_id": None,
         },
     }
 
@@ -327,8 +329,10 @@ account Assets:Bank:Savings
     assert txn_updates == 1
     assert warnings == []
     assert transfer_account in content
-    assert "; transfer_state: pending" in content
+    assert "; transfer_type: import_match" in content
+    assert "; transfer_match_state: pending" in content
     assert "; transfer_peer_account_id: savings" in content
+    assert "; transfer_state:" not in content
     assert f"account {transfer_account}" in accounts.read_text(encoding="utf-8")
 
 
@@ -384,9 +388,11 @@ account Assets:Bank:Savings
     assert txn_updates == 2
     assert warnings == []
     assert content.count(transfer_account) == 2
-    assert content.count("; transfer_state: matched") == 2
+    assert content.count("; transfer_type: import_match") == 2
+    assert content.count("; transfer_match_state: matched") == 2
     assert "; transfer_peer_account_id: savings" in content
     assert "; transfer_peer_account_id: checking" in content
+    assert "; transfer_state:" not in content
 
     transfer_ids = {
         line.partition(":")[2].strip()
@@ -442,8 +448,10 @@ account Liabilities:Cards:Visa
     assert txn_updates == 1
     assert warnings == []
     assert transfer_account in content
-    assert "; transfer_state: pending" in content
+    assert "; transfer_type: import_match" in content
+    assert "; transfer_match_state: pending" in content
     assert "; transfer_peer_account_id: visa" in content
+    assert "; transfer_state:" not in content
     assert f"account {transfer_account}" in accounts.read_text(encoding="utf-8")
 
 
@@ -493,8 +501,11 @@ account Assets:Vehicle:Subaru
     assert warnings == []
     assert "Assets:Vehicle:Subaru" in content
     assert "Expenses:Unknown" not in content
+    assert "; transfer_id:" in content
+    assert "; transfer_type: direct" in content
+    assert "; transfer_match_state: none" in content
+    assert "; transfer_peer_account_id: vehicle" in content
     assert "; transfer_state:" not in content
-    assert "; transfer_peer_account_id:" not in content
     assert "Assets:Transfers:" not in content
     assert "Assets:Transfers:" not in accounts.read_text(encoding="utf-8")
 
@@ -545,8 +556,11 @@ account Liabilities:Loans:Auto
     assert warnings == []
     assert "Liabilities:Loans:Auto" in content
     assert "Expenses:Unknown" not in content
+    assert "; transfer_id:" in content
+    assert "; transfer_type: direct" in content
+    assert "; transfer_match_state: none" in content
+    assert "; transfer_peer_account_id: auto_loan" in content
     assert "; transfer_state:" not in content
-    assert "; transfer_peer_account_id:" not in content
     assert "Assets:Transfers:" not in content
     assert "Assets:Transfers:" not in accounts.read_text(encoding="utf-8")
 
@@ -615,8 +629,10 @@ account {transfer_account}
     content = journal.read_text(encoding="utf-8")
     assert txn_updates == 2
     assert warnings == []
-    assert content.count("; transfer_state: matched") == 2
+    assert content.count("; transfer_type: import_match") == 2
+    assert content.count("; transfer_match_state: matched") == 2
     assert "; transfer_id: transfer-1" in content
+    assert "; transfer_state:" not in content
 
 
 def test_add_payee_rule_adds_mapping(tmp_path: Path) -> None:

@@ -31,6 +31,13 @@ def _make_config(workspace: Path) -> AppConfig:
                 "last4": "1234",
                 "tracked_account_id": "checking",
             },
+            "savings": {
+                "display_name": "Savings",
+                "institution": "wells_fargo",
+                "ledger_account": "Assets:Bank:Savings",
+                "last4": "4321",
+                "tracked_account_id": "savings",
+            },
             "visa": {
                 "display_name": "Visa Signature",
                 "institution": "visa",
@@ -59,6 +66,12 @@ def _make_config(workspace: Path) -> AppConfig:
                 "institution": "wells_fargo",
                 "ledger_account": "Assets:Bank:Savings",
                 "last4": "4321",
+                "import_account_id": "savings",
+            },
+            "vehicle": {
+                "display_name": "Vehicle",
+                "ledger_account": "Assets:Vehicle:Subaru",
+                "import_account_id": None,
             },
         },
         payee_aliases="payee_aliases.csv",
@@ -201,7 +214,8 @@ def test_account_register_uses_transfer_peer_metadata_for_pending_transfers(tmp_
 2026/02/04 Transfer to savings
     ; import_account_id: checking
     ; transfer_id: transfer-1
-    ; transfer_state: pending
+    ; transfer_type: import_match
+    ; transfer_match_state: pending
     ; transfer_peer_account_id: savings
     Assets:Transfers:checking__savings  $30.00
     Assets:Bank:Checking
@@ -284,7 +298,8 @@ def test_account_register_shows_pending_transfer_on_liability_peer_account_witho
 2026/02/04 Credit card payment
     ; import_account_id: checking
     ; transfer_id: transfer-1
-    ; transfer_state: pending
+    ; transfer_type: import_match
+    ; transfer_match_state: pending
     ; transfer_peer_account_id: visa
     Assets:Transfers:checking__visa  $50.00
     Assets:Bank:Checking
@@ -306,6 +321,114 @@ def test_account_register_shows_pending_transfer_on_liability_peer_account_witho
     assert latest["amount"] == 50.0
     assert latest["runningBalance"] == 0.0
     assert latest["transferState"] == "pending"
+    assert latest["transferPeerAccountId"] == "checking"
+    assert latest["transferPeerAccountName"] == "Wells Fargo Checking"
+    assert latest["detailLines"] == [
+        {
+            "label": "Wells Fargo Checking",
+            "account": "Assets:Bank:Checking",
+            "kind": "asset",
+        }
+    ]
+
+
+def test_account_register_shows_direct_transfer_on_manual_destination_without_pending_state(tmp_path: Path) -> None:
+    config = _make_config(tmp_path / "workspace")
+    _write_year_journal(
+        config,
+        """
+2026/02/04 Vehicle purchase
+    ; import_account_id: checking
+    ; transfer_id: transfer-1
+    ; transfer_type: direct
+    ; transfer_match_state: none
+    ; transfer_peer_account_id: vehicle
+    Assets:Vehicle:Subaru  $30.00
+    Assets:Bank:Checking
+""".strip()
+        + "\n",
+    )
+
+    register = build_account_register(config, "vehicle")
+
+    assert register["currentBalance"] == 30.0
+    assert register["transactionCount"] == 1
+    assert register["entryCount"] == 1
+    assert register["latestActivityDate"] == "2026-02-04"
+
+    latest = register["entries"][0]
+    assert latest["summary"] == "Transfer · Wells Fargo Checking"
+    assert latest["amount"] == 30.0
+    assert latest["runningBalance"] == 30.0
+    assert latest["transferState"] is None
+    assert latest["transferPeerAccountId"] == "checking"
+    assert latest["transferPeerAccountName"] == "Wells Fargo Checking"
+    assert latest["detailLines"] == [
+        {
+            "label": "Wells Fargo Checking",
+            "account": "Assets:Bank:Checking",
+            "kind": "asset",
+        }
+    ]
+
+
+def test_account_register_ignores_legacy_pending_state_for_manual_destination(tmp_path: Path) -> None:
+    config = _make_config(tmp_path / "workspace")
+    _write_year_journal(
+        config,
+        """
+2026/02/04 Vehicle purchase
+    ; import_account_id: checking
+    ; transfer_id: transfer-1
+    ; transfer_state: pending
+    ; transfer_peer_account_id: vehicle
+    Assets:Vehicle:Subaru  $30.00
+    Assets:Bank:Checking
+""".strip()
+        + "\n",
+    )
+
+    register = build_account_register(config, "vehicle")
+
+    assert register["currentBalance"] == 30.0
+    assert register["transactionCount"] == 1
+    assert register["entryCount"] == 1
+
+    latest = register["entries"][0]
+    assert latest["summary"] == "Transfer · Wells Fargo Checking"
+    assert latest["transferState"] is None
+    assert latest["transferPeerAccountId"] == "checking"
+    assert latest["transferPeerAccountName"] == "Wells Fargo Checking"
+
+
+def test_account_register_treats_manual_destination_transfer_account_entry_as_posted_direct_transfer(tmp_path: Path) -> None:
+    config = _make_config(tmp_path / "workspace")
+    _write_year_journal(
+        config,
+        """
+2026/02/04 Vehicle purchase
+    ; import_account_id: checking
+    ; transfer_id: transfer-1
+    ; transfer_type: import_match
+    ; transfer_match_state: pending
+    ; transfer_peer_account_id: vehicle
+    Assets:Transfers:checking__vehicle  $30.00
+    Assets:Bank:Checking
+""".strip()
+        + "\n",
+    )
+
+    register = build_account_register(config, "vehicle")
+
+    assert register["currentBalance"] == 30.0
+    assert register["transactionCount"] == 1
+    assert register["entryCount"] == 1
+
+    latest = register["entries"][0]
+    assert latest["summary"] == "Transfer · Wells Fargo Checking"
+    assert latest["amount"] == 30.0
+    assert latest["runningBalance"] == 30.0
+    assert latest["transferState"] is None
     assert latest["transferPeerAccountId"] == "checking"
     assert latest["transferPeerAccountName"] == "Wells Fargo Checking"
     assert latest["detailLines"] == [
