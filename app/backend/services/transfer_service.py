@@ -101,40 +101,39 @@ def parse_transfer_metadata(
     explicit_transfer_type = raw_transfer_type if raw_transfer_type in VALID_TRANSFER_TYPES else None
     explicit_match_state = raw_transfer_match_state if raw_transfer_match_state in VALID_TRANSFER_MATCH_STATES else None
     legacy_match_state = raw_transfer_state if raw_transfer_state in ACTIVE_TRANSFER_MATCH_STATES else None
+    has_linkage = bool(transfer_id or peer_account_id)
+    peer_requires_import_match = _peer_requires_import_match(tracked_accounts, peer_account_id)
 
     transfer_type: str | None = None
     transfer_match_state: str | None = None
 
-    if explicit_transfer_type is not None or explicit_match_state is not None:
-        transfer_type = explicit_transfer_type
+    if (
+        explicit_transfer_type == TRANSFER_TYPE_IMPORT_MATCH
+        and explicit_match_state in ACTIVE_TRANSFER_MATCH_STATES
+        and has_linkage
+    ):
+        transfer_type = TRANSFER_TYPE_IMPORT_MATCH
         transfer_match_state = explicit_match_state
-        if transfer_type is None:
-            if transfer_match_state in ACTIVE_TRANSFER_MATCH_STATES:
-                transfer_type = TRANSFER_TYPE_IMPORT_MATCH
-            elif transfer_id or peer_account_id:
-                transfer_type = TRANSFER_TYPE_DIRECT
-        if transfer_type == TRANSFER_TYPE_DIRECT:
-            transfer_match_state = TRANSFER_MATCH_STATE_NONE
-        elif transfer_type == TRANSFER_TYPE_IMPORT_MATCH and transfer_match_state not in ACTIVE_TRANSFER_MATCH_STATES:
-            transfer_match_state = TRANSFER_MATCH_STATE_NONE
-    elif legacy_match_state is not None:
-        if _peer_requires_import_match(tracked_accounts, peer_account_id):
-            transfer_type = TRANSFER_TYPE_IMPORT_MATCH
-            transfer_match_state = legacy_match_state
-        elif transfer_id or peer_account_id:
-            transfer_type = TRANSFER_TYPE_DIRECT
-            transfer_match_state = TRANSFER_MATCH_STATE_NONE
-    elif transfer_id or peer_account_id:
+    elif (
+        explicit_transfer_type is None
+        and explicit_match_state in ACTIVE_TRANSFER_MATCH_STATES
+        and has_linkage
+    ):
+        transfer_type = TRANSFER_TYPE_IMPORT_MATCH
+        transfer_match_state = explicit_match_state
+    elif legacy_match_state is not None and has_linkage and peer_requires_import_match is True:
+        transfer_type = TRANSFER_TYPE_IMPORT_MATCH
+        transfer_match_state = legacy_match_state
+    elif has_linkage or explicit_transfer_type == TRANSFER_TYPE_DIRECT:
         transfer_type = TRANSFER_TYPE_DIRECT
         transfer_match_state = TRANSFER_MATCH_STATE_NONE
 
-    peer_requires_import_match = _peer_requires_import_match(tracked_accounts, peer_account_id)
     if (
         transfer_type == TRANSFER_TYPE_IMPORT_MATCH
         and transfer_match_state in ACTIVE_TRANSFER_MATCH_STATES
         and peer_requires_import_match is False
     ):
-        transfer_type = TRANSFER_TYPE_DIRECT if (transfer_id or peer_account_id) else None
+        transfer_type = TRANSFER_TYPE_DIRECT if has_linkage else None
         transfer_match_state = TRANSFER_MATCH_STATE_NONE if transfer_type is not None else None
 
     transfer_state_for_ui = (

@@ -34,6 +34,25 @@ def _make_config(workspace: Path) -> AppConfig:
                 "ledger_account": "Assets:Bank:Checking",
             }
         },
+        tracked_accounts={
+            "checking": {
+                "display_name": "Wells Fargo Checking",
+                "institution": "wells_fargo",
+                "ledger_account": "Assets:Bank:Checking",
+                "import_account_id": "wf_checking",
+            },
+            "savings": {
+                "display_name": "Savings",
+                "institution": "wells_fargo",
+                "ledger_account": "Assets:Bank:Savings",
+                "import_account_id": "wf_savings",
+            },
+            "vehicle": {
+                "display_name": "Vehicle",
+                "ledger_account": "Assets:Vehicle:Subaru",
+                "import_account_id": None,
+            },
+        },
         payee_aliases="payee_aliases.csv",
     )
 
@@ -352,6 +371,78 @@ def test_undo_import_rejects_downgrading_surviving_direct_transfer_peer(tmp_path
         assert "counterpart-aware" in str(exc).lower()
     else:
         raise AssertionError("undo_import should reject downgrading a direct transfer survivor")
+
+    assert journal_path.read_text(encoding="utf-8") == original
+
+
+def test_undo_import_rejects_downgrading_legacy_false_pending_manual_transfer_peer(tmp_path: Path) -> None:
+    config = _make_config(tmp_path / "workspace")
+    journal_path = config.journal_dir / "2026.journal"
+    _write_journal(
+        journal_path,
+        "\n".join(
+            [
+                "2026/03/01 Vehicle purchase",
+                "    ; import_account_id: wf_checking",
+                "    ; source_identity: txn-undo",
+                "    ; source_payload_hash: payload-undo",
+                "    ; transfer_id: transfer-1",
+                "    ; transfer_state: matched",
+                "    ; transfer_peer_account_id: vehicle",
+                "    Assets:Vehicle:Subaru  $10.00",
+                "    Assets:Bank:Checking",
+            ]
+        ),
+        "\n".join(
+            [
+                "2026/03/02 Vehicle adjustment",
+                "    ; import_account_id: wf_checking",
+                "    ; source_identity: txn-keep",
+                "    ; source_payload_hash: payload-keep",
+                "    ; transfer_id: transfer-1",
+                "    ; transfer_state: matched",
+                "    ; transfer_peer_account_id: vehicle",
+                "    Assets:Vehicle:Subaru  $5.00",
+                "    Assets:Bank:Checking",
+            ]
+        ),
+    )
+
+    backup_path = config.imports_dir / "2026.legacy-direct-transfer.import.bak"
+    backup_path.write_text("snapshot\n", encoding="utf-8")
+
+    index = ImportIndex(config.root_dir / ".workflow" / "state.db")
+    index.upsert_transactions(
+        import_account_id="wf_checking",
+        year="2026",
+        journal_path=journal_path,
+        source_file_sha256="sha-transfer",
+        txns=[
+            {"sourceIdentity": "txn-undo", "sourcePayloadHash": "payload-undo"},
+            {"sourceIdentity": "txn-keep", "sourcePayloadHash": "payload-keep"},
+        ],
+    )
+
+    recorded = record_applied_import(
+        config,
+        _stage(
+            config,
+            stage_id="undo",
+            csv_path=config.csv_dir / "2026__wf_checking__legacy-direct-transfer.csv",
+            backup_path=backup_path,
+            archived_csv_path=None,
+            journal_path=journal_path,
+            source_identity="txn-undo",
+        ),
+    )
+
+    original = journal_path.read_text(encoding="utf-8")
+    try:
+        undo_import(config, recorded["id"])
+    except ValueError as exc:
+        assert "counterpart-aware" in str(exc).lower()
+    else:
+        raise AssertionError("undo_import should reject downgrading a manual legacy transfer survivor")
 
     assert journal_path.read_text(encoding="utf-8") == original
 

@@ -440,6 +440,45 @@ def test_account_register_treats_manual_destination_transfer_account_entry_as_po
     ]
 
 
+def test_account_register_treats_import_match_without_active_state_as_posted_direct_transfer(tmp_path: Path) -> None:
+    config = _make_config(tmp_path / "workspace")
+    _write_year_journal(
+        config,
+        """
+2026/02/04 Transfer to savings
+    ; import_account_id: checking
+    ; transfer_id: transfer-1
+    ; transfer_type: import_match
+    ; transfer_match_state: none
+    ; transfer_peer_account_id: savings
+    Assets:Transfers:checking__savings  $30.00
+    Assets:Bank:Checking
+""".strip()
+        + "\n",
+    )
+
+    register = build_account_register(config, "savings")
+
+    assert register["currentBalance"] == 30.0
+    assert register["transactionCount"] == 1
+    assert register["entryCount"] == 1
+
+    latest = register["entries"][0]
+    assert latest["summary"] == "Transfer · Wells Fargo Checking"
+    assert latest["amount"] == 30.0
+    assert latest["runningBalance"] == 30.0
+    assert latest["transferState"] is None
+    assert latest["transferPeerAccountId"] == "checking"
+    assert latest["transferPeerAccountName"] == "Wells Fargo Checking"
+    assert latest["detailLines"] == [
+        {
+            "label": "Wells Fargo Checking",
+            "account": "Assets:Bank:Checking",
+            "kind": "asset",
+        }
+    ]
+
+
 def test_account_register_reflects_offsetting_tracked_account_opening_balance_on_peer_account(tmp_path: Path) -> None:
     config = _make_config(tmp_path / "workspace")
     config.tracked_accounts["loan"] = {

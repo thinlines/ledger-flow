@@ -11,6 +11,7 @@ from .backup_service import backup_file
 from .config_service import AppConfig
 from .import_index import ImportIndex
 from .transfer_service import (
+    ACTIVE_TRANSFER_MATCH_STATES,
     TRANSFER_MATCH_STATE_PENDING,
     build_import_match_transfer_metadata_updates,
     parse_transfer_metadata,
@@ -123,7 +124,11 @@ def _upsert_transaction_metadata(
     return updated_lines
 
 
-def _downgrade_remaining_transfer_peers(lines: list[str], removed_transactions: list[JournalTransaction]) -> list[str]:
+def _downgrade_remaining_transfer_peers(
+    config: AppConfig,
+    lines: list[str],
+    removed_transactions: list[JournalTransaction],
+) -> list[str]:
     removed_transfer_ids = {
         str(transaction.metadata.get("transfer_id") or "").strip()
         for transaction in removed_transactions
@@ -144,12 +149,15 @@ def _downgrade_remaining_transfer_peers(lines: list[str], removed_transactions: 
             raise ValueError("Transfer-linked transactions are no longer in a valid state for undo.")
         if len(remaining) != 1:
             continue
-        remaining_transfer = parse_transfer_metadata(remaining[0].metadata)
+        remaining_transfer = parse_transfer_metadata(
+            remaining[0].metadata,
+            config.tracked_accounts or None,
+        )
         if remaining_transfer.transfer_id is None or remaining_transfer.peer_account_id is None:
             raise ValueError("Transfer-linked transactions are no longer in a valid state for undo.")
         if not (
             remaining_transfer.is_import_match
-            or remaining_transfer.raw_transfer_state in {"pending", "matched"}
+            and remaining_transfer.transfer_match_state in ACTIVE_TRANSFER_MATCH_STATES
         ):
             raise ValueError("Only counterpart-aware transfers can be downgraded during undo.")
         updated_lines = _upsert_transaction_metadata(
@@ -351,7 +359,7 @@ def undo_import(config: AppConfig, history_id: str) -> dict:
         kept_lines.extend(lines[cursor:start])
         cursor = end
     kept_lines.extend(lines[cursor:])
-    kept_lines = _downgrade_remaining_transfer_peers(kept_lines, matched_transactions)
+    kept_lines = _downgrade_remaining_transfer_peers(config, kept_lines, matched_transactions)
     if kept_lines:
         journal_path.write_text("\n".join(kept_lines).rstrip() + "\n", encoding="utf-8")
     else:
