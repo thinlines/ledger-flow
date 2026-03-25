@@ -7,6 +7,7 @@ import glob
 from pathlib import Path
 import re
 
+from .commodity_service import CommodityMismatchError, commodity_label, parse_amount
 from .config_service import AppConfig
 
 
@@ -26,6 +27,7 @@ INCLUDE_RE = re.compile(r"^\s*include\s+(.+?)\s*$")
 class Posting:
     account: str
     amount: Decimal | None
+    commodity: str | None = None
     inferred: bool = False
 
 
@@ -48,22 +50,6 @@ def pretty_account_name(account: str) -> str:
     if len(parts) == 1:
         return parts[0].title()
     return " / ".join(part.title() for part in parts[1:])
-
-
-def _parse_amount(raw: str) -> Decimal | None:
-    compact = re.sub(r"\s+", "", raw)
-    if not compact:
-        return None
-
-    digits = "".join(ch for ch in compact if ch.isdigit() or ch in {".", ","})
-    if not digits:
-        return None
-
-    sign = -1 if "-" in compact else 1
-    try:
-        return Decimal(digits.replace(",", "")) * sign
-    except InvalidOperation:
-        return None
 
 
 def _split_transactions(journal_text: str) -> list[list[str]]:
@@ -146,8 +132,14 @@ def _parse_transaction(lines: list[str]) -> ParsedTransaction | None:
             continue
 
         account = posting_match.group(1).strip()
-        amount = _parse_amount(posting_match.group(2) or "")
-        postings.append(Posting(account=account, amount=amount))
+        parsed_amount = parse_amount(posting_match.group(2) or "")
+        postings.append(
+            Posting(
+                account=account,
+                amount=parsed_amount.value if parsed_amount is not None else None,
+                commodity=parsed_amount.commodity if parsed_amount is not None else None,
+            )
+        )
 
     if not postings:
         return None
@@ -156,7 +148,18 @@ def _parse_transaction(lines: list[str]) -> ParsedTransaction | None:
     blank_indexes = [index for index, posting in enumerate(postings) if posting.amount is None]
     if len(blank_indexes) == 1:
         idx = blank_indexes[0]
-        postings[idx] = Posting(account=postings[idx].account, amount=-known_total, inferred=True)
+        known_commodities = {posting.commodity for posting in postings if posting.amount is not None}
+        if len(known_commodities) > 1:
+            raise CommodityMismatchError(
+                "Transaction mixes multiple commodities and cannot infer the blank posting amount "
+                f"({', '.join(sorted(commodity_label(commodity) for commodity in known_commodities))})."
+            )
+        postings[idx] = Posting(
+            account=postings[idx].account,
+            amount=-known_total,
+            commodity=next(iter(known_commodities), None),
+            inferred=True,
+        )
 
     return ParsedTransaction(
         posted_on=posted_on,

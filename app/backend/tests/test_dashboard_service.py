@@ -3,6 +3,9 @@ from __future__ import annotations
 from datetime import date
 from pathlib import Path
 
+import pytest
+
+from services.commodity_service import CommodityMismatchError
 from services.config_service import AppConfig
 from services.dashboard_service import build_dashboard_overview
 from services.workspace_service import ensure_workspace_journal_includes
@@ -216,6 +219,33 @@ def test_dashboard_overview_includes_opening_balances_without_counting_them_as_a
     assert overview["summary"]["netWorth"] == 250.0
     assert overview["summary"]["transactionCount"] == 0
     assert overview["recentTransactions"] == []
+
+
+def test_dashboard_overview_rejects_mixed_commodities_for_account_balance(tmp_path: Path) -> None:
+    config = _make_config(tmp_path / "workspace")
+    (config.opening_bal_dir / "checking.journal").write_text(
+        """
+2026-01-15 Opening balance
+    ; tracked_account_id: checking
+    Assets:Bank:Checking  USD 200.00
+    Equity:Opening-Balances
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    _write_year_journal(
+        config,
+        """
+2026/02/12 Paycheck
+    ; import_account_id: checking
+    Assets:Bank:Checking  $1000.00 = $1200.00
+    Income:Salary
+""".strip()
+        + "\n",
+    )
+
+    with pytest.raises(CommodityMismatchError, match="mixes commodities"):
+        build_dashboard_overview(config, today=date(2026, 3, 9))
 
 
 def test_dashboard_overview_reflects_tracked_account_offset_opening_balances_on_both_accounts(tmp_path: Path) -> None:

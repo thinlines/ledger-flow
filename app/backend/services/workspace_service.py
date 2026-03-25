@@ -6,6 +6,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
+from .commodity_service import BASE_CURRENCY_SYMBOLS
 from .config_service import AppConfig, infer_account_kind, load_config
 from .custom_csv_service import normalize_custom_profile
 from .import_identity_service import source_payload_hash_for_lines
@@ -28,13 +29,23 @@ JOURNAL_INCLUDE_LINES = (
     "include ../rules/12-tags.dat",
     "include ../rules/13-commodities.dat",
 )
-BASE_CURRENCY_SYMBOLS = {
-    "USD": "$",
-    "EUR": "€",
-    "GBP": "£",
-    "JPY": "¥",
-    "CNY": "¥",
-}
+SYSTEM_TAGS = (
+    "CSV",
+    "Imported",
+    "UUID",
+    "import_account_id",
+    "importer_version",
+    "institution_template",
+    "source_file_sha256",
+    "source_identity",
+    "source_payload_hash",
+    "tracked_account_id",
+    "transfer_id",
+    "transfer_match_state",
+    "transfer_peer_account_id",
+    "transfer_state",
+    "transfer_type",
+)
 ACCOUNT_SUBTYPE_KIND = {
     "checking": "asset",
     "savings": "asset",
@@ -104,6 +115,30 @@ def ensure_standard_commodities_file(commodities_path: Path, base_currency: str)
 
     commodities_path.parent.mkdir(parents=True, exist_ok=True)
     commodities_path.write_text(text, encoding="utf-8")
+
+
+def ensure_standard_tags_file(tags_path: Path) -> None:
+    existing_lines = tags_path.read_text(encoding="utf-8").splitlines() if tags_path.exists() else []
+    known_tags = {
+        line[len("tag "):].strip()
+        for line in existing_lines
+        if line.startswith("tag ")
+    }
+    changed = not tags_path.exists()
+    lines = list(existing_lines)
+
+    for tag in SYSTEM_TAGS:
+        if tag in known_tags:
+            continue
+        lines.append(f"tag {tag}")
+        known_tags.add(tag)
+        changed = True
+
+    if not changed:
+        return
+
+    tags_path.parent.mkdir(parents=True, exist_ok=True)
+    tags_path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
 
 
 def ensure_journal_includes(
@@ -199,6 +234,8 @@ class WorkspaceManager:
             return None
         config = load_config(config_path)
         ensure_workspace_journal_includes(config)
+        ensure_standard_tags_file(config.init_dir / "12-tags.dat")
+        ensure_standard_commodities_file(config.init_dir / "13-commodities.dat", str(config.workspace.get("base_currency", "USD")))
         return config
 
     def get_setup_state(self, config: AppConfig | None) -> dict:
@@ -732,6 +769,7 @@ class WorkspaceManager:
 
     def _rewrite_transaction_source_payload_hash(
         self,
+        config: AppConfig,
         txn_lines: list[str],
         *,
         import_account_id: str,
@@ -757,7 +795,11 @@ class WorkspaceManager:
         if not source_identity:
             return txn_lines, None
 
-        source_payload_hash = source_payload_hash_for_lines(txn_lines, target_ledger_account)
+        source_payload_hash = source_payload_hash_for_lines(
+            txn_lines,
+            target_ledger_account,
+            base_currency=str(config.workspace.get("base_currency", "USD")),
+        )
         updated_lines = list(txn_lines)
         payload_line = f"    ; source_payload_hash: {source_payload_hash}"
         if source_payload_hash_idx is None:
@@ -815,6 +857,7 @@ class WorkspaceManager:
 
                 if txn_changed and import_account_id:
                     txn_lines, payload_update = self._rewrite_transaction_source_payload_hash(
+                        config,
                         txn_lines,
                         import_account_id=import_account_id,
                         target_ledger_account=target,
@@ -948,8 +991,7 @@ class WorkspaceManager:
         self._ensure_seeded_accounts(accounts_dat, list(tracked_accounts.values()))
 
         tags_dat = rules / "12-tags.dat"
-        if not tags_dat.exists():
-            tags_dat.write_text("tag Imported\ntag UUID\n", encoding="utf-8")
+        ensure_standard_tags_file(tags_dat)
 
         commodities_dat = rules / "13-commodities.dat"
         ensure_standard_commodities_file(commodities_dat, base_currency)

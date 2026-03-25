@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from services.account_register_service import build_account_register
+from services.commodity_service import CommodityMismatchError
 from services.config_service import AppConfig
 from services.workspace_service import ensure_workspace_journal_includes
 
@@ -100,17 +103,17 @@ def test_account_register_returns_latest_first_rows_with_running_balances(tmp_pa
         """
 2026/02/02 Grocer
     ; import_account_id: checking
-    Expenses:Food:Groceries  $20.00
+    Expenses:Food:Groceries  USD 20.00
     Assets:Bank:Checking
 
 2026/02/03 Paycheck
     ; import_account_id: checking
-    Assets:Bank:Checking  $100.00
+    Assets:Bank:Checking  USD 100.00
     Income:Salary
 
 2026/02/04 Transfer to savings
     ; import_account_id: checking
-    Assets:Savings  $30.00
+    Assets:Savings  USD 30.00
     Assets:Bank:Checking
 """.strip()
         + "\n",
@@ -142,6 +145,64 @@ def test_account_register_returns_latest_first_rows_with_running_balances(tmp_pa
     assert opening["isOpeningBalance"] is True
     assert opening["amount"] == 500.0
     assert opening["runningBalance"] == 500.0
+
+
+def test_account_register_parses_balance_assertions_for_matching_commodities(tmp_path: Path) -> None:
+    config = _make_config(tmp_path / "workspace")
+    (config.opening_bal_dir / "checking.journal").write_text(
+        """
+2026-02-01 Opening balance
+    ; tracked_account_id: checking
+    Assets:Bank:Checking  USD 200.00
+    Equity:Opening-Balances
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    _write_year_journal(
+        config,
+        """
+2026/02/02 Paycheck
+    ; import_account_id: checking
+    Assets:Bank:Checking  USD 1000.00 = USD 1200.00
+    Income:Salary
+""".strip()
+        + "\n",
+    )
+
+    register = build_account_register(config, "checking")
+
+    assert register["currentBalance"] == 1200.0
+    latest = register["entries"][0]
+    assert latest["amount"] == 1000.0
+    assert latest["runningBalance"] == 1200.0
+
+
+def test_account_register_rejects_mixed_commodities_in_running_balance(tmp_path: Path) -> None:
+    config = _make_config(tmp_path / "workspace")
+    (config.opening_bal_dir / "checking.journal").write_text(
+        """
+2026-02-01 Opening balance
+    ; tracked_account_id: checking
+    Assets:Bank:Checking  USD 200.00
+    Equity:Opening-Balances
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    _write_year_journal(
+        config,
+        """
+2026/02/02 Paycheck
+    ; import_account_id: checking
+    Assets:Bank:Checking  $1000.00 = $1200.00
+    Income:Salary
+""".strip()
+        + "\n",
+    )
+
+    with pytest.raises(CommodityMismatchError, match="mixes commodities"):
+        build_account_register(config, "checking")
 
 
 def test_account_register_preserves_liability_signs_in_running_balance(tmp_path: Path) -> None:

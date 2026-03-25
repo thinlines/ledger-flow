@@ -14,6 +14,7 @@ def test_parse_transaction_builds_stable_identity() -> None:
         ],
         import_account_id="wf_checking",
         institution_account="Assets:Wells Fargo Checking",
+        base_currency="USD",
     )
     assert txn["sourceIdentity"]
     assert txn["sourcePayloadHash"]
@@ -29,6 +30,7 @@ def test_parse_transaction_payload_hash_ignores_import_account_name_changes() ->
         ],
         import_account_id="wf_checking",
         institution_account="Assets:Bank:Checking",
+        base_currency="USD",
     )
     after = _parse_transaction(
         [
@@ -38,6 +40,7 @@ def test_parse_transaction_payload_hash_ignores_import_account_name_changes() ->
         ],
         import_account_id="wf_checking",
         institution_account="Assets:Bank:Primary:Checking",
+        base_currency="USD",
     )
 
     assert before["sourceIdentity"] == after["sourceIdentity"]
@@ -70,6 +73,7 @@ def test_annotated_raw_txn_adds_import_metadata() -> None:
         source_file_sha256="filehash",
         import_account_id="wf_checking",
         institution_template_id="wells_fargo",
+        base_currency="USD",
     )
     assert "; import_account_id: wf_checking" in out
     assert "; institution_template: wells_fargo" in out
@@ -77,8 +81,33 @@ def test_annotated_raw_txn_adds_import_metadata() -> None:
     assert "; source_payload_hash: payload123" in out
     assert "; source_file_sha256: filehash" in out
     assert "; importer_version: mvp2" in out
-    assert "Assets:Wells Fargo Checking  $1200.00" in out
-    assert "Expenses:Unknown  $-7.50 = $1192.50" in out
+    assert "Assets:Wells Fargo Checking  USD 1200.00" in out
+    assert "Expenses:Unknown  USD -7.50 = USD 1192.50" in out
+
+
+def test_parse_transaction_payload_hash_treats_base_currency_symbol_and_code_as_equivalent() -> None:
+    symbol_txn = _parse_transaction(
+        [
+            "2026/03/01 Coffee Shop",
+            "    Assets:Bank:Checking  $-7.50",
+            "    Expenses:Unknown",
+        ],
+        import_account_id="wf_checking",
+        institution_account="Assets:Bank:Checking",
+        base_currency="USD",
+    )
+    code_txn = _parse_transaction(
+        [
+            "2026/03/01 Coffee Shop",
+            "    Assets:Bank:Checking  USD -7.50",
+            "    Expenses:Unknown",
+        ],
+        import_account_id="wf_checking",
+        institution_account="Assets:Bank:Checking",
+        base_currency="USD",
+    )
+
+    assert symbol_txn["sourcePayloadHash"] == code_txn["sourcePayloadHash"]
 
 
 def test_build_existing_map_prefers_canonical_journal_hash_over_legacy_stored_hash(tmp_path: Path) -> None:
@@ -123,6 +152,7 @@ def test_build_existing_map_prefers_canonical_journal_hash_over_legacy_stored_ha
         ],
         import_account_id="checking",
         institution_account="Assets:Bank:Primary:Checking",
+        base_currency="USD",
     )
     legacy_hash = "legacyhash123"
     journal_path = workspace / "journals" / "2026.journal"

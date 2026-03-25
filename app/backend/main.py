@@ -30,6 +30,7 @@ from models import (
 )
 from services.backup_service import backup_file
 from services.account_register_service import build_account_register
+from services.commodity_service import CommodityMismatchError
 from services.custom_csv_service import inspect_csv_bytes
 from services.dashboard_service import build_dashboard_overview
 from services.import_history_service import list_import_history, record_applied_import, undo_import
@@ -369,7 +370,10 @@ def app_state() -> dict:
 @app.get("/api/dashboard/overview")
 def dashboard_overview() -> dict:
     config = _require_workspace_config()
-    return build_dashboard_overview(config)
+    try:
+        return build_dashboard_overview(config)
+    except CommodityMismatchError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
 
 
 @app.get("/api/transactions/register")
@@ -377,6 +381,8 @@ def transactions_register(accountId: str) -> dict:
     config = _require_workspace_config()
     try:
         return build_account_register(config, accountId)
+    except CommodityMismatchError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
 

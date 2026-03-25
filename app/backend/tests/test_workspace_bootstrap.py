@@ -12,6 +12,7 @@ from services.workspace_service import (
     WorkspaceManager,
     ensure_journal_includes,
     ensure_standard_commodities_file,
+    ensure_standard_tags_file,
 )
 
 
@@ -639,6 +640,7 @@ def test_upsert_import_account_rewrites_existing_journal_postings_to_new_ledger_
         ],
         import_account_id=account_id,
         institution_account="Assets:Bank:Checking",
+        base_currency="USD",
     )
     journal_path.write_text(
         "2026/03/01 Coffee Shop\n"
@@ -687,6 +689,7 @@ def test_upsert_import_account_rewrites_existing_journal_postings_to_new_ledger_
         ],
         import_account_id=account_id,
         institution_account="Assets:Bank:Primary:Checking",
+        base_currency="USD",
     )
     assert (
         _classify_transaction(
@@ -1020,6 +1023,11 @@ ledger_account = "Assets:Bank:Checking"
     next_year_content = (journals / "2027.journal").read_text(encoding="utf-8")
     assert "include ../opening/_opening_balances.journal" not in next_year_content
 
+    tags_content = (rules / "12-tags.dat").read_text(encoding="utf-8")
+    assert "tag Imported" in tags_content
+    assert "tag source_identity" in tags_content
+    assert "tag tracked_account_id" in tags_content
+
 
 def test_ensure_standard_commodities_file_appends_symbol_format_for_base_currency(tmp_path: Path) -> None:
     commodities_path = tmp_path / "13-commodities.dat"
@@ -1035,3 +1043,18 @@ def test_ensure_standard_commodities_file_appends_symbol_format_for_base_currenc
     assert content.count("commodity USD") == 1
     assert "commodity $" in content
     assert "\tformat $1,000.00" in content
+
+
+def test_ensure_standard_tags_file_appends_missing_system_tags(tmp_path: Path) -> None:
+    tags_path = tmp_path / "12-tags.dat"
+    tags_path.write_text("tag Imported\n", encoding="utf-8")
+
+    ensure_standard_tags_file(tags_path)
+
+    content = tags_path.read_text(encoding="utf-8")
+    assert content.count("tag Imported") == 1
+    assert "tag UUID" in content
+    assert "tag source_identity" in content
+    assert "tag source_payload_hash" in content
+    assert "tag tracked_account_id" in content
+    assert "tag transfer_id" in content

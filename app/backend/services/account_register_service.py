@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
 
+from .commodity_service import CommodityMismatchError, commodity_label
 from .config_service import AppConfig, infer_account_kind
 from .journal_query_service import (
     amount_to_number,
@@ -19,6 +20,7 @@ class RegisterEvent:
     posted_on: date
     order: int
     amount: Decimal
+    commodity: str | None
     payee: str
     summary: str
     is_unknown: bool
@@ -31,11 +33,39 @@ class RegisterEvent:
     counts_as_transaction: bool = True
 
 
-def _account_amount(transaction, ledger_account: str) -> Decimal | None:
-    matched = [posting.amount for posting in transaction.postings if posting.account == ledger_account]
+def _account_amount(transaction, ledger_account: str) -> tuple[Decimal | None, str | None]:
+    matched = [posting for posting in transaction.postings if posting.account == ledger_account and posting.amount is not None]
     if not matched:
-        return None
-    return sum((amount or Decimal("0")) for amount in matched)
+        return (None, None)
+
+    commodities = {posting.commodity for posting in matched}
+    if len(commodities) > 1:
+        raise CommodityMismatchError(
+            f"Account {ledger_account} mixes commodities within one transaction "
+            f"({', '.join(sorted(commodity_label(commodity) for commodity in commodities))})."
+        )
+
+    return (
+        sum((posting.amount or Decimal("0")) for posting in matched),
+        next(iter(commodities), None),
+    )
+
+
+def _next_running_commodity(
+    ledger_account: str,
+    current: str | None,
+    incoming: str | None,
+    *,
+    initialized: bool,
+) -> str | None:
+    if not initialized:
+        return incoming
+    if current != incoming:
+        raise CommodityMismatchError(
+            f"Account {ledger_account} mixes commodities in its running balance "
+            f"({commodity_label(current)} and {commodity_label(incoming)})."
+        )
+    return current
 
 
 def _tracked_account_display(config: AppConfig, tracked_account_id: str | None) -> tuple[str | None, str | None, str | None]:
@@ -236,7 +266,7 @@ def _pending_transfer_event_for_peer_account(
     if not source_ledger_account:
         return None
 
-    source_amount = _account_amount(transaction, source_ledger_account)
+    source_amount, source_commodity = _account_amount(transaction, source_ledger_account)
     if source_amount is None:
         return None
 
@@ -245,6 +275,7 @@ def _pending_transfer_event_for_peer_account(
         posted_on=transaction.posted_on,
         order=order,
         amount=-source_amount,
+        commodity=source_commodity,
         payee=transaction.payee,
         summary=f"Transfer · {label} (Pending)",
         is_unknown=False,
@@ -278,7 +309,7 @@ def _direct_transfer_event_for_peer_account(
     if not source_ledger_account:
         return None
 
-    source_amount = _account_amount(transaction, source_ledger_account)
+    source_amount, source_commodity = _account_amount(transaction, source_ledger_account)
     if source_amount is None:
         return None
 
@@ -287,6 +318,7 @@ def _direct_transfer_event_for_peer_account(
         posted_on=transaction.posted_on,
         order=order,
         amount=-source_amount,
+        commodity=source_commodity,
         payee=transaction.payee,
         summary=f"Transfer · {label}",
         is_unknown=False,
@@ -333,7 +365,7 @@ def build_account_register(config: AppConfig, account_id: str) -> dict:
 
     events: list[RegisterEvent] = []
     for order, transaction in enumerate(load_transactions(config)):
-        amount = _account_amount(transaction, ledger_account)
+        amount, commodity = _account_amount(transaction, ledger_account)
         if amount is not None:
             other_postings = [posting for posting in transaction.postings if posting.account != ledger_account]
             is_generated_opening = is_generated_opening_balance_transaction(transaction)
@@ -362,6 +394,7 @@ def build_account_register(config: AppConfig, account_id: str) -> dict:
                     posted_on=transaction.posted_on,
                     order=order,
                     amount=amount,
+                    commodity=commodity,
                     payee=transaction.payee,
                     summary=summary,
                     is_unknown=is_unknown,
@@ -387,11 +420,20 @@ def build_account_register(config: AppConfig, account_id: str) -> dict:
     events.sort(key=lambda event: (event.posted_on, event.order))
 
     balance = Decimal("0")
+    balance_commodity: str | None = None
+    balance_initialized = False
     rows: list[dict] = []
     transaction_count = 0
     latest_transaction_date: str | None = None
     for index, event in enumerate(events):
         if event.affects_balance:
+            balance_commodity = _next_running_commodity(
+                ledger_account,
+                balance_commodity,
+                event.commodity,
+                initialized=balance_initialized,
+            )
+            balance_initialized = True
             balance += event.amount
         rows.append(
             {

@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 
+from .commodity_service import canonicalize_base_currency_posting
 from .config_service import AppConfig
 from .csv_normalizer import normalize_csv_to_intermediate
 from .import_index import ImportIndex
@@ -29,7 +30,6 @@ HEADER_RE = re.compile(
 POSTING_RE = re.compile(r"^(\s+)([^\s].*?)(\s{2,}|\t+)(.*)$")
 META_RE = re.compile(r"^\s*;\s*([^:]+):\s*(.*)$")
 IMPORTER_VERSION = "mvp2"
-TRAILING_SYMBOL_COMMODITY_RE = re.compile(r"(?P<amount>-?\d+(?:\.\d+)?)(?:\s+)(?P<symbol>[$€£¥])(?=(?:\s|$))")
 
 
 @dataclass(frozen=True)
@@ -298,7 +298,13 @@ def _extract_institution_amount(postings: list[dict], institution_account: str) 
     return ""
 
 
-def _parse_transaction(lines: list[str], import_account_id: str, institution_account: str) -> dict:
+def _parse_transaction(
+    lines: list[str],
+    import_account_id: str,
+    institution_account: str,
+    *,
+    base_currency: str,
+) -> dict:
     header = lines[0]
     hm = HEADER_RE.match(header)
     if not hm:
@@ -329,7 +335,11 @@ def _parse_transaction(lines: list[str], import_account_id: str, institution_acc
     source_identity = _sha256_text(identity_base)
 
     normalized_body = "\n".join(line.rstrip() for line in lines).strip() + "\n"
-    source_payload_hash = source_payload_hash_for_lines(lines, institution_account)
+    source_payload_hash = source_payload_hash_for_lines(
+        lines,
+        institution_account,
+        base_currency=base_currency,
+    )
 
     return {
         "date": date,
@@ -368,7 +378,11 @@ def _existing_identity_map_from_journal(config: AppConfig, target_journal: Path)
             if import_account_id:
                 ledger_account = str(config.import_accounts.get(import_account_id, {}).get("ledger_account", "")).strip() or None
             if ledger_account:
-                source_payload_hash = source_payload_hash_for_lines(lines, ledger_account)
+                source_payload_hash = source_payload_hash_for_lines(
+                    lines,
+                    ledger_account,
+                    base_currency=str(config.workspace.get("base_currency", "USD")),
+                )
             out[source_identity] = source_payload_hash
     return out
 
@@ -389,6 +403,8 @@ def _annotated_raw_txn(
     source_file_sha256: str,
     import_account_id: str,
     institution_template_id: str,
+    *,
+    base_currency: str,
 ) -> str:
     lines = txn["raw"].rstrip("\n").splitlines()
     if not lines:
@@ -415,14 +431,10 @@ def _annotated_raw_txn(
         metadata_lines.append(f"    ; importer_version: {IMPORTER_VERSION}")
 
     out = [lines[0], *metadata_lines, *lines[1:]]
-    return _normalize_symbol_commodity_display("\n".join(out).rstrip() + "\n")
-
-
-def _normalize_symbol_commodity_display(text: str) -> str:
-    def repl(match: re.Match[str]) -> str:
-        return f"{match.group('symbol')}{match.group('amount')}"
-
-    return TRAILING_SYMBOL_COMMODITY_RE.sub(repl, text)
+    return (
+        "\n".join(canonicalize_base_currency_posting(line, base_currency) for line in out).rstrip()
+        + "\n"
+    )
 
 
 def _build_existing_map(config: AppConfig, import_account_id: str, target_journal: Path) -> dict[str, str | None]:
@@ -492,14 +504,21 @@ def preview_import(
 
     txns = []
     existing_map = _build_existing_map(config, import_account_id, target_journal)
+    base_currency = str(config.workspace.get("base_currency", "USD"))
     for lines in _split_transactions(converted_journal):
-        txn = _parse_transaction(lines, import_account_id, account)
+        txn = _parse_transaction(
+            lines,
+            import_account_id,
+            account,
+            base_currency=base_currency,
+        )
         txn["matchStatus"] = _classify_transaction(txn, existing_map)
         txn["annotatedRaw"] = _annotated_raw_txn(
             txn,
             source_file_sha256,
             import_account_id,
             str(source.get("institution_id") or source.get("profile_id") or "custom_csv"),
+            base_currency=base_currency,
         )
         txns.append(txn)
 

@@ -4,6 +4,7 @@ from collections import defaultdict
 from datetime import date
 from decimal import Decimal
 
+from .commodity_service import CommodityMismatchError, commodity_label
 from .config_service import AppConfig, infer_account_kind
 from .journal_query_service import (
     ParsedTransaction,
@@ -40,6 +41,23 @@ def _month_window(today: date, count: int) -> list[tuple[int, int]]:
 
 def _month_label(year: int, month: int) -> str:
     return date(year, month, 1).strftime("%b")
+
+
+def _accumulate_total(
+    totals: defaultdict,
+    commodities: dict,
+    key,
+    amount: Decimal,
+    commodity: str | None,
+    *,
+    label: str,
+) -> None:
+    if key in commodities and commodities[key] != commodity:
+        raise CommodityMismatchError(
+            f"{label} mixes commodities ({commodity_label(commodities[key])} and {commodity_label(commodity)})."
+        )
+    commodities[key] = commodity
+    totals[key] += amount
 
 
 def _primary_posting(transaction: ParsedTransaction, config: AppConfig) -> Posting | None:
@@ -104,11 +122,15 @@ def build_dashboard_overview(config: AppConfig, *, today: date | None = None) ->
     _, opening_by_ledger_account = opening_balance_index(config)
     opening_balance_accounts = set(opening_by_ledger_account)
     account_balances: defaultdict[str, Decimal] = defaultdict(lambda: Decimal("0"))
+    account_balance_commodities: dict[str, str | None] = {}
     accounts_with_balance_source: set[str] = set()
     accounts_with_activity: set[str] = set()
     monthly_income: defaultdict[str, Decimal] = defaultdict(lambda: Decimal("0"))
+    monthly_income_commodities: dict[str, str | None] = {}
     monthly_spending: defaultdict[str, Decimal] = defaultdict(lambda: Decimal("0"))
+    monthly_spending_commodities: dict[str, str | None] = {}
     category_spending: defaultdict[tuple[str, str], Decimal] = defaultdict(lambda: Decimal("0"))
+    category_spending_commodities: dict[tuple[str, str], str | None] = {}
     unknown_transaction_count = 0
     recent_rows: list[dict] = []
     activity_transactions: list[ParsedTransaction] = []
@@ -123,17 +145,45 @@ def build_dashboard_overview(config: AppConfig, *, today: date | None = None) ->
 
             kind = _account_kind(posting.account)
             if kind in {"asset", "liability"}:
-                account_balances[posting.account] += posting.amount
+                _accumulate_total(
+                    account_balances,
+                    account_balance_commodities,
+                    posting.account,
+                    posting.amount,
+                    posting.commodity,
+                    label=f"Account {posting.account}",
+                )
                 accounts_with_balance_source.add(posting.account)
                 if not is_opening_balance:
                     accounts_with_activity.add(posting.account)
             elif is_opening_balance:
                 continue
             elif kind == "expense":
-                monthly_spending[month] += posting.amount
-                category_spending[(month, posting.account)] += posting.amount
+                _accumulate_total(
+                    monthly_spending,
+                    monthly_spending_commodities,
+                    month,
+                    posting.amount,
+                    posting.commodity,
+                    label=f"Monthly spending for {month}",
+                )
+                _accumulate_total(
+                    category_spending,
+                    category_spending_commodities,
+                    (month, posting.account),
+                    posting.amount,
+                    posting.commodity,
+                    label=f"Category spending for {posting.account} in {month}",
+                )
             elif kind == "income":
-                monthly_income[month] += -posting.amount
+                _accumulate_total(
+                    monthly_income,
+                    monthly_income_commodities,
+                    month,
+                    -posting.amount,
+                    posting.commodity,
+                    label=f"Monthly income for {month}",
+                )
 
         if is_opening_balance:
             continue
@@ -165,14 +215,25 @@ def build_dashboard_overview(config: AppConfig, *, today: date | None = None) ->
 
     balances = []
     tracked_total = Decimal("0")
+    tracked_total_commodity: str | None = None
+    tracked_total_initialized = False
     for account_id, account_cfg in sorted(
         config.tracked_accounts.items(),
         key=lambda item: str(item[1].get("display_name", item[0])),
     ):
         ledger_account = str(account_cfg.get("ledger_account", "")).strip()
         balance = account_balances.get(ledger_account, Decimal("0"))
+        balance_commodity = account_balance_commodities.get(ledger_account)
         has_opening_balance = ledger_account in opening_balance_accounts
         has_transaction_activity = ledger_account in accounts_with_activity
+        if ledger_account in account_balance_commodities:
+            if tracked_total_initialized and tracked_total_commodity != balance_commodity:
+                raise CommodityMismatchError(
+                    "Tracked balances mix commodities "
+                    f"({commodity_label(tracked_total_commodity)} and {commodity_label(balance_commodity)})."
+                )
+            tracked_total_initialized = True
+            tracked_total_commodity = balance_commodity
         tracked_total += balance
         balances.append(
             {
@@ -190,14 +251,21 @@ def build_dashboard_overview(config: AppConfig, *, today: date | None = None) ->
             }
         )
 
-    net_worth = sum(
-        (
-            balance
-            for account, balance in account_balances.items()
-            if _account_kind(account) in {"asset", "liability"}
-        ),
-        start=Decimal("0"),
-    )
+    net_worth = Decimal("0")
+    net_worth_commodity: str | None = None
+    net_worth_initialized = False
+    for account, balance in account_balances.items():
+        if _account_kind(account) not in {"asset", "liability"}:
+            continue
+        balance_commodity = account_balance_commodities.get(account)
+        if net_worth_initialized and net_worth_commodity != balance_commodity:
+            raise CommodityMismatchError(
+                "Net worth mixes commodities "
+                f"({commodity_label(net_worth_commodity)} and {commodity_label(balance_commodity)})."
+            )
+        net_worth_initialized = True
+        net_worth_commodity = balance_commodity
+        net_worth += balance
 
     series = []
     for year_value, month_value in _month_window(current_day, 6):

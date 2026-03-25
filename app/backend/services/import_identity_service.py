@@ -3,6 +3,8 @@ from __future__ import annotations
 import hashlib
 import re
 
+from .commodity_service import canonicalize_base_currency_posting
+
 
 ACCOUNT_LINE_RE = re.compile(r"^(\s+)([^\s].*?)(\s{2,}|\t+)(.*)$")
 ACCOUNT_ONLY_RE = re.compile(r"^(\s+)([^\s].*?)\s*$")
@@ -26,9 +28,16 @@ def _canonicalize_payload_line(line: str, institution_account: str) -> str:
     return line
 
 
-def source_payload_hash_for_lines(lines: list[str], institution_account: str) -> str:
+def source_payload_hash_for_lines(
+    lines: list[str],
+    institution_account: str,
+    base_currency: str | None = None,
+) -> str:
     canonical_lines = [
-        _canonicalize_payload_line(line.rstrip(), institution_account)
+        canonicalize_base_currency_posting(
+            _canonicalize_payload_line(line.rstrip(), institution_account),
+            base_currency or "",
+        )
         for line in lines
         if not META_RE.match(line)
     ]
