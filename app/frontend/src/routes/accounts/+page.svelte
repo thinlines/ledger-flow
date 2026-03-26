@@ -4,6 +4,7 @@
   import { describeAccountSubtype } from '$lib/account-subtypes';
   import { effectiveOpeningBalanceDate } from '$lib/account-defaults';
   import { describeBalanceTrust } from '$lib/account-trust';
+  import { normalizeCurrencyCode } from '$lib/currency-format';
 
   type AppState = {
     initialized: boolean;
@@ -106,7 +107,7 @@
     if (value == null) return 'No balance yet';
     return new Intl.NumberFormat(undefined, {
       style: 'currency',
-      currency: baseCurrency,
+      currency: normalizeCurrencyCode(baseCurrency),
       minimumFractionDigits: 2,
       maximumFractionDigits: 2
     }).format(value);

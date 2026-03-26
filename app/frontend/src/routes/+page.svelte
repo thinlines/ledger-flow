@@ -3,6 +3,7 @@
   import { apiGet } from '$lib/api';
   import { accountSubtypeLabel } from '$lib/account-subtypes';
   import { describeBalanceTrust } from '$lib/account-trust';
+  import { normalizeCurrencyCode } from '$lib/currency-format';
 
   type SetupState = {
     needsAccounts: boolean;
@@ -159,7 +160,7 @@
   let loading = true;
 
   function formatCurrency(value: number, options?: { signed?: boolean; compact?: boolean }): string {
-    const currency = dashboard?.baseCurrency || 'USD';
+    const currency = normalizeCurrencyCode(dashboard?.baseCurrency);
     return new Intl.NumberFormat(undefined, {
       style: 'currency',
       currency,

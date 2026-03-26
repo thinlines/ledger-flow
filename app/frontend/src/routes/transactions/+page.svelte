@@ -4,6 +4,7 @@
   import { onMount } from 'svelte';
   import { apiGet } from '$lib/api';
   import { describeBalanceTrust } from '$lib/account-trust';
+  import { normalizeCurrencyCode } from '$lib/currency-format';
 
   type AppState = {
     initialized: boolean;
@@ -98,7 +99,7 @@
 
     return new Intl.NumberFormat(undefined, {
       style: 'currency',
-      currency: baseCurrency,
+      currency: normalizeCurrencyCode(baseCurrency),
       minimumFractionDigits: 2,
       maximumFractionDigits: 2,
       signDisplay: options.signed ? 'always' : 'auto'
