@@ -512,6 +512,9 @@
                   {#if entry.isOpeningBalance}
                     <span class="pill">Starting balance</span>
                   {/if}
+                  {#if entry.transferState === 'settled_grouped'}
+                    <span class="pill">Grouped transfer</span>
+                  {/if}
                 </div>
               </div>
 
@@ -531,6 +534,10 @@
             <div class="register-details">
               {#if entry.isOpeningBalance}
                 <p class="details-note">This entry anchors running balances for the account until more history is backfilled.</p>
+              {/if}
+
+              {#if entry.transferState === 'settled_grouped'}
+                <p class="details-note">This imported row settled as part of a grouped transfer, so it no longer counts as pending.</p>
               {/if}
 
               {#if entry.detailLines.length > 0}

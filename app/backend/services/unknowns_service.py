@@ -10,6 +10,7 @@ from uuid import uuid4
 from .config_service import infer_account_kind
 from .rules_service import extract_set_account, find_matching_rule
 from .transfer_service import (
+    MAX_TRANSFER_MATCH_DAYS,
     TRANSFER_MATCH_STATE_MATCHED,
     TRANSFER_MATCH_STATE_PENDING,
     build_direct_transfer_metadata_updates,
@@ -29,9 +30,6 @@ ACCOUNT_ONLY_RE = re.compile(r"^(\s+)([^\s].*?)\s*$")
 HEADER_RE = re.compile(r"^(\d{4}[-/]\d{2}[-/]\d{2})(?:\s+[*!])?(?:\s+\([^)]+\))?\s*(.*)$")
 META_RE = re.compile(r"^\s*;\s*([^:]+):\s*(.*)$")
 TXN_START_RE = re.compile(r"^\d{4}[-/]\d{2}[-/]\d{2}")
-MAX_TRANSFER_MATCH_DAYS = 7
-
-
 def list_known_accounts(accounts_dat: Path) -> list[str]:
     return sorted(_load_known_accounts(accounts_dat))
 

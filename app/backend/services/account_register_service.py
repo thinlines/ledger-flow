@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from collections import defaultdict
 from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
+from functools import lru_cache
 
 from .commodity_service import CommodityMismatchError, commodity_label
 from .config_service import AppConfig, infer_account_kind
@@ -12,7 +14,16 @@ from .journal_query_service import (
     load_transactions,
     pretty_account_name,
 )
-from .transfer_service import is_transfer_account, parse_transfer_metadata
+from .transfer_service import (
+    MAX_TRANSFER_MATCH_DAYS,
+    TRANSFER_STATE_SETTLED_GROUPED,
+    is_transfer_account,
+    parse_transfer_metadata,
+    transfer_pair_account,
+)
+
+
+MAX_GROUPED_SETTLEMENT_WINDOW_ROWS = 8
 
 
 @dataclass(frozen=True)
@@ -31,6 +42,16 @@ class RegisterEvent:
     transfer_peer_account_name: str | None = None
     affects_balance: bool = True
     counts_as_transaction: bool = True
+
+
+@dataclass(frozen=True)
+class PendingTransferCandidate:
+    order: int
+    posted_on: date
+    source_tracked_account_id: str
+    peer_account_id: str
+    transfer_account: str
+    amount: Decimal
 
 
 def _account_amount(transaction, ledger_account: str) -> tuple[Decimal | None, str | None]:
@@ -135,6 +156,220 @@ def _source_tracked_account_details(
     return (None, None, None, None)
 
 
+def _transfer_account_amount(transaction) -> tuple[str | None, Decimal | None]:
+    transfer_postings = [
+        posting
+        for posting in transaction.postings
+        if is_transfer_account(posting.account) and posting.amount is not None
+    ]
+    if len(transfer_postings) != 1:
+        return (None, None)
+    return (transfer_postings[0].account, transfer_postings[0].amount)
+
+
+def _pending_transfer_candidate(
+    config: AppConfig,
+    transaction,
+    order: int,
+) -> PendingTransferCandidate | None:
+    transfer = parse_transfer_metadata(transaction.metadata, config.tracked_accounts)
+    if not transfer.is_pending or not transfer.peer_account_id:
+        return None
+
+    source_tracked_account_id, _, source_ledger_account, _ = _source_tracked_account_details(config, transaction)
+    if not source_tracked_account_id or not source_ledger_account or source_tracked_account_id == transfer.peer_account_id:
+        return None
+
+    amount, _ = _account_amount(transaction, source_ledger_account)
+    transfer_account, transfer_amount = _transfer_account_amount(transaction)
+    if amount is None or transfer_account is None or transfer_amount is None:
+        return None
+
+    expected_transfer_account = transfer_pair_account(source_tracked_account_id, transfer.peer_account_id)
+    if transfer_account != expected_transfer_account or amount + transfer_amount != Decimal("0"):
+        return None
+
+    return PendingTransferCandidate(
+        order=order,
+        posted_on=transaction.posted_on,
+        source_tracked_account_id=source_tracked_account_id,
+        peer_account_id=transfer.peer_account_id,
+        transfer_account=transfer_account,
+        amount=amount,
+    )
+
+
+def _grouped_settlement_subset_mask(candidates: list[PendingTransferCandidate], indexes: list[int]) -> int:
+    if len(indexes) < 3:
+        return 0
+    if (candidates[indexes[-1]].posted_on - candidates[indexes[0]].posted_on).days > MAX_TRANSFER_MATCH_DAYS:
+        return 0
+
+    if sum((candidates[index].amount for index in indexes), Decimal("0")) != Decimal("0"):
+        return 0
+
+    if len({candidates[index].source_tracked_account_id for index in indexes}) < 2:
+        return 0
+
+    for left_offset, left_index in enumerate(indexes):
+        left_candidate = candidates[left_index]
+        for right_index in indexes[left_offset + 1 :]:
+            right_candidate = candidates[right_index]
+            if left_candidate.source_tracked_account_id == right_candidate.source_tracked_account_id:
+                continue
+            if left_candidate.amount + right_candidate.amount == Decimal("0"):
+                return 0
+
+    mask = 0
+    for index in indexes:
+        mask |= 1 << index
+    return mask
+
+
+def _candidate_group_masks(candidates: list[PendingTransferCandidate]) -> list[int]:
+    masks: set[int] = set()
+    candidate_count = len(candidates)
+    for start in range(candidate_count - 2):
+        window_indexes = [start]
+        for end in range(start + 1, candidate_count):
+            if (candidates[end].posted_on - candidates[start].posted_on).days > MAX_TRANSFER_MATCH_DAYS:
+                break
+            window_indexes.append(end)
+
+        if len(window_indexes) < 3 or len(window_indexes) > MAX_GROUPED_SETTLEMENT_WINDOW_ROWS:
+            continue
+
+        trailing_indexes = window_indexes[1:]
+        for selected in range(1 << len(trailing_indexes)):
+            if selected.bit_count() < 2:
+                continue
+            indexes = [start]
+            indexes.extend(
+                trailing_indexes[offset]
+                for offset in range(len(trailing_indexes))
+                if selected & (1 << offset)
+            )
+            mask = _grouped_settlement_subset_mask(candidates, indexes)
+            if mask:
+                masks.add(mask)
+    return sorted(masks)
+
+
+def _mask_packings_union(packings: tuple[tuple[int, ...], ...], additions: tuple[tuple[int, ...], ...]) -> tuple[tuple[int, ...], ...]:
+    merged: list[tuple[int, ...]] = list(packings)
+    for packing in additions:
+        if packing in merged:
+            continue
+        merged.append(packing)
+        if len(merged) == 2:
+            break
+    return tuple(merged)
+
+
+def _unique_grouped_component_mask(component_mask: int, masks: list[int]) -> int:
+    row_masks: dict[int, list[int]] = defaultdict(list)
+    for mask in masks:
+        row_bits = mask
+        while row_bits:
+            row_bit = row_bits & -row_bits
+            row_masks[row_bit.bit_length() - 1].append(mask)
+            row_bits ^= row_bit
+
+    @lru_cache(maxsize=None)
+    def _solve(available_mask: int) -> tuple[int, tuple[tuple[int, ...], ...]]:
+        if available_mask == 0:
+            return (0, ((),))
+
+        first_bit = available_mask & -available_mask
+        first_index = first_bit.bit_length() - 1
+
+        best_count, best_packings = _solve(available_mask ^ first_bit)
+        for mask in row_masks.get(first_index, []):
+            if mask & available_mask != mask:
+                continue
+            covered_count, packings = _solve(available_mask ^ mask)
+            covered_count += mask.bit_count()
+            normalized = tuple(tuple(sorted((mask, *packing))) for packing in packings)
+            if covered_count > best_count:
+                best_count = covered_count
+                best_packings = normalized[:2]
+            elif covered_count == best_count:
+                best_packings = _mask_packings_union(best_packings, normalized)
+
+        return (best_count, best_packings)
+
+    covered_count, packings = _solve(component_mask)
+    if covered_count == 0 or len(packings) != 1:
+        return 0
+
+    covered_mask = 0
+    for mask in packings[0]:
+        covered_mask |= mask
+    return covered_mask
+
+
+def _grouped_settlement_components(candidate_count: int, masks: list[int]) -> list[int]:
+    adjacency = [0] * candidate_count
+    active_rows = 0
+    for mask in masks:
+        row_bits = mask
+        active_rows |= mask
+        while row_bits:
+            row_bit = row_bits & -row_bits
+            adjacency[row_bit.bit_length() - 1] |= mask
+            row_bits ^= row_bit
+
+    components: list[int] = []
+    seen = 0
+    for index in range(candidate_count):
+        row_bit = 1 << index
+        if not (active_rows & row_bit) or (seen & row_bit):
+            continue
+
+        component_mask = 0
+        frontier = row_bit
+        while frontier:
+            current_bit = frontier & -frontier
+            frontier ^= current_bit
+            if component_mask & current_bit:
+                continue
+            component_mask |= current_bit
+            frontier |= adjacency[current_bit.bit_length() - 1] & ~component_mask
+
+        seen |= component_mask
+        components.append(component_mask)
+
+    return components
+
+
+def _grouped_settled_pending_transfer_orders(config: AppConfig, transactions: list) -> set[int]:
+    candidates_by_transfer_account: dict[str, list[PendingTransferCandidate]] = defaultdict(list)
+    for order, transaction in enumerate(transactions):
+        candidate = _pending_transfer_candidate(config, transaction, order)
+        if candidate is not None:
+            candidates_by_transfer_account[candidate.transfer_account].append(candidate)
+
+    grouped_orders: set[int] = set()
+    for candidates in candidates_by_transfer_account.values():
+        if len(candidates) < 3:
+            continue
+        ordered_candidates = sorted(candidates, key=lambda candidate: (candidate.posted_on, candidate.order))
+        masks = _candidate_group_masks(ordered_candidates)
+        if not masks:
+            continue
+
+        for component_mask in _grouped_settlement_components(len(ordered_candidates), masks):
+            component_masks = [mask for mask in masks if mask & component_mask == mask]
+            covered_mask = _unique_grouped_component_mask(component_mask, component_masks)
+            if not covered_mask:
+                continue
+            for index, candidate in enumerate(ordered_candidates):
+                if covered_mask & (1 << index):
+                    grouped_orders.add(candidate.order)
+
+    return grouped_orders
+
+
 def _detail_lines(
     config: AppConfig,
     transaction,
@@ -215,6 +450,8 @@ def _transaction_summary(
     transaction,
     other_postings,
     current_account_id: str,
+    *,
+    grouped_settled: bool = False,
 ) -> tuple[str, bool, str | None, str | None, str | None]:
     transfer = parse_transfer_metadata(transaction.metadata, config.tracked_accounts)
     transfer_peer_account_id, transfer_peer_name, _, _ = _transfer_peer_details(
@@ -225,9 +462,12 @@ def _transaction_summary(
     if transfer_peer_account_id:
         label = transfer_peer_name or transfer_peer_account_id
         summary = f"Transfer · {label}"
-        if transfer.is_pending:
+        transfer_state = transfer.transfer_state_for_ui
+        if grouped_settled and transfer.is_pending:
+            transfer_state = TRANSFER_STATE_SETTLED_GROUPED
+        elif transfer.is_pending:
             summary = f"{summary} (Pending)"
-        return (summary, False, transfer.transfer_state_for_ui, transfer_peer_account_id, label)
+        return (summary, False, transfer_state, transfer_peer_account_id, label)
 
     if not other_postings:
         return ("No category details", False, None, None, None)
@@ -253,9 +493,10 @@ def _pending_transfer_event_for_peer_account(
     transaction,
     account_id: str,
     order: int,
+    grouped_settled_orders: set[int],
 ) -> RegisterEvent | None:
     transfer = parse_transfer_metadata(transaction.metadata, config.tracked_accounts)
-    if not transfer.is_pending:
+    if not transfer.is_pending or order in grouped_settled_orders:
         return None
 
     target_account_id = transfer.peer_account_id
@@ -363,8 +604,11 @@ def build_account_register(config: AppConfig, account_id: str) -> dict:
     if not ledger_account:
         raise ValueError(f"Tracked account is missing a ledger account: {account_id}")
 
+    transactions = load_transactions(config)
+    grouped_settled_orders = _grouped_settled_pending_transfer_orders(config, transactions)
+
     events: list[RegisterEvent] = []
-    for order, transaction in enumerate(load_transactions(config)):
+    for order, transaction in enumerate(transactions):
         amount, commodity = _account_amount(transaction, ledger_account)
         if amount is not None:
             other_postings = [posting for posting in transaction.postings if posting.account != ledger_account]
@@ -385,6 +629,7 @@ def build_account_register(config: AppConfig, account_id: str) -> dict:
                     transaction,
                     other_postings,
                     account_id,
+                    grouped_settled=order in grouped_settled_orders,
                 )
                 if is_generated_opening:
                     is_unknown = False
@@ -408,7 +653,13 @@ def build_account_register(config: AppConfig, account_id: str) -> dict:
             )
             continue
 
-        pending_peer_event = _pending_transfer_event_for_peer_account(config, transaction, account_id, order)
+        pending_peer_event = _pending_transfer_event_for_peer_account(
+            config,
+            transaction,
+            account_id,
+            order,
+            grouped_settled_orders,
+        )
         if pending_peer_event is not None:
             events.append(pending_peer_event)
             continue

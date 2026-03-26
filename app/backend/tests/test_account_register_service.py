@@ -7,6 +7,7 @@ import pytest
 from services.account_register_service import build_account_register
 from services.commodity_service import CommodityMismatchError
 from services.config_service import AppConfig
+from services.transfer_service import transfer_pair_account
 from services.workspace_service import ensure_workspace_journal_includes
 
 
@@ -391,6 +392,204 @@ def test_account_register_shows_pending_transfer_on_liability_peer_account_witho
             "kind": "asset",
         }
     ]
+
+
+def test_account_register_treats_balanced_grouped_pending_transfer_rows_as_settled(tmp_path: Path) -> None:
+    config = _make_config(tmp_path / "workspace")
+    transfer_account = transfer_pair_account("checking", "savings")
+    _write_year_journal(
+        config,
+        f"""
+2026/03/12 ACH verification withdrawal
+    ; import_account_id: checking
+    ; transfer_id: transfer-checking
+    ; transfer_type: import_match
+    ; transfer_match_state: pending
+    ; transfer_peer_account_id: savings
+    {transfer_account}  $0.46
+    Assets:Bank:Checking
+
+2026/03/12 ACH verification deposit 1
+    ; import_account_id: savings
+    ; transfer_id: transfer-savings-1
+    ; transfer_type: import_match
+    ; transfer_match_state: pending
+    ; transfer_peer_account_id: checking
+    {transfer_account}  $-0.12
+    Assets:Bank:Savings
+
+2026/03/12 ACH verification deposit 2
+    ; import_account_id: savings
+    ; transfer_id: transfer-savings-2
+    ; transfer_type: import_match
+    ; transfer_match_state: pending
+    ; transfer_peer_account_id: checking
+    {transfer_account}  $-0.34
+    Assets:Bank:Savings
+""".strip()
+        + "\n",
+    )
+
+    savings_register = build_account_register(config, "savings")
+    assert savings_register["currentBalance"] == 0.46
+    assert savings_register["transactionCount"] == 2
+    assert savings_register["entryCount"] == 2
+    assert [entry["amount"] for entry in savings_register["entries"]] == [0.34, 0.12]
+    assert all(entry["transferState"] == "settled_grouped" for entry in savings_register["entries"])
+    assert all("(Pending)" not in entry["summary"] for entry in savings_register["entries"])
+
+    checking_register = build_account_register(config, "checking")
+    assert checking_register["currentBalance"] == -0.46
+    assert checking_register["transactionCount"] == 1
+    assert checking_register["entryCount"] == 1
+    latest = checking_register["entries"][0]
+    assert latest["summary"] == "Transfer · Savings"
+    assert latest["amount"] == -0.46
+    assert latest["transferState"] == "settled_grouped"
+
+
+def test_account_register_leaves_only_grouped_transfer_residue_pending(tmp_path: Path) -> None:
+    config = _make_config(tmp_path / "workspace")
+    transfer_account = transfer_pair_account("checking", "savings")
+    _write_year_journal(
+        config,
+        f"""
+2026/03/12 ACH verification withdrawal
+    ; import_account_id: checking
+    ; transfer_id: transfer-checking
+    ; transfer_type: import_match
+    ; transfer_match_state: pending
+    ; transfer_peer_account_id: savings
+    {transfer_account}  $0.46
+    Assets:Bank:Checking
+
+2026/03/12 ACH verification deposit 1
+    ; import_account_id: savings
+    ; transfer_id: transfer-savings-1
+    ; transfer_type: import_match
+    ; transfer_match_state: pending
+    ; transfer_peer_account_id: checking
+    {transfer_account}  $-0.12
+    Assets:Bank:Savings
+
+2026/03/12 ACH verification deposit 2
+    ; import_account_id: savings
+    ; transfer_id: transfer-savings-2
+    ; transfer_type: import_match
+    ; transfer_match_state: pending
+    ; transfer_peer_account_id: checking
+    {transfer_account}  $-0.34
+    Assets:Bank:Savings
+
+2026/03/13 ACH verification deposit residue
+    ; import_account_id: savings
+    ; transfer_id: transfer-savings-3
+    ; transfer_type: import_match
+    ; transfer_match_state: pending
+    ; transfer_peer_account_id: checking
+    {transfer_account}  $-0.10
+    Assets:Bank:Savings
+""".strip()
+        + "\n",
+    )
+
+    savings_register = build_account_register(config, "savings")
+    assert savings_register["currentBalance"] == 0.56
+    assert savings_register["transactionCount"] == 3
+    assert savings_register["entryCount"] == 3
+
+    pending_entries = [entry for entry in savings_register["entries"] if entry["transferState"] == "pending"]
+    settled_entries = [entry for entry in savings_register["entries"] if entry["transferState"] == "settled_grouped"]
+
+    assert len(pending_entries) == 1
+    assert pending_entries[0]["amount"] == 0.10
+    assert pending_entries[0]["summary"] == "Transfer · Wells Fargo Checking (Pending)"
+    assert len(settled_entries) == 2
+    assert sorted(entry["amount"] for entry in settled_entries) == [0.12, 0.34]
+
+
+def test_account_register_fails_closed_for_ambiguous_same_window_grouped_transfers(tmp_path: Path) -> None:
+    config = _make_config(tmp_path / "workspace")
+    transfer_account = transfer_pair_account("checking", "savings")
+    _write_year_journal(
+        config,
+        f"""
+2026/03/12 Transfer out 1
+    ; import_account_id: checking
+    ; transfer_id: transfer-checking-1
+    ; transfer_type: import_match
+    ; transfer_match_state: pending
+    ; transfer_peer_account_id: savings
+    {transfer_account}  $0.12
+    Assets:Bank:Checking
+
+2026/03/12 Transfer out 2
+    ; import_account_id: checking
+    ; transfer_id: transfer-checking-2
+    ; transfer_type: import_match
+    ; transfer_match_state: pending
+    ; transfer_peer_account_id: savings
+    {transfer_account}  $0.34
+    Assets:Bank:Checking
+
+2026/03/12 Transfer in 1
+    ; import_account_id: savings
+    ; transfer_id: transfer-savings-1
+    ; transfer_type: import_match
+    ; transfer_match_state: pending
+    ; transfer_peer_account_id: checking
+    {transfer_account}  $-0.12
+    Assets:Bank:Savings
+
+2026/03/12 Transfer in 2
+    ; import_account_id: savings
+    ; transfer_id: transfer-savings-2
+    ; transfer_type: import_match
+    ; transfer_match_state: pending
+    ; transfer_peer_account_id: checking
+    {transfer_account}  $-0.34
+    Assets:Bank:Savings
+""".strip()
+        + "\n",
+    )
+
+    checking_register = build_account_register(config, "checking")
+    assert checking_register["entryCount"] == 4
+    assert all(entry["transferState"] == "pending" for entry in checking_register["entries"])
+    assert all("settled_grouped" != entry["transferState"] for entry in checking_register["entries"])
+
+
+def test_account_register_preserves_matched_import_transfer_behavior(tmp_path: Path) -> None:
+    config = _make_config(tmp_path / "workspace")
+    transfer_account = transfer_pair_account("checking", "savings")
+    _write_year_journal(
+        config,
+        f"""
+2026/03/12 Transfer out
+    ; import_account_id: checking
+    ; transfer_id: transfer-1
+    ; transfer_type: import_match
+    ; transfer_match_state: matched
+    ; transfer_peer_account_id: savings
+    {transfer_account}  $0.46
+    Assets:Bank:Checking
+
+2026/03/12 Transfer in
+    ; import_account_id: savings
+    ; transfer_id: transfer-1
+    ; transfer_type: import_match
+    ; transfer_match_state: matched
+    ; transfer_peer_account_id: checking
+    {transfer_account}  $-0.46
+    Assets:Bank:Savings
+""".strip()
+        + "\n",
+    )
+
+    checking_register = build_account_register(config, "checking")
+    latest = checking_register["entries"][0]
+    assert latest["summary"] == "Transfer · Savings"
+    assert latest["transferState"] == "matched"
 
 
 def test_account_register_shows_direct_transfer_on_manual_destination_without_pending_state(tmp_path: Path) -> None:
