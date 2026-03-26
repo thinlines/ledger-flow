@@ -1,4 +1,0 @@
-interface:
-  display_name: "Project Manager"
-  short_description: "Protect scope and ship polished user experiences"
-  default_prompt: "Use $project-manager to keep this app on track, prevent scope creep, and protect a five-star user experience."
