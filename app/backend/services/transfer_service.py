@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import base64
 from collections.abc import Mapping
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
+import json
 from pathlib import Path
 import re
 
@@ -15,6 +17,10 @@ TRANSFER_MATCH_STATE_NONE = "none"
 TRANSFER_MATCH_STATE_PENDING = "pending"
 TRANSFER_MATCH_STATE_MATCHED = "matched"
 TRANSFER_STATE_SETTLED_GROUPED = "settled_grouped"
+MANUAL_TRANSFER_RESOLUTION_METADATA_KEY = "transfer_manual_resolution"
+MANUAL_TRANSFER_RESOLUTION_METADATA_VALUE = "missing_import_counterpart"
+MANUAL_TRANSFER_RESOLUTION_TOKEN_KIND = "pending_import_transfer_resolution"
+MANUAL_TRANSFER_RESOLUTION_TOKEN_VERSION = 1
 MAX_TRANSFER_MATCH_DAYS = 7
 VALID_TRANSFER_TYPES = {TRANSFER_TYPE_DIRECT, TRANSFER_TYPE_IMPORT_MATCH}
 VALID_TRANSFER_MATCH_STATES = {
@@ -73,6 +79,56 @@ def is_transfer_account(account: str) -> bool:
 def transfer_pair_account(source_tracked_account_id: str, target_tracked_account_id: str) -> str:
     left, right = sorted([source_tracked_account_id.strip(), target_tracked_account_id.strip()])
     return f"{TRANSFER_ROOT_ACCOUNT}:{left}{PAIR_SEPARATOR}{right}"
+
+
+def build_manual_transfer_resolution_token(
+    *,
+    import_account_id: str,
+    source_identity: str,
+    transfer_id: str,
+    peer_account_id: str,
+) -> str:
+    payload = {
+        "kind": MANUAL_TRANSFER_RESOLUTION_TOKEN_KIND,
+        "v": MANUAL_TRANSFER_RESOLUTION_TOKEN_VERSION,
+        "importAccountId": import_account_id.strip(),
+        "sourceIdentity": source_identity.strip(),
+        "transferId": transfer_id.strip(),
+        "peerAccountId": peer_account_id.strip(),
+    }
+    raw = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+
+def parse_manual_transfer_resolution_token(token: str) -> dict[str, str]:
+    trimmed = token.strip()
+    if not trimmed:
+        raise ValueError("Resolution token is required.")
+
+    padding = "=" * (-len(trimmed) % 4)
+    try:
+        payload = json.loads(base64.urlsafe_b64decode(trimmed + padding).decode("utf-8"))
+    except (ValueError, json.JSONDecodeError) as exc:
+        raise ValueError("Resolution token is invalid.") from exc
+
+    if payload.get("kind") != MANUAL_TRANSFER_RESOLUTION_TOKEN_KIND:
+        raise ValueError("Resolution token is invalid.")
+    if payload.get("v") != MANUAL_TRANSFER_RESOLUTION_TOKEN_VERSION:
+        raise ValueError("Resolution token is no longer supported.")
+
+    import_account_id = str(payload.get("importAccountId") or "").strip()
+    source_identity = str(payload.get("sourceIdentity") or "").strip()
+    transfer_id = str(payload.get("transferId") or "").strip()
+    peer_account_id = str(payload.get("peerAccountId") or "").strip()
+    if not import_account_id or not source_identity or not transfer_id or not peer_account_id:
+        raise ValueError("Resolution token is invalid.")
+
+    return {
+        "importAccountId": import_account_id,
+        "sourceIdentity": source_identity,
+        "transferId": transfer_id,
+        "peerAccountId": peer_account_id,
+    }
 
 
 def _metadata_value(metadata: Mapping[str, object], key: str) -> str | None:

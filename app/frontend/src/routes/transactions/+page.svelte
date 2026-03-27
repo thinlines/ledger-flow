@@ -1,8 +1,9 @@
 <script lang="ts">
+  import { Dialog as DialogPrimitive } from 'bits-ui';
   import { goto } from '$app/navigation';
   import { page } from '$app/stores';
   import { onMount } from 'svelte';
-  import { apiGet } from '$lib/api';
+  import { apiGet, apiPost } from '$lib/api';
   import { describeBalanceTrust } from '$lib/account-trust';
   import { normalizeCurrencyCode } from '$lib/currency-format';
 
@@ -39,6 +40,8 @@
       account: string;
       kind: string;
     }>;
+    manualResolutionToken?: string | null;
+    manualResolutionNote?: string | null;
   };
 
   type AccountRegister = {
@@ -64,6 +67,36 @@
     note: string;
   };
 
+  type ManualResolutionPreview = {
+    resolutionToken: string;
+    date: string;
+    payee: string;
+    amount: number;
+    baseCurrency: string;
+    sourceAccountId: string;
+    sourceAccountName: string;
+    destinationAccountId: string;
+    destinationAccountName: string;
+    fromAccountId: string;
+    fromAccountName: string;
+    toAccountId: string;
+    toAccountName: string;
+    warning: string;
+  };
+
+  type ManualResolutionApplyResult = {
+    applied: boolean;
+    backupPath: string;
+    journalPath: string;
+    date: string;
+    payee: string;
+    amount: number;
+    sourceAccountId: string;
+    sourceAccountName: string;
+    destinationAccountId: string;
+    destinationAccountName: string;
+  };
+
   let initialized = false;
   let workspaceName = '';
   let trackedAccounts: TrackedAccount[] = [];
@@ -82,6 +115,12 @@
   let registerUnknownCount = 0;
   let primaryAction: RegisterAction | null = null;
   let secondaryActions: ActionLink[] = [];
+  let manualResolutionOpen = false;
+  let manualResolutionEntry: RegisterEntry | null = null;
+  let manualResolutionPreview: ManualResolutionPreview | null = null;
+  let manualResolutionError = '';
+  let manualResolutionSuccess = '';
+  let manualResolutionLoading: 'preview' | 'apply' | null = null;
 
   function titleCase(value: string): string {
     return value.charAt(0).toUpperCase() + value.slice(1);
@@ -120,6 +159,20 @@
       day: 'numeric',
       year: 'numeric'
     }).format(new Date(`${value}T00:00:00`));
+  }
+
+  function resetManualResolutionDialog() {
+    manualResolutionOpen = false;
+    manualResolutionEntry = null;
+    manualResolutionPreview = null;
+    manualResolutionError = '';
+    manualResolutionLoading = null;
+  }
+
+  function handleManualResolutionOpenChange(nextOpen: boolean) {
+    if (!nextOpen) {
+      resetManualResolutionDialog();
+    }
   }
 
   function selectedAccountTrust() {
@@ -202,6 +255,8 @@
     if (!accountId) return;
     if (accountId === selectedAccountId && register?.accountId === accountId) return;
 
+    manualResolutionSuccess = '';
+    resetManualResolutionDialog();
     selectedAccountId = accountId;
     const params = new URLSearchParams($page.url.searchParams);
     params.set('accountId', accountId);
@@ -240,6 +295,56 @@
   function handleAccountChange(event: Event) {
     const nextAccountId = (event.currentTarget as HTMLSelectElement).value;
     void syncSelection(nextAccountId);
+  }
+
+  async function openManualResolution(entry: RegisterEntry) {
+    if (!entry.manualResolutionToken) return;
+
+    manualResolutionSuccess = '';
+    manualResolutionEntry = entry;
+    manualResolutionPreview = null;
+    manualResolutionError = '';
+    manualResolutionOpen = true;
+    manualResolutionLoading = 'preview';
+
+    try {
+      manualResolutionPreview = await apiPost<ManualResolutionPreview>(
+        '/api/transactions/manual-transfer-resolution/preview',
+        {
+          resolutionToken: entry.manualResolutionToken
+        }
+      );
+      baseCurrency = manualResolutionPreview.baseCurrency;
+    } catch (e) {
+      manualResolutionError = String(e);
+    } finally {
+      manualResolutionLoading = null;
+    }
+  }
+
+  async function confirmManualResolution() {
+    const resolutionToken =
+      manualResolutionPreview?.resolutionToken ?? manualResolutionEntry?.manualResolutionToken ?? null;
+    if (!resolutionToken) return;
+
+    manualResolutionError = '';
+    manualResolutionLoading = 'apply';
+
+    try {
+      const result = await apiPost<ManualResolutionApplyResult>(
+        '/api/transactions/manual-transfer-resolution/apply',
+        {
+          resolutionToken
+        }
+      );
+      await loadRegister(selectedAccountId);
+      manualResolutionSuccess = `Resolved manually: ${result.sourceAccountName} to ${result.destinationAccountName}.`;
+      resetManualResolutionDialog();
+    } catch (e) {
+      manualResolutionError = String(e);
+    } finally {
+      manualResolutionLoading = null;
+    }
   }
 
   $: selectedAccount = trackedAccounts.find((account) => account.id === selectedAccountId) ?? null;
@@ -297,7 +402,7 @@
       <a class="text-link" href="/accounts">Open accounts</a>
     </div>
   </section>
-{:else}
+  {:else}
   <section class="view-card transactions-hero">
     <div class="hero-copy">
       <p class="eyebrow">Transactions</p>
@@ -338,6 +443,14 @@
     </div>
   </section>
 
+  {#if manualResolutionSuccess}
+    <section class="view-card result-card">
+      <p class="eyebrow">Resolved</p>
+      <h3>Transfer resolved manually</h3>
+      <p class="section-note">{manualResolutionSuccess} The missing side was added because no imported counterpart was expected.</p>
+    </section>
+  {/if}
+
   <section class="summary-grid">
     <article class="view-card summary-card">
       <p class="stat-label">Balance coverage</p>
@@ -346,11 +459,13 @@
     </article>
 
     <article class="view-card summary-card summary-balance-card">
-      <p class="stat-label">Imported balance</p>
+      <p class="stat-label">Current balance</p>
       <p class:positive={(register?.currentBalance ?? 0) > 0} class:negative={(register?.currentBalance ?? 0) < 0} class="stat-value">
         {formatCurrency(register?.currentBalance ?? null)}
       </p>
-      <p class="stat-note">{selectedAccount?.institutionDisplayName || 'Tracked account'}{#if selectedAccount?.last4} •••• {selectedAccount.last4}{/if}</p>
+      <p class="stat-note">
+        {selectedAccount?.institutionDisplayName || 'Tracked account'}{#if selectedAccount?.last4} •••• {selectedAccount.last4}{/if}
+      </p>
     </article>
 
     <article class="view-card summary-card summary-balance-card summary-balance-pending">
@@ -360,23 +475,23 @@
       </p>
       <p class="stat-note">
         {#if pendingTransferCount > 0}
-          {countLabel(pendingTransferCount, 'pending transfer')} worth {formatCurrency(pendingTransferTotal, { signed: true })} waiting to import.
+          {countLabel(pendingTransferCount, 'pending transfer')} worth {formatCurrency(pendingTransferTotal, { signed: true })} still waiting to settle.
         {:else}
-          Matches imported balance when nothing is pending.
+          Matches current balance when nothing is pending.
         {/if}
       </p>
     </article>
 
     <article class="view-card summary-card">
-      <p class="stat-label">Latest imported</p>
-      <p class="stat-value">{latestPostedActivityDate ? shortDate(latestPostedActivityDate) : 'No imports yet'}</p>
+      <p class="stat-label">Latest activity</p>
+      <p class="stat-value">{latestPostedActivityDate ? shortDate(latestPostedActivityDate) : 'No activity yet'}</p>
       <p class="stat-note">
         {#if latestPostedActivityDate}
-          {titleCase(selectedAccount?.kind || 'account')} register.
+          Posted to this {selectedAccount?.kind || 'account'} register.
         {:else if pendingTransferCount > 0}
-          Pending transfers are above while imported activity is still empty.
+          Pending transfers are above while posted activity is still empty.
         {:else}
-          Imported activity will appear here after the first statement import.
+          Posted activity will appear here after the first statement import.
         {/if}
       </p>
     </article>
@@ -402,7 +517,9 @@
             {formatCurrency(balanceWithPending)}
           </p>
         </div>
-        <p class="pending-banner-note">Imported balance remains {formatCurrency(register?.currentBalance ?? null)} until import completes.</p>
+        <p class="pending-banner-note">
+          Current balance remains {formatCurrency(register?.currentBalance ?? null)} until the missing side is imported or resolved.
+        </p>
       </div>
 
       <div class="pending-header" aria-hidden="true">
@@ -443,8 +560,11 @@
 
             <div class="register-details">
               <p class="details-note pending-details-note">
-                This transfer stays in the pending section until the imported transaction lands and replaces it in the
-                register.
+                {#if entry.manualResolutionToken}
+                  This transfer stays pending until the matching import arrives. Resolve it manually only when no imported counterpart is expected.
+                {:else}
+                  This transfer stays in the pending section until the imported transaction lands and replaces it in the register.
+                {/if}
               </p>
 
               {#if entry.detailLines.length > 0}
@@ -457,6 +577,14 @@
                   {/each}
                 </div>
               {/if}
+
+              {#if entry.manualResolutionToken}
+                <div class="pending-actions">
+                  <button class="btn pending-secondary-action" type="button" on:click={() => void openManualResolution(entry)}>
+                    Resolve manually
+                  </button>
+                </div>
+              {/if}
             </div>
           </details>
         {/each}
@@ -467,10 +595,10 @@
   <section class="view-card register-card">
     <div class="section-head">
       <div>
-        <p class="eyebrow">Imported</p>
-        <h3>Imported register</h3>
+        <p class="eyebrow">Posted</p>
+        <h3>Posted register</h3>
       </div>
-      <p class="section-note">Only imported activity changes this running balance.</p>
+      <p class="section-note">Imported activity, manual transfer resolutions, and opening balances change this running balance.</p>
     </div>
 
     {#if registerLoading}
@@ -480,12 +608,12 @@
       </div>
     {:else if !register || postedEntries.length === 0}
       <div class="empty-panel">
-        <h4>No imported activity yet</h4>
+        <h4>No posted activity yet</h4>
         <p>
           {#if pendingTransferCount > 0}
-            Pending transfers are listed above. Imported transactions and opening-balance history will appear here after import.
+            Pending transfers are listed above. Posted transactions and opening-balance history will appear here after import or manual resolution.
           {:else}
-            Once this account has imported transactions or an opening balance, the register will appear here.
+            Once this account has posted transactions or an opening balance, the register will appear here.
           {/if}
         </p>
       </div>
@@ -541,6 +669,10 @@
                 <p class="details-note">This imported row settled as part of a grouped transfer, so it no longer counts as pending.</p>
               {/if}
 
+              {#if entry.manualResolutionNote}
+                <p class="details-note manual-resolution-note">{entry.manualResolutionNote}</p>
+              {/if}
+
               {#if entry.detailLines.length > 0}
                 <div class="detail-lines">
                   {#each entry.detailLines as line}
@@ -558,6 +690,74 @@
     {/if}
   </section>
 {/if}
+
+<DialogPrimitive.Root bind:open={manualResolutionOpen} onOpenChange={handleManualResolutionOpenChange}>
+  <DialogPrimitive.Portal>
+    <DialogPrimitive.Overlay class="manual-resolution-backdrop" />
+
+    <DialogPrimitive.Content
+      class="manual-resolution-modal"
+      aria-labelledby="manual-resolution-title"
+      aria-describedby="manual-resolution-description"
+    >
+      <h3 id="manual-resolution-title">Resolve manually</h3>
+      <p id="manual-resolution-description" class="muted">
+        Add the missing side of this transfer only when no imported counterpart is expected.
+      </p>
+
+      {#if manualResolutionLoading === 'preview'}
+        <div class="empty-panel">
+          <h4>Loading preview</h4>
+          <p>Validating the pending transfer and building the missing side.</p>
+        </div>
+      {:else if manualResolutionPreview}
+        <div class="manual-resolution-preview">
+          <div class="manual-resolution-grid">
+            <div>
+              <p class="stat-label">From</p>
+              <p>{manualResolutionPreview.fromAccountName}</p>
+            </div>
+            <div>
+              <p class="stat-label">To</p>
+              <p>{manualResolutionPreview.toAccountName}</p>
+            </div>
+            <div>
+              <p class="stat-label">Date</p>
+              <p>{shortDate(manualResolutionPreview.date)}</p>
+            </div>
+            <div>
+              <p class="stat-label">Amount</p>
+              <p>{formatCurrency(manualResolutionPreview.amount)}</p>
+            </div>
+          </div>
+
+          <div class="detail-line preview-payee">
+            <p>{manualResolutionPreview.payee}</p>
+            <p class="muted small">The imported side stays in place. The missing destination-side transaction will be added and marked matched.</p>
+          </div>
+
+          <p class="details-note pending-details-note">{manualResolutionPreview.warning}</p>
+        </div>
+      {/if}
+
+      {#if manualResolutionError}
+        <p class="error-text">{manualResolutionError}</p>
+      {/if}
+
+      <div class="modal-actions">
+        <button class="btn" type="button" on:click={resetManualResolutionDialog}>Cancel</button>
+        <button
+          class="btn btn-primary"
+          type="button"
+          disabled={!manualResolutionPreview || manualResolutionLoading === 'apply'}
+          on:click={() => void confirmManualResolution()}
+        >
+          {manualResolutionLoading === 'apply' ? 'Applying...' : 'Confirm resolution'}
+        </button>
+      </div>
+    </DialogPrimitive.Content>
+  </DialogPrimitive.Portal>
+</DialogPrimitive.Root>
 
 <style>
   h3,
@@ -838,6 +1038,10 @@
     color: #7d5200;
   }
 
+  .manual-resolution-note {
+    color: var(--brand-strong);
+  }
+
   .detail-lines {
     display: grid;
     gap: 0.6rem;
@@ -860,6 +1064,65 @@
     border-radius: 1rem;
     padding: 1rem;
     background: rgba(255, 255, 255, 0.52);
+  }
+
+  .result-card {
+    display: grid;
+    gap: 0.45rem;
+    background:
+      radial-gradient(circle at top right, rgba(214, 235, 220, 0.62), transparent 44%),
+      linear-gradient(155deg, rgba(248, 252, 246, 0.98), rgba(242, 248, 255, 0.96));
+  }
+
+  .pending-actions,
+  .modal-actions {
+    display: flex;
+    gap: 0.7rem;
+    flex-wrap: wrap;
+  }
+
+  .pending-secondary-action {
+    background: rgba(255, 255, 255, 0.85);
+  }
+
+  .manual-resolution-preview {
+    display: grid;
+    gap: 0.9rem;
+  }
+
+  .manual-resolution-grid {
+    display: grid;
+    gap: 0.8rem;
+    grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
+  }
+
+  .preview-payee {
+    background: rgba(255, 255, 255, 0.72);
+  }
+
+  :global(.manual-resolution-backdrop) {
+    position: fixed;
+    inset: 0;
+    background: rgba(10, 20, 30, 0.35);
+    z-index: 30;
+  }
+
+  :global(.manual-resolution-modal) {
+    width: min(640px, calc(100vw - 2rem));
+    max-height: calc(100vh - 2rem);
+    background: #fff;
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    box-shadow: var(--shadow);
+    padding: 1rem;
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    overflow: auto;
+    z-index: 31;
+    display: grid;
+    gap: 1rem;
   }
 
   @media (max-width: 980px) {

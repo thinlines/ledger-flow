@@ -14,6 +14,7 @@ from models import (
     CreateAccountRequest,
     ImportPreviewRequest,
     ImportUndoRequest,
+    ManualTransferResolutionRequest,
     PayeeRuleRequest,
     RuleHistoryApplyRequest,
     RuleHistoryScanRequest,
@@ -42,6 +43,10 @@ from services.import_service import (
     preview_import_safely,
     remove_inbox_csv,
     scan_candidates,
+)
+from services.manual_transfer_resolution_service import (
+    apply_manual_transfer_resolution,
+    preview_manual_transfer_resolution,
 )
 from services.import_profile_service import import_source_summary
 from services.institution_registry import canonical_template_id, display_name_for, list_templates
@@ -385,6 +390,24 @@ def transactions_register(accountId: str) -> dict:
         raise HTTPException(status_code=400, detail=str(e)) from e
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
+
+
+@app.post("/api/transactions/manual-transfer-resolution/preview")
+def transactions_manual_transfer_resolution_preview(req: ManualTransferResolutionRequest) -> dict:
+    config = _require_workspace_config()
+    try:
+        return preview_manual_transfer_resolution(config, req.resolutionToken)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+@app.post("/api/transactions/manual-transfer-resolution/apply")
+def transactions_manual_transfer_resolution_apply(req: ManualTransferResolutionRequest) -> dict:
+    config = _require_workspace_config()
+    try:
+        return apply_manual_transfer_resolution(config, req.resolutionToken)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
 
 
 @app.post("/api/workspace/bootstrap")

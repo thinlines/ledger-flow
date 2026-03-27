@@ -15,8 +15,11 @@ from .journal_query_service import (
     pretty_account_name,
 )
 from .transfer_service import (
+    MANUAL_TRANSFER_RESOLUTION_METADATA_KEY,
+    MANUAL_TRANSFER_RESOLUTION_METADATA_VALUE,
     MAX_TRANSFER_MATCH_DAYS,
     TRANSFER_STATE_SETTLED_GROUPED,
+    build_manual_transfer_resolution_token,
     is_transfer_account,
     parse_transfer_metadata,
     transfer_pair_account,
@@ -40,6 +43,8 @@ class RegisterEvent:
     transfer_state: str | None = None
     transfer_peer_account_id: str | None = None
     transfer_peer_account_name: str | None = None
+    manual_resolution_token: str | None = None
+    manual_resolution_note: str | None = None
     affects_balance: bool = True
     counts_as_transaction: bool = True
 
@@ -370,6 +375,48 @@ def _grouped_settled_pending_transfer_orders(config: AppConfig, transactions: li
     return grouped_orders
 
 
+def _manual_resolution_token(
+    config: AppConfig,
+    transaction,
+    *,
+    grouped_settled: bool,
+) -> str | None:
+    if grouped_settled:
+        return None
+
+    transfer = parse_transfer_metadata(transaction.metadata, config.tracked_accounts)
+    if not transfer.is_import_match or not transfer.is_pending:
+        return None
+
+    source_identity = str(transaction.metadata.get("source_identity") or "").strip()
+    import_account_id = str(transaction.metadata.get("import_account_id") or "").strip()
+    transfer_id = str(transfer.transfer_id or "").strip()
+    peer_account_id = str(transfer.peer_account_id or "").strip()
+    if not source_identity or not import_account_id or not transfer_id or not peer_account_id:
+        return None
+
+    peer_account = config.tracked_accounts.get(peer_account_id)
+    peer_import_account_id = str(peer_account.get("import_account_id") or "").strip() if peer_account else ""
+    if not peer_import_account_id:
+        return None
+
+    return build_manual_transfer_resolution_token(
+        import_account_id=import_account_id,
+        source_identity=source_identity,
+        transfer_id=transfer_id,
+        peer_account_id=peer_account_id,
+    )
+
+
+def _manual_resolution_note(transaction) -> str | None:
+    if (
+        str(transaction.metadata.get(MANUAL_TRANSFER_RESOLUTION_METADATA_KEY) or "").strip()
+        != MANUAL_TRANSFER_RESOLUTION_METADATA_VALUE
+    ):
+        return None
+    return "The missing side was added manually because no imported counterpart was expected."
+
+
 def _detail_lines(
     config: AppConfig,
     transaction,
@@ -512,6 +559,11 @@ def _pending_transfer_event_for_peer_account(
         return None
 
     label = source_name or pretty_account_name(source_ledger_account)
+    manual_resolution_token = _manual_resolution_token(
+        config,
+        transaction,
+        grouped_settled=order in grouped_settled_orders,
+    )
     return RegisterEvent(
         posted_on=transaction.posted_on,
         order=order,
@@ -531,6 +583,8 @@ def _pending_transfer_event_for_peer_account(
         transfer_state=transfer.transfer_state_for_ui,
         transfer_peer_account_id=source_account_id,
         transfer_peer_account_name=source_name or label,
+        manual_resolution_token=manual_resolution_token,
+        manual_resolution_note=_manual_resolution_note(transaction),
         affects_balance=False,
         counts_as_transaction=False,
     )
@@ -615,6 +669,7 @@ def build_account_register(config: AppConfig, account_id: str) -> dict:
             is_generated_opening = is_generated_opening_balance_transaction(transaction)
             opening_account_id = str(transaction.metadata.get("tracked_account_id", "")).strip() or None
             is_primary_opening = is_generated_opening and opening_account_id == account_id
+            manual_resolution_token = None
             if is_primary_opening:
                 offset_account = other_postings[0].account if other_postings else ""
                 summary = "Starting point for this account"
@@ -624,6 +679,11 @@ def build_account_register(config: AppConfig, account_id: str) -> dict:
                 transfer_peer_name = None
                 detail_lines = [_opening_balance_detail_line(config, offset_account)]
             else:
+                manual_resolution_token = _manual_resolution_token(
+                    config,
+                    transaction,
+                    grouped_settled=order in grouped_settled_orders,
+                )
                 summary, is_unknown, transfer_state, transfer_peer_account_id, transfer_peer_name = _transaction_summary(
                     config,
                     transaction,
@@ -648,6 +708,8 @@ def build_account_register(config: AppConfig, account_id: str) -> dict:
                     transfer_state=transfer_state,
                     transfer_peer_account_id=transfer_peer_account_id,
                     transfer_peer_account_name=transfer_peer_name,
+                    manual_resolution_token=manual_resolution_token,
+                    manual_resolution_note=_manual_resolution_note(transaction),
                     counts_as_transaction=not is_generated_opening,
                 )
             )
@@ -700,6 +762,8 @@ def build_account_register(config: AppConfig, account_id: str) -> dict:
                 "transferState": event.transfer_state,
                 "transferPeerAccountId": event.transfer_peer_account_id,
                 "transferPeerAccountName": event.transfer_peer_account_name,
+                "manualResolutionToken": event.manual_resolution_token,
+                "manualResolutionNote": event.manual_resolution_note,
             }
         )
         if event.counts_as_transaction and not event.is_opening_balance:
