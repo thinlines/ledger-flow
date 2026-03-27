@@ -65,6 +65,57 @@ Own engineering work end to end with senior-level judgment. Follow the active pl
 - Update adjacent docs, config, or task artifacts when behavior or workflows materially change.
 - Isolate tactical compromises, label them, and state the debt explicitly when they are truly necessary.
 
+#### Implementation anti-patterns
+
+Avoid these recurring mistakes that erode correctness, readability, or maintainability:
+
+**Structural**
+- Do not add a boolean parameter to toggle behavior inside a function. Extract the variant into its own function or let the caller choose the right code path.
+- Do not duplicate validation or computation that already exists upstream. Find the existing function and call it; if it needs a small change, change it rather than forking a copy.
+- Do not catch and silence exceptions in business logic. If an error can happen, handle it with a meaningful recovery or let it propagate. A bare `except: pass` or `catch {}` hides the bug that will surface later in a harder-to-diagnose form.
+- Do not store derived state that can be recomputed from the source of truth. In this project the ledger journal is canonical — a user running `ledger -f 2026.journal` must be able to reproduce every number the app shows. Caching is fine; persisting a second copy of truth is not.
+
+**Component and UI (Svelte / Astro)**
+- Do not put non-trivial expressions inline in template blocks (`{#each}`, `{#if}`, attribute bindings). Move the logic into a named variable or function in the `<script>` block where it can be read, tested, and reused.
+- Do not let a single component file grow past the point where its responsibilities are obvious. Extract sub-components or move shared logic into `$lib/` modules that both components and pages can import.
+- Do not duplicate types that mirror backend models across multiple route files. Define them once in a shared location and import them.
+
+**Service layer (Python / FastAPI)**
+- Do not reach into `AppConfig` internals from multiple unrelated call sites. Access configuration through the service function that owns that concern.
+- Do not mix file-system side effects with pure computation in the same function. Keep parsing, filtering, and transformation pure; push I/O (reads, writes, archives) to the edges.
+- Do not use mutable default arguments or module-level mutable state. Prefer frozen dataclasses and explicit parameter passing.
+
+#### Debugging and investigation
+
+When the root cause is unclear, follow this sequence rather than guessing:
+
+1. **Reproduce first.** Create or identify the minimal input (journal fixture, CSV, API request) that triggers the wrong behavior. If you cannot reproduce it, you do not understand it yet.
+2. **Trace the actual execution path.** Follow the data from source (journal file or CSV) through the service layer, API response, and into the UI. Read the code that runs, not the code you think runs. Print intermediate values or use a debugger when reading alone is ambiguous.
+3. **Identify the broken invariant.** Every bug is a violated assumption. Name the assumption: "this function expected one candidate but received two", "this date comparison used `<` instead of `<=`", "this account ID was `None` because the config was stale." Fix the invariant, not just the symptom.
+4. **Check for the same class of bug nearby.** If the broken invariant could be violated in a sibling function or parallel code path, check those too. Fix them in the same change if the scope is small; file a follow-up if it is not.
+5. **Verify the fix does not mask a deeper issue.** If you are adding a guard clause, ask whether the upstream code should have prevented the bad state in the first place. A guard is acceptable when the upstream fix is out of scope, but name the debt.
+6. **Compare against the canonical source.** For any data-correctness issue, run the equivalent `ledger` CLI query against the journal file. If the app and `ledger` disagree, the app is wrong.
+
+#### Testing heuristics
+
+Tests in this project use pytest with real file I/O against `tmp_path` fixtures — no mocks. Follow these guidelines:
+
+**When to write tests**
+- **Bug fixes:** Write the failing test first. The test encodes the broken invariant; the fix makes it pass. This order prevents "fix the symptom, miss the cause" regressions.
+- **New behavior:** Test the contract (inputs → outputs) at the service-function boundary, not the internal implementation. If `build_account_register` should exclude bilateral matches, assert on the returned register, not on an internal helper's intermediate list.
+- **Refactors:** Run the existing test suite before and after. If coverage is thin in the area you are changing, add characterization tests that lock current behavior before restructuring.
+
+**How to write tests**
+- Use `tmp_path` to create isolated workspace directories. Write realistic journal entries and config files as fixtures — the same format the production code reads.
+- Use setup helpers (like the existing `_make_config` pattern) to reduce boilerplate. Keep helpers in the test file unless multiple test files need them, then promote to `conftest.py`.
+- Test one behavior per test function. Name the test after the behavior: `test_bilateral_match_excludes_both_from_pending`, not `test_register_3`.
+- Cover edge cases called out in `TASK.md` explicitly. Each edge case in the task spec should map to at least one test.
+
+**What not to test**
+- Do not mock the file system, the journal parser, or service internals. The journal file *is* the test fixture; mocking it removes the value of the test.
+- Do not write tests for trivial getters, dataclass construction, or framework boilerplate.
+- Do not add tests for code you did not change unless the existing coverage is dangerously thin for the area you are working in.
+
 ### 5. Delegate large lifts
 
 - Keep the immediate blocking reasoning local.
