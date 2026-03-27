@@ -15,20 +15,25 @@ Eliminate the remaining transfer cases that still force users to edit journal fi
   - direct transfers to manually tracked destination accounts
   - pending import-match transfers when only one imported side exists
   - automatic matching when one safe imported counterpart is available
-- Register readers now suppress false pending work for balanced grouped ACH verification transfers instead of treating them as permanent pending work.
-- The remaining product gap is narrower: a genuinely unresolved pending transfer between two import-enabled tracked accounts when no real imported counterpart will arrive.
+- Register readers suppress false pending work for balanced grouped ACH verification transfers.
+- Guided manual resolution is shipped: a user can resolve an eligible one-sided pending transfer from the transactions page without editing files.
+- Outstanding trust gap: when both sides of a transfer are independently imported and the dates differ by 1–7 days, the two pending rows are not linked. Both appear as separate negative-amount rows with identical-looking labels. The pending section is misleading and offers no clear resolution path.
 
 ### Decision
 
-- Pending-transfer resolution should be a guided manual-transaction mode launched from an existing pending transfer.
-- This should not become a separate transfer workbench.
-- A broad freeform manual transaction system is follow-on work, not the first slice.
+- Bilateral pending pairs (both sides imported, mutual peer references, same absolute amount, within date window) should be auto-reconciled at register read time with no journal writes, following the same read-time exclusion model as grouped-settlement detection.
+- Ambiguous pairs (multiple same-amount candidates in the same window) must fail closed to pending.
+- Manual link UI for ambiguous pairs is follow-on work after auto-reconciliation is proven safe.
+- A broad freeform manual transaction system is follow-on work after the transfer-specific flows are trusted.
 
 ### Delivery Sequence
 
-1. Ship and verify the grouped-settlement trust fix already in progress.
-2. Add guided manual resolution for eligible pending imported transfers from the transactions view.
-3. Generalize that authoring path into broader manual transaction entry only after the transfer-specific flow proves safe and understandable.
+1. ✅ Ship and verify the grouped-settlement trust fix.
+2. ✅ Add guided manual resolution for eligible one-sided pending imported transfers.
+3. Fix bilateral pending auto-reconciliation: two independently-imported sides of the same transfer should resolve without user action.
+4. Fix import-time matching so bilateral pairs do not arise (the pipeline should link them on the second import).
+5. Manual link UI for ambiguous bilateral pairs that cannot be auto-reconciled.
+6. Generalize into broader manual transaction entry only after transfer-specific flows are trusted.
 
 ### Constraints
 
