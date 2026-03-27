@@ -81,6 +81,9 @@ def _parse_postings(lines: list[str], start: int, end: int) -> list[dict]:
     postings = []
     for i in range(start + 1, end):
         line = lines[i]
+        if line.lstrip().startswith(";"):
+            continue
+
         m = ACCOUNT_LINE_RE.match(line)
         if m:
             postings.append(
@@ -93,9 +96,6 @@ def _parse_postings(lines: list[str], start: int, end: int) -> list[dict]:
                     "line": line,
                 }
             )
-            continue
-
-        if line.lstrip().startswith(";"):
             continue
 
         m = ACCOUNT_ONLY_RE.match(line)
@@ -358,6 +358,8 @@ def _populate_transfer_suggestions(transaction_records: list[dict]) -> None:
 
         if len(matches) == 1:
             current["unknownRows"][0]["transferSuggestion"] = matches[0]
+        for row in current.get("unknownRows", []):
+            row["transferMatchCount"] = len(matches)
 
 
 def scan_unknowns(

@@ -55,6 +55,7 @@
     sourceTrackedAccountId?: string | null;
     sourceTrackedAccountKind?: string | null;
     transferSuggestion?: TransferSuggestion | null;
+    transferMatchCount?: number;
   };
 
   type UnknownGroup = {
@@ -1209,6 +1210,14 @@
       return {
         tone: 'muted',
         text: `This will post directly to ${targetAccount.displayName}. No imported counterpart is required.`
+      };
+    }
+
+    const matchCount = txn.transferMatchCount ?? 0;
+    if (matchCount > 0) {
+      return {
+        tone: 'muted',
+        text: `Matching imports found but not uniquely identifiable. Both sides will be auto-reconciled after review.`
       };
     }
 

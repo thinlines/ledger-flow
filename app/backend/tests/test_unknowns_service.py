@@ -721,3 +721,40 @@ def test_create_account_omits_blank_description_metadata(tmp_path: Path) -> None
     assert added is True
     assert warning is None
     assert "; description:" not in accounts.read_text(encoding="utf-8")
+
+
+def test_scan_unknowns_suggests_transfer_when_csv_comment_contains_double_spaces(tmp_path: Path) -> None:
+    """CSV metadata comments with 2+ spaces in the description must not be
+    mis-parsed as posting lines, which would break amount inference and prevent
+    transfer suggestion matching."""
+    journal = tmp_path / "sample.journal"
+    journal.write_text(
+        """
+2026/03/02 Transfer out
+    ; import_account_id: checking_import
+    ; CSV: 2026/03/02,,TRANSFER TO OTHER BANK  REF #ABC123,$-500.00,,
+    Expenses:Unknown  $500.00
+    Assets:Bank:Checking
+
+2026/03/04 Transfer in
+    ; import_account_id: savings_import
+    ; CSV: 2026/03/04,,ACH Deposit ABC123  - DDA TO DDA,$500.00,$1500.00,,,
+    Expenses:Unknown  $-500.00
+    Assets:Bank:Savings  $500.00 = $1500.00
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    result = scan_unknowns(journal, [], _import_accounts(), _tracked_accounts())
+
+    checking_group = next(g for g in result["groups"] if g["sourceTrackedAccountId"] == "checking")
+    savings_group = next(g for g in result["groups"] if g["sourceTrackedAccountId"] == "savings")
+
+    assert checking_group["txns"][0]["transferSuggestion"] is not None
+    assert checking_group["txns"][0]["transferSuggestion"]["targetTrackedAccountId"] == "savings"
+    assert checking_group["txns"][0]["transferMatchCount"] == 1
+
+    assert savings_group["txns"][0]["transferSuggestion"] is not None
+    assert savings_group["txns"][0]["transferSuggestion"]["targetTrackedAccountId"] == "checking"
+    assert savings_group["txns"][0]["transferMatchCount"] == 1
