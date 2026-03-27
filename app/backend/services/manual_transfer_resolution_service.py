@@ -4,7 +4,10 @@ from dataclasses import dataclass
 from decimal import Decimal
 from pathlib import Path
 
-from .account_register_service import _grouped_settled_pending_transfer_orders
+from .account_register_service import (
+    _bilateral_matched_pending_transfer_orders,
+    _grouped_settled_pending_transfer_orders,
+)
 from .backup_service import backup_file
 from .config_service import AppConfig
 from .import_profile_service import import_source_summary
@@ -127,9 +130,10 @@ def _find_source_transaction(config: AppConfig, resolution_token: str) -> Locate
     return matches[0]
 
 
-def _assert_not_grouped_settled(config: AppConfig, import_account_id: str, source_identity: str) -> None:
+def _assert_not_auto_resolved(config: AppConfig, import_account_id: str, source_identity: str) -> None:
     transactions = load_transactions(config)
     grouped_settled_orders = _grouped_settled_pending_transfer_orders(config, transactions)
+    bilateral_matched_orders = _bilateral_matched_pending_transfer_orders(config, transactions, grouped_settled_orders)
 
     matching_orders = [
         order
@@ -139,14 +143,14 @@ def _assert_not_grouped_settled(config: AppConfig, import_account_id: str, sourc
     ]
     if len(matching_orders) != 1:
         raise ValueError("This pending transfer is no longer uniquely identifiable.")
-    if matching_orders[0] in grouped_settled_orders:
+    if matching_orders[0] in grouped_settled_orders or matching_orders[0] in bilateral_matched_orders:
         raise ValueError("This pending transfer is already handled automatically and cannot be resolved manually.")
 
 
 def _build_resolution_plan(config: AppConfig, resolution_token: str) -> ManualTransferResolutionPlan:
     token = parse_manual_transfer_resolution_token(resolution_token)
     located = _find_source_transaction(config, resolution_token)
-    _assert_not_grouped_settled(config, token["importAccountId"], token["sourceIdentity"])
+    _assert_not_auto_resolved(config, token["importAccountId"], token["sourceIdentity"])
 
     parsed_source = parse_journal_transaction(located.block_lines)
     if parsed_source is None:

@@ -18,6 +18,7 @@ from .transfer_service import (
     MANUAL_TRANSFER_RESOLUTION_METADATA_KEY,
     MANUAL_TRANSFER_RESOLUTION_METADATA_VALUE,
     MAX_TRANSFER_MATCH_DAYS,
+    TRANSFER_STATE_BILATERAL_MATCH,
     TRANSFER_STATE_SETTLED_GROUPED,
     build_manual_transfer_resolution_token,
     is_transfer_account,
@@ -375,6 +376,62 @@ def _grouped_settled_pending_transfer_orders(config: AppConfig, transactions: li
     return grouped_orders
 
 
+def _bilateral_matched_pending_transfer_orders(
+    config: AppConfig,
+    transactions: list,
+    excluded_orders: set[int],
+) -> set[int]:
+    candidates_by_transfer_account: dict[str, list[PendingTransferCandidate]] = defaultdict(list)
+    for order, transaction in enumerate(transactions):
+        if order in excluded_orders:
+            continue
+        candidate = _pending_transfer_candidate(config, transaction, order)
+        if candidate is not None:
+            candidates_by_transfer_account[candidate.transfer_account].append(candidate)
+
+    bilateral_orders: set[int] = set()
+    for candidates in candidates_by_transfer_account.values():
+        if len(candidates) < 2:
+            continue
+
+        by_abs_amount: dict[Decimal, list[PendingTransferCandidate]] = defaultdict(list)
+        for candidate in candidates:
+            by_abs_amount[abs(candidate.amount)].append(candidate)
+
+        for group in by_abs_amount.values():
+            sides: dict[str, list[PendingTransferCandidate]] = defaultdict(list)
+            for candidate in group:
+                sides[candidate.source_tracked_account_id].append(candidate)
+
+            if len(sides) != 2:
+                continue
+
+            side_a, side_b = list(sides.values())
+
+            valid_pairs: list[tuple[PendingTransferCandidate, PendingTransferCandidate]] = []
+            for a in side_a:
+                for b in side_b:
+                    if abs((a.posted_on - b.posted_on).days) <= MAX_TRANSFER_MATCH_DAYS:
+                        valid_pairs.append((a, b))
+
+            for a, b in valid_pairs:
+                ambiguous = False
+                for c in group:
+                    if c.order == a.order or c.order == b.order:
+                        continue
+                    if (
+                        abs((c.posted_on - a.posted_on).days) <= MAX_TRANSFER_MATCH_DAYS
+                        or abs((c.posted_on - b.posted_on).days) <= MAX_TRANSFER_MATCH_DAYS
+                    ):
+                        ambiguous = True
+                        break
+                if not ambiguous:
+                    bilateral_orders.add(a.order)
+                    bilateral_orders.add(b.order)
+
+    return bilateral_orders
+
+
 def _manual_resolution_token(
     config: AppConfig,
     transaction,
@@ -499,6 +556,7 @@ def _transaction_summary(
     current_account_id: str,
     *,
     grouped_settled: bool = False,
+    bilateral_matched: bool = False,
 ) -> tuple[str, bool, str | None, str | None, str | None]:
     transfer = parse_transfer_metadata(transaction.metadata, config.tracked_accounts)
     transfer_peer_account_id, transfer_peer_name, _, _ = _transfer_peer_details(
@@ -512,6 +570,8 @@ def _transaction_summary(
         transfer_state = transfer.transfer_state_for_ui
         if grouped_settled and transfer.is_pending:
             transfer_state = TRANSFER_STATE_SETTLED_GROUPED
+        elif bilateral_matched and transfer.is_pending:
+            transfer_state = TRANSFER_STATE_BILATERAL_MATCH
         elif transfer.is_pending:
             summary = f"{summary} (Pending)"
         return (summary, False, transfer_state, transfer_peer_account_id, label)
@@ -660,6 +720,8 @@ def build_account_register(config: AppConfig, account_id: str) -> dict:
 
     transactions = load_transactions(config)
     grouped_settled_orders = _grouped_settled_pending_transfer_orders(config, transactions)
+    bilateral_matched_orders = _bilateral_matched_pending_transfer_orders(config, transactions, grouped_settled_orders)
+    pending_excluded_orders = grouped_settled_orders | bilateral_matched_orders
 
     events: list[RegisterEvent] = []
     for order, transaction in enumerate(transactions):
@@ -682,7 +744,7 @@ def build_account_register(config: AppConfig, account_id: str) -> dict:
                 manual_resolution_token = _manual_resolution_token(
                     config,
                     transaction,
-                    grouped_settled=order in grouped_settled_orders,
+                    grouped_settled=order in pending_excluded_orders,
                 )
                 summary, is_unknown, transfer_state, transfer_peer_account_id, transfer_peer_name = _transaction_summary(
                     config,
@@ -690,6 +752,7 @@ def build_account_register(config: AppConfig, account_id: str) -> dict:
                     other_postings,
                     account_id,
                     grouped_settled=order in grouped_settled_orders,
+                    bilateral_matched=order in bilateral_matched_orders,
                 )
                 if is_generated_opening:
                     is_unknown = False
@@ -720,7 +783,7 @@ def build_account_register(config: AppConfig, account_id: str) -> dict:
             transaction,
             account_id,
             order,
-            grouped_settled_orders,
+            pending_excluded_orders,
         )
         if pending_peer_event is not None:
             events.append(pending_peer_event)

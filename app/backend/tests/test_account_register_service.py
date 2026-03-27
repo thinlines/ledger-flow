@@ -628,9 +628,12 @@ def test_account_register_fails_closed_for_ambiguous_same_window_grouped_transfe
     )
 
     checking_register = build_account_register(config, "checking")
-    assert checking_register["entryCount"] == 4
-    assert all(entry["transferState"] == "pending" for entry in checking_register["entries"])
-    assert all("settled_grouped" != entry["transferState"] for entry in checking_register["entries"])
+    # The two distinct-amount pairs ($0.12 and $0.34) are each unambiguously
+    # bilateral-matched, so synthetic peers are suppressed and only the two
+    # source-side entries remain on the checking register.
+    assert checking_register["entryCount"] == 2
+    assert all(entry["transferState"] == "bilateral_match" for entry in checking_register["entries"])
+    assert all("(Pending)" not in entry["summary"] for entry in checking_register["entries"])
 
 
 def test_account_register_preserves_matched_import_transfer_behavior(tmp_path: Path) -> None:
@@ -846,3 +849,307 @@ def test_account_register_reflects_offsetting_tracked_account_opening_balance_on
     assert opening_offset["amount"] == 18500.0
     assert opening_offset["runningBalance"] == 18500.0
     assert opening_offset["isOpeningBalance"] is False
+
+
+def test_bilateral_match_excludes_both_from_pending_and_shows_as_posted(tmp_path: Path) -> None:
+    config = _make_config(tmp_path / "workspace")
+    transfer_account = transfer_pair_account("checking", "savings")
+    _write_year_journal(
+        config,
+        f"""
+2026/03/02 Transfer out
+    ; import_account_id: checking
+    ; source_identity: tx-checking
+    ; transfer_id: transfer-wf
+    ; transfer_type: import_match
+    ; transfer_match_state: pending
+    ; transfer_peer_account_id: savings
+    {transfer_account}  $2000.00
+    Assets:Bank:Checking
+
+2026/03/04 Transfer in
+    ; import_account_id: savings
+    ; source_identity: tx-savings
+    ; transfer_id: transfer-iccu
+    ; transfer_type: import_match
+    ; transfer_match_state: pending
+    ; transfer_peer_account_id: checking
+    {transfer_account}  $-2000.00
+    Assets:Bank:Savings
+""".strip()
+        + "\n",
+    )
+
+    checking_register = build_account_register(config, "checking")
+    assert checking_register["transactionCount"] == 1
+    assert checking_register["entryCount"] == 1
+    checking_entry = checking_register["entries"][0]
+    assert checking_entry["summary"] == "Transfer · Savings"
+    assert checking_entry["amount"] == -2000.0
+    assert checking_entry["transferState"] == "bilateral_match"
+    assert checking_entry["transferPeerAccountId"] == "savings"
+    assert checking_entry["manualResolutionToken"] is None
+    assert "(Pending)" not in checking_entry["summary"]
+
+    savings_register = build_account_register(config, "savings")
+    assert savings_register["transactionCount"] == 1
+    assert savings_register["entryCount"] == 1
+    savings_entry = savings_register["entries"][0]
+    assert savings_entry["summary"] == "Transfer · Wells Fargo Checking"
+    assert savings_entry["amount"] == 2000.0
+    assert savings_entry["transferState"] == "bilateral_match"
+    assert savings_entry["transferPeerAccountId"] == "checking"
+    assert savings_entry["manualResolutionToken"] is None
+    assert "(Pending)" not in savings_entry["summary"]
+
+
+def test_bilateral_match_excludes_pair_from_pending_balance_and_counts(tmp_path: Path) -> None:
+    config = _make_config(tmp_path / "workspace")
+    transfer_account = transfer_pair_account("checking", "savings")
+    (config.opening_bal_dir / "checking.journal").write_text(
+        """
+2026-02-01 Opening balance
+    ; tracked_account_id: checking
+    Assets:Bank:Checking  $5000.00
+    Equity:Opening-Balances
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    _write_year_journal(
+        config,
+        f"""
+2026/03/02 Transfer out
+    ; import_account_id: checking
+    ; transfer_id: transfer-wf
+    ; transfer_type: import_match
+    ; transfer_match_state: pending
+    ; transfer_peer_account_id: savings
+    {transfer_account}  $2000.00
+    Assets:Bank:Checking
+
+2026/03/04 Transfer in
+    ; import_account_id: savings
+    ; transfer_id: transfer-iccu
+    ; transfer_type: import_match
+    ; transfer_match_state: pending
+    ; transfer_peer_account_id: checking
+    {transfer_account}  $-2000.00
+    Assets:Bank:Savings
+""".strip()
+        + "\n",
+    )
+
+    register = build_account_register(config, "checking")
+    # The bilateral-matched transfer still affects the running balance
+    # (it IS a real transaction), but no pending synthetic peer is generated.
+    assert register["currentBalance"] == 3000.0
+    assert register["transactionCount"] == 1
+    assert register["entryCount"] == 2  # opening + the matched transfer
+    pending_entries = [e for e in register["entries"] if e["transferState"] == "pending"]
+    assert len(pending_entries) == 0
+
+
+def test_bilateral_match_ambiguous_same_amount_remains_pending(tmp_path: Path) -> None:
+    config = _make_config(tmp_path / "workspace")
+    transfer_account = transfer_pair_account("checking", "savings")
+    _write_year_journal(
+        config,
+        f"""
+2026/03/01 Transfer out 1
+    ; import_account_id: checking
+    ; source_identity: tx-c1
+    ; transfer_id: transfer-c1
+    ; transfer_type: import_match
+    ; transfer_match_state: pending
+    ; transfer_peer_account_id: savings
+    {transfer_account}  $500.00
+    Assets:Bank:Checking
+
+2026/03/01 Transfer out 2
+    ; import_account_id: checking
+    ; source_identity: tx-c2
+    ; transfer_id: transfer-c2
+    ; transfer_type: import_match
+    ; transfer_match_state: pending
+    ; transfer_peer_account_id: savings
+    {transfer_account}  $500.00
+    Assets:Bank:Checking
+
+2026/03/03 Transfer in 1
+    ; import_account_id: savings
+    ; source_identity: tx-s1
+    ; transfer_id: transfer-s1
+    ; transfer_type: import_match
+    ; transfer_match_state: pending
+    ; transfer_peer_account_id: checking
+    {transfer_account}  $-500.00
+    Assets:Bank:Savings
+
+2026/03/03 Transfer in 2
+    ; import_account_id: savings
+    ; source_identity: tx-s2
+    ; transfer_id: transfer-s2
+    ; transfer_type: import_match
+    ; transfer_match_state: pending
+    ; transfer_peer_account_id: checking
+    {transfer_account}  $-500.00
+    Assets:Bank:Savings
+""".strip()
+        + "\n",
+    )
+
+    checking_register = build_account_register(config, "checking")
+    # All four remain pending: two same-amount pairs are ambiguous
+    assert checking_register["entryCount"] == 4
+    assert all(entry["transferState"] == "pending" for entry in checking_register["entries"])
+
+    savings_register = build_account_register(config, "savings")
+    assert savings_register["entryCount"] == 4
+    assert all(entry["transferState"] == "pending" for entry in savings_register["entries"])
+
+
+def test_bilateral_match_date_boundary_exact_window_matches(tmp_path: Path) -> None:
+    config = _make_config(tmp_path / "workspace")
+    transfer_account = transfer_pair_account("checking", "savings")
+    _write_year_journal(
+        config,
+        f"""
+2026/03/01 Transfer out
+    ; import_account_id: checking
+    ; transfer_id: transfer-c
+    ; transfer_type: import_match
+    ; transfer_match_state: pending
+    ; transfer_peer_account_id: savings
+    {transfer_account}  $100.00
+    Assets:Bank:Checking
+
+2026/03/08 Transfer in
+    ; import_account_id: savings
+    ; transfer_id: transfer-s
+    ; transfer_type: import_match
+    ; transfer_match_state: pending
+    ; transfer_peer_account_id: checking
+    {transfer_account}  $-100.00
+    Assets:Bank:Savings
+""".strip()
+        + "\n",
+    )
+
+    # Exactly MAX_TRANSFER_MATCH_DAYS (7) apart → should match
+    checking_register = build_account_register(config, "checking")
+    assert checking_register["entryCount"] == 1
+    assert checking_register["entries"][0]["transferState"] == "bilateral_match"
+
+
+def test_bilateral_match_date_boundary_exceeds_window_remains_pending(tmp_path: Path) -> None:
+    config = _make_config(tmp_path / "workspace")
+    transfer_account = transfer_pair_account("checking", "savings")
+    _write_year_journal(
+        config,
+        f"""
+2026/03/01 Transfer out
+    ; import_account_id: checking
+    ; source_identity: tx-c
+    ; transfer_id: transfer-c
+    ; transfer_type: import_match
+    ; transfer_match_state: pending
+    ; transfer_peer_account_id: savings
+    {transfer_account}  $100.00
+    Assets:Bank:Checking
+
+2026/03/09 Transfer in
+    ; import_account_id: savings
+    ; source_identity: tx-s
+    ; transfer_id: transfer-s
+    ; transfer_type: import_match
+    ; transfer_match_state: pending
+    ; transfer_peer_account_id: checking
+    {transfer_account}  $-100.00
+    Assets:Bank:Savings
+""".strip()
+        + "\n",
+    )
+
+    # MAX_TRANSFER_MATCH_DAYS + 1 (8 days) apart → should NOT match
+    checking_register = build_account_register(config, "checking")
+    assert checking_register["entryCount"] == 2
+    assert all(entry["transferState"] == "pending" for entry in checking_register["entries"])
+
+
+def test_bilateral_match_single_sided_pending_still_shows_synthetic_peer(tmp_path: Path) -> None:
+    config = _make_config(tmp_path / "workspace")
+    transfer_account = transfer_pair_account("checking", "savings")
+    _write_year_journal(
+        config,
+        f"""
+2026/03/02 Transfer out
+    ; import_account_id: checking
+    ; source_identity: tx-c
+    ; transfer_id: transfer-c
+    ; transfer_type: import_match
+    ; transfer_match_state: pending
+    ; transfer_peer_account_id: savings
+    {transfer_account}  $2000.00
+    Assets:Bank:Checking
+""".strip()
+        + "\n",
+    )
+
+    # Only WF side imported, no ICCU counterpart
+    checking_register = build_account_register(config, "checking")
+    assert checking_register["entryCount"] == 1
+    checking_entry = checking_register["entries"][0]
+    assert checking_entry["transferState"] == "pending"
+    assert "(Pending)" in checking_entry["summary"]
+    assert checking_entry["manualResolutionToken"] is not None
+
+    # Savings register should show the synthetic peer event
+    savings_register = build_account_register(config, "savings")
+    assert savings_register["entryCount"] == 1
+    savings_entry = savings_register["entries"][0]
+    assert savings_entry["transferState"] == "pending"
+    assert "(Pending)" in savings_entry["summary"]
+    assert savings_entry["amount"] == 2000.0  # peer side gets negated source amount
+
+
+def test_bilateral_match_does_not_interfere_with_grouped_settlement(tmp_path: Path) -> None:
+    config = _make_config(tmp_path / "workspace")
+    transfer_account = transfer_pair_account("checking", "savings")
+    _write_year_journal(
+        config,
+        f"""
+2026/03/12 ACH verification withdrawal
+    ; import_account_id: checking
+    ; transfer_id: transfer-checking
+    ; transfer_type: import_match
+    ; transfer_match_state: pending
+    ; transfer_peer_account_id: savings
+    {transfer_account}  $0.46
+    Assets:Bank:Checking
+
+2026/03/12 ACH verification deposit 1
+    ; import_account_id: savings
+    ; transfer_id: transfer-savings-1
+    ; transfer_type: import_match
+    ; transfer_match_state: pending
+    ; transfer_peer_account_id: checking
+    {transfer_account}  $-0.12
+    Assets:Bank:Savings
+
+2026/03/12 ACH verification deposit 2
+    ; import_account_id: savings
+    ; transfer_id: transfer-savings-2
+    ; transfer_type: import_match
+    ; transfer_match_state: pending
+    ; transfer_peer_account_id: checking
+    {transfer_account}  $-0.34
+    Assets:Bank:Savings
+""".strip()
+        + "\n",
+    )
+
+    # These 3 transactions form a grouped settlement (sum to zero)
+    # Bilateral matching should not interfere
+    savings_register = build_account_register(config, "savings")
+    assert all(entry["transferState"] == "settled_grouped" for entry in savings_register["entries"])
