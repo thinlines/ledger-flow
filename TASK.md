@@ -142,23 +142,27 @@ The overview page becomes a trustworthy daily home that answers "where do I stan
 - 3 months visible by default; 6 months on expand.
 - Income and spending still visually distinguishable via bar color.
 
-### 7. Compress Today Rail
+### 7. Compress Today Rail and Fix Stale-Data Status
 
 **Inputs**
 
 - Current Today rail: heading + description + 3 signal cards + primary CTA button + secondary links.
+- `dashboard.lastUpdated`: ISO date string of the most recent transaction in the books.
 
 **Logic**
 
 - The Today rail's intent is strong (surface the dominant next action) but it's too dense.
-- Compress to: a single status line (e.g., "Books look current" or "3 transactions need review") + primary CTA button + secondary links. Remove the individual signal cards — the hero stat chips (from step 4) already show month cash flow, and the review/inbox counts can fold into the status line.
+- Compress to: a single status line + primary CTA button + secondary links. Remove the individual signal cards — the hero stat chips (from step 4) already show month cash flow, and the review/inbox counts can fold into the status line.
 - Keep the Today rail as a distinct zone within the hero but reduce its height.
+- **Stale-data awareness**: `heroRailTitle()` currently falls through to "Books look current" whenever there is no review queue and no inbox. This is misleading when the most recent transaction is weeks old. Fix: compare `dashboard.lastUpdated` against today's date. If the gap exceeds 7 days, show "Last activity [date] — import a fresh statement" and point the primary CTA at `/import` instead of `/transactions`. The `primaryTask()` function must apply the same staleness check so the CTA label and href are consistent with the status line.
+- Staleness threshold: 7 days. This is a frontend-only constant — no backend or settings change needed.
 
 **Outputs**
 
 - Today rail is tighter: status summary + CTA + links.
 - No signal cards within the rail.
-- Status line dynamically reflects review queue, inbox, or caught-up state.
+- Status line dynamically reflects review queue, inbox, stale data, or caught-up state.
+- When data is stale (>7 days since last transaction), the status line warns and the CTA directs to import.
 
 ## System Invariants
 
@@ -174,6 +178,7 @@ The overview page becomes a trustworthy daily home that answers "where do I stan
 - **Setup incomplete**: CTA directs to setup with appropriate step label.
 - **Review queue non-empty**: "Review transactions" pointing to `/unknowns`.
 - **Statement inbox non-empty**: "Import statements" pointing to `/import`.
+- **Data stale** (>7 days since last transaction): status line shows "Last activity [date] — import a fresh statement", CTA points to `/import`.
 - **Caught up**: "Open transactions" pointing to `/transactions`.
 
 ### Balance Sheet Card
@@ -188,7 +193,8 @@ The overview page becomes a trustworthy daily home that answers "where do I stan
 ## Edge Cases
 
 - **Tracked accounts configured but no journal activity**: balance sheet shows accounts with $0 balances. This is correct — the accounts exist but have no history yet.
-- **All signal conditions clear (no review, no inbox)**: Today rail shows "Books look current" with a contextual insight (top category trend or latest transaction) and "Open transactions" CTA.
+- **All signal conditions clear (no review, no inbox), data fresh**: Today rail shows "Books look current" and "Open transactions" CTA.
+- **All signal conditions clear, data stale (>7 days)**: Today rail shows "Last activity [date] — import a fresh statement" and CTA points to `/import`. This prevents false confidence when manual entries mask import staleness.
 - **Only 1–2 months of data**: cash flow shows available months without padding empty months in the collapsed view.
 
 ## Failure Behavior
@@ -210,6 +216,7 @@ The overview page becomes a trustworthy daily home that answers "where do I stan
 - Balance sheet card shows an empty state with guidance when no tracked accounts exist.
 - "Tracked balances" stat and account count are internally consistent.
 - Hero CTA shows "Open transactions" (or appropriate queue-based label) when setup is complete — never "Open setup".
+- When the most recent transaction is more than 7 days old and no review/inbox items exist, the status line warns about stale data and the CTA directs to import.
 - Recent activity and category trends appear directly below the hero, above cash flow and balance sheet.
 - Cash flow section shows 3 months by default with an expand toggle for 6 months.
 - No standalone snapshot band — metrics are inline in the hero.
