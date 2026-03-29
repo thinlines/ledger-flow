@@ -8,9 +8,10 @@ from .rules_service import extract_set_account, find_matching_rule
 from .unknowns_service import list_known_accounts
 
 
+from .header_parser import HEADER_RE
+
 ACCOUNT_LINE_RE = re.compile(r"^(\s+)([^\s].*?)(\s{2,}|\t+)(.*)$")
 ACCOUNT_ONLY_RE = re.compile(r"^(\s+)([^\s].*?)\s*$")
-HEADER_RE = re.compile(r"^(\d{4}[-/]\d{2}[-/]\d{2})(?:\s+[*!])?(?:\s+\([^)]+\))?\s*(.*)$")
 META_RE = re.compile(r"^\s*;\s*([^:]+):\s*(.*)$")
 TXN_START_RE = re.compile(r"^\d{4}[-/]\d{2}[-/]\d{2}")
 
@@ -83,8 +84,8 @@ def scan_rule_reapply(journal_path: Path, rule: dict, import_accounts: dict[str,
     for start, end in _iter_transaction_ranges(lines):
         header_match = HEADER_RE.match(lines[start])
         if header_match:
-            current_date = header_match.group(1).replace("/", "-")
-            current_payee = header_match.group(2).strip() or "(no payee)"
+            current_date = header_match.group("date").replace("/", "-")
+            current_payee = header_match.group("payee").strip() or "(no payee)"
         else:
             current_date = ""
             current_payee = "(no payee)"

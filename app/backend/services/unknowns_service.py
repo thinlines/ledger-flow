@@ -31,9 +31,10 @@ from .transfer_service import (
     upsert_transaction_metadata,
 )
 
+from .header_parser import HEADER_RE
+
 ACCOUNT_LINE_RE = re.compile(r"^(\s+)([^\s].*?)(\s{2,}|\t+)(.*)$")
 ACCOUNT_ONLY_RE = re.compile(r"^(\s+)([^\s].*?)\s*$")
-HEADER_RE = re.compile(r"^(\d{4}[-/]\d{2}[-/]\d{2})(?:\s+[*!])?(?:\s+\([^)]+\))?\s*(.*)$")
 META_RE = re.compile(r"^\s*;\s*([^:]+):\s*(.*)$")
 TXN_START_RE = re.compile(r"^\d{4}[-/]\d{2}[-/]\d{2}")
 def list_known_accounts(accounts_dat: Path) -> list[str]:
@@ -218,8 +219,8 @@ def _build_transaction_records(
         header_line = lines[start]
         match = HEADER_RE.match(header_line)
         if match:
-            current_date = match.group(1)
-            current_payee = match.group(2).strip() or "(no payee)"
+            current_date = match.group("date")
+            current_payee = match.group("payee").strip() or "(no payee)"
         else:
             current_date = ""
             current_payee = "(no payee)"

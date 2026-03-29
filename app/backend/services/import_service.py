@@ -20,13 +20,9 @@ from .workspace_service import ensure_standard_commodities_file, ensure_workspac
 INBOX_FILE_RE = re.compile(
     r"^(?P<year>\d{4})__(?P<import_account_id>[a-z0-9_]+)__(?P<label>.+)\.csv$"
 )
+from .header_parser import HEADER_RE
+
 TXN_START_RE = re.compile(r"^\d{4}[-/]\d{2}[-/]\d{2}")
-HEADER_RE = re.compile(
-    r"^(?P<date>\d{4}[-/]\d{2}[-/]\d{2})"
-    r"(?:\s+[*!])?"
-    r"(?:\s+\([^)]+\))?"
-    r"\s*(?P<payee>.*)$"
-)
 POSTING_RE = re.compile(r"^(\s+)([^\s].*?)(\s{2,}|\t+)(.*)$")
 META_RE = re.compile(r"^\s*;\s*([^:]+):\s*(.*)$")
 IMPORTER_VERSION = "mvp2"

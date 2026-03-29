@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date
 from decimal import Decimal, InvalidOperation
 import glob
@@ -9,15 +9,10 @@ import re
 
 from .commodity_service import CommodityMismatchError, commodity_label, parse_amount
 from .config_service import AppConfig
+from .header_parser import HEADER_RE, TransactionStatus, parse_header
 
 
 TXN_START_RE = re.compile(r"^\d{4}[-/]\d{2}[-/]\d{2}")
-HEADER_RE = re.compile(
-    r"^(?P<date>\d{4}[-/]\d{2}[-/]\d{2})"
-    r"(?:\s+[*!])?"
-    r"(?:\s+\([^)]+\))?"
-    r"\s*(?P<payee>.*)$"
-)
 POSTING_RE = re.compile(r"^\s+([^\s].*?)(?:(?:\s{2,}|\t+)(.+))?$")
 META_RE = re.compile(r"^\s*;\s*([^:]+):\s*(.*)$")
 INCLUDE_RE = re.compile(r"^\s*include\s+(.+?)\s*$")
@@ -37,6 +32,9 @@ class ParsedTransaction:
     payee: str
     postings: list[Posting]
     metadata: dict[str, str]
+    status: TransactionStatus = TransactionStatus.unmarked
+    header_line: str = ""
+    source_journal: str = ""
 
 
 def amount_to_number(value: Decimal) -> float:
@@ -109,15 +107,16 @@ def _expand_journal_lines(path: Path, stack: tuple[Path, ...] = ()) -> list[str]
 
 
 def _parse_transaction(lines: list[str]) -> ParsedTransaction | None:
-    header_match = HEADER_RE.match(lines[0])
-    if not header_match:
+    parsed_header = parse_header(lines[0])
+    if not parsed_header:
         return None
 
     try:
-        posted_on = date.fromisoformat(header_match.group("date").replace("/", "-"))
+        posted_on = date.fromisoformat(parsed_header.date.replace("/", "-"))
     except ValueError:
         return None
 
+    txn_status = parsed_header.status
     metadata: dict[str, str] = {}
     postings: list[Posting] = []
 
@@ -163,9 +162,11 @@ def _parse_transaction(lines: list[str]) -> ParsedTransaction | None:
 
     return ParsedTransaction(
         posted_on=posted_on,
-        payee=header_match.group("payee").strip() or "Untitled transaction",
+        payee=parsed_header.payee or "Untitled transaction",
         postings=postings,
         metadata=metadata,
+        status=txn_status,
+        header_line=lines[0],
     )
 
 
@@ -182,5 +183,5 @@ def load_transactions(config: AppConfig) -> list[ParsedTransaction]:
         for lines in _split_transactions(text):
             transaction = _parse_transaction(lines)
             if transaction is not None:
-                transactions.append(transaction)
+                transactions.append(replace(transaction, source_journal=str(journal_path)))
     return sorted(transactions, key=lambda txn: txn.posted_on)

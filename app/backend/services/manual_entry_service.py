@@ -13,7 +13,8 @@ from .import_service import (
 
 MAX_MANUAL_MATCH_DAYS = 3
 
-HEADER_RE = re.compile(r"^(\d{4}[-/]\d{2}[-/]\d{2})(?:\s+[*!])?(?:\s+\([^)]+\))?\s*(.*)$")
+from .header_parser import HEADER_RE
+
 META_RE = re.compile(r"^\s*;\s*([^:]+):\s*(.*)$")
 TXN_START_RE = re.compile(r"^\d{4}[-/]\d{2}[-/]\d{2}")
 ACCOUNT_LINE_RE = re.compile(r"^(\s+)([^\s].*?)(\s{2,}|\t+)(.*)$")
@@ -218,12 +219,12 @@ def find_match_candidates(
         if not header_match:
             continue
 
-        txn_date_str = header_match.group(1).replace("/", "-")
+        txn_date_str = header_match.group("date").replace("/", "-")
         txn_date = _parse_posted_on(txn_date_str)
         if txn_date is None:
             continue
 
-        txn_payee = header_match.group(2).strip()
+        txn_payee = header_match.group("payee").strip()
 
         destination = _parse_manual_entry_destination(txn_lines, tracked_ledger_account)
         if not destination or "Unknown" in destination:

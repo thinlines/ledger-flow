@@ -43,6 +43,9 @@
     }>;
     manualResolutionToken?: string | null;
     manualResolutionNote?: string | null;
+    clearingStatus?: 'unmarked' | 'pending' | 'cleared';
+    headerLine?: string;
+    journalPath?: string;
   };
 
   type AccountRegister = {
@@ -348,6 +351,48 @@
       manualResolutionError = String(e);
     } finally {
       manualResolutionLoading = null;
+    }
+  }
+
+  // --- Clearing Status Toggle ---
+  const CLEARING_TOOLTIPS: Record<string, string> = {
+    cleared: 'Bank-confirmed',
+    pending: 'Flagged',
+    unmarked: 'Manual entry'
+  };
+
+  const CLEARING_CYCLE: Record<string, string> = {
+    unmarked: 'pending',
+    pending: 'cleared',
+    cleared: 'unmarked'
+  };
+
+  async function toggleClearingStatus(entry: RegisterEntry, event: MouseEvent) {
+    event.preventDefault();
+    event.stopPropagation();
+
+    if (!entry.headerLine || !entry.journalPath) return;
+
+    const previousStatus = entry.clearingStatus ?? 'unmarked';
+    const nextStatus = CLEARING_CYCLE[previousStatus] as 'unmarked' | 'pending' | 'cleared';
+
+    entry.clearingStatus = nextStatus;
+    postedEntries = [...postedEntries];
+    pendingEntries = [...pendingEntries];
+
+    try {
+      const result = await apiPost<{ newStatus: string; newHeaderLine: string }>(
+        '/api/transactions/toggle-status',
+        { journalPath: entry.journalPath, headerLine: entry.headerLine }
+      );
+      entry.clearingStatus = result.newStatus as 'unmarked' | 'pending' | 'cleared';
+      entry.headerLine = result.newHeaderLine;
+      postedEntries = [...postedEntries];
+      pendingEntries = [...pendingEntries];
+    } catch {
+      entry.clearingStatus = previousStatus;
+      postedEntries = [...postedEntries];
+      pendingEntries = [...pendingEntries];
     }
   }
 
@@ -685,6 +730,7 @@
       </div>
 
       <div class="pending-header" aria-hidden="true">
+        <span></span>
         <span>Date</span>
         <span>Description</span>
         <span class="align-right">Amount</span>
@@ -695,6 +741,12 @@
         {#each pendingEntries as entry}
           <details class="pending-row">
             <summary class="pending-summary">
+              <button
+                class="clearing-indicator clearing-{entry.clearingStatus ?? 'unmarked'}"
+                title={CLEARING_TOOLTIPS[entry.clearingStatus ?? 'unmarked']}
+                on:click={(e) => toggleClearingStatus(entry, e)}
+                type="button"
+              ></button>
               <div class="register-cell register-date">{shortDate(entry.date)}</div>
 
               <div class="register-cell register-description">
@@ -781,6 +833,7 @@
       </div>
     {:else}
       <div class="register-header" aria-hidden="true">
+        <span></span>
         <span>Date</span>
         <span>Description</span>
         <span class="align-right">Amount</span>
@@ -791,6 +844,12 @@
         {#each postedEntries as entry}
           <details class:opening-row={entry.isOpeningBalance} class="register-row">
             <summary class="register-summary">
+              <button
+                class="clearing-indicator clearing-{entry.clearingStatus ?? 'unmarked'}"
+                title={CLEARING_TOOLTIPS[entry.clearingStatus ?? 'unmarked']}
+                on:click={(e) => toggleClearingStatus(entry, e)}
+                type="button"
+              ></button>
               <div class="register-cell register-date">{shortDate(entry.date)}</div>
 
               <div class="register-cell register-description">
@@ -1082,7 +1141,7 @@
   .pending-header,
   .pending-summary {
     display: grid;
-    grid-template-columns: minmax(7.5rem, 0.75fr) minmax(0, 2fr) minmax(7.5rem, 0.75fr) minmax(8rem, 0.85fr);
+    grid-template-columns: 1.5rem minmax(7.5rem, 0.75fr) minmax(0, 2fr) minmax(7.5rem, 0.75fr) minmax(8rem, 0.85fr);
     gap: 1rem;
     align-items: center;
   }
@@ -1136,6 +1195,33 @@
     padding: 0.95rem 1rem;
     cursor: pointer;
     list-style: none;
+  }
+
+  .clearing-indicator {
+    width: 0.7rem;
+    height: 0.7rem;
+    padding: 0;
+    border: none;
+    border-radius: 50%;
+    cursor: pointer;
+    align-self: center;
+    flex-shrink: 0;
+    transition: background 0.15s, box-shadow 0.15s;
+  }
+
+  .clearing-cleared {
+    background: var(--ok, #0d7f58);
+    box-shadow: none;
+  }
+
+  .clearing-pending {
+    background: transparent;
+    box-shadow: inset 0 0 0 2px var(--warn, #ad6a00);
+  }
+
+  .clearing-unmarked {
+    background: rgba(10, 61, 89, 0.12);
+    box-shadow: none;
   }
 
   .register-summary::-webkit-details-marker,
@@ -1311,8 +1397,12 @@
 
     .register-summary,
     .pending-summary {
-      grid-template-columns: 1fr;
+      grid-template-columns: 1.5rem 1fr;
       gap: 0.45rem;
+    }
+
+    .clearing-indicator {
+      grid-row: 1;
     }
 
     .register-date {

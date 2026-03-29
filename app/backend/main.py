@@ -23,6 +23,7 @@ from models import (
     RuleReorderRequest,
     RuleUpdateRequest,
     StageApplyRequest,
+    ToggleStatusRequest,
     TrackedAccountUpsertRequest,
     UnknownScanRequest,
     UnknownStageRequest,
@@ -31,6 +32,7 @@ from models import (
     WorkspaceSelectRequest,
 )
 from services.backup_service import backup_file
+from services.header_parser import TransactionStatus, parse_header, set_header_status, HEADER_RE as _HEADER_RE
 from services.account_register_service import build_account_register
 from services.commodity_service import CommodityMismatchError
 from services.custom_csv_service import inspect_csv_bytes
@@ -437,6 +439,44 @@ def transactions_manual_transfer_resolution_apply(req: ManualTransferResolutionR
         return apply_manual_transfer_resolution(config, req.resolutionToken)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+_STATUS_CYCLE = {
+    TransactionStatus.unmarked: TransactionStatus.pending,
+    TransactionStatus.pending: TransactionStatus.cleared,
+    TransactionStatus.cleared: TransactionStatus.unmarked,
+}
+
+
+@app.post("/api/transactions/toggle-status")
+def transactions_toggle_status(req: ToggleStatusRequest) -> dict:
+    journal_path = Path(req.journalPath)
+    if not journal_path.is_file():
+        raise HTTPException(status_code=404, detail="Journal file not found")
+
+    parsed = parse_header(req.headerLine)
+    if parsed is None:
+        raise HTTPException(status_code=400, detail="Invalid header line")
+
+    next_status = _STATUS_CYCLE[parsed.status]
+    new_line = set_header_status(req.headerLine, next_status)
+
+    if not _HEADER_RE.match(new_line):
+        raise HTTPException(status_code=500, detail="Rewritten header is invalid")
+
+    text = journal_path.read_text(encoding="utf-8")
+    lines = text.splitlines()
+
+    match_indexes = [i for i, line in enumerate(lines) if line == req.headerLine]
+    if len(match_indexes) == 0:
+        raise HTTPException(status_code=404, detail="Header line not found in journal (stale data — try refreshing)")
+    if len(match_indexes) > 1:
+        raise HTTPException(status_code=409, detail="Ambiguous: multiple matching header lines found")
+
+    lines[match_indexes[0]] = new_line
+    journal_path.write_text("\n".join(lines) + ("\n" if text.endswith("\n") else ""), encoding="utf-8")
+
+    return {"newStatus": next_status.value, "newHeaderLine": new_line}
 
 
 @app.post("/api/workspace/bootstrap")

@@ -8,6 +8,7 @@ from functools import lru_cache
 
 from .commodity_service import CommodityMismatchError, commodity_label
 from .config_service import AppConfig, infer_account_kind
+from .header_parser import TransactionStatus
 from .journal_query_service import (
     amount_to_number,
     is_generated_opening_balance_transaction,
@@ -46,6 +47,9 @@ class RegisterEvent:
     transfer_peer_account_name: str | None = None
     manual_resolution_token: str | None = None
     manual_resolution_note: str | None = None
+    clearing_status: str = "unmarked"
+    header_line: str = ""
+    journal_path: str = ""
     affects_balance: bool = True
     counts_as_transaction: bool = True
 
@@ -645,6 +649,9 @@ def _pending_transfer_event_for_peer_account(
         transfer_peer_account_name=source_name or label,
         manual_resolution_token=manual_resolution_token,
         manual_resolution_note=_manual_resolution_note(transaction),
+        clearing_status=transaction.status.value,
+        header_line=transaction.header_line,
+        journal_path=transaction.source_journal,
         affects_balance=False,
         counts_as_transaction=False,
     )
@@ -688,6 +695,9 @@ def _direct_transfer_event_for_peer_account(
         transfer_state=None,
         transfer_peer_account_id=source_account_id,
         transfer_peer_account_name=source_name or label,
+        clearing_status=transaction.status.value,
+        header_line=transaction.header_line,
+        journal_path=transaction.source_journal,
         affects_balance=True,
         counts_as_transaction=True,
     )
@@ -773,6 +783,9 @@ def build_account_register(config: AppConfig, account_id: str) -> dict:
                     transfer_peer_account_name=transfer_peer_name,
                     manual_resolution_token=manual_resolution_token,
                     manual_resolution_note=_manual_resolution_note(transaction),
+                    clearing_status=transaction.status.value,
+                    header_line=transaction.header_line,
+                    journal_path=transaction.source_journal,
                     counts_as_transaction=not is_generated_opening,
                 )
             )
@@ -827,6 +840,9 @@ def build_account_register(config: AppConfig, account_id: str) -> dict:
                 "transferPeerAccountName": event.transfer_peer_account_name,
                 "manualResolutionToken": event.manual_resolution_token,
                 "manualResolutionNote": event.manual_resolution_note,
+                "clearingStatus": event.clearing_status,
+                "headerLine": event.header_line,
+                "journalPath": event.journal_path,
             }
         )
         if event.counts_as_transaction and not event.is_opening_balance:

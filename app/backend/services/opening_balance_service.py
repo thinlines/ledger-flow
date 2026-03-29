@@ -8,13 +8,9 @@ import re
 from .config_service import AppConfig, infer_account_kind
 
 
+from .header_parser import HEADER_RE
+
 TXN_START_RE = re.compile(r"^\d{4}[-/]\d{2}[-/]\d{2}")
-HEADER_RE = re.compile(
-    r"^(?P<date>\d{4}[-/]\d{2}[-/]\d{2})"
-    r"(?:\s+[*!])?"
-    r"(?:\s+\([^)]+\))?"
-    r"\s*(?P<payee>.*)$"
-)
 POSTING_RE = re.compile(r"^\s+([^\s].*?)(?:(?:\s{2,}|\t+)(.+))?$")
 META_RE = re.compile(r"^\s*;\s*([^:]+):\s*(.*)$")
 OPENING_BALANCES_EQUITY = "Equity:Opening-Balances"
