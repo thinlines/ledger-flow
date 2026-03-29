@@ -2,221 +2,225 @@
 
 ## Title
 
-Manual transaction entry with import matching
+Transaction clearing status: parse, display, and toggle
 
 ## Objective
 
-Users can add transactions manually on any tracked account to keep an up-to-date picture of their finances. When a CSV is later imported, the unknowns review offers to match imported transactions to existing manual entries — replacing the manual entry with the imported version while preserving the user's categorization and metadata.
+Users can see at a glance which transactions are bank-confirmed versus manually entered, and can toggle a transaction's clearing status directly from the register. The codebase gains a shared transaction-header parser, eliminating duplicated regex across six services.
 
 ## Scope
 
 ### Included
 
-- Backend endpoint to create a new transaction on any tracked account, written to the journal with a `:manual:` tag and inserted in date order.
-- UI entry point to add a transaction from the account register page.
-- Backend detection of manual-entry match candidates during `scan_unknowns`, returned alongside existing transfer suggestions.
-- Third toggle mode **{categorize, transfer, match}** on the unknowns review page.
-- Match mode shows a combobox of ranked candidates, with the best pre-selected when the system finds a strong match.
-- Match confirmation UI that surfaces amount deltas explicitly when the imported and manual amounts differ.
-- Apply logic that replaces the manual entry with the imported transaction's posting, carrying over the destination account, `:manual:` tag, and any user metadata from the manual entry.
-- Regression tests for creation, matching, replacement, and edge cases.
+- Shared header-parsing module that extracts the clearing flag (`*`, `!`, or unmarked) alongside date and payee. Replaces the duplicated `HEADER_RE` in `journal_query_service.py`, `import_service.py`, `manual_entry_service.py`, `unknowns_service.py`, `rule_reapply_service.py`, and `opening_balance_service.py`.
+- `ParsedTransaction` gains a `status` field (enum: `unmarked`, `pending`, `cleared`).
+- Register API returns the clearing status for each entry.
+- Register UI displays a visible status indicator per transaction row.
+- Backend endpoint to toggle a transaction's clearing status by rewriting the header line in the journal.
+- Frontend toggle control: clicking the status indicator cycles through states.
 
 ### Explicitly Excluded
 
-- Transaction editing (Feature 2 — separate task).
-- Configurable match window (deferred settings interface).
-- Split transactions in the manual entry form (simple two-posting entries only; split editing is Feature 2).
-- Automated/unconfirmed matching — user must always confirm via the review page.
+- Changing what the import pipeline writes (`ledger convert` already outputs `*`; no change).
+- Changing what manual entry writes (already outputs no flag; no change).
+- Migrating existing journal data.
+- Statement reconciliation (future sprint — will use metadata, not the clearing flag).
+- Bulk status operations (select multiple → mark cleared).
 
 ## System Behavior
 
-### 1. Creating a Manual Transaction
+### 1. Shared Header Parser
 
 **Inputs**
 
-- User action: clicks "Add transaction" on an account register page.
-- Form fields, in tab order:
-  1. **Date** — text input, defaults to today, accepts `YYYY-MM-DD` or common shorthands. Focused on open.
-  2. **Payee** — text input with typeahead from existing payees in the journal.
-  3. **Amount** — numeric input. Plain number; currency symbol is added automatically based on the account's commodity.
-  4. **Destination account** — `AccountCombobox` (the same component used in the unknowns review). Filters as the user types, navigable with arrow keys, selects with Enter/Tab. `--strict`-style warning shown inline when the typed value doesn't match a known account (warn, not block).
-- The entire form must be completable without the mouse. Tab advances between fields; Enter on the last field (or a submit shortcut) saves. Escape cancels and closes the form.
-- Autofocus lands on the date field. If the user's most common flow is "today, type payee, type amount, pick category, Enter" — that path should require zero clicks after opening the form.
+- A transaction header line (e.g., `2026/01/15 * UBER TRIP` or `2026/03/28 Coffee Shop`).
 
 **Logic**
 
-- Build a two-posting transaction block:
-  ```
-  2026/03/28 Uber
-      ; :manual:
-      Expenses:Transportation:Rides    $45.95
-      Assets:Wells:Fargo:Checking
-  ```
-- The tracked account's `ledger_account` is the balancing posting (amount inferred by ledger).
-- The `:manual:` tag is a standard ledger tag on the transaction header, not a KV pair.
-- Insert into the journal in date order using the existing `_merge_transaction_blocks` pattern from `import_service.py`.
-- Validate destination account against `accounts.dat`. Warn (do not block) on unknown accounts, matching the `--strict` principle.
+- New module `app/backend/services/header_parser.py` exports:
+  - `HEADER_RE` — compiled regex with named groups: `date`, `status` (optional `*` or `!`), `code` (optional parenthesized code), `payee`.
+  - `TransactionStatus` — string enum with values `unmarked`, `pending`, `cleared`.
+  - `parse_header(line: str) -> ParsedHeader | None` — returns a dataclass with `date: str`, `status: TransactionStatus`, `code: str | None`, `payee: str`.
+  - `set_header_status(line: str, new_status: TransactionStatus) -> str` — rewrites the header line with the new flag, preserving date, code, and payee.
+- All six services import from `header_parser` instead of defining their own `HEADER_RE`.
+- `TXN_START_RE` (used only for line-type detection, not parsing) may remain local or also be shared — implementer's judgment.
 
 **Outputs**
 
-- Transaction appears immediately in the account register as normal posted activity.
-- No import metadata is written (no `source_identity`, `import_account_id`, etc.) — the entry is purely manual.
+- No user-visible change from this step alone. Foundation for steps 2–4.
 
-### 2. Detecting Match Candidates During Unknowns Scan
+### 2. ParsedTransaction Status Field
 
 **Inputs**
 
-- `scan_unknowns` is called after a CSV import introduces new `Expenses:Unknown` transactions.
+- Journal lines parsed by `journal_query_service._parse_transaction`.
 
 **Logic**
 
-- New function `_populate_match_candidates(transaction_records, journal_transactions)`:
-  - For each unknown transaction on an import-enabled tracked account, scan the journal for `:manual:`-tagged transactions on the **same** tracked account.
-  - A manual entry is a candidate if its date is within ±`MAX_MANUAL_MATCH_DAYS` (3) of the imported transaction's date.
-  - Rank candidates by match quality (highest to lowest):
-    1. **Date + exact amount**: same absolute amount, dates within window.
-    2. **Date + close amount**: dates within window, amounts differ.
-    3. **Date + payee substring**: date within window, imported payee contains manual payee (case-insensitive) or vice versa.
-    4. **Payee substring only**: payee match exists but dates are outside the window (show as low-confidence candidates).
-  - Within each tier, sort by date proximity (closest first).
-  - Each candidate record includes: manual transaction's date, payee, amount, destination account, line range, and the computed match quality tier.
-- Attach `matchCandidates: [...]` to each unknown row that has at least one candidate.
-- Pre-select: if exactly one candidate is tier 1 (date + exact amount), mark it as `suggestedMatchId`.
+- `_parse_transaction` uses `parse_header` to extract the status.
+- `ParsedTransaction` gains `status: TransactionStatus` (default `unmarked`).
+- The status is derived from the header flag:
+  - `*` → `cleared`
+  - `!` → `pending`
+  - no flag → `unmarked`
 
 **Outputs**
 
-- Unknown rows gain `matchCandidates` array and optional `suggestedMatchId`.
-- Existing transfer suggestion and category suggestion logic is unchanged.
+- `ParsedTransaction` instances now carry their clearing status.
 
-### 3. Match Mode in Unknowns Review UI
+### 3. Register API: Surface Status
 
 **Inputs**
 
-- User toggles to "Match" in the three-way toggle on an unknown row that has `matchCandidates`.
+- `account_register_service.build_account_register` builds register rows.
 
 **Logic**
 
-- The toggle becomes `{categorize, transfer, match}`. The "Match" button is only enabled when `matchCandidates` is non-empty.
-- Match mode renders a combobox of candidates. Each option shows: date, payee, amount, and match quality indicator.
-- If `suggestedMatchId` exists, that candidate is pre-selected.
-- When the selected candidate's amount differs from the imported amount, a helper line shows: `"Manual entry: $45.95 · Import: $47.95 · Difference: $2.00"`. This is a trust moment — the user must see the delta before confirming.
-- The imported amount is canonical (bank wins). The manual entry's destination account carries over.
+- `RegisterEvent` gains `clearing_status: str` (one of `unmarked`, `pending`, `cleared`).
+- The status is read from the `ParsedTransaction` and passed through to the register row dict as `clearingStatus`.
 
 **Outputs**
 
-- `GroupSelection` gains `selectionType: 'match'` with `matchedManualTxnId` and `matchedManualLineRange`.
+- Register API response includes `clearingStatus` on each entry.
+- `ledger` CLI queries using `--cleared`, `--pending`, `--uncleared` produce results consistent with the flags in the journal. This is inherently true since we are reading and preserving the native ledger flags — no additional work required, but it is a system invariant to verify.
 
-### 4. Applying a Match
+### 4. Register UI: Display Status
 
 **Inputs**
 
-- User clicks Apply with one or more groups set to `selectionType: 'match'`.
+- `RegisterEntry` in the frontend gains `clearingStatus: 'unmarked' | 'pending' | 'cleared'`.
 
 **Logic**
 
-- For each match selection:
-  1. Read the manual entry's destination account and user metadata (tags, KV pairs, freeform comments — everything except system metadata like `source_identity`, `transfer_id`, etc.).
-  2. Replace the unknown posting's `Expenses:Unknown` account with the manual entry's destination account.
-  3. Add the `:manual:` tag to the imported transaction as provenance.
-  4. Copy user metadata from the manual entry to the imported transaction.
-  5. Remove the manual entry from the journal.
-- Operations are ordered: replacements before removals to maintain line stability.
-- If the manual entry has already been removed (race condition or stale scan), fail closed with a warning — do not apply a partial match.
+- Each transaction row displays a status indicator. Placement: leading position in the row, before the date.
+- Visual treatment:
+  - `cleared` (`*`): solid filled indicator — this transaction is bank-confirmed.
+  - `pending` (`!`): outlined or hollow indicator — flagged for attention.
+  - `unmarked`: subtle dot or empty — manual entry, no bank confirmation.
+- The indicator is a clickable toggle (see step 5).
+- Hover tooltip explains the state in plain language:
+  - `cleared`: "Bank-confirmed"
+  - `pending`: "Flagged"
+  - `unmarked`: "Manual entry"
+- Do not use the words "cleared", "pending", or "unmarked" in the default UI. Use finance-first language per `AGENT_RULES.md`.
 
 **Outputs**
 
-- The imported transaction is now categorized with the manual entry's destination.
-- The manual entry is gone from the journal.
-- The imported transaction carries the `:manual:` tag and any user metadata from the original manual entry.
+- Users can see at a glance which transactions come from bank imports versus manual entry.
+
+### 5. Toggle Clearing Status
+
+**Inputs**
+
+- User clicks the status indicator on a transaction row.
+
+**Logic**
+
+- Cycle order: `unmarked` → `pending` → `cleared` → `unmarked`.
+- Frontend calls `POST /api/transactions/toggle-status` with the transaction's identifying information.
+- Backend endpoint:
+  1. Reads the journal file.
+  2. Locates the transaction header line. The transaction is identified by date + payee + line content match (using the same approach as other journal-line-targeting operations in the codebase). The API payload must include enough context for unambiguous identification — at minimum the journal path and the exact header line text.
+  3. Calls `set_header_status(header_line, next_status)` to produce the rewritten line.
+  4. Writes the updated journal.
+  5. Returns the new status.
+- Frontend updates the indicator optimistically, rolls back on error.
+
+**Outputs**
+
+- The journal file reflects the new status flag.
+- The register row updates immediately.
+- `ledger` CLI queries reflect the change.
 
 ## System Invariants
 
-- A manual entry is a standard ledger transaction. It must be valid ledger syntax with a `:manual:` tag.
-- The `:manual:` tag is provenance — it records that the entry originated from manual input, even after import matching.
-- The imported amount is always canonical after matching. The manual amount is informational for match ranking only.
-- Match confirmation is mandatory. The system must never auto-match without user review.
-- Manual entries on non-import-enabled accounts are never match candidates. They are ordinary transactions.
-- The zero-sum posting invariant holds for all created transactions.
+- The clearing flag is a native ledger format feature. The app must never write a flag value that `ledger` or `hledger` would not recognize.
+- The flag is positional: it appears between the date and the payee on the header line, separated by whitespace. No other position is valid.
+- Toggling status must not alter any other part of the transaction: not the date, payee, code, metadata, postings, or whitespace in non-header lines.
+- The shared header parser must produce identical parse results to the existing per-service regexes for all transaction headers currently in the journal. This is a migration safety invariant.
+- Import pipeline output is not modified. `ledger convert` produces `*`; this is preserved as-is through `_annotated_raw_txn`.
+- Manual entry output is not modified. `build_manual_transaction_block` produces no flag; this is preserved.
 
 ## States
 
-### Add Transaction Form
-- **Default**: form visible with date pre-filled to today, other fields empty.
-- **Validation error**: destination account unknown — show warning, allow save.
-- **Submitting**: button disabled, spinner.
-- **Success**: form clears, register refreshes, new transaction visible.
-- **Error**: inline error message, form remains populated for retry.
+### Status Indicator
+- **Cleared**: solid indicator, tooltip "Bank-confirmed".
+- **Pending**: outlined indicator, tooltip "Flagged".
+- **Unmarked**: subtle/empty indicator, tooltip "Manual entry".
 
-### Match Mode in Unknowns Review
-- **Default (candidates exist)**: "Match" button enabled in toggle. Combobox shows ranked candidates.
-- **Default (no candidates)**: "Match" button disabled in toggle. Tooltip: "No manual entries found for this account."
-- **Candidate selected, amounts match**: standard confirmation state.
-- **Candidate selected, amounts differ**: delta helper displayed as trust cue.
-- **Apply success**: row resolved, manual entry removed.
-- **Apply error (stale manual entry)**: warning message, row remains unresolved.
+### Toggle Interaction
+- **Default**: indicator shows current status, clickable.
+- **Optimistic update**: indicator changes immediately on click.
+- **Success**: server confirms, no further change.
+- **Error**: indicator rolls back to previous state, brief inline error.
 
 ## Edge Cases
 
-- **Multiple manual entries match the same import**: all appear in the combobox, ranked by quality. User picks one. The others remain in the journal.
-- **One manual entry matches multiple imports**: each import's combobox shows the manual entry as a candidate independently. If the user matches the first import, the manual entry is removed. Subsequent imports will show a stale-entry warning on apply. The scan should be re-triggered after each apply batch to reflect current state.
-- **Manual entry with no destination (only tracked-account posting + unknown)**: not a valid candidate — a matched manual entry must have a non-unknown destination to carry over.
-- **Manual entry on a non-import-enabled account**: never a candidate. It is a regular transaction.
-- **Amount is zero**: valid for both manual entry and matching (e.g., refund that nets to zero). No special treatment.
-- **Payee is empty**: valid. Payee match tier does not apply; date + amount still works.
+- **Transaction with parenthesized code**: `2026/01/15 * (1234) UBER`. The toggle must preserve the code. `set_header_status` handles this via regex groups.
+- **Transaction with no payee**: `2026/01/15 *`. Valid ledger syntax. Toggle must handle empty payee without corruption.
+- **Multiple transactions with identical headers on the same date**: the API must use exact line content (or line number) for disambiguation. If ambiguous, fail closed — do not toggle the wrong transaction.
+- **Concurrent journal edit**: if the journal has changed between read and write (e.g., an import ran), the toggle should detect the mismatch and return an error rather than corrupting an unrelated line.
 
 ## Failure Behavior
 
-- If transaction creation fails (file write error, invalid journal syntax), the endpoint returns an error and the journal is unchanged.
-- If match apply encounters a removed manual entry, that group fails with a warning. Other groups in the same batch proceed.
-- If the journal cannot be parsed during `scan_unknowns`, match candidates are empty (fail open to no candidates, not fail open to bad matches).
+- If the header line cannot be found in the journal (stale data), the toggle endpoint returns an error. The frontend shows a brief message and prompts a page refresh.
+- If `set_header_status` produces invalid ledger syntax (should not happen with correct regex, but defensive), the endpoint must validate the output line against `HEADER_RE` before writing.
+- If the journal file cannot be written (permissions, disk), the endpoint returns an error and the journal is unchanged.
 
 ## Regression Risks
 
-- Manual entry creation must not interfere with import duplicate detection. Manual entries have no `source_identity` — the importer must not treat them as duplicates of imported transactions.
-- The `:manual:` tag must not break any existing journal parsing (posting detection, metadata extraction, amount inference).
-- Match apply must not corrupt transfer metadata on unrelated transactions. The removal of a manual entry must not shift line numbers for other queued operations.
-- The three-way toggle must not break existing category and transfer selection state or autosave behavior.
-- Existing transfer suggestion logic must be unaffected — match candidates are a parallel detection path, not a replacement.
+- **Header parser migration**: replacing six independent regexes with one shared parser could surface edge cases where the regexes diverged. Verify that all existing tests pass after the migration.
+- **Register payload change**: adding `clearingStatus` to the register API could break frontend code that destructures or iterates over entry keys. The field is additive (new key), so risk is low, but verify `pnpm check` passes.
+- **Toggle line targeting**: rewriting a header line in the journal is a new mutation pattern. Ensure it does not shift line numbers for other operations (import, match-apply, manual entry) that may reference line positions.
+- **Transfer state display**: the register already shows transfer states (pending, settled, bilateral). Clearing status is orthogonal — ensure the two indicators do not conflict visually or semantically. A transfer can be "pending" (transfer sense) and "cleared" (clearing sense) simultaneously.
 
 ## Acceptance Criteria
 
-- User can add a transaction from the WF Checking register page with date, payee, amount, and destination account. The transaction appears in the register immediately.
-- The created transaction has the `:manual:` tag in the journal and valid ledger syntax.
-- After importing a CSV that contains a transaction matching the manual entry (same account, ±3 days, same amount), the unknowns review shows the "Match" toggle enabled for that row.
-- The match combobox shows the manual entry as a candidate with a "date + exact amount" quality indicator, pre-selected.
-- When the user confirms the match and applies, the manual entry is removed from the journal and the imported transaction is categorized with the manual entry's destination account and carries the `:manual:` tag.
-- When amounts differ ($45.95 manual vs $47.95 import), the delta is displayed before confirmation. After apply, the imported amount ($47.95) is in the journal.
-- A manual entry on a non-import-enabled account never appears as a match candidate.
-- After matching, the `:manual:` tag is present on the imported transaction in the journal.
-- Existing category and transfer flows on the unknowns page continue to work identically.
-- All existing tests pass.
+- Imported transactions (those with `*` in the journal) display as bank-confirmed in the register.
+- Manual transactions (those with no flag) display as manual entries in the register.
+- User can click a transaction's status indicator to cycle through unmarked → flagged → bank-confirmed → unmarked.
+- After toggling, the journal file reflects the new flag and `ledger bal --cleared` / `--pending` / `--uncleared` produces matching results.
+- The toggle preserves all other transaction content (date, code, payee, metadata, postings).
+- All six services use the shared header parser. No service defines its own `HEADER_RE`.
+- All existing tests pass (`uv run pytest -q` and `pnpm check`).
+- Transfer state indicators continue to display correctly alongside clearing status.
+- Hover tooltips use plain language, not accounting terminology.
 
 ## Proposed Sequence
 
-1. **Define constants and helpers**: add `MAX_MANUAL_MATCH_DAYS = 3` to `transfer_service.py` (or a new `manual_entry_service.py` if cleaner). Add a helper to detect the `:manual:` tag on a parsed transaction.
-2. **Backend: create transaction endpoint** — `POST /api/transactions/create` accepting `{ journalPath, trackedAccountId, date, payee, amount, destinationAccount }`. Builds a two-posting transaction block with `:manual:` tag, inserts in date order using `_merge_transaction_blocks`, validates destination against `accounts.dat`. Returns the created transaction.
-3. **Frontend: add transaction form** — button on account register page opens a form. Date defaults to today. Destination uses `AccountCombobox` with unknown-value warning. On submit, calls the create endpoint and refreshes the register.
-4. **Backend: match candidate detection** — add `_populate_match_candidates()` in `unknowns_service.py`. During `scan_unknowns`, for each unknown row on an import-enabled account, find `:manual:` entries on the same account within ±3 days, rank by quality tier, attach as `matchCandidates` with optional `suggestedMatchId`.
-5. **Frontend: match toggle and combobox** — extend `GroupSelection` with `selectionType: 'match'`. Add third toggle button (disabled when no candidates). Render combobox with candidates and amount-delta helper.
-6. **Backend: apply match** — extend `apply_unknown_mappings` to handle `selectionType: 'match'`: replace the unknown posting with the manual entry's destination, add `:manual:` tag and user metadata to the imported transaction, remove the manual entry from the journal.
-7. **Tests** — creation (valid syntax, date ordering, `:manual:` tag present), matching (exact match pre-selected, close-amount ranked, no candidates on non-import account), apply (replacement + removal, stale-entry warning, metadata carryover), regression (existing category/transfer flows unaffected, import duplicate detection ignores manual entries).
+1. **Shared header parser module** — create `header_parser.py` with `HEADER_RE`, `TransactionStatus` enum, `ParsedHeader` dataclass, `parse_header()`, and `set_header_status()`. Write unit tests for all header variations (with/without flag, with/without code, empty payee).
+2. **Migrate consumers** — update all six services to import from `header_parser`. Remove their local `HEADER_RE` definitions. Run `uv run pytest -q` to verify no regressions.
+3. **ParsedTransaction status** — add `status: TransactionStatus` to `ParsedTransaction`. Update `_parse_transaction` in `journal_query_service.py` to populate it from `parse_header()`.
+4. **Register API** — add `clearing_status` to `RegisterEvent`, propagate to the register row dict as `clearingStatus`. Verify with a manual API call or test.
+5. **Register UI: display** — add `clearingStatus` to `RegisterEntry` type. Render the status indicator in each row with appropriate visual treatment and tooltip.
+6. **Toggle endpoint** — `POST /api/transactions/toggle-status`. Accepts journal path and header line text, locates the line, rewrites with `set_header_status`, returns new status.
+7. **Toggle UI** — wire the status indicator click to the toggle endpoint. Implement optimistic update with rollback.
+8. **Verification** — run `uv run pytest -q`, `pnpm check`, and manually verify register display and toggle behavior on both imported and manual transactions.
 
 ## Definition of Done
 
-- Users can create manual transactions from the register page on any tracked account.
-- The unknowns review page offers a "Match" mode when manual-entry candidates exist.
-- After matching, the manual entry is replaced by the import with correct categorization and `:manual:` provenance.
-- Amount deltas are surfaced before confirmation.
-- All existing tests pass. New tests cover creation, matching, apply, and edge cases.
-- Import duplicate detection is unaffected by manual entries.
+- Users can distinguish bank-confirmed from manually entered transactions at a glance in the register.
+- Users can toggle a transaction's clearing status from the register.
+- The journal reflects toggles correctly and `ledger` CLI queries match.
+- Six duplicated header regexes are consolidated into one shared module.
+- All existing tests pass. Transfer state display is unaffected.
+- No accounting terminology in default UI copy.
+
+## UX Notes
+
+- The status indicator should be visually lightweight — it's informational, not a call to action. It should not compete with the payee, amount, or transfer state for attention.
+- The click target should be generous (at least the size of the indicator plus padding) for comfortable toggling.
+- The tooltip is the primary explanation mechanism. The indicator itself is a learned affordance — keep it simple and consistent.
+- Consider the mobile/narrow viewport: the indicator should not be hidden or truncated. It may collapse to just the icon without tooltip on small screens.
 
 ## Out of Scope
 
-- Transaction editing, split management, and metadata editing (Feature 2).
-- Keyboard shortcut to open the add-transaction form (needs a broader keyboard shortcut plan first).
-- Configurable match window (deferred settings interface).
-- Automated matching without user confirmation.
-- Automated transactions (ledger's `=` syntax).
+- Statement reconciliation (future sprint — will use metadata like `; reconciled: YYYY-MM-DD`, not the clearing flag).
+- Bulk status operations.
+- Import pipeline changes.
+- Manual entry pipeline changes.
+- Configurable status cycle order.
+- Status-based filtering or grouping in the register (valid future enhancement, not this task).
 
 ## Replacement Rule
 

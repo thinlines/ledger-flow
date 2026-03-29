@@ -7,7 +7,7 @@ It is a planning document, not a strict delivery contract.
 
 ## Current Delivery Focus
 
-Give users full control over their financial data through the UI — manual transaction entry for real-time tracking, and transaction editing for corrections, metadata, and splits — without sacrificing import safety or data trust.
+Give users full control over their financial data through the UI — transaction status visibility, transaction editing for corrections and metadata, and statement reconciliation — without sacrificing import safety or data trust.
 
 ### Current Status
 
@@ -18,23 +18,31 @@ Give users full control over their financial data through the UI — manual tran
   - Bilateral auto-reconciliation is shipped (read-time detection, no journal writes).
   - Transfer suggestion matching works correctly after the CSV comment parsing fix.
 - Import-time auto-linking (bypassing the unknowns review queue) was considered and rejected — it reduces trust by removing the human confirmation step. The current flow (import → review → confirm → auto-reconcile display) is the correct trust model.
+- Manual transaction entry with import matching is shipped:
+  - Users can add transactions from the register with a `:manual:` tag.
+  - Unknowns review offers a "match" mode to match imports to manual entries.
+  - Match quality ranking, amount-delta display, and metadata carryover are complete.
 
 ### Delivery Sequence
 
-1. **Manual transaction entry** — users can insert new transactions on any tracked account, including import-enabled ones. Manually entered transactions are tagged with `:manual:` (standard ledger tag). On subsequent import, the importer offers to match manual entries to their imported counterparts via a new "match" mode in the unknowns review.
-2. **Transaction editing** — users can edit any transaction (imported or manual): payee, date, posting amounts, splits (add/remove/rebalance postings), and user metadata (tags, KV pairs, comments). System metadata stays hidden. Full split management from the first pass.
+1. ~~**Manual transaction entry**~~ — shipped.
+2. **Transaction clearing status** — parse the native ledger clearing flag (`*`, `!`, unmarked), display it in the register, and let users toggle it. Consolidates duplicated header-parsing regex across six services into a shared module.
+3. **Transaction editing** — users can edit any transaction (imported or manual): payee, date, posting amounts, splits (add/remove/rebalance postings), and user metadata (tags, KV pairs, comments). System metadata stays hidden. Full split management from the first pass.
 
-### Feature 1: Manual Entry + Import Matching
+### Feature 1: Manual Entry + Import Matching ✓
 
-- New transactions are written to the journal with a `:manual:` tag (ledger standard tag syntax, not a KV pair).
-- Supported on all tracked accounts, including import-enabled ones.
-- Import matching uses a ±3-day date window. (Long-term, this becomes configurable via a settings interface — not currently planned.)
-- The unknowns review page gains a third mode: **{categorize, transfer, match}**. "Match" shows a combobox of candidate manual entries, pre-selected if the system finds a strong match.
-- Match candidates are ordered by quality: date + exact amount (highest), date + close amount, payee substring + date, payee substring only (lowest).
-- When amounts differ (e.g., tip added, fee adjusted, authorization vs. posted), the confirmation UI surfaces the delta explicitly — this is a trust moment.
-- After match confirmation, the imported transaction replaces the manual entry. The `:manual:` tag carries over as provenance, and any user metadata from the manual entry transfers to the imported version.
+Shipped. See git history for implementation details.
 
-### Feature 2: Transaction Editing
+### Feature 2: Transaction Clearing Status
+
+- The ledger format's native clearing flags (`*` cleared, `!` pending, unmarked) represent data provenance: `*` means bank-confirmed (imported from CSV), unmarked means manually entered, `!` means user-flagged for attention.
+- The register displays a visible status indicator per transaction row, using plain-language tooltips ("Bank-confirmed", "Flagged", "Manual entry").
+- Users can toggle status by clicking the indicator (cycles: unmarked → flagged → bank-confirmed → unmarked).
+- Six duplicated `HEADER_RE` definitions across backend services are consolidated into a shared `header_parser.py` module.
+- No changes to the import pipeline or manual entry pipeline — both already write the correct flags.
+- Foundation for future statement reconciliation (which will use metadata, not the clearing flag).
+
+### Feature 3: Transaction Editing
 
 - Users can edit payee, date, and posting amounts on existing transactions.
 - Full split management: add, remove, and rebalance postings. The UI enforces the zero-sum constraint interactively.
@@ -64,4 +72,5 @@ These are valid ideas, but they are not current priorities:
 - Zero-based/envelope budgeting workflow
 - Long-range forecasting and goals
 - Detailed FI planner with retirement-timeline modeling
+- Statement reconciliation against print/PDF bank statements (will use metadata like `; reconciled: YYYY-MM-DD`, not the clearing flag)
 - Advanced reconciliation features beyond the current safe-edit workflow

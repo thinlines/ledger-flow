@@ -30,6 +30,20 @@ This reference defines the project's domain vocabulary. Use it when writing task
 
 **`settled_grouped`**: Multiple imported transfer rows that jointly settle across the same tracked-account pair (e.g., two microdeposits + one withdrawal summing to zero). A read-time presentation state only — not persisted to journals. Detection must be conservative; fail closed to `pending` if uncertain.
 
+## Clearing Status
+
+The ledger format's native transaction status flag, appearing between the date and the payee on the header line, or between the date and the code (in parentheses) if a code is present. Represents data provenance — how confident we are that a transaction occurred — not reconciliation state.
+
+**`cleared` (`*`)**: Bank-confirmed. Written by `ledger convert` during CSV import. Indicates the transaction originates from an institution statement.
+
+**`pending` (`!`)**: Flagged for attention. Set by the user via the register toggle. Indicates the user wants to revisit this transaction.
+
+**`unmarked` (no flag)**: Manual entry. Written by the manual transaction creation flow. Indicates the transaction was entered by the user without bank confirmation.
+
+These are orthogonal to transfer states (`pending`, `settled_grouped`, `bilateral_match`). A transaction can be transfer-pending and clearing-cleared simultaneously. Do not conflate the two systems.
+
+UI copy must use plain language: "Bank-confirmed", "Flagged", "Manual entry". Do not expose "cleared", "pending", or "unmarked" in default surfaces.
+
 ## Import Identity
 
 Each imported transaction carries metadata that makes import idempotent. These fields are written as comments in journal transaction blocks and are never rewritten after import:
