@@ -7,33 +7,40 @@ It is a planning document, not a strict delivery contract.
 
 ## Current Delivery Focus
 
-Eliminate the remaining transfer cases that still force users to edit journal files by hand, while preserving import safety and keeping the default UI finance-first.
+Give users full control over their financial data through the UI — manual transaction entry for real-time tracking, and transaction editing for corrections, metadata, and splits — without sacrificing import safety or data trust.
 
 ### Current Status
 
-- Unknown review already supports:
-  - direct transfers to manually tracked destination accounts
-  - pending import-match transfers when only one imported side exists
-  - automatic matching when one safe imported counterpart is available
-- Register readers suppress false pending work for balanced grouped ACH verification transfers.
-- Guided manual resolution is shipped: a user can resolve an eligible one-sided pending transfer from the transactions page without editing files.
-- Outstanding trust gap: when both sides of a transfer are independently imported and the dates differ by 1–7 days, the two pending rows are not linked. Both appear as separate negative-amount rows with identical-looking labels. The pending section is misleading and offers no clear resolution path.
-
-### Decision
-
-- Bilateral pending pairs (both sides imported, mutual peer references, same absolute amount, within date window) should be auto-reconciled at register read time with no journal writes, following the same read-time exclusion model as grouped-settlement detection.
-- Ambiguous pairs (multiple same-amount candidates in the same window) must fail closed to pending.
-- Manual link UI for ambiguous pairs is follow-on work after auto-reconciliation is proven safe.
-- A broad freeform manual transaction system is follow-on work after the transfer-specific flows are trusted.
+- Transfer-specific flows are complete:
+  - Unknown review supports direct transfers, pending import-match transfers, and automatic matching.
+  - Grouped-settlement trust fix is shipped.
+  - Guided manual resolution is shipped.
+  - Bilateral auto-reconciliation is shipped (read-time detection, no journal writes).
+  - Transfer suggestion matching works correctly after the CSV comment parsing fix.
+- Import-time auto-linking (bypassing the unknowns review queue) was considered and rejected — it reduces trust by removing the human confirmation step. The current flow (import → review → confirm → auto-reconcile display) is the correct trust model.
 
 ### Delivery Sequence
 
-1. ✅ Ship and verify the grouped-settlement trust fix.
-2. ✅ Add guided manual resolution for eligible one-sided pending imported transfers.
-3. Fix bilateral pending auto-reconciliation: two independently-imported sides of the same transfer should resolve without user action.
-4. Fix import-time matching so bilateral pairs do not arise (the pipeline should link them on the second import).
-5. Manual link UI for ambiguous bilateral pairs that cannot be auto-reconciled.
-6. Generalize into broader manual transaction entry only after transfer-specific flows are trusted.
+1. **Manual transaction entry** — users can insert new transactions on any tracked account, including import-enabled ones. Manually entered transactions are tagged with `:manual:` (standard ledger tag). On subsequent import, the importer offers to match manual entries to their imported counterparts via a new "match" mode in the unknowns review.
+2. **Transaction editing** — users can edit any transaction (imported or manual): payee, date, posting amounts, splits (add/remove/rebalance postings), and user metadata (tags, KV pairs, comments). System metadata stays hidden. Full split management from the first pass.
+
+### Feature 1: Manual Entry + Import Matching
+
+- New transactions are written to the journal with a `:manual:` tag (ledger standard tag syntax, not a KV pair).
+- Supported on all tracked accounts, including import-enabled ones.
+- Import matching uses a ±3-day date window. (Long-term, this becomes configurable via a settings interface — not currently planned.)
+- The unknowns review page gains a third mode: **{categorize, transfer, match}**. "Match" shows a combobox of candidate manual entries, pre-selected if the system finds a strong match.
+- Match candidates are ordered by quality: date + exact amount (highest), date + close amount, payee substring + date, payee substring only (lowest).
+- When amounts differ (e.g., tip added, fee adjusted, authorization vs. posted), the confirmation UI surfaces the delta explicitly — this is a trust moment.
+- After match confirmation, the imported transaction replaces the manual entry. The `:manual:` tag carries over as provenance, and any user metadata from the manual entry transfers to the imported version.
+
+### Feature 2: Transaction Editing
+
+- Users can edit payee, date, and posting amounts on existing transactions.
+- Full split management: add, remove, and rebalance postings. The UI enforces the zero-sum constraint interactively.
+- User metadata: tags (`:vacation:`), KV pairs (`; project: kitchen-remodel`), and freeform comments are visible and editable.
+- System metadata (import identities, transfer state, source hashes) stays hidden from the UI.
+- `--strict`-style validation at the UI layer: autocomplete for accounts, tags, and metadata keys drawn from the journal; warn before writing unknown values. Preventive, not after-the-fact.
 
 ### Constraints
 
@@ -42,15 +49,16 @@ Eliminate the remaining transfer cases that still force users to edit journal fi
 - Keep transfer-resolution logic, import-identity generation, and journal writes in backend services.
 - Hide transfer-clearing and journal-file details from default UI copy.
 - Fail closed when the system cannot safely protect against future duplicate imports.
-- Do not solve this by broadening into many-to-many transfer matching or debt-payment decomposition.
+- The `:manual:` tag is standard ledger metadata — no custom extensions to the format.
 
 ## Deferred for Now
 
 These are valid ideas, but they are not current priorities:
 
+- Settings interface for configurable parameters (e.g., match date window)
 - Merchant management UI
 - Expanding the rule language beyond the current limited matching model
-- debt-payment decomposition and richer liability servicing workflows such as principal-vs-interest splits, amortization guidance, and lender-specific debt management beyond pure transfer handling
+- Debt-payment decomposition and richer liability servicing workflows such as principal-vs-interest splits, amortization guidance, and lender-specific debt management beyond pure transfer handling
 - Declarative CSV import row rules for advanced conditional parsing or categorization, inspired by hledger-style `if` matching, unless they can be introduced without making account setup feel heavy or surprising
 - Full budgeting system
 - Zero-based/envelope budgeting workflow

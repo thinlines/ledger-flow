@@ -70,7 +70,15 @@ This document records stable product and architecture choices that explain why t
 
 **Implication:** Accounts UI must expose asset-vs-liability choice directly, subtype state must be trustworthy instead of silently inferred, and balance-sheet workflows belong in Accounts rather than being pushed into rules or review.
 
-## 9. Prefer Journal-Derived Opening Balance Offsets Over New Link State
+## 9. Require Human Confirmation for Transfer Matching
+
+**Decision:** The import pipeline must not auto-link bilateral transfer pairs. All transfer matches flow through the unknowns review queue for user confirmation.
+
+**Why:** Import-time auto-linking was considered when both sides of a transfer are independently imported with different dates. It was rejected because skipping the review step removes the human confirmation checkpoint, reducing trust. The unknowns review page is the trust boundary for categorization and matching decisions.
+
+**Implication:** Bilateral pairs that arise from separate imports are handled by read-time auto-reconciliation (display-only, no journal writes) and resolved permanently when the user confirms the match through the unknowns review. The flow is: import → review → confirm → reconcile.
+
+## 10. Prefer Journal-Derived Opening Balance Offsets Over New Link State
 
 **Decision:** For the current financed-liability cut, the product should let users choose an opening-balance offset account without introducing a new persistent pairing or account-relationship model.
 
