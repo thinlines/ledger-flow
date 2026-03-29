@@ -43,16 +43,26 @@ class ImportCandidateRemoveRequest(BaseModel):
     csvPath: str
 
 
+class ManualTransactionRequest(BaseModel):
+    trackedAccountId: str
+    date: str = Field(pattern=DATE_PATTERN)
+    payee: str = ""
+    amount: str = Field(min_length=1)
+    destinationAccount: str = Field(min_length=1)
+
+
 class UnknownScanRequest(BaseModel):
     journalPath: str
 
 
 class UnknownSelection(BaseModel):
     groupKey: str
-    selectionType: Literal["category", "transfer"]
+    selectionType: Literal["category", "transfer", "match"]
     categoryAccount: str | None = None
     targetTrackedAccountId: str | None = None
     matchedCandidateId: str | None = None
+    matchedManualTxnId: str | None = None
+    matchedManualLineRange: list[int] | None = None
 
 
 class UnknownStageRequest(BaseModel):
@@ -173,6 +183,14 @@ class CustomImportAccountUpsertRequest(BaseModel):
     openingBalanceDate: str | None = Field(default=None, pattern=DATE_PATTERN)
     openingBalanceOffsetAccountId: str | None = None
     customProfile: CustomCsvProfileRequest
+
+
+class ManualTransactionCreateRequest(BaseModel):
+    trackedAccountId: str
+    date: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
+    payee: str = Field(min_length=1)
+    amount: str = Field(min_length=1)
+    destinationAccount: str = Field(min_length=1)
 
 
 class TrackedAccountUpsertRequest(BaseModel):

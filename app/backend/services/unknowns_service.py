@@ -8,6 +8,12 @@ from pathlib import Path
 from uuid import uuid4
 
 from .config_service import infer_account_kind
+from .manual_entry_service import (
+    _extract_user_metadata_lines,
+    _parse_manual_entry_destination,
+    has_manual_tag,
+    populate_match_candidates,
+)
 from .rules_service import extract_set_account, find_matching_rule
 from .transfer_service import (
     MAX_TRANSFER_MATCH_DAYS,
@@ -374,6 +380,7 @@ def scan_unknowns(
         tracked_accounts or {},
     )
     _populate_transfer_suggestions(transaction_records)
+    populate_match_candidates(groups, journal_path, import_accounts or {}, tracked_accounts or {})
 
     for group in groups:
         for txn in group["txns"]:
@@ -690,6 +697,68 @@ def apply_unknown_mappings(
             )
             processed_line_nos.add(int(txn["lineNo"]))
 
+    # Match selections: replace unknown posting with manual entry's destination, remove manual entry.
+    manual_removal_ranges: list[tuple[int, int, str]] = []  # (start_idx, end_idx, group_key)
+    match_tag_start_lines: list[int] = []  # 0-indexed start lines that need :manual: tag
+    for group in scanned_groups:
+        selection = selections.get(group["groupKey"])
+        if not selection or selection.get("selectionType") != "match":
+            continue
+
+        matched_manual_line_range = selection.get("matchedManualLineRange")
+        if not matched_manual_line_range or len(matched_manual_line_range) < 2:
+            warnings.append({"groupKey": group["groupKey"], "warning": "Match selection is missing manual entry line range"})
+            continue
+
+        manual_start = int(matched_manual_line_range[0])
+        manual_end = int(matched_manual_line_range[1])
+
+        if manual_start < 1 or manual_end > len(original_lines):
+            warnings.append({"groupKey": group["groupKey"], "warning": "Manual entry is no longer available (line range out of bounds)"})
+            continue
+
+        manual_lines = original_lines[manual_start - 1 : manual_end]
+        if not has_manual_tag(manual_lines):
+            warnings.append({"groupKey": group["groupKey"], "warning": "Manual entry is no longer available (missing :manual: tag)"})
+            continue
+
+        source_ledger = group.get("sourceLedgerAccount", "")
+        destination = _parse_manual_entry_destination(manual_lines, source_ledger)
+        if not destination:
+            warnings.append({"groupKey": group["groupKey"], "warning": "Manual entry does not have a usable destination account"})
+            continue
+
+        user_metadata_lines = _extract_user_metadata_lines(manual_lines)
+        metadata_updates: dict[str, str | None] = {}
+        for meta_line in user_metadata_lines:
+            mm = META_RE.match(meta_line)
+            if mm:
+                metadata_updates[mm.group(1).strip().lower()] = mm.group(2).strip()
+
+        for txn in group["txns"]:
+            if txn["lineNo"] in processed_line_nos:
+                warnings.append(
+                    {"groupKey": group["groupKey"], "warning": f"Line {txn['lineNo']} was already resolved"}
+                )
+                continue
+
+            _queue_operation(
+                operations_by_start,
+                _build_operation(
+                    group_key=group["groupKey"],
+                    transaction_start_line=int(txn["transactionStartLine"]),
+                    transaction_end_line=int(txn["transactionEndLine"]),
+                    posting_line_no=int(txn["lineNo"]),
+                    target_account=destination,
+                    expected_unknown=True,
+                    metadata_updates=metadata_updates,
+                ),
+            )
+            match_tag_start_lines.append(int(txn["transactionStartLine"]) - 1)
+            processed_line_nos.add(int(txn["lineNo"]))
+
+        manual_removal_ranges.append((manual_start - 1, manual_end, group["groupKey"]))
+
     lines = list(original_lines)
     applied_count = 0
     for _, operation in sorted(operations_by_start.items(), key=lambda item: item[0], reverse=True):
@@ -698,6 +767,56 @@ def apply_unknown_mappings(
             warnings.append({"groupKey": operation["groupKey"], "warning": warning})
             continue
         applied_count += 1
+
+    # Insert :manual: tag into matched imported transactions (before removing manual entries).
+    # Process in reverse order to preserve line indices.
+    for start_idx in sorted(set(match_tag_start_lines), reverse=True):
+        if start_idx >= len(lines):
+            continue
+        # Check if :manual: tag already exists in this transaction block.
+        has_tag = False
+        for i in range(start_idx + 1, min(start_idx + 20, len(lines))):
+            if TXN_START_RE.match(lines[i]):
+                break
+            if ":manual:" in lines[i]:
+                has_tag = True
+                break
+        if not has_tag:
+            lines.insert(start_idx + 1, "    ; :manual:")
+
+    # Remove matched manual entries in reverse order to preserve line stability.
+    for start_idx, end_idx, group_key in sorted(manual_removal_ranges, key=lambda r: r[0], reverse=True):
+        # Find the manual entry by scanning for :manual: tag near expected position.
+        # Lines may have shifted due to metadata inserts and tag additions above.
+        # Search for the manual entry header and tag within a reasonable window.
+        found_start = None
+        for i in range(max(0, start_idx - 10), min(len(lines), start_idx + 10)):
+            if TXN_START_RE.match(lines[i]):
+                # Check if this transaction has :manual: tag
+                for j in range(i + 1, min(i + 10, len(lines))):
+                    if TXN_START_RE.match(lines[j]):
+                        break
+                    if ":manual:" in lines[j]:
+                        found_start = i
+                        break
+                if found_start is not None:
+                    break
+
+        if found_start is None:
+            continue
+
+        # Find the end of this transaction block.
+        found_end = len(lines)
+        for i in range(found_start + 1, len(lines)):
+            if TXN_START_RE.match(lines[i]):
+                found_end = i
+                break
+
+        # Remove trailing blank lines.
+        while found_end < len(lines) and not lines[found_end].strip():
+            found_end += 1
+
+        lines[found_start:found_end] = []
 
     journal_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return applied_count, warnings

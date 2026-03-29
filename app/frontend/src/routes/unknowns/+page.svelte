@@ -42,6 +42,19 @@
     candidateUnknownLineNo?: number | null;
   };
 
+  type MatchCandidate = {
+    manualTxnId: string;
+    date: string;
+    payee: string;
+    amount: string | null;
+    destinationAccount: string;
+    lineStart: number;
+    lineEnd: number;
+    matchTier: number;
+    matchQuality: string;
+    dateDiff: number;
+  };
+
   type TxnRow = {
     txnId: string;
     transactionId?: string;
@@ -56,6 +69,8 @@
     sourceTrackedAccountKind?: string | null;
     transferSuggestion?: TransferSuggestion | null;
     transferMatchCount?: number;
+    matchCandidates?: MatchCandidate[];
+    suggestedMatchId?: string | null;
   };
 
   type UnknownGroup = {
@@ -75,10 +90,12 @@
   };
 
   type GroupSelection = {
-    selectionType: 'category' | 'transfer';
+    selectionType: 'category' | 'transfer' | 'match';
     categoryAccount?: string;
     targetTrackedAccountId?: string;
     matchedCandidateId?: string;
+    matchedManualTxnId?: string;
+    matchedManualLineRange?: [number, number];
   };
 
   type UnknownStage = {
@@ -450,11 +467,14 @@
     status: 'ready' | 'needs';
     statusLabel: string;
     matchedRuleId: string | null;
-    selectionType: 'category' | 'transfer';
+    selectionType: 'category' | 'transfer' | 'match';
     categoryAccount: string;
     transferTargetAccountId: string;
     transferDestinationAccounts: TrackedAccount[];
     transferHelper: { tone: 'muted' | 'warn'; text: string } | null;
+    matchCandidates: MatchCandidate[];
+    selectedMatchId: string;
+    matchAmountDelta: { manual: string; imported: string; diff: string } | null;
   };
 
   let reviewRowsData: ReviewRow[] = [];
@@ -500,6 +520,20 @@
       : null;
   }
 
+  function groupMatchCandidates(group: UnknownGroup): MatchCandidate[] {
+    for (const txn of group.txns) {
+      if (txn.matchCandidates?.length) return txn.matchCandidates;
+    }
+    return [];
+  }
+
+  function groupSuggestedMatchId(group: UnknownGroup): string | null {
+    for (const txn of group.txns) {
+      if (txn.suggestedMatchId) return txn.suggestedMatchId;
+    }
+    return null;
+  }
+
   function buildDefaultSelection(group: UnknownGroup): GroupSelection {
     const transferSuggestion = groupTransferSuggestion(group);
     if (transferSuggestion) {
@@ -508,6 +542,20 @@
         targetTrackedAccountId: transferSuggestion.targetTrackedAccountId,
         matchedCandidateId: transferSuggestion.candidateTxnId
       };
+    }
+
+    // Auto-select match mode if there's a strong match suggestion.
+    const candidates = groupMatchCandidates(group);
+    const suggestedId = groupSuggestedMatchId(group);
+    if (suggestedId && candidates.length) {
+      const suggested = candidates.find((c) => c.manualTxnId === suggestedId);
+      if (suggested) {
+        return {
+          selectionType: 'match',
+          matchedManualTxnId: suggestedId,
+          matchedManualLineRange: [suggested.lineStart, suggested.lineEnd]
+        };
+      }
     }
 
     return {
@@ -526,7 +574,7 @@
   function groupMode(
     group: UnknownGroup,
     currentSelections: Record<string, GroupSelection> = selections
-  ): 'category' | 'transfer' {
+  ): 'category' | 'transfer' | 'match' {
     return selectionFor(group, currentSelections).selectionType;
   }
 
@@ -551,6 +599,9 @@
     currentSelections: Record<string, GroupSelection> = selections
   ): 'ready' | 'needs' {
     const selection = selectionFor(group, currentSelections);
+    if (selection.selectionType === 'match') {
+      return selection.matchedManualTxnId?.trim() ? 'ready' : 'needs';
+    }
     if (selection.selectionType === 'transfer') {
       return selection.targetTrackedAccountId?.trim() ? 'ready' : 'needs';
     }
@@ -562,7 +613,9 @@
     currentSelections: Record<string, GroupSelection> = selections
   ): string {
     if (groupStatus(group, currentSelections) === 'ready') return 'Ready';
-    return groupMode(group, currentSelections) === 'transfer' ? 'Needs transfer' : 'Needs category';
+    const mode = groupMode(group, currentSelections);
+    if (mode === 'match') return 'Needs match';
+    return mode === 'transfer' ? 'Needs transfer' : 'Needs category';
   }
 
   function buildReviewRows(
@@ -581,7 +634,25 @@
       const categoryAccount = selectionType === 'category' ? (selection.categoryAccount ?? '').trim() : '';
       const destinationAccounts = transferDestinationAccounts(group, currentTrackedAccounts);
 
+      const candidates = groupMatchCandidates(group);
+      const selectedMatchId =
+        selectionType === 'match' ? (selection.matchedManualTxnId ?? '').trim() : '';
+      const selectedCandidate = candidates.find((c) => c.manualTxnId === selectedMatchId) ?? null;
+
       for (const txn of group.txns) {
+        let matchAmountDelta: ReviewRow['matchAmountDelta'] = null;
+        if (selectionType === 'match' && selectedCandidate && txn.amount) {
+          const importNum = parseFloat(txn.amount.replace(/[$,]/g, ''));
+          const manualNum = selectedCandidate.amount ? parseFloat(selectedCandidate.amount) : null;
+          if (manualNum !== null && !isNaN(importNum) && !isNaN(manualNum) && Math.abs(importNum) !== Math.abs(manualNum)) {
+            matchAmountDelta = {
+              manual: selectedCandidate.amount ?? '?',
+              imported: txn.amount,
+              diff: (Math.abs(importNum) - Math.abs(manualNum)).toFixed(2)
+            };
+          }
+        }
+
         rows.push({
           rowId: txn.txnId,
           group,
@@ -593,7 +664,10 @@
           categoryAccount,
           transferTargetAccountId,
           transferDestinationAccounts: destinationAccounts,
-          transferHelper: transferHelperText(group, txn, currentSelections, currentTrackedAccounts)
+          transferHelper: transferHelperText(group, txn, currentSelections, currentTrackedAccounts),
+          matchCandidates: candidates,
+          selectedMatchId,
+          matchAmountDelta
         });
       }
     }
@@ -615,8 +689,26 @@
             targetTrackedAccountId: string;
             matchedCandidateId?: string;
           }
+        | {
+            groupKey: string;
+            selectionType: 'match';
+            matchedManualTxnId: string;
+            matchedManualLineRange: [number, number];
+          }
       >
     >((payload, [groupKey, selection]) => {
+      if (selection.selectionType === 'match') {
+        const matchedManualTxnId = (selection.matchedManualTxnId ?? '').trim();
+        if (!matchedManualTxnId || !selection.matchedManualLineRange) return payload;
+        payload.push({
+          groupKey,
+          selectionType: 'match',
+          matchedManualTxnId,
+          matchedManualLineRange: selection.matchedManualLineRange
+        });
+        return payload;
+      }
+
       if (selection.selectionType === 'transfer') {
         const targetTrackedAccountId = (selection.targetTrackedAccountId ?? '').trim();
         if (!targetTrackedAccountId) return payload;
@@ -1117,12 +1209,21 @@
     await persistRule({ allowCreateAccountModal: true });
   }
 
-  function setGroupMode(group: UnknownGroup, selectionType: 'category' | 'transfer') {
+  function setGroupMode(group: UnknownGroup, selectionType: 'category' | 'transfer' | 'match') {
     const current = selectionFor(group);
     const transferSuggestion = groupTransferSuggestion(group);
     let nextSelection: GroupSelection;
 
-    if (selectionType === 'transfer') {
+    if (selectionType === 'match') {
+      const candidates = groupMatchCandidates(group);
+      const suggestedId = groupSuggestedMatchId(group);
+      const suggested = suggestedId ? candidates.find((c) => c.manualTxnId === suggestedId) : candidates[0];
+      nextSelection = {
+        selectionType: 'match',
+        matchedManualTxnId: suggested?.manualTxnId ?? '',
+        matchedManualLineRange: suggested ? [suggested.lineStart, suggested.lineEnd] : undefined
+      };
+    } else if (selectionType === 'transfer') {
       nextSelection = {
         selectionType,
         targetTrackedAccountId:
@@ -1175,6 +1276,31 @@
       }
     };
     queueStageAutosave();
+  }
+
+  function setMatchForGroup(group: UnknownGroup, manualTxnId: string) {
+    const candidates = groupMatchCandidates(group);
+    const candidate = candidates.find((c) => c.manualTxnId === manualTxnId);
+    clearApplyFeedback();
+    selections = {
+      ...selections,
+      [group.groupKey]: {
+        selectionType: 'match',
+        matchedManualTxnId: manualTxnId,
+        matchedManualLineRange: candidate ? [candidate.lineStart, candidate.lineEnd] : undefined
+      }
+    };
+    queueStageAutosave();
+  }
+
+  function matchQualityLabel(quality: string): string {
+    switch (quality) {
+      case 'date_exact_amount': return 'Exact match';
+      case 'date_close_amount': return 'Close amount';
+      case 'date_payee': return 'Payee match';
+      case 'payee_only': return 'Payee only';
+      default: return quality;
+    }
   }
 
   function transferDestinationAccounts(
@@ -1662,9 +1788,53 @@
                   >
                     Transfer
                   </button>
+                  <button
+                    class="btn btn-small"
+                    type="button"
+                    class:active-filter={row.selectionType === 'match'}
+                    disabled={row.matchCandidates.length === 0}
+                    title={row.matchCandidates.length === 0 ? 'No manual entries found for this account.' : ''}
+                    on:click={() => setGroupMode(row.group, 'match')}
+                  >
+                    Match
+                  </button>
                 </div>
 
-                {#if row.selectionType === 'transfer'}
+                {#if row.selectionType === 'match'}
+                  <div class="match-fields">
+                    <div class="field">
+                      <label for={`match-${row.rowId}`}>Manual entry</label>
+                      <select
+                        id={`match-${row.rowId}`}
+                        value={row.selectedMatchId}
+                        on:change={(event) =>
+                          setMatchForGroup(row.group, (event.currentTarget as HTMLSelectElement).value)}
+                      >
+                        <option value="">Choose manual entry...</option>
+                        {#each row.matchCandidates as candidate}
+                          <option value={candidate.manualTxnId}>
+                            {candidate.date} · {candidate.payee || '(no payee)'} · {candidate.amount ?? '?'} · {matchQualityLabel(candidate.matchQuality)}
+                          </option>
+                        {/each}
+                      </select>
+                    </div>
+
+                    {#if row.matchAmountDelta}
+                      <p class="muted match-delta-hint">
+                        Manual entry: {row.matchAmountDelta.manual} · Import: {row.matchAmountDelta.imported} · Difference: {row.matchAmountDelta.diff}
+                      </p>
+                    {/if}
+
+                    {#if row.selectedMatchId}
+                      {@const selected = row.matchCandidates.find((c) => c.manualTxnId === row.selectedMatchId)}
+                      {#if selected}
+                        <p class="muted match-dest-hint">
+                          Will categorize as: {selected.destinationAccount}
+                        </p>
+                      {/if}
+                    {/if}
+                  </div>
+                {:else if row.selectionType === 'transfer'}
                   <div class="transfer-fields">
                     <div class="field">
                       <label for={`transfer-${row.rowId}`}>Destination account</label>
@@ -1707,6 +1877,8 @@
                   <button class="btn" type="button" on:click={() => openRuleModal(row.group.groupKey)}>
                     {row.matchedRuleId ? 'Edit rule' : 'Save rule'}
                   </button>
+                {:else if row.selectionType === 'match'}
+                  <p class="muted row-note transfer-rule-note">Matching replaces the manual entry with the import.</p>
                 {:else}
                   <p class="muted row-note transfer-rule-note">Transfers are reviewed once and do not create rules.</p>
                 {/if}
@@ -2343,5 +2515,21 @@
     .existing-rule-item {
       grid-template-columns: 1fr;
     }
+  }
+
+  .match-fields {
+    display: grid;
+    gap: 0.55rem;
+  }
+
+  .match-delta-hint {
+    padding: 0.4rem 0.6rem;
+    background: rgba(220, 160, 40, 0.08);
+    border-radius: 0.5rem;
+    font-size: 0.85rem;
+  }
+
+  .match-dest-hint {
+    font-size: 0.85rem;
   }
 </style>

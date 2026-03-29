@@ -85,7 +85,7 @@
     <ChevronsUpDownIcon class="size-4 shrink-0 opacity-50" />
   </Popover.Trigger>
 
-  <Popover.Content class="w-[22rem] max-w-[calc(100vw-2rem)] p-0" align="start">
+  <Popover.Content class="w-88 max-w-[calc(100vw-2rem)] p-0" align="start">
     <Command.Root shouldFilter={false}>
       <div role="presentation" on:keydown={handleInputKeydown}>
         <Command.Input bind:value={query} placeholder="Search account..." />

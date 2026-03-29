@@ -4,6 +4,7 @@
   import { page } from '$app/stores';
   import { onMount } from 'svelte';
   import { apiGet, apiPost } from '$lib/api';
+  import AccountCombobox from '$lib/components/AccountCombobox.svelte';
   import { describeBalanceTrust } from '$lib/account-trust';
   import { normalizeCurrencyCode } from '$lib/currency-format';
 
@@ -274,7 +275,10 @@
     workspaceName = state.workspaceName ?? '';
     if (!initialized) return;
 
-    const accountsData = await apiGet<{ trackedAccounts: TrackedAccount[] }>('/api/tracked-accounts');
+    const [accountsData] = await Promise.all([
+      apiGet<{ trackedAccounts: TrackedAccount[] }>('/api/tracked-accounts'),
+      loadAllAccounts()
+    ]);
     trackedAccounts = accountsData.trackedAccounts;
     if (trackedAccounts.length === 0) return;
 
@@ -347,6 +351,83 @@
     }
   }
 
+  // --- Add Transaction Form ---
+  let showAddForm = false;
+  let addDate = '';
+  let addPayee = '';
+  let addAmount = '';
+  let addDestination = '';
+  let addError = '';
+  let addSubmitting = false;
+  let addSuccess = '';
+  let addDateEl: HTMLInputElement | null = null;
+  let allAccounts: string[] = [];
+
+  function todayISO(): string {
+    const d = new Date();
+    const yyyy = d.getFullYear();
+    const mm = String(d.getMonth() + 1).padStart(2, '0');
+    const dd = String(d.getDate()).padStart(2, '0');
+    return `${yyyy}-${mm}-${dd}`;
+  }
+
+  function openAddForm() {
+    addDate = todayISO();
+    addPayee = '';
+    addAmount = '';
+    addDestination = '';
+    addError = '';
+    addSuccess = '';
+    showAddForm = true;
+    setTimeout(() => addDateEl?.focus(), 50);
+  }
+
+  function closeAddForm() {
+    showAddForm = false;
+    addError = '';
+  }
+
+  function handleAddFormKeydown(event: KeyboardEvent) {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      closeAddForm();
+    }
+  }
+
+  async function submitAddTransaction() {
+    if (!selectedAccountId || !addDate || !addPayee.trim() || !addAmount.trim() || !addDestination.trim()) {
+      addError = 'All fields are required.';
+      return;
+    }
+    addError = '';
+    addSubmitting = true;
+    try {
+      const result = await apiPost<{ created: boolean; warning?: string | null }>('/api/transactions/create', {
+        trackedAccountId: selectedAccountId,
+        date: addDate,
+        payee: addPayee.trim(),
+        amount: addAmount.trim(),
+        destinationAccount: addDestination.trim()
+      });
+      addSuccess = `Added: ${addPayee.trim()} on ${addDate}${result.warning ? ` (${result.warning})` : ''}`;
+      showAddForm = false;
+      await loadRegister(selectedAccountId);
+    } catch (e) {
+      addError = String(e);
+    } finally {
+      addSubmitting = false;
+    }
+  }
+
+  async function loadAllAccounts() {
+    try {
+      const data = await apiGet<{ accounts: string[] }>('/api/accounts');
+      allAccounts = data.accounts;
+    } catch {
+      // Non-critical, combobox will work without pre-loaded accounts
+    }
+  }
+
   $: selectedAccount = trackedAccounts.find((account) => account.id === selectedAccountId) ?? null;
   $: postedEntries = register?.entries.filter((entry) => entry.transferState !== 'pending') ?? [];
   $: pendingEntries = register?.entries.filter((entry) => entry.transferState === 'pending') ?? [];
@@ -362,7 +443,7 @@
     loading = true;
     error = '';
     try {
-      await load();
+      await Promise.all([load(), loadAllAccounts()]);
     } catch (e) {
       error = String(e);
     } finally {
@@ -429,6 +510,7 @@
       </div>
 
       <div class="hero-actions">
+        <button class="btn" type="button" on:click={openAddForm}>Add transaction</button>
         {#if primaryAction}
           <a class="btn btn-primary" href={primaryAction.href}>{primaryAction.label}</a>
         {/if}
@@ -448,6 +530,86 @@
       <p class="eyebrow">Resolved</p>
       <h3>Transfer resolved manually</h3>
       <p class="section-note">{manualResolutionSuccess} The missing side was added because no imported counterpart was expected.</p>
+    </section>
+  {/if}
+
+  {#if addSuccess}
+    <section class="view-card result-card">
+      <p class="eyebrow">Transaction Added</p>
+      <h3>Manual entry created</h3>
+      <p class="section-note">{addSuccess}</p>
+    </section>
+  {/if}
+
+  {#if showAddForm}
+    <!-- svelte-ignore a11y-no-noninteractive-element-interactions -->
+    <section class="view-card add-txn-card" role="form" on:keydown={handleAddFormKeydown}>
+      <div class="section-head">
+        <div>
+          <p class="eyebrow">New Transaction</p>
+          <h3>Add a manual entry</h3>
+        </div>
+        <button class="btn" type="button" on:click={closeAddForm}>Cancel</button>
+      </div>
+
+      <div class="add-txn-fields">
+        <div class="field">
+          <label for="add-date">Date</label>
+          <input
+            id="add-date"
+            type="date"
+            bind:this={addDateEl}
+            bind:value={addDate}
+          />
+        </div>
+
+        <div class="field">
+          <label for="add-payee">Payee</label>
+          <input
+            id="add-payee"
+            type="text"
+            bind:value={addPayee}
+            placeholder="e.g. Coffee Shop"
+          />
+        </div>
+
+        <div class="field">
+          <label for="add-amount">Amount</label>
+          <input
+            id="add-amount"
+            type="text"
+            inputmode="decimal"
+            bind:value={addAmount}
+            placeholder="e.g. 45.95"
+          />
+        </div>
+
+        <div class="field">
+          <label for="add-destination">Destination account</label>
+          <AccountCombobox
+            accounts={allAccounts}
+            value={addDestination}
+            placeholder="e.g. Expenses:Food"
+            allowCreate={false}
+            onChange={(account) => (addDestination = account)}
+          />
+        </div>
+      </div>
+
+      {#if addError}
+        <p class="error-text">{addError}</p>
+      {/if}
+
+      <div class="add-txn-actions">
+        <button
+          class="btn btn-primary"
+          type="button"
+          disabled={addSubmitting}
+          on:click={() => void submitAddTransaction()}
+        >
+          {addSubmitting ? 'Saving...' : 'Save transaction'}
+        </button>
+      </div>
     </section>
   {/if}
 
@@ -1169,5 +1331,22 @@
     .align-right {
       text-align: left;
     }
+  }
+
+  .add-txn-card {
+    display: grid;
+    gap: 1rem;
+  }
+
+  .add-txn-fields {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
+    gap: 0.85rem;
+  }
+
+  .add-txn-actions {
+    display: flex;
+    gap: 0.7rem;
+    justify-content: flex-end;
   }
 </style>

@@ -14,6 +14,7 @@ from models import (
     CreateAccountRequest,
     ImportPreviewRequest,
     ImportUndoRequest,
+    ManualTransactionRequest,
     ManualTransferResolutionRequest,
     PayeeRuleRequest,
     RuleHistoryApplyRequest,
@@ -44,6 +45,7 @@ from services.import_service import (
     remove_inbox_csv,
     scan_candidates,
 )
+from services.manual_entry_service import create_manual_transaction
 from services.manual_transfer_resolution_service import (
     apply_manual_transfer_resolution,
     preview_manual_transfer_resolution,
@@ -390,6 +392,33 @@ def transactions_register(accountId: str) -> dict:
         raise HTTPException(status_code=400, detail=str(e)) from e
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
+
+
+@app.post("/api/transactions/create")
+def transactions_create(req: ManualTransactionRequest) -> dict:
+    config = _require_workspace_config()
+    tracked_account_cfg = config.tracked_accounts.get(req.trackedAccountId)
+    if not tracked_account_cfg:
+        raise HTTPException(status_code=404, detail=f"Tracked account not found: {req.trackedAccountId}")
+
+    year = req.date[:4]
+    journal_path = config.journal_dir / f"{year}.journal"
+    accounts_dat = config.init_dir / "10-accounts.dat"
+    currency = str(config.workspace.get("base_currency", "USD"))
+
+    try:
+        return create_manual_transaction(
+            journal_path=journal_path,
+            accounts_dat=accounts_dat,
+            tracked_account_cfg=tracked_account_cfg,
+            txn_date=req.date,
+            payee=req.payee,
+            amount_str=req.amount,
+            destination_account=req.destinationAccount,
+            currency=currency,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
 
 
 @app.post("/api/transactions/manual-transfer-resolution/preview")
