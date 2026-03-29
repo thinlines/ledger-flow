@@ -7,7 +7,7 @@ It is a planning document, not a strict delivery contract.
 
 ## Current Delivery Focus
 
-Give users full control over their financial data through the UI — transaction status visibility, transaction editing for corrections and metadata, and statement reconciliation — without sacrificing import safety or data trust.
+Make the dashboard the trustworthy daily home it should be — fix data visibility bugs, improve layout density and section priority, and ensure the hero reflects real workspace state — while transaction clearing status ships in parallel on a separate branch.
 
 ### Current Status
 
@@ -26,8 +26,9 @@ Give users full control over their financial data through the UI — transaction
 ### Delivery Sequence
 
 1. ~~**Manual transaction entry**~~ — shipped.
-2. **Transaction clearing status** — parse the native ledger clearing flag (`*`, `!`, unmarked), display it in the register, and let users toggle it. Consolidates duplicated header-parsing regex across six services into a shared module.
-3. **Transaction editing** — users can edit any transaction (imported or manual): payee, date, posting amounts, splits (add/remove/rebalance postings), and user metadata (tags, KV pairs, comments). System metadata stays hidden. Full split management from the first pass.
+2. ~~**Transaction clearing status**~~ — shipped.
+3. **Overview dashboard facelift** — fix data bugs (balance sheet card non-functional, hero CTA ignoring workspace state), reorder sections to prioritize recent activity, and compress layout to reduce scroll depth. See active `TASK.md`.
+4. **Transaction editing** — deferred. See Deferred for Now.
 
 ### Feature 1: Manual Entry + Import Matching ✓
 
@@ -35,20 +36,16 @@ Shipped. See git history for implementation details.
 
 ### Feature 2: Transaction Clearing Status
 
-- The ledger format's native clearing flags (`*` cleared, `!` pending, unmarked) represent data provenance: `*` means bank-confirmed (imported from CSV), unmarked means manually entered, `!` means user-flagged for attention.
-- The register displays a visible status indicator per transaction row, using plain-language tooltips ("Bank-confirmed", "Flagged", "Manual entry").
-- Users can toggle status by clicking the indicator (cycles: unmarked → flagged → bank-confirmed → unmarked).
-- Six duplicated `HEADER_RE` definitions across backend services are consolidated into a shared `header_parser.py` module.
-- No changes to the import pipeline or manual entry pipeline — both already write the correct flags.
-- Foundation for future statement reconciliation (which will use metadata, not the clearing flag).
+Shipped. See git history for implementation details.
 
-### Feature 3: Transaction Editing
+### Feature 3: Overview Dashboard Facelift
 
-- Users can edit payee, date, and posting amounts on existing transactions.
-- Full split management: add, remove, and rebalance postings. The UI enforces the zero-sum constraint interactively.
-- User metadata: tags (`:vacation:`), KV pairs (`; project: kitchen-remodel`), and freeform comments are visible and editable.
-- System metadata (import identities, transfer state, source hashes) stays hidden from the UI.
-- `--strict`-style validation at the UI layer: autocomplete for accounts, tags, and metadata keys drawn from the journal; warn before writing unknown values. Preventive, not after-the-fact.
+- Balance sheet card is non-functional: shows 0 tracked accounts despite $19K in tracked balances. The dashboard API builds `balances` from `config.tracked_accounts` but the data path is broken.
+- Hero CTA shows "Open setup" after setup is fully complete with months of imported data. The reactive declaration computes stale state.
+- Recent activity and category trends — the most actionable daily-use sections — sit ~1400px below the fold, buried under structural summary content.
+- Snapshot band duplicates figures shown in the hero and cash flow sections.
+- Cash flow section is vertically expensive: 6 months of double-bar rows consume ~900px.
+- Coverage strip in the hero shows setup/accounts metrics that compete with financial summary.
 
 ### Constraints
 
@@ -63,6 +60,7 @@ Shipped. See git history for implementation details.
 
 These are valid ideas, but they are not current priorities:
 
+- Transaction editing — users can edit any transaction (imported or manual): payee, date, posting amounts, splits (add/remove/rebalance postings), and user metadata (tags, KV pairs, comments). System metadata stays hidden. Full split management from the first pass. `--strict`-style validation at the UI layer.
 - Settings interface for configurable parameters (e.g., match date window)
 - Merchant management UI
 - Expanding the rule language beyond the current limited matching model

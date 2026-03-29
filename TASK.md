@@ -2,225 +2,258 @@
 
 ## Title
 
-Transaction clearing status: parse, display, and toggle
+Overview dashboard facelift: fix data bugs, reorder for daily use, compress layout
 
 ## Objective
 
-Users can see at a glance which transactions are bank-confirmed versus manually entered, and can toggle a transaction's clearing status directly from the register. The codebase gains a shared transaction-header parser, eliminating duplicated regex across six services.
+The overview page becomes a trustworthy daily home that answers "where do I stand, what changed, what needs attention" without scrolling past broken cards or stale CTAs. Two data-visibility bugs are fixed, sections are reordered to prioritize recent activity, and the layout is compressed to reduce scroll depth.
 
 ## Scope
 
 ### Included
 
-- Shared header-parsing module that extracts the clearing flag (`*`, `!`, or unmarked) alongside date and payee. Replaces the duplicated `HEADER_RE` in `journal_query_service.py`, `import_service.py`, `manual_entry_service.py`, `unknowns_service.py`, `rule_reapply_service.py`, and `opening_balance_service.py`.
-- `ParsedTransaction` gains a `status` field (enum: `unmarked`, `pending`, `cleared`).
-- Register API returns the clearing status for each entry.
-- Register UI displays a visible status indicator per transaction row.
-- Backend endpoint to toggle a transaction's clearing status by rewriting the header line in the journal.
-- Frontend toggle control: clicking the status indicator cycles through states.
+- Fix: balance sheet card renders tracked accounts from the dashboard API (currently shows 0 accounts despite non-zero tracked balance total).
+- Fix: hero CTA reflects actual workspace state instead of showing "Open setup" after setup is complete.
+- Reorder dashboard sections: recent activity and category trends move above cash flow and balance sheet.
+- Compress cash flow section: reduce vertical height by ~50%.
+- Merge snapshot band metrics into the hero section to eliminate redundancy.
+- Remove coverage strip from the hero (setup/accounts concern, not daily overview).
+- Compress the Today rail in the hero to a tighter layout.
 
 ### Explicitly Excluded
 
-- Changing what the import pipeline writes (`ledger convert` already outputs `*`; no change).
-- Changing what manual entry writes (already outputs no flag; no change).
-- Migrating existing journal data.
-- Statement reconciliation (future sprint — will use metadata, not the clearing flag).
-- Bulk status operations (select multiple → mark cleared).
+- Transaction register changes (owned by clearing-status branch).
+- Backend services touched by clearing-status: `header_parser.py`, `journal_query_service.py`, `import_service.py`, `manual_entry_service.py`, `unknowns_service.py`, `rule_reapply_service.py`, `opening_balance_service.py`, `account_register_service.py`.
+- Date group headers in recent activity (follow-up polish).
+- Empty cash flow month filtering (follow-up polish).
+- Changes to the sidebar, layout shell, or other routes.
 
 ## System Behavior
 
-### 1. Shared Header Parser
+### 1. Fix: Balance Sheet Card Data
 
 **Inputs**
 
-- A transaction header line (e.g., `2026/01/15 * UBER TRIP` or `2026/03/28 Coffee Shop`).
+- `build_dashboard_overview()` in `dashboard_service.py` builds the `balances` list by iterating `config.tracked_accounts`.
+- The frontend `buildOverviewAccounts()` maps `dashboard.balances` into renderable rows.
 
 **Logic**
 
-- New module `app/backend/services/header_parser.py` exports:
-  - `HEADER_RE` — compiled regex with named groups: `date`, `status` (optional `*` or `!`), `code` (optional parenthesized code), `payee`.
-  - `TransactionStatus` — string enum with values `unmarked`, `pending`, `cleared`.
-  - `parse_header(line: str) -> ParsedHeader | None` — returns a dataclass with `date: str`, `status: TransactionStatus`, `code: str | None`, `payee: str`.
-  - `set_header_status(line: str, new_status: TransactionStatus) -> str` — rewrites the header line with the new flag, preserving date, code, and payee.
-- All six services import from `header_parser` instead of defining their own `HEADER_RE`.
-- `TXN_START_RE` (used only for line-type detection, not parsing) may remain local or also be shared — implementer's judgment.
+- Investigate why `dashboard.balances` returns an empty list when `summary.trackedBalanceTotal` is non-zero. The `balances` loop (line 220–252) and the `tracked_total` accumulator share the same `config.tracked_accounts` source — if one produces data, the other should too.
+- Likely causes to check: (a) `config.tracked_accounts` is empty while journal-derived `account_balances` contains real asset/liability data — meaning net worth is computed from journals but tracked balances are not; (b) a mismatch between ledger account names in `config.tracked_accounts` and actual journal account names; (c) `trackedBalanceTotal` is incorrectly sourced from `netWorth` rather than `tracked_total`.
+- After fix: the balance sheet card must show every tracked account with its current balance. If the user has no tracked accounts configured but does have journal data, the card should show an empty state with guidance to add accounts — not a header with zero content.
 
 **Outputs**
 
-- No user-visible change from this step alone. Foundation for steps 2–4.
+- Balance sheet card displays account rows matching `config.tracked_accounts`.
+- Snapshot stat "Tracked balances" and the account count are internally consistent.
+- If no tracked accounts exist, the card shows an explicit empty state.
 
-### 2. ParsedTransaction Status Field
+### 2. Fix: Hero CTA State Awareness
 
 **Inputs**
 
-- Journal lines parsed by `journal_query_service._parse_transaction`.
+- `primaryTask()` and `secondaryActions()` in `+page.svelte` read the module-level `state` variable.
+- Svelte 4 reactive declarations: `$: activeTask = primaryTask()` and `$: secondary = secondaryActions()`.
 
 **Logic**
 
-- `_parse_transaction` uses `parse_header` to extract the status.
-- `ParsedTransaction` gains `status: TransactionStatus` (default `unmarked`).
-- The status is derived from the header flag:
-  - `*` → `cleared`
-  - `!` → `pending`
-  - no flag → `unmarked`
+- The reactive declarations compute when `state` is still `null` (before `onMount` completes), producing the `!state?.initialized` result ("Open setup" / "Use existing workspace"). The template's `{:else}` block correctly evaluates `state` inline, so the overview hero renders — but the CTA inside it uses the stale reactive value.
+- Fix by ensuring the reactive declarations re-evaluate when `state` and `dashboard` change. Options:
+  - Pass `state` and `dashboard` as explicit parameters: `$: activeTask = primaryTask(state, dashboard)`. This makes the dependency explicit to Svelte's compiler.
+  - Or restructure so the CTA is computed inline in the template rather than via a reactive declaration.
+- After fix: the CTA must reflect the actual workspace condition. For a user with completed setup, imported data, and no review queue or inbox: the CTA should be "Open transactions" with secondary links to "Manage accounts".
 
 **Outputs**
 
-- `ParsedTransaction` instances now carry their clearing status.
+- Hero CTA matches the current workspace state on every render.
+- CTA labels follow the existing priority ladder: review queue → statement inbox → open transactions.
+- No "Open setup" or "Use existing workspace" in the populated overview hero.
 
-### 3. Register API: Surface Status
+### 3. Reorder Dashboard Sections
 
 **Inputs**
 
-- `account_register_service.build_account_register` builds register rows.
+- Current section order (top to bottom): hero → snapshot band → balance sheet → cash flow → detail grid (category trends + recent activity).
 
 **Logic**
 
-- `RegisterEvent` gains `clearing_status: str` (one of `unmarked`, `pending`, `cleared`).
-- The status is read from the `ParsedTransaction` and passed through to the register row dict as `clearingStatus`.
+- New section order: hero → detail grid (recent activity + category trends) → cash flow → balance sheet.
+- The detail grid answers "what changed recently" and "what needs attention" — the two most actionable daily-use questions. These belong immediately after the "where do I stand" hero.
+- Balance sheet and cash flow are structural/historical — useful for periodic review, not daily scanning.
 
 **Outputs**
 
-- Register API response includes `clearingStatus` on each entry.
-- `ledger` CLI queries using `--cleared`, `--pending`, `--uncleared` produce results consistent with the flags in the journal. This is inherently true since we are reading and preserving the native ledger flags — no additional work required, but it is a system invariant to verify.
+- Recent activity and category trends appear directly below the hero.
+- Cash flow and balance sheet follow.
+- All existing content remains; only the DOM order changes.
 
-### 4. Register UI: Display Status
+### 4. Merge Snapshot Band into Hero
 
 **Inputs**
 
-- `RegisterEntry` in the frontend gains `clearingStatus: 'unmarked' | 'pending' | 'cleared'`.
+- Snapshot band: 4-column card showing tracked balances, income this month, spent this month, net this month.
+- Hero: net worth headline + subtitle + Today rail.
 
 **Logic**
 
-- Each transaction row displays a status indicator. Placement: leading position in the row, before the date.
-- Visual treatment:
-  - `cleared` (`*`): solid filled indicator — this transaction is bank-confirmed.
-  - `pending` (`!`): outlined or hollow indicator — flagged for attention.
-  - `unmarked`: subtle dot or empty — manual entry, no bank confirmation.
-- The indicator is a clickable toggle (see step 5).
-- Hover tooltip explains the state in plain language:
-  - `cleared`: "Bank-confirmed"
-  - `pending`: "Flagged"
-  - `unmarked`: "Manual entry"
-- Do not use the words "cleared", "pending", or "unmarked" in the default UI. Use finance-first language per `AGENT_RULES.md`.
+- The snapshot band duplicates data visible elsewhere: net this month appears in both the snapshot and the cash flow header; income and spending appear in both the snapshot and the cash flow bars.
+- Merge the four metrics into the hero as compact inline stats below the net worth figure. Replace the full-width snapshot card with a row of small stat chips inside the hero.
+- Remove the standalone snapshot band section entirely.
 
 **Outputs**
 
-- Users can see at a glance which transactions come from bank imports versus manual entry.
+- Hero displays net worth prominently with tracked balances, income, spending, and net as secondary stat chips.
+- No standalone snapshot band card.
+- ~120px of vertical space reclaimed.
 
-### 5. Toggle Clearing Status
+### 5. Remove Coverage Strip from Hero
 
 **Inputs**
 
-- User clicks the status indicator on a transaction row.
+- Coverage strip: 3-item row inside the hero showing coverage count, "needs a start" count, and import-ready count.
 
 **Logic**
 
-- Cycle order: `unmarked` → `pending` → `cleared` → `unmarked`.
-- Frontend calls `POST /api/transactions/toggle-status` with the transaction's identifying information.
-- Backend endpoint:
-  1. Reads the journal file.
-  2. Locates the transaction header line. The transaction is identified by date + payee + line content match (using the same approach as other journal-line-targeting operations in the codebase). The API payload must include enough context for unambiguous identification — at minimum the journal path and the exact header line text.
-  3. Calls `set_header_status(header_line, next_status)` to produce the rewritten line.
-  4. Writes the updated journal.
-  5. Returns the new status.
-- Frontend updates the indicator optimistically, rolls back on error.
+- Coverage metrics (balance source coverage, import readiness) are setup and account-management concerns. They are useful during onboarding but not for daily overview use.
+- Remove the coverage strip from the overview hero. Users who need this information find it in the Accounts page, which already shows per-account trust indicators.
 
 **Outputs**
 
-- The journal file reflects the new status flag.
-- The register row updates immediately.
-- `ledger` CLI queries reflect the change.
+- No coverage strip in the hero.
+- Coverage data remains available on the Accounts page (no data loss).
+
+### 6. Compress Cash Flow Section
+
+**Inputs**
+
+- Current: 6 months × (month label row + 2 separate bar tracks + 2 currency value labels) = ~900px.
+
+**Logic**
+
+- Replace the double-bar layout (separate income and spending rows) with a single stacked or side-by-side bar per month.
+- Show only the month label and the net value inline with the bar. Drop the separate income/spending currency labels below the bars — users who want exact figures can see them in the bar tooltip or the snapshot stats.
+- Show 3 months by default. Add a "Show more" toggle that expands to the full 6-month window.
+- Months with zero income and zero spending may still appear in the collapsed view if they fall within the 3-month window — empty-month filtering is a follow-up item.
+
+**Outputs**
+
+- Cash flow section height reduced by approximately 50%.
+- 3 months visible by default; 6 months on expand.
+- Income and spending still visually distinguishable via bar color.
+
+### 7. Compress Today Rail
+
+**Inputs**
+
+- Current Today rail: heading + description + 3 signal cards + primary CTA button + secondary links.
+
+**Logic**
+
+- The Today rail's intent is strong (surface the dominant next action) but it's too dense.
+- Compress to: a single status line (e.g., "Books look current" or "3 transactions need review") + primary CTA button + secondary links. Remove the individual signal cards — the hero stat chips (from step 4) already show month cash flow, and the review/inbox counts can fold into the status line.
+- Keep the Today rail as a distinct zone within the hero but reduce its height.
+
+**Outputs**
+
+- Today rail is tighter: status summary + CTA + links.
+- No signal cards within the rail.
+- Status line dynamically reflects review queue, inbox, or caught-up state.
 
 ## System Invariants
 
-- The clearing flag is a native ledger format feature. The app must never write a flag value that `ledger` or `hledger` would not recognize.
-- The flag is positional: it appears between the date and the payee on the header line, separated by whitespace. No other position is valid.
-- Toggling status must not alter any other part of the transaction: not the date, payee, code, metadata, postings, or whitespace in non-header lines.
-- The shared header parser must produce identical parse results to the existing per-service regexes for all transaction headers currently in the journal. This is a migration safety invariant.
-- Import pipeline output is not modified. `ledger convert` produces `*`; this is preserved as-is through `_annotated_raw_txn`.
-- Manual entry output is not modified. `build_manual_transaction_block` produces no flag; this is preserved.
+- The dashboard must not modify files owned by the clearing-status branch. Scope is limited to `+page.svelte`, `dashboard_service.py`, and the `/api/app/state` endpoint path in `main.py` if needed.
+- Finance-first language only. No ledger, journal, posting, or file-path terminology in UI copy.
+- The hero CTA must always reflect the actual workspace state. It must never show setup-oriented labels when setup is complete.
+- Balance sheet data must be internally consistent: if `trackedBalanceTotal` is non-zero, the balance list must contain the accounts that produce that total.
+- Responsive behavior preserved: desktop grid layouts collapse to single-column on narrow viewports.
 
 ## States
 
-### Status Indicator
-- **Cleared**: solid indicator, tooltip "Bank-confirmed".
-- **Pending**: outlined indicator, tooltip "Flagged".
-- **Unmarked**: subtle/empty indicator, tooltip "Manual entry".
+### Hero CTA
+- **Setup incomplete**: CTA directs to setup with appropriate step label.
+- **Review queue non-empty**: "Review transactions" pointing to `/unknowns`.
+- **Statement inbox non-empty**: "Import statements" pointing to `/import`.
+- **Caught up**: "Open transactions" pointing to `/transactions`.
 
-### Toggle Interaction
-- **Default**: indicator shows current status, clickable.
-- **Optimistic update**: indicator changes immediately on click.
-- **Success**: server confirms, no further change.
-- **Error**: indicator rolls back to previous state, brief inline error.
+### Balance Sheet Card
+- **Has tracked accounts**: renders account rows grouped by kind (asset/liability) with name and balance.
+- **No tracked accounts, has journal data**: empty state explaining that tracked accounts need to be configured, with a link to Accounts.
+- **No data at all**: handled by the onboarding hero (existing behavior, unchanged).
+
+### Cash Flow
+- **Default (collapsed)**: 3 most recent months.
+- **Expanded**: full 6-month window.
 
 ## Edge Cases
 
-- **Transaction with parenthesized code**: `2026/01/15 * (1234) UBER`. The toggle must preserve the code. `set_header_status` handles this via regex groups.
-- **Transaction with no payee**: `2026/01/15 *`. Valid ledger syntax. Toggle must handle empty payee without corruption.
-- **Multiple transactions with identical headers on the same date**: the API must use exact line content (or line number) for disambiguation. If ambiguous, fail closed — do not toggle the wrong transaction.
-- **Concurrent journal edit**: if the journal has changed between read and write (e.g., an import ran), the toggle should detect the mismatch and return an error rather than corrupting an unrelated line.
+- **Tracked accounts configured but no journal activity**: balance sheet shows accounts with $0 balances. This is correct — the accounts exist but have no history yet.
+- **All signal conditions clear (no review, no inbox)**: Today rail shows "Books look current" with a contextual insight (top category trend or latest transaction) and "Open transactions" CTA.
+- **Only 1–2 months of data**: cash flow shows available months without padding empty months in the collapsed view.
 
 ## Failure Behavior
 
-- If the header line cannot be found in the journal (stale data), the toggle endpoint returns an error. The frontend shows a brief message and prompts a page refresh.
-- If `set_header_status` produces invalid ledger syntax (should not happen with correct regex, but defensive), the endpoint must validate the output line against `HEADER_RE` before writing.
-- If the journal file cannot be written (permissions, disk), the endpoint returns an error and the journal is unchanged.
+- If the dashboard API returns an error, the existing error state renders (unchanged).
+- If `dashboard.balances` is empty but `trackedBalanceTotal` is non-zero after the fix, this indicates a regression — log a warning in the backend and render the balance total without individual rows rather than showing contradictory data.
 
 ## Regression Risks
 
-- **Header parser migration**: replacing six independent regexes with one shared parser could surface edge cases where the regexes diverged. Verify that all existing tests pass after the migration.
-- **Register payload change**: adding `clearingStatus` to the register API could break frontend code that destructures or iterates over entry keys. The field is additive (new key), so risk is low, but verify `pnpm check` passes.
-- **Toggle line targeting**: rewriting a header line in the journal is a new mutation pattern. Ensure it does not shift line numbers for other operations (import, match-apply, manual entry) that may reference line positions.
-- **Transfer state display**: the register already shows transfer states (pending, settled, bilateral). Clearing status is orthogonal — ensure the two indicators do not conflict visually or semantically. A transfer can be "pending" (transfer sense) and "cleared" (clearing sense) simultaneously.
+- **Snapshot band removal**: any code that references `.snapshot-band` or `.snapshot-metric` CSS classes must be removed completely. Partial removal could leave orphaned styles.
+- **Section reorder**: the `detail-grid` CSS currently sets `grid-template-columns: minmax(0, 1.1fr) minmax(0, 0.9fr)`. Verify this still works when the grid moves above the cash flow section.
+- **CTA reactivity fix**: ensure the reactive declarations also correctly handle the loading, onboarding, and error states — not just the populated overview.
+- **Cash flow compression**: the bar color legend (income = green, spending = blue) must remain visually clear in the compressed single-bar format.
+- **Coverage strip removal**: verify no other component or page references the coverage data from the dashboard API. If coverage fields are unused after removal, they can be dropped from the API response.
 
 ## Acceptance Criteria
 
-- Imported transactions (those with `*` in the journal) display as bank-confirmed in the register.
-- Manual transactions (those with no flag) display as manual entries in the register.
-- User can click a transaction's status indicator to cycle through unmarked → flagged → bank-confirmed → unmarked.
-- After toggling, the journal file reflects the new flag and `ledger bal --cleared` / `--pending` / `--uncleared` produces matching results.
-- The toggle preserves all other transaction content (date, code, payee, metadata, postings).
-- All six services use the shared header parser. No service defines its own `HEADER_RE`.
-- All existing tests pass (`uv run pytest -q` and `pnpm check`).
-- Transfer state indicators continue to display correctly alongside clearing status.
-- Hover tooltips use plain language, not accounting terminology.
+- Balance sheet card shows all tracked accounts with current balances when tracked accounts are configured.
+- Balance sheet card shows an empty state with guidance when no tracked accounts exist.
+- "Tracked balances" stat and account count are internally consistent.
+- Hero CTA shows "Open transactions" (or appropriate queue-based label) when setup is complete — never "Open setup".
+- Recent activity and category trends appear directly below the hero, above cash flow and balance sheet.
+- Cash flow section shows 3 months by default with an expand toggle for 6 months.
+- No standalone snapshot band — metrics are inline in the hero.
+- No coverage strip in the hero.
+- Today rail is a compact status line + CTA, not a stack of signal cards.
+- All existing responsive breakpoints still function (1100px, 720px).
+- `pnpm check` passes.
+- `uv run pytest -q` passes.
 
 ## Proposed Sequence
 
-1. **Shared header parser module** — create `header_parser.py` with `HEADER_RE`, `TransactionStatus` enum, `ParsedHeader` dataclass, `parse_header()`, and `set_header_status()`. Write unit tests for all header variations (with/without flag, with/without code, empty payee).
-2. **Migrate consumers** — update all six services to import from `header_parser`. Remove their local `HEADER_RE` definitions. Run `uv run pytest -q` to verify no regressions.
-3. **ParsedTransaction status** — add `status: TransactionStatus` to `ParsedTransaction`. Update `_parse_transaction` in `journal_query_service.py` to populate it from `parse_header()`.
-4. **Register API** — add `clearing_status` to `RegisterEvent`, propagate to the register row dict as `clearingStatus`. Verify with a manual API call or test.
-5. **Register UI: display** — add `clearingStatus` to `RegisterEntry` type. Render the status indicator in each row with appropriate visual treatment and tooltip.
-6. **Toggle endpoint** — `POST /api/transactions/toggle-status`. Accepts journal path and header line text, locates the line, rewrites with `set_header_status`, returns new status.
-7. **Toggle UI** — wire the status indicator click to the toggle endpoint. Implement optimistic update with rollback.
-8. **Verification** — run `uv run pytest -q`, `pnpm check`, and manually verify register display and toggle behavior on both imported and manual transactions.
+1. **Fix balance sheet data** — investigate and fix the `dashboard.balances` / `config.tracked_accounts` data path in `dashboard_service.py`. Add an empty state to the balance sheet card in `+page.svelte`. Verify the snapshot stat is consistent.
+2. **Fix hero CTA reactivity** — make `primaryTask()` and `secondaryActions()` dependencies explicit to Svelte's reactive system. Verify the CTA is correct across all workspace states (uninitialized, onboarding, populated with queue, populated caught-up).
+3. **Reorder sections** — move the detail grid (recent activity + category trends) above cash flow and balance sheet in the template. Adjust any CSS dependencies.
+4. **Merge snapshot band into hero** — add stat chips to the hero, remove the standalone snapshot band section and its styles.
+5. **Remove coverage strip** — delete the coverage strip markup and styles from the hero. Leave coverage data in the API for the Accounts page.
+6. **Compress cash flow** — replace double-bar rows with a single-bar-per-month layout. Add 3-month default with expand toggle.
+7. **Compress Today rail** — replace signal cards with a compact status summary. Keep CTA and secondary links.
+8. **Verification** — run `pnpm check`, `uv run pytest -q`. Visually verify all four hero states (uninitialized, onboarding, populated with queue, caught-up). Check responsive behavior at 1100px and 720px breakpoints.
 
 ## Definition of Done
 
-- Users can distinguish bank-confirmed from manually entered transactions at a glance in the register.
-- Users can toggle a transaction's clearing status from the register.
-- The journal reflects toggles correctly and `ledger` CLI queries match.
-- Six duplicated header regexes are consolidated into one shared module.
-- All existing tests pass. Transfer state display is unaffected.
-- No accounting terminology in default UI copy.
+- The two data bugs are fixed: balance sheet card shows real accounts, hero CTA reflects actual state.
+- Dashboard section order prioritizes daily-use content (recent activity, trends) over structural summaries (cash flow, balance sheet).
+- Layout is compressed: no standalone snapshot band, no coverage strip, tighter cash flow, tighter Today rail.
+- No regressions in existing tests or responsive behavior.
+- No accounting terminology in UI copy.
 
 ## UX Notes
 
-- The status indicator should be visually lightweight — it's informational, not a call to action. It should not compete with the payee, amount, or transfer state for attention.
-- The click target should be generous (at least the size of the indicator plus padding) for comfortable toggling.
-- The tooltip is the primary explanation mechanism. The indicator itself is a learned affordance — keep it simple and consistent.
-- Consider the mobile/narrow viewport: the indicator should not be hidden or truncated. It may collapse to just the icon without tooltip on small screens.
+- The hero stat chips should be visually secondary to the net worth headline — small text, muted color, inline layout. They inform at a glance without competing for attention.
+- The compressed cash flow bars should use the existing brand colors (green for income, blue for spending) and be thick enough to compare visually at the compressed height.
+- The "Show more" toggle for cash flow should be a text link, not a button — it's a disclosure control, not a primary action.
+- The balance sheet section, now lower on the page, can afford slightly more detail per account than the compressed version described in the review — name + balance + subtype pill is the right density.
 
 ## Out of Scope
 
-- Statement reconciliation (future sprint — will use metadata like `; reconciled: YYYY-MM-DD`, not the clearing flag).
-- Bulk status operations.
-- Import pipeline changes.
-- Manual entry pipeline changes.
-- Configurable status cycle order.
-- Status-based filtering or grouping in the register (valid future enhancement, not this task).
+- Transaction register changes (clearing-status branch).
+- Transaction editing (deferred).
+- Date group headers in recent activity (follow-up polish).
+- Empty cash flow month filtering (follow-up polish).
+- Sidebar or layout shell changes.
+- Mobile-specific redesign beyond maintaining existing responsive breakpoints.
+- Changes to the Accounts, Import, Review, Rules, or Setup pages.
 
 ## Replacement Rule
 
