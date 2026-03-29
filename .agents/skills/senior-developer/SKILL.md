@@ -59,6 +59,7 @@ Own engineering work end to end with senior-level judgment. Follow the active pl
 
 - Fix root causes rather than layering ad hoc conditionals on top of symptoms.
 - Preserve or improve codebase structure: naming, boundaries, types, state flow, error handling, and tests.
+- **Opportunistic decomposition:** Before modifying a large page component, check `plans/` for a decomposition plan (e.g., `plans/unknowns-decomposition.md`). If a plan exists and a step is relevant to the current task, perform that extraction first — then build the feature on the cleaner foundation. Each extraction must be behavior-preserving and independently shippable. See `ROADMAP.md § Standing Work` for the list of candidates.
 - Keep diffs coherent and avoid unrelated churn unless it materially reduces risk.
 - Follow existing conventions unless they are causing the problem.
 - Add or tighten tests when behavior changes, regressions are plausible, or refactors need protection.
