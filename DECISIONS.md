@@ -85,3 +85,11 @@ This document records stable product and architecture choices that explain why t
 **Why:** The user problem is immediate accounting correctness for the starting entry, not long-term account-link semantics. A lighter implementation solves the blocker faster and avoids prematurely hardening a product concept the app may not need yet.
 
 **Implication:** Opening-balance edit flows should derive the current offset from the existing opening-balance transaction, default to `Equity:Opening-Balances`, and only branch to another tracked account when the user explicitly chooses that accounting treatment.
+
+## 11. Inline Signals Over Action Cards
+
+**Decision:** Dashboard status signals (review queue, staleness, missing data) live inline where the relevant data already appears — the Today rail, transaction badges, per-account indicators — rather than in a centralized "needs attention" card section or notification center.
+
+**Why:** Action card patterns assume a steady stream of heterogeneous alerts (bill due dates, budget alerts, sync failures, anomaly flags). Ledger Flow's data model produces 0–2 actionable signals at any given time. A dedicated section that's usually empty creates anxiety ("should something be here?") and imposes an abstraction tax: every future feature must decide whether it generates a card, cards need priority weights, and dismissal state needs persistence. Inline signals are cheaper to build, contextually richer, and avoid the empty-state problem entirely.
+
+**Implication:** New features that surface actionable state should embed indicators next to the data they relate to (e.g., staleness next to account balance, review badge next to transaction) rather than registering with a centralized action-card system. The Today rail remains the single CTA surface for the dominant next action.
