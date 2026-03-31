@@ -297,9 +297,21 @@
       .filter((group): group is BalanceGroup => group !== null);
   }
 
+  const STALE_THRESHOLD_DAYS = 7;
+
+  function isDataStale(): boolean {
+    if (!dashboard?.lastUpdated) return false;
+    const last = new Date(`${dashboard.lastUpdated}T00:00:00`);
+    const now = new Date();
+    now.setHours(0, 0, 0, 0);
+    const diffMs = now.getTime() - last.getTime();
+    return diffMs > STALE_THRESHOLD_DAYS * 24 * 60 * 60 * 1000;
+  }
+
   function heroRailTitle(): string {
     if (hasReviewQueue()) return reviewQueueTitle();
     if (statementInboxCount() > 0) return statementInboxTitle();
+    if (isDataStale()) return `Last activity ${formatDate(dashboard?.lastUpdated ?? null)}`;
     return 'Books look current';
   }
 
@@ -373,6 +385,13 @@
         href: '/import',
         label: 'Import statements',
         note: statementInboxNote()
+      };
+    }
+    if (isDataStale()) {
+      return {
+        href: '/import',
+        label: 'Import a statement',
+        note: 'Your most recent activity is over a week old. Import a fresh statement to stay current.'
       };
     }
     return {
