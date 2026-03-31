@@ -476,11 +476,14 @@
   $: overviewAccounts = buildOverviewAccounts(dashboard, trackedAccounts);
   $: balanceGroups = buildBalanceGroups(overviewAccounts);
 
-  let cashFlowExpanded = false;
-  $: visibleCashFlow = cashFlowExpanded
-    ? [...(dashboard?.cashFlow.series ?? [])].reverse()
-    : [...(dashboard?.cashFlow.series ?? [])].reverse().slice(0, 3);
-  $: cashFlowMax = Math.max(...(dashboard?.cashFlow.series.map((row) => Math.max(row.income, row.spending)) ?? [0]));
+  let cashFlowPreset: 'month' | 'last3' | 'last6' = 'last3';
+  $: visibleCashFlow = (() => {
+    const reversed = [...(dashboard?.cashFlow.series ?? [])].reverse();
+    if (cashFlowPreset === 'month') return reversed.slice(0, 1);
+    if (cashFlowPreset === 'last6') return reversed;
+    return reversed.slice(0, 3);
+  })();
+  $: cashFlowMax = Math.max(...visibleCashFlow.map((row) => Math.max(row.income, row.spending)), 0);
   $: categoryMax = Math.max(
     ...(dashboard?.categoryTrends.flatMap((row) => [row.current, row.previous]) ?? [0])
   );
@@ -714,7 +717,14 @@
         <p class="eyebrow">Cash flow</p>
         <h3>Monthly income and spending</h3>
       </div>
-      <p class="section-note">{formatCurrency(dashboard.cashFlow.net, { signed: true })} this month</p>
+      <div class="cashflow-controls">
+        <p class="section-note">{formatCurrency(dashboard.cashFlow.net, { signed: true })} this month</p>
+        <div class="cashflow-presets">
+          <button class:active={cashFlowPreset === 'month'} on:click={() => cashFlowPreset = 'month'}>This month</button>
+          <button class:active={cashFlowPreset === 'last3'} on:click={() => cashFlowPreset = 'last3'}>Last 3</button>
+          <button class:active={cashFlowPreset === 'last6'} on:click={() => cashFlowPreset = 'last6'}>Last 6</button>
+        </div>
+      </div>
     </div>
 
     <div class="cashflow-list">
@@ -732,11 +742,6 @@
       {/each}
     </div>
 
-    {#if (dashboard?.cashFlow.series.length ?? 0) > 3}
-      <button class="expand-toggle" on:click={() => cashFlowExpanded = !cashFlowExpanded}>
-        {cashFlowExpanded ? 'Show less' : 'Show more'}
-      </button>
-    {/if}
   </section>
 
   <section class="view-card balances-panel balance-sheet-panel">
@@ -1165,20 +1170,41 @@
     min-width: 2px;
   }
 
-  .expand-toggle {
-    display: inline;
-    margin-top: 0.6rem;
-    padding: 0;
-    border: none;
-    background: none;
-    color: var(--brand-strong);
-    font-weight: 700;
-    font-size: inherit;
-    cursor: pointer;
+  .cashflow-controls {
+    display: grid;
+    gap: 0.4rem;
+    justify-items: end;
+    text-align: right;
   }
 
-  .expand-toggle:hover {
-    text-decoration: underline;
+  .cashflow-presets {
+    display: inline-flex;
+    gap: 0.15rem;
+    padding: 0.15rem;
+    border-radius: 999px;
+    background: rgba(10, 61, 89, 0.06);
+  }
+
+  .cashflow-presets button {
+    padding: 0.25rem 0.65rem;
+    border: none;
+    border-radius: 999px;
+    background: transparent;
+    color: var(--muted-foreground);
+    font-size: 0.78rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+  }
+
+  .cashflow-presets button.active {
+    background: #fff;
+    color: var(--foreground);
+    box-shadow: 0 1px 3px rgba(10, 61, 89, 0.1);
+  }
+
+  .cashflow-presets button:hover:not(.active) {
+    color: var(--foreground);
   }
 
   .category-bars {
