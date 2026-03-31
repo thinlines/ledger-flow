@@ -152,6 +152,8 @@ def test_dashboard_overview_summarizes_financial_state(tmp_path: Path) -> None:
     assert balances["visa"]["hasOpeningBalance"] is False
     assert balances["visa"]["hasTransactionActivity"] is True
     assert balances["visa"]["hasBalanceSource"] is True
+    assert balances["checking"]["lastTransactionDate"] == "2026-03-08"
+    assert balances["visa"]["lastTransactionDate"] == "2026-03-05"
 
     assert overview["cashFlow"]["series"][-1] == {
         "month": "2026-03",
@@ -215,6 +217,7 @@ def test_dashboard_overview_includes_opening_balances_without_counting_them_as_a
     assert balances["cash_wallet"]["hasOpeningBalance"] is True
     assert balances["cash_wallet"]["hasTransactionActivity"] is False
     assert balances["cash_wallet"]["hasBalanceSource"] is True
+    assert balances["cash_wallet"]["lastTransactionDate"] is None
     assert overview["summary"]["trackedBalanceTotal"] == 250.0
     assert overview["summary"]["netWorth"] == 250.0
     assert overview["summary"]["transactionCount"] == 0

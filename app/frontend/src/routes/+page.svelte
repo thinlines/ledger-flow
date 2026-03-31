@@ -41,6 +41,7 @@
     hasOpeningBalance: boolean;
     hasTransactionActivity: boolean;
     hasBalanceSource: boolean;
+    lastTransactionDate: string | null;
   };
 
   type TrackedAccount = {
@@ -107,6 +108,7 @@
     hasOpeningBalance: boolean;
     hasTransactionActivity: boolean;
     hasBalanceSource: boolean;
+    lastTransactionDate: string | null;
   };
 
   type BalanceGroup = {
@@ -269,7 +271,8 @@
           balance: balance.balance,
           hasOpeningBalance: balance.hasOpeningBalance,
           hasTransactionActivity: balance.hasTransactionActivity,
-          hasBalanceSource: balance.hasBalanceSource
+          hasBalanceSource: balance.hasBalanceSource,
+          lastTransactionDate: balance.lastTransactionDate ?? null,
         } satisfies OverviewAccount;
       })
       .sort((left, right) => {
@@ -306,6 +309,22 @@
     now.setHours(0, 0, 0, 0);
     const diffMs = now.getTime() - last.getTime();
     return diffMs > STALE_THRESHOLD_DAYS * 24 * 60 * 60 * 1000;
+  }
+
+  const ACCOUNT_STALE_THRESHOLD_DAYS = 14;
+
+  function isAccountStale(lastTransactionDate: string | null): boolean {
+    if (!lastTransactionDate) return true;
+    const last = new Date(`${lastTransactionDate}T00:00:00`);
+    const now = new Date();
+    now.setHours(0, 0, 0, 0);
+    const diffMs = now.getTime() - last.getTime();
+    return diffMs > ACCOUNT_STALE_THRESHOLD_DAYS * 24 * 60 * 60 * 1000;
+  }
+
+  function accountStalenessLabel(lastTransactionDate: string | null): string {
+    if (!lastTransactionDate) return 'No activity yet';
+    return `Last activity ${shortDate(lastTransactionDate)}`;
   }
 
   function heroRailTitle(): string {
@@ -743,11 +762,19 @@
                 {#each group.accounts as account}
                   <tr>
                     <td class="balance-table-name">
-                      {account.displayName}
-                      <span class={`pill subtype-pill ${account.kind}`}>{accountSubtypeLabel(account, 'short')}</span>
+                      <span>
+                        {account.displayName}
+                        <span class={`pill subtype-pill ${account.kind}`}>{accountSubtypeLabel(account, 'short')}</span>
+                      </span>
+                      {#if account.importConfigured && !account.hasOpeningBalance}
+                        <a class="account-note text-link" href="/accounts">Needs opening balance</a>
+                      {/if}
                     </td>
                     <td class:negative={account.balance < 0} class:positive={account.balance > 0} class="balance-table-value">
-                      {formatCurrency(account.balance)}
+                      <span>{formatCurrency(account.balance)}</span>
+                      {#if isAccountStale(account.lastTransactionDate)}
+                        <span class="staleness-note">{accountStalenessLabel(account.lastTransactionDate)}</span>
+                      {/if}
                     </td>
                   </tr>
                 {/each}
@@ -1076,6 +1103,20 @@
     font-family: 'Space Grotesk', sans-serif;
     font-weight: 600;
     white-space: nowrap;
+  }
+
+  .account-note {
+    display: block;
+    font-size: 0.75rem;
+    font-weight: 400;
+    color: var(--muted-foreground);
+  }
+
+  .staleness-note {
+    display: block;
+    font-size: 0.75rem;
+    font-weight: 400;
+    color: var(--muted-foreground);
   }
 
   .subtype-pill.asset {

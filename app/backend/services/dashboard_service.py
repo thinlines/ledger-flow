@@ -125,6 +125,7 @@ def build_dashboard_overview(config: AppConfig, *, today: date | None = None) ->
     account_balance_commodities: dict[str, str | None] = {}
     accounts_with_balance_source: set[str] = set()
     accounts_with_activity: set[str] = set()
+    account_last_transaction: dict[str, date] = {}
     monthly_income: defaultdict[str, Decimal] = defaultdict(lambda: Decimal("0"))
     monthly_income_commodities: dict[str, str | None] = {}
     monthly_spending: defaultdict[str, Decimal] = defaultdict(lambda: Decimal("0"))
@@ -156,6 +157,8 @@ def build_dashboard_overview(config: AppConfig, *, today: date | None = None) ->
                 accounts_with_balance_source.add(posting.account)
                 if not is_opening_balance:
                     accounts_with_activity.add(posting.account)
+                    if posting.account not in account_last_transaction or transaction.posted_on > account_last_transaction[posting.account]:
+                        account_last_transaction[posting.account] = transaction.posted_on
             elif is_opening_balance:
                 continue
             elif kind == "expense":
@@ -248,6 +251,7 @@ def build_dashboard_overview(config: AppConfig, *, today: date | None = None) ->
                 "hasOpeningBalance": has_opening_balance,
                 "hasTransactionActivity": has_transaction_activity,
                 "hasBalanceSource": ledger_account in accounts_with_balance_source,
+                "lastTransactionDate": account_last_transaction[ledger_account].isoformat() if ledger_account in account_last_transaction else None,
             }
         )
 
