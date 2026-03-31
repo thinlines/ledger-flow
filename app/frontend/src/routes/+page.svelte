@@ -430,8 +430,8 @@
 
   let cashFlowExpanded = false;
   $: visibleCashFlow = cashFlowExpanded
-    ? (dashboard?.cashFlow.series ?? [])
-    : (dashboard?.cashFlow.series ?? []).slice(-3);
+    ? [...(dashboard?.cashFlow.series ?? [])].reverse()
+    : [...(dashboard?.cashFlow.series ?? [])].reverse().slice(0, 3);
   $: cashFlowMax = Math.max(...(dashboard?.cashFlow.series.map((row) => Math.max(row.income, row.spending)) ?? [0]));
   $: categoryMax = Math.max(
     ...(dashboard?.categoryTrends.flatMap((row) => [row.current, row.previous]) ?? [0])
@@ -1019,10 +1019,12 @@
   }
 
   .balance-table-name {
-    display: flex;
-    align-items: baseline;
-    gap: 0.5rem;
     font-weight: 500;
+  }
+
+  .balance-table-name .subtype-pill {
+    margin-left: 0.4rem;
+    vertical-align: baseline;
   }
 
   .balance-table-value {
@@ -1152,6 +1154,14 @@
     .dashboard-hero,
     .detail-grid {
       grid-template-columns: 1fr;
+    }
+
+    .categories-panel {
+      order: -1;
+    }
+
+    .transaction-row:nth-child(n + 6) {
+      display: none;
     }
 
     .landing-grid {
