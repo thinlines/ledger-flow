@@ -96,6 +96,7 @@
     csvPath: string | null;
     fileName: string | null;
     fileKeptInInbox: boolean;
+    causeMessage: string | null;
   };
 
   type ParsedApiFailure = {
@@ -276,7 +277,8 @@
       message: candidate.message,
       csvPath: typeof candidate.csvPath === 'string' ? candidate.csvPath : null,
       fileName: typeof candidate.fileName === 'string' ? candidate.fileName : null,
-      fileKeptInInbox: candidate.fileKeptInInbox === true
+      fileKeptInInbox: candidate.fileKeptInInbox === true,
+      causeMessage: typeof candidate.causeMessage === 'string' ? candidate.causeMessage : null
     };
   }
 
@@ -700,6 +702,9 @@
               <p class="eyebrow">Recovery</p>
               <h4>{recoveryState.fileKeptInInbox ? 'This statement needs a different account' : 'This upload was blocked before it reached the inbox'}</h4>
               <p class="muted">{recoveryState.message}</p>
+              {#if recoveryState.causeMessage}
+                <pre class="cause-detail">{recoveryState.causeMessage}</pre>
+              {/if}
             </div>
           </section>
         {/if}
@@ -943,6 +948,9 @@
                 <p class="eyebrow">Recovery</p>
                 <h4>{recoveryState.fileKeptInInbox ? 'This statement needs a different account' : 'This upload was blocked before it reached the inbox'}</h4>
                 <p class="muted">{recoveryState.message}</p>
+                {#if recoveryState.causeMessage}
+                  <pre class="cause-detail">{recoveryState.causeMessage}</pre>
+                {/if}
               </div>
             </section>
           {/if}
@@ -1456,6 +1464,18 @@
 
   .recovery-card p {
     margin: 0.25rem 0 0;
+  }
+
+  .recovery-card .cause-detail {
+    margin: 0.5rem 0 0;
+    padding: 0.5rem 0.65rem;
+    background: rgba(0, 0, 0, 0.04);
+    border-radius: 6px;
+    font-size: 0.78rem;
+    line-height: 1.45;
+    white-space: pre-wrap;
+    word-break: break-word;
+    color: rgba(0, 0, 0, 0.6);
   }
 
   .preview-panel {

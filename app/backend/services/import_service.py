@@ -48,6 +48,7 @@ class ImportPreviewBlockedError(Exception):
         csv_path: Path | None = None,
         file_kept_in_inbox: bool = False,
         code: str = "statement_preview_blocked",
+        cause_message: str | None = None,
     ) -> None:
         super().__init__(message)
         self.message = message
@@ -55,15 +56,19 @@ class ImportPreviewBlockedError(Exception):
         self.csv_path = str(csv_path.resolve()) if csv_path is not None else None
         self.file_name = csv_path.name if csv_path is not None else None
         self.file_kept_in_inbox = file_kept_in_inbox
+        self.cause_message = cause_message
 
     def as_detail(self) -> dict:
-        return {
+        detail: dict = {
             "code": self.code,
             "message": self.message,
             "csvPath": self.csv_path,
             "fileName": self.file_name,
             "fileKeptInInbox": self.file_kept_in_inbox,
         }
+        if self.cause_message:
+            detail["causeMessage"] = self.cause_message
+        return detail
 
 
 def scan_candidates(config: AppConfig) -> list[ImportCandidate]:
@@ -140,6 +145,7 @@ def preview_import_safely(
             except OSError:
                 pass
         file_kept_in_inbox = was_inbox_path and csv_path.exists()
+        cause_message = str(e).strip() or None
         raise ImportPreviewBlockedError(
             _preview_blocked_message(
                 config,
@@ -149,6 +155,7 @@ def preview_import_safely(
             ),
             csv_path=csv_path,
             file_kept_in_inbox=file_kept_in_inbox,
+            cause_message=cause_message,
         ) from e
 
 
