@@ -421,9 +421,38 @@
     return { href: '/transactions', label: 'Open transactions' };
   }
 
+  type DateGroup = { header: string; transactions: RecentTransaction[] };
+
+  function groupByDate(transactions: RecentTransaction[]): DateGroup[] {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const yesterday = new Date(today);
+    yesterday.setDate(yesterday.getDate() - 1);
+
+    const todayStr = today.toISOString().slice(0, 10);
+    const yesterdayStr = yesterday.toISOString().slice(0, 10);
+
+    const groups: DateGroup[] = [];
+    let currentGroup: DateGroup | null = null;
+
+    for (const tx of transactions.slice(0, 5)) {
+      const header = tx.date === todayStr ? 'Today'
+        : tx.date === yesterdayStr ? 'Yesterday'
+        : shortDate(tx.date);
+
+      if (!currentGroup || currentGroup.header !== header) {
+        currentGroup = { header, transactions: [] };
+        groups.push(currentGroup);
+      }
+      currentGroup.transactions.push(tx);
+    }
+    return groups;
+  }
+
   $: activeTask = primaryTask(state, dashboard);
   $: secondary = secondaryActions(state, dashboard);
   $: recentAction = recentActivityAction();
+  $: recentGroups = groupByDate(dashboard?.recentTransactions ?? []);
   $: steps = setupSteps(state);
   $: overviewAccounts = buildOverviewAccounts(dashboard, trackedAccounts);
   $: balanceGroups = buildBalanceGroups(overviewAccounts);
@@ -596,22 +625,27 @@
       </div>
 
       <div class="transaction-list">
-        {#each dashboard.recentTransactions as transaction}
-          <div class="transaction-row">
-            <div class="transaction-main">
-              <p class="transaction-payee">{transaction.payee}</p>
-              <p class="transaction-meta">
-                {shortDate(transaction.date)} · {transaction.accountLabel} · {transaction.category}
-              </p>
-            </div>
-            <div class="transaction-side">
-              <p class:positive={transaction.amount > 0} class:negative={transaction.amount < 0} class="transaction-amount">
-                {formatCurrency(transaction.amount, { signed: true })}
-              </p>
-              {#if transaction.isUnknown}
-                <span class="pill warn">Needs review</span>
-              {/if}
-            </div>
+        {#each recentGroups as group, gi}
+          <div class="date-group" class:date-group-first={gi === 0}>
+            <h4 class="date-header">{group.header}</h4>
+            {#each group.transactions as transaction}
+              <div class="transaction-row">
+                <div class="transaction-main">
+                  <p class="transaction-payee">{transaction.payee}</p>
+                  <p class="transaction-meta">
+                    {shortDate(transaction.date)} · {transaction.accountLabel} · {transaction.category}
+                  </p>
+                </div>
+                <div class="transaction-side">
+                  <p class:positive={transaction.amount > 0} class:negative={transaction.amount < 0} class="transaction-amount">
+                    {formatCurrency(transaction.amount, { signed: true })}
+                  </p>
+                  {#if transaction.isUnknown}
+                    <a class="pill warn" href="/unknowns">Needs review</a>
+                  {/if}
+                </div>
+              </div>
+            {/each}
           </div>
         {/each}
       </div>
@@ -1152,6 +1186,25 @@
     justify-items: end;
   }
 
+  .date-header {
+    margin: 0;
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--muted-foreground);
+    font-weight: 700;
+  }
+
+  .date-group + .date-group {
+    margin-top: 0.65rem;
+    padding-top: 0.65rem;
+    border-top: 1px solid rgba(10, 61, 89, 0.08);
+  }
+
+  a.pill.warn {
+    text-decoration: none;
+  }
+
   .positive {
     color: var(--ok);
   }
@@ -1168,10 +1221,6 @@
 
     .categories-panel {
       order: -1;
-    }
-
-    .transaction-row:nth-child(n + 6) {
-      display: none;
     }
 
     .landing-grid {
