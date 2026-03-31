@@ -546,6 +546,15 @@
       <p class="eyebrow">Overview</p>
       <h2 class="page-title hero-worth">{formatCurrency(dashboard.summary.netWorth, { compact: true })}</h2>
       <p class="hero-label">Net worth</p>
+      <p class="hero-momentum">
+        {#if dashboard.summary.savingsThisMonth > 0}
+          You're <span class="positive">{formatCurrency(dashboard.summary.savingsThisMonth, { signed: true, compact: true })}</span> ahead this month
+        {:else if dashboard.summary.savingsThisMonth < 0}
+          You're <span class="negative">{formatCurrency(Math.abs(dashboard.summary.savingsThisMonth), { compact: true })}</span> behind this month
+        {:else}
+          Breaking even this month
+        {/if}
+      </p>
       <div class="hero-stats">
         <span class="hero-chip">
           <span class="hero-chip-label">Tracked</span>
@@ -558,12 +567,6 @@
         <span class="hero-chip">
           <span class="hero-chip-label">Spent</span>
           <span class="hero-chip-value negative">{formatCurrency(dashboard.summary.spendingThisMonth, { compact: true })}</span>
-        </span>
-        <span class="hero-chip">
-          <span class="hero-chip-label">Net</span>
-          <span class:positive={dashboard.summary.savingsThisMonth >= 0} class:negative={dashboard.summary.savingsThisMonth < 0} class="hero-chip-value">
-            {formatCurrency(dashboard.summary.savingsThisMonth, { signed: true, compact: true })}
-          </span>
         </span>
       </div>
       <p class="subtitle hero-subtitle">
@@ -764,6 +767,13 @@
     letter-spacing: 0.14em;
     color: var(--muted-foreground);
     font-weight: 700;
+  }
+
+  .hero-momentum {
+    margin: 0.3rem 0 0;
+    font-size: 1rem;
+    color: var(--muted-foreground);
+    line-height: 1.4;
   }
 
   .hero-subtitle {
