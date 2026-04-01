@@ -7,7 +7,7 @@ It is a planning document, not a strict delivery contract.
 
 ## Current Delivery Focus
 
-Make the dashboard the trustworthy daily home it should be. Fix data visibility bugs and layout problems (facelift), then sharpen each section with independent polish passes (momentum framing, day-grouped activity, inline staleness, time presets), and finally connect dashboard insights to a filterable activity view so users can investigate what they see.
+The dashboard facelift is shipped — data bugs are fixed and layout is compressed. Current focus: sharpen each section with independent polish passes (momentum framing, day-grouped activity, inline staleness, time presets), then connect dashboard insights to a filterable activity view so users can investigate what they see.
 
 ### Current Status
 
@@ -44,14 +44,9 @@ Shipped. See git history for implementation details.
 
 Shipped. See git history for implementation details.
 
-### Feature 3: Overview Dashboard Facelift
+### Feature 3: Overview Dashboard Facelift ✓
 
-- Balance sheet card is non-functional: shows 0 tracked accounts despite $19K in tracked balances. The dashboard API builds `balances` from `config.tracked_accounts` but the data path is broken.
-- Hero CTA shows "Open setup" after setup is fully complete with months of imported data. The reactive declaration computes stale state.
-- Recent activity and category trends — the most actionable daily-use sections — sit ~1400px below the fold, buried under structural summary content.
-- Snapshot band duplicates figures shown in the hero and cash flow sections.
-- Cash flow section is vertically expensive: 6 months of double-bar rows consume ~900px.
-- Coverage strip in the hero shows setup/accounts metrics that compete with financial summary.
+Shipped. Balance sheet data path fixed (`dashboard.balances` from `config.tracked_accounts`), hero CTA reactivity fixed (explicit Svelte dependencies), sections reordered (activity and trends above cash flow and balance sheet), snapshot band merged into hero stat chips, coverage strip removed, cash flow compressed to 3-month default with expand toggle, Today rail compacted to status line + CTA, stale-data awareness added (7-day threshold). See git history for implementation details.
 
 ### Feature 3b: Dashboard Polish (Parallel-Ready)
 
