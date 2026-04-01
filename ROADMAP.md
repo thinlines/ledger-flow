@@ -7,7 +7,7 @@ It is a planning document, not a strict delivery contract.
 
 ## Current Delivery Focus
 
-The dashboard facelift is shipped — data bugs are fixed and layout is compressed. Current focus: sharpen each section with independent polish passes (momentum framing, day-grouped activity, inline staleness, time presets), then connect dashboard insights to a filterable activity view so users can investigate what they see.
+The dashboard facelift and polish passes are shipped — data bugs fixed, layout compressed, momentum framing, day-grouped activity, inline staleness, and time presets all landed. Current focus: connect dashboard insights to a filterable cross-account activity view so users can investigate what they see.
 
 ### Current Status
 
@@ -27,13 +27,9 @@ The dashboard facelift is shipped — data bugs are fixed and layout is compress
 
 1. ~~**Manual transaction entry**~~ — shipped.
 2. ~~**Transaction clearing status**~~ — shipped.
-3. **Overview dashboard facelift** — fix data bugs, reorder sections, compress layout, add stale-data awareness. See active `TASK.md`.
-4. **Dashboard polish** — four independent improvements, all parallelizable (see Feature 3b below):
-   - 4a. Momentum line in hero (frontend, hero section)
-   - 4b. Day-grouped recent activity (frontend, recent-activity panel)
-   - 4c. Per-account staleness in balance sheet (frontend + minor backend, balance-sheet panel)
-   - 4d. Cash flow time presets (frontend, cash-flow section)
-5. **Dashboard drill-down and activity view** — clickable category trends + cash flow rows, cross-account activity view with filters. See Feature 4 below.
+3. ~~**Overview dashboard facelift**~~ — shipped.
+4. ~~**Dashboard polish**~~ — shipped (4a–4d: momentum line, day-grouped activity, per-account staleness, cash flow presets).
+5. **Dashboard drill-down and activity view** — clickable category trends + cash flow rows, cross-account activity view with filters. See active `TASK.md`.
 6. **Transaction editing** — deferred. See Deferred for Now.
 
 ### Feature 1: Manual Entry + Import Matching ✓
@@ -48,17 +44,9 @@ Shipped. See git history for implementation details.
 
 Shipped. Balance sheet data path fixed (`dashboard.balances` from `config.tracked_accounts`), hero CTA reactivity fixed (explicit Svelte dependencies), sections reordered (activity and trends above cash flow and balance sheet), snapshot band merged into hero stat chips, coverage strip removed, cash flow compressed to 3-month default with expand toggle, Today rail compacted to status line + CTA, stale-data awareness added (7-day threshold). See git history for implementation details.
 
-### Feature 3b: Dashboard Polish (Parallel-Ready)
+### Feature 3b: Dashboard Polish ✓
 
-Four independent improvements that sharpen the dashboard after the facelift lands. Each touches a different DOM section and has no data or logic dependencies on the others — all four can be implemented in parallel or in any order.
-
-**4a. Momentum line in hero** — Replace the "Net" stat chip with a hero-level callout directly below the net worth figure: *"You're +$412 ahead this month."* Same data (`savingsThisMonth`), reframed as directional velocity. The remaining chips (Tracked, Income, Spent) stay. Frontend-only; touches the hero section.
-
-**4b. Day-grouped recent activity** — Group the recent transaction list by date headers ("Today," "Yesterday," "Mar 27") instead of a flat list. Cap visible transactions at 5 (down from 8). Make "Needs review" badges link directly to `/unknowns`. Frontend-only; touches the recent-activity panel.
-
-**4c. Per-account staleness in balance sheet** — Show a muted last-import date inline next to each account balance when the account's most recent transaction is older than 14 days. Highlight accounts with `importConfigured` but no opening balance with a "(needs opening balance)" note linking to `/accounts`. Replaces the need for a separate "needs attention" card section. Touches the balance-sheet panel; may require a `lastTransactionDate` field from the dashboard API per balance row.
-
-**4d. Cash flow time presets** — Add a segmented toggle above the cash flow bars: **This month | Last 3 | Last 6**. Replaces the current expand/collapse toggle. Frontend-only if the 6-month series data continues to be returned by default; touches the cash-flow section.
+Shipped. Momentum line replaces Net chip, recent activity day-grouped (5-item cap, linked review badges), per-account staleness and missing opening balance indicators in balance sheet (backend `lastTransactionDate`), cash flow segmented preset toggle (This month / Last 3 / Last 6). See git history for implementation details.
 
 ### Feature 4: Dashboard Drill-Down and Activity View
 
