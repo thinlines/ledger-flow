@@ -36,6 +36,7 @@ from services.header_parser import TransactionStatus, parse_header, set_header_s
 from services.account_register_service import build_account_register
 from services.commodity_service import CommodityMismatchError
 from services.custom_csv_service import inspect_csv_bytes
+from services.activity_service import build_activity_view
 from services.dashboard_service import build_dashboard_overview
 from services.import_history_service import list_import_history, record_applied_import, undo_import
 from services.import_index import ImportIndex
@@ -383,6 +384,16 @@ def dashboard_overview() -> dict:
         return build_dashboard_overview(config)
     except CommodityMismatchError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+@app.get("/api/transactions/activity")
+def transactions_activity(
+    category: str | None = None,
+    month: str | None = None,
+    period: str | None = None,
+) -> dict:
+    config = _require_workspace_config()
+    return build_activity_view(config, category=category, month=month, period=period)
 
 
 @app.get("/api/transactions/register")
