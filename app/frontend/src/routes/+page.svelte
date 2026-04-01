@@ -69,6 +69,7 @@
 
   type CategoryTrend = {
     category: string;
+    account: string;
     current: number;
     previous: number;
     delta: number;
@@ -685,7 +686,7 @@
       {#if dashboard.categoryTrends.length > 0}
         <div class="category-list">
           {#each dashboard.categoryTrends as row}
-            <div class="category-row">
+            <a class="category-row drilldown-link" href={`/transactions?view=activity&category=${encodeURIComponent(row.account)}`}>
               <div class="category-head">
                 <p>{row.category}</p>
                 <span class:negative={row.delta > 0} class:positive={row.delta < 0}>{formatTrend(row.delta)}</span>
@@ -702,7 +703,7 @@
                 <span>Now {formatCurrency(row.current)}</span>
                 <span>Prev {formatCurrency(row.previous)}</span>
               </div>
-            </div>
+            </a>
           {/each}
         </div>
       {:else}
@@ -729,7 +730,7 @@
 
     <div class="cashflow-list">
       {#each visibleCashFlow as row}
-        <div class="cashflow-row-compact">
+        <a class="cashflow-row-compact drilldown-link" href={`/transactions?view=activity&month=${row.month}`}>
           <div class="cashflow-meta">
             <p>{row.label}</p>
             <span class:positive={row.net >= 0} class:negative={row.net < 0}>{formatCurrency(row.net, { signed: true, compact: true })}</span>
@@ -738,7 +739,7 @@
             <span class="bar-income" style={`width: ${barWidth(row.income, cashFlowMax)}`}></span>
             <span class="bar-spending" style={`width: ${barWidth(row.spending, cashFlowMax)}`}></span>
           </div>
-        </div>
+        </a>
       {/each}
     </div>
 
@@ -1241,6 +1242,27 @@
 
   .category-meter.previous span {
     background: linear-gradient(90deg, #d5dee8, #b7c9da);
+  }
+
+  .drilldown-link {
+    text-decoration: none;
+    color: inherit;
+    border-radius: 0.65rem;
+    transition: background 0.15s;
+  }
+
+  .drilldown-link:hover {
+    background: rgba(10, 61, 89, 0.04);
+  }
+
+  a.cashflow-row-compact {
+    padding: 0.35rem 0.5rem;
+    margin: -0.35rem -0.5rem;
+  }
+
+  a.category-row {
+    padding: 0.35rem 0.5rem;
+    margin: -0.35rem -0.5rem;
   }
 
   .transaction-main,

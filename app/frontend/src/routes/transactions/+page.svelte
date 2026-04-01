@@ -62,6 +62,32 @@
     entries: RegisterEntry[];
   };
 
+  type ActivityTransaction = {
+    date: string;
+    payee: string;
+    accountLabel: string;
+    importAccountId: string | null;
+    category: string;
+    categoryAccount: string;
+    amount: number;
+    isIncome: boolean;
+    isUnknown: boolean;
+  };
+
+  type ActivityResult = {
+    baseCurrency: string;
+    period: string | null;
+    category: string | null;
+    month: string | null;
+    transactions: ActivityTransaction[];
+    totalCount: number;
+  };
+
+  type ActivityDateGroup = {
+    header: string;
+    transactions: ActivityTransaction[];
+  };
+
   type ActionLink = {
     href: string;
     label: string;
@@ -110,6 +136,15 @@
   let error = '';
   let loading = true;
   let registerLoading = false;
+
+  // Activity view state
+  let activityMode = false;
+  let activityResult: ActivityResult | null = null;
+  let activityLoading = false;
+  let activityError = '';
+  let activityPeriod: 'this-month' | 'last-30' | 'last-3-months' = 'last-3-months';
+  let activityCategory: string | null = null;
+  let activityMonth: string | null = null;
   let postedEntries: RegisterEntry[] = [];
   let pendingEntries: RegisterEntry[] = [];
   let pendingTransferCount = 0;
@@ -255,6 +290,119 @@
     }
   }
 
+  function monthTitle(month: string): string {
+    const parsed = new Date(`${month}-01T00:00:00`);
+    return new Intl.DateTimeFormat(undefined, { month: 'long', year: 'numeric' }).format(parsed);
+  }
+
+  function activityShortDate(value: string): string {
+    const parsed = new Date(`${value}T00:00:00`);
+    return new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' }).format(parsed);
+  }
+
+  function groupActivityByDate(transactions: ActivityTransaction[]): ActivityDateGroup[] {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const yesterday = new Date(today);
+    yesterday.setDate(yesterday.getDate() - 1);
+    const todayStr = today.toISOString().slice(0, 10);
+    const yesterdayStr = yesterday.toISOString().slice(0, 10);
+
+    const groups: ActivityDateGroup[] = [];
+    let currentGroup: ActivityDateGroup | null = null;
+
+    for (const tx of transactions) {
+      const header = tx.date === todayStr ? 'Today'
+        : tx.date === yesterdayStr ? 'Yesterday'
+        : activityShortDate(tx.date);
+
+      if (!currentGroup || currentGroup.header !== header) {
+        currentGroup = { header, transactions: [] };
+        groups.push(currentGroup);
+      }
+      currentGroup.transactions.push(tx);
+    }
+    return groups;
+  }
+
+  async function loadActivity() {
+    activityLoading = true;
+    activityError = '';
+
+    const params = new URLSearchParams();
+    if (activityMonth) {
+      params.set('month', activityMonth);
+    } else {
+      params.set('period', activityPeriod);
+    }
+    if (activityCategory) {
+      params.set('category', activityCategory);
+    }
+
+    try {
+      activityResult = await apiGet<ActivityResult>(`/api/transactions/activity?${params.toString()}`);
+      baseCurrency = activityResult.baseCurrency;
+    } catch (e) {
+      activityError = String(e);
+      activityResult = null;
+    } finally {
+      activityLoading = false;
+    }
+  }
+
+  function updateActivityUrl(replaceState = false) {
+    const params = new URLSearchParams();
+    params.set('view', 'activity');
+    if (activityMonth) {
+      params.set('month', activityMonth);
+    } else if (activityPeriod !== 'last-3-months') {
+      params.set('period', activityPeriod);
+    }
+    if (activityCategory) {
+      params.set('category', activityCategory);
+    }
+    void goto(`/transactions?${params.toString()}`, {
+      replaceState,
+      noScroll: true,
+      keepFocus: true
+    });
+  }
+
+  function setActivityPeriod(preset: 'this-month' | 'last-30' | 'last-3-months') {
+    activityPeriod = preset;
+    activityMonth = null;
+    updateActivityUrl(true);
+    void loadActivity();
+  }
+
+  function clearActivityMonth() {
+    activityMonth = null;
+    updateActivityUrl(true);
+    void loadActivity();
+  }
+
+  function clearActivityCategory() {
+    activityCategory = null;
+    updateActivityUrl(true);
+    void loadActivity();
+  }
+
+  function switchToActivity() {
+    activityMode = true;
+    updateActivityUrl();
+    void loadActivity();
+  }
+
+  function switchToRegister() {
+    activityMode = false;
+    const accountId = selectedAccountId || (trackedAccounts[0]?.id ?? '');
+    if (accountId) {
+      void syncSelection(accountId);
+    } else {
+      void goto('/transactions', { replaceState: true, noScroll: true, keepFocus: true });
+    }
+  }
+
   async function syncSelection(accountId: string, replaceState = false) {
     if (!accountId) return;
     if (accountId === selectedAccountId && register?.accountId === accountId) return;
@@ -283,6 +431,21 @@
       loadAllAccounts()
     ]);
     trackedAccounts = accountsData.trackedAccounts;
+
+    // Check for activity view mode
+    const viewParam = $page.url.searchParams.get('view');
+    if (viewParam === 'activity') {
+      activityMode = true;
+      activityCategory = $page.url.searchParams.get('category') || null;
+      activityMonth = $page.url.searchParams.get('month') || null;
+      const periodParam = $page.url.searchParams.get('period');
+      if (periodParam === 'this-month' || periodParam === 'last-30' || periodParam === 'last-3-months') {
+        activityPeriod = periodParam;
+      }
+      await loadActivity();
+      return;
+    }
+
     if (trackedAccounts.length === 0) return;
 
     const requestedAccountId = $page.url.searchParams.get('accountId') ?? '';
@@ -483,6 +646,7 @@
   $: registerUnknownCount = postedEntries.filter((entry) => entry.isUnknown).length;
   $: primaryAction = registerPrimaryAction(selectedAccount, registerUnknownCount);
   $: secondaryActions = registerSecondaryActions(selectedAccount);
+  $: activityGroups = groupActivityByDate(activityResult?.transactions ?? []);
 
   onMount(async () => {
     loading = true;
@@ -518,7 +682,7 @@
       <a class="btn btn-primary" href="/setup">Open setup</a>
     </div>
   </section>
-{:else if trackedAccounts.length === 0}
+{:else if !activityMode && trackedAccounts.length === 0}
   <section class="view-card transactions-hero">
     <p class="eyebrow">Transactions</p>
     <h2 class="page-title">{workspaceName || 'Workspace'} does not have any accounts yet</h2>
@@ -528,7 +692,112 @@
       <a class="text-link" href="/accounts">Open accounts</a>
     </div>
   </section>
+{:else if activityMode}
+  <section class="view-card transactions-hero activity-hero">
+    <div class="hero-copy">
+      <p class="eyebrow">Transactions</p>
+      <h2 class="page-title">All activity</h2>
+      <p class="subtitle">Cross-account transactions matching your filters.</p>
+    </div>
+
+    <div class="hero-side">
+      <div class="view-toggle">
+        <button class="view-toggle-btn active" type="button">All activity</button>
+        <button class="view-toggle-btn" type="button" on:click={switchToRegister}>Account view</button>
+      </div>
+    </div>
+  </section>
+
+  <section class="view-card activity-filters-card">
+    <div class="activity-filter-bar">
+      {#if activityMonth}
+        <div class="filter-chip-group">
+          <span class="filter-label">Month</span>
+          <span class="filter-chip">
+            {monthTitle(activityMonth)}
+            <button class="filter-clear" type="button" on:click={clearActivityMonth} aria-label="Clear month filter">&times;</button>
+          </span>
+        </div>
+      {:else}
+        <div class="activity-presets">
+          <button class:active={activityPeriod === 'this-month'} on:click={() => setActivityPeriod('this-month')}>This month</button>
+          <button class:active={activityPeriod === 'last-30'} on:click={() => setActivityPeriod('last-30')}>Last 30 days</button>
+          <button class:active={activityPeriod === 'last-3-months'} on:click={() => setActivityPeriod('last-3-months')}>Last 3 months</button>
+        </div>
+      {/if}
+
+      {#if activityCategory}
+        <div class="filter-chip-group">
+          <span class="filter-label">Category</span>
+          <span class="filter-chip">
+            {activityResult?.transactions[0]?.category || activityCategory.split(':').slice(1).join(' / ')}
+            <button class="filter-clear" type="button" on:click={clearActivityCategory} aria-label="Clear category filter">&times;</button>
+          </span>
+        </div>
+      {/if}
+    </div>
+  </section>
+
+  {#if activityError}
+    <section class="view-card">
+      <p class="error-text">{activityError}</p>
+    </section>
+  {:else if activityLoading}
+    <section class="view-card">
+      <div class="empty-panel">
+        <h4>Loading transactions</h4>
+        <p>Fetching cross-account activity.</p>
+      </div>
+    </section>
+  {:else if !activityResult || activityResult.transactions.length === 0}
+    <section class="view-card">
+      <div class="empty-panel">
+        <h4>No transactions match these filters</h4>
+        <p>Try a different time range or clear the category filter to see more.</p>
+        <div class="actions" style="margin-top: 0.75rem;">
+          {#if activityCategory || activityMonth}
+            <button class="btn" type="button" on:click={() => { activityCategory = null; activityMonth = null; activityPeriod = 'last-3-months'; updateActivityUrl(true); void loadActivity(); }}>Clear all filters</button>
+          {/if}
+        </div>
+      </div>
+    </section>
   {:else}
+    <section class="view-card activity-list-card">
+      <div class="section-head">
+        <div>
+          <p class="eyebrow">Results</p>
+          <h3>{activityResult.totalCount} {activityResult.totalCount === 1 ? 'transaction' : 'transactions'}</h3>
+        </div>
+      </div>
+
+      <div class="activity-list">
+        {#each activityGroups as group, gi}
+          <div class="date-group" class:date-group-first={gi === 0}>
+            <h4 class="date-header">{group.header}</h4>
+            {#each group.transactions as tx}
+              <div class="activity-row">
+                <div class="activity-main">
+                  <p class="activity-payee">{tx.payee}</p>
+                  <p class="activity-meta">
+                    {activityShortDate(tx.date)} · {tx.accountLabel} · {tx.category}
+                  </p>
+                </div>
+                <div class="activity-side">
+                  <p class:positive={tx.amount > 0} class:negative={tx.amount < 0} class="activity-amount">
+                    {formatCurrency(tx.amount, { signed: true })}
+                  </p>
+                  {#if tx.isUnknown}
+                    <a class="pill warn" href="/unknowns">Needs review</a>
+                  {/if}
+                </div>
+              </div>
+            {/each}
+          </div>
+        {/each}
+      </div>
+    </section>
+  {/if}
+{:else}
   <section class="view-card transactions-hero">
     <div class="hero-copy">
       <p class="eyebrow">Transactions</p>
@@ -545,6 +814,11 @@
     </div>
 
     <div class="hero-side">
+      <div class="view-toggle">
+        <button class="view-toggle-btn" type="button" on:click={switchToActivity}>All activity</button>
+        <button class="view-toggle-btn active" type="button">Account view</button>
+      </div>
+
       <div class="field">
         <label for="account-select">Account</label>
         <select id="account-select" bind:value={selectedAccountId} on:change={handleAccountChange}>
@@ -1438,5 +1712,221 @@
     display: flex;
     gap: 0.7rem;
     justify-content: flex-end;
+  }
+
+  /* --- View Toggle --- */
+  .view-toggle {
+    display: inline-flex;
+    gap: 0.15rem;
+    padding: 0.15rem;
+    border-radius: 999px;
+    background: rgba(10, 61, 89, 0.06);
+  }
+
+  .view-toggle-btn {
+    padding: 0.3rem 0.75rem;
+    border: none;
+    border-radius: 999px;
+    background: transparent;
+    color: var(--muted-foreground);
+    font-size: 0.82rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+  }
+
+  .view-toggle-btn.active {
+    background: #fff;
+    color: var(--foreground);
+    box-shadow: 0 1px 3px rgba(10, 61, 89, 0.1);
+  }
+
+  .view-toggle-btn:hover:not(.active) {
+    color: var(--foreground);
+  }
+
+  /* --- Activity View --- */
+  .activity-hero {
+    background:
+      radial-gradient(circle at top left, rgba(214, 235, 220, 0.86), transparent 34%),
+      linear-gradient(155deg, #fbfdf8 0%, #f6fbff 60%, #eef6f3 100%);
+  }
+
+  .activity-filters-card {
+    padding: 1rem 1.5rem;
+  }
+
+  .activity-filter-bar {
+    display: flex;
+    gap: 1rem;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+
+  .activity-presets {
+    display: inline-flex;
+    gap: 0.15rem;
+    padding: 0.15rem;
+    border-radius: 999px;
+    background: rgba(10, 61, 89, 0.06);
+  }
+
+  .activity-presets button {
+    padding: 0.25rem 0.65rem;
+    border: none;
+    border-radius: 999px;
+    background: transparent;
+    color: var(--muted-foreground);
+    font-size: 0.78rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+  }
+
+  .activity-presets button.active {
+    background: #fff;
+    color: var(--foreground);
+    box-shadow: 0 1px 3px rgba(10, 61, 89, 0.1);
+  }
+
+  .activity-presets button:hover:not(.active) {
+    color: var(--foreground);
+  }
+
+  .filter-chip-group {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+  }
+
+  .filter-label {
+    font-size: 0.78rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--muted-foreground);
+  }
+
+  .filter-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.2rem 0.55rem;
+    border-radius: 999px;
+    background: rgba(15, 95, 136, 0.08);
+    color: var(--brand-strong);
+    font-size: 0.82rem;
+    font-weight: 600;
+    border: 1px solid rgba(15, 95, 136, 0.14);
+  }
+
+  .filter-clear {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.1rem;
+    height: 1.1rem;
+    border: none;
+    border-radius: 50%;
+    background: rgba(15, 95, 136, 0.12);
+    color: var(--brand-strong);
+    font-size: 0.85rem;
+    line-height: 1;
+    cursor: pointer;
+    padding: 0;
+    transition: background 0.15s;
+  }
+
+  .filter-clear:hover {
+    background: rgba(15, 95, 136, 0.22);
+  }
+
+  .activity-list-card {
+    overflow: hidden;
+  }
+
+  .activity-list {
+    display: grid;
+  }
+
+  .date-group + .date-group {
+    margin-top: 0.65rem;
+    padding-top: 0.65rem;
+    border-top: 1px solid rgba(10, 61, 89, 0.08);
+  }
+
+  .date-header {
+    margin: 0;
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--muted-foreground);
+    font-weight: 700;
+  }
+
+  .activity-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 1rem;
+    padding: 0.65rem 0;
+    border-bottom: 1px solid rgba(10, 61, 89, 0.05);
+  }
+
+  .activity-row:last-child {
+    border-bottom: none;
+  }
+
+  .activity-main {
+    display: grid;
+    gap: 0.2rem;
+    min-width: 0;
+  }
+
+  .activity-payee {
+    font-weight: 700;
+  }
+
+  .activity-meta {
+    color: var(--muted-foreground);
+    font-size: 0.88rem;
+  }
+
+  .activity-side {
+    display: grid;
+    gap: 0.2rem;
+    justify-items: end;
+    flex-shrink: 0;
+  }
+
+  .activity-amount {
+    font-weight: 700;
+    white-space: nowrap;
+  }
+
+  a.pill.warn {
+    text-decoration: none;
+  }
+
+  @media (max-width: 980px) {
+    .activity-hero {
+      grid-template-columns: 1fr;
+    }
+
+    .activity-filter-bar {
+      flex-direction: column;
+      align-items: flex-start;
+    }
+  }
+
+  @media (max-width: 720px) {
+    .activity-row {
+      flex-direction: column;
+      gap: 0.3rem;
+    }
+
+    .activity-side {
+      justify-items: start;
+    }
   }
 </style>
