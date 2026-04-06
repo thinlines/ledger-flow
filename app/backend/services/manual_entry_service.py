@@ -25,6 +25,7 @@ SYSTEM_METADATA_KEYS = frozenset({
     "source_payload_hash", "source_file_sha256", "importer_version",
     "transfer_id", "transfer_peer_account_id", "transfer_type",
     "transfer_match_state", "transfer_state",
+    "match-id",
 })
 
 TIER_LABELS = {1: "date_exact_amount", 2: "date_close_amount", 3: "date_payee", 4: "payee_only"}

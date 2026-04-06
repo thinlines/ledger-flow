@@ -7,6 +7,7 @@ from decimal import Decimal
 from pathlib import Path
 from uuid import uuid4
 
+from .archive_service import archive_manual_entry, rollback_archive
 from .config_service import infer_account_kind
 from .manual_entry_service import (
     _extract_user_metadata_lines,
@@ -73,6 +74,15 @@ def _load_payee_rules(accounts_dat: Path) -> dict[str, str]:
             payee = line.strip()[len("payee "):].strip()
             mapping[payee.lower()] = current_account
     return mapping
+
+
+def _block_has_match_id_tag(lines: list[str]) -> bool:
+    """Return True if any line in the block is a ``; match-id:`` comment."""
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith(";") and "match-id:" in stripped:
+            return True
+    return False
 
 
 def _iter_transaction_ranges(lines: list[str]) -> list[tuple[int, int]]:
@@ -698,128 +708,177 @@ def apply_unknown_mappings(
             )
             processed_line_nos.add(int(txn["lineNo"]))
 
-    # Match selections: replace unknown posting with manual entry's destination, remove manual entry.
-    manual_removal_ranges: list[tuple[int, int, str]] = []  # (start_idx, end_idx, group_key)
-    match_tag_start_lines: list[int] = []  # 0-indexed start lines that need :manual: tag
-    for group in scanned_groups:
-        selection = selections.get(group["groupKey"])
-        if not selection or selection.get("selectionType") != "match":
-            continue
+    # --- Match-apply section ---------------------------------------------
+    # Matched manual entries are archived (not deleted) so a future unmatch can
+    # restore them. The archive is linked 1:1 to the main-journal imported
+    # transaction via a shared match-id UUID. Archive writes happen before
+    # main-journal removal; on any failure from here through the journal write
+    # we rollback the archive to its pre-apply size (or remove it if new).
+    archived_path = journal_path.parent / "archived-manual.journal"
+    archive_size_before = archived_path.stat().st_size if archived_path.exists() else None
 
-        matched_manual_line_range = selection.get("matchedManualLineRange")
-        if not matched_manual_line_range or len(matched_manual_line_range) < 2:
-            warnings.append({"groupKey": group["groupKey"], "warning": "Match selection is missing manual entry line range"})
-            continue
-
-        manual_start = int(matched_manual_line_range[0])
-        manual_end = int(matched_manual_line_range[1])
-
-        if manual_start < 1 or manual_end > len(original_lines):
-            warnings.append({"groupKey": group["groupKey"], "warning": "Manual entry is no longer available (line range out of bounds)"})
-            continue
-
-        manual_lines = original_lines[manual_start - 1 : manual_end]
-        if not has_manual_tag(manual_lines):
-            warnings.append({"groupKey": group["groupKey"], "warning": "Manual entry is no longer available (missing :manual: tag)"})
-            continue
-
-        source_ledger = group.get("sourceLedgerAccount", "")
-        destination = _parse_manual_entry_destination(manual_lines, source_ledger)
-        if not destination:
-            warnings.append({"groupKey": group["groupKey"], "warning": "Manual entry does not have a usable destination account"})
-            continue
-
-        user_metadata_lines = _extract_user_metadata_lines(manual_lines)
-        metadata_updates: dict[str, str | None] = {}
-        for meta_line in user_metadata_lines:
-            mm = META_RE.match(meta_line)
-            if mm:
-                metadata_updates[mm.group(1).strip().lower()] = mm.group(2).strip()
-
-        for txn in group["txns"]:
-            if txn["lineNo"] in processed_line_nos:
-                warnings.append(
-                    {"groupKey": group["groupKey"], "warning": f"Line {txn['lineNo']} was already resolved"}
-                )
+    try:
+        # Collect match selections. One match-id per group, shared between the
+        # main-journal stamp and the archived manual entry.
+        manual_removal_ranges: list[tuple[int, int, str, str]] = []  # (start_idx, end_idx, group_key, match_id)
+        match_tag_entries: list[tuple[int, str]] = []  # (0-indexed txn start line, match_id)
+        for group in scanned_groups:
+            selection = selections.get(group["groupKey"])
+            if not selection or selection.get("selectionType") != "match":
                 continue
 
-            _queue_operation(
-                operations_by_start,
-                _build_operation(
-                    group_key=group["groupKey"],
-                    transaction_start_line=int(txn["transactionStartLine"]),
-                    transaction_end_line=int(txn["transactionEndLine"]),
-                    posting_line_no=int(txn["lineNo"]),
-                    target_account=destination,
-                    expected_unknown=True,
-                    metadata_updates=metadata_updates,
-                ),
-            )
-            match_tag_start_lines.append(int(txn["transactionStartLine"]) - 1)
-            processed_line_nos.add(int(txn["lineNo"]))
+            matched_manual_line_range = selection.get("matchedManualLineRange")
+            if not matched_manual_line_range or len(matched_manual_line_range) < 2:
+                warnings.append({"groupKey": group["groupKey"], "warning": "Match selection is missing manual entry line range"})
+                continue
 
-        manual_removal_ranges.append((manual_start - 1, manual_end, group["groupKey"]))
+            manual_start = int(matched_manual_line_range[0])
+            manual_end = int(matched_manual_line_range[1])
 
-    lines = list(original_lines)
-    applied_count = 0
-    for _, operation in sorted(operations_by_start.items(), key=lambda item: item[0], reverse=True):
-        lines, warning = _apply_operation(lines, operation)
-        if warning is not None:
-            warnings.append({"groupKey": operation["groupKey"], "warning": warning})
-            continue
-        applied_count += 1
+            if manual_start < 1 or manual_end > len(original_lines):
+                warnings.append({"groupKey": group["groupKey"], "warning": "Manual entry is no longer available (line range out of bounds)"})
+                continue
 
-    # Insert :manual: tag into matched imported transactions (before removing manual entries).
-    # Process in reverse order to preserve line indices.
-    for start_idx in sorted(set(match_tag_start_lines), reverse=True):
-        if start_idx >= len(lines):
-            continue
-        # Check if :manual: tag already exists in this transaction block.
-        has_tag = False
-        for i in range(start_idx + 1, min(start_idx + 20, len(lines))):
-            if TXN_START_RE.match(lines[i]):
-                break
-            if ":manual:" in lines[i]:
-                has_tag = True
-                break
-        if not has_tag:
-            lines.insert(start_idx + 1, "    ; :manual:")
+            manual_lines = original_lines[manual_start - 1 : manual_end]
+            if not has_manual_tag(manual_lines):
+                warnings.append({"groupKey": group["groupKey"], "warning": "Manual entry is no longer available (missing :manual: tag)"})
+                continue
 
-    # Remove matched manual entries in reverse order to preserve line stability.
-    for start_idx, end_idx, group_key in sorted(manual_removal_ranges, key=lambda r: r[0], reverse=True):
-        # Find the manual entry by scanning for :manual: tag near expected position.
-        # Lines may have shifted due to metadata inserts and tag additions above.
-        # Search for the manual entry header and tag within a reasonable window.
-        found_start = None
-        for i in range(max(0, start_idx - 10), min(len(lines), start_idx + 10)):
-            if TXN_START_RE.match(lines[i]):
-                # Check if this transaction has :manual: tag
-                for j in range(i + 1, min(i + 10, len(lines))):
-                    if TXN_START_RE.match(lines[j]):
-                        break
-                    if ":manual:" in lines[j]:
+            source_ledger = group.get("sourceLedgerAccount", "")
+            destination = _parse_manual_entry_destination(manual_lines, source_ledger)
+            if not destination:
+                warnings.append({"groupKey": group["groupKey"], "warning": "Manual entry does not have a usable destination account"})
+                continue
+
+            user_metadata_lines = _extract_user_metadata_lines(manual_lines)
+            metadata_updates: dict[str, str | None] = {}
+            for meta_line in user_metadata_lines:
+                mm = META_RE.match(meta_line)
+                if mm:
+                    metadata_updates[mm.group(1).strip().lower()] = mm.group(2).strip()
+
+            match_id = str(uuid4())
+
+            for txn in group["txns"]:
+                if txn["lineNo"] in processed_line_nos:
+                    warnings.append(
+                        {"groupKey": group["groupKey"], "warning": f"Line {txn['lineNo']} was already resolved"}
+                    )
+                    continue
+
+                _queue_operation(
+                    operations_by_start,
+                    _build_operation(
+                        group_key=group["groupKey"],
+                        transaction_start_line=int(txn["transactionStartLine"]),
+                        transaction_end_line=int(txn["transactionEndLine"]),
+                        posting_line_no=int(txn["lineNo"]),
+                        target_account=destination,
+                        expected_unknown=True,
+                        metadata_updates=metadata_updates,
+                    ),
+                )
+                match_tag_entries.append((int(txn["transactionStartLine"]) - 1, match_id))
+                processed_line_nos.add(int(txn["lineNo"]))
+
+            manual_removal_ranges.append((manual_start - 1, manual_end, group["groupKey"], match_id))
+
+        lines = list(original_lines)
+        applied_count = 0
+        for _, operation in sorted(operations_by_start.items(), key=lambda item: item[0], reverse=True):
+            lines, warning = _apply_operation(lines, operation)
+            if warning is not None:
+                warnings.append({"groupKey": operation["groupKey"], "warning": warning})
+                continue
+            applied_count += 1
+
+        # Stamp matched imported transactions with :manual: and match-id: tags.
+        # Convention: :manual: on line 2 of the block, match-id: on line 3.
+        # :manual: marks the transaction as carrying its destination from a manual entry;
+        # match-id: links it to the archived manual entry (used by a future unmatch).
+        # Process in reverse order to preserve line indices as we insert.
+        # Insertions both happen at start_idx+1, so inserting match-id FIRST and
+        # :manual: SECOND yields the desired order header → :manual: → match-id → rest.
+        # Dedup guards are defensive — tags should not already be present.
+        for start_idx, match_id in sorted(set(match_tag_entries), key=lambda t: t[0], reverse=True):
+            if start_idx >= len(lines):
+                continue
+            has_manual = False
+            has_match_id = False
+            for i in range(start_idx + 1, min(start_idx + 20, len(lines))):
+                if TXN_START_RE.match(lines[i]):
+                    break
+                if ":manual:" in lines[i]:
+                    has_manual = True
+                if "match-id:" in lines[i]:
+                    has_match_id = True
+            if not has_match_id:
+                lines.insert(start_idx + 1, f"    ; match-id: {match_id}")
+            if not has_manual:
+                lines.insert(start_idx + 1, "    ; :manual:")
+
+        # Archive then remove matched manual entries in reverse order to keep line indices stable.
+        for start_idx, end_idx, group_key, match_id in sorted(manual_removal_ranges, key=lambda r: r[0], reverse=True):
+            # Find the manual entry by scanning for :manual: tag near expected position.
+            # Lines may have shifted due to metadata inserts and tag additions above.
+            # A manual entry has :manual: AND no import_account_id. Matched imported
+            # transactions also carry :manual: (inserted by this very flow) but have
+            # import_account_id, so we must skip those to avoid removing the wrong record.
+            found_start = None
+            for i in range(max(0, start_idx - 10), min(len(lines), start_idx + 10)):
+                if TXN_START_RE.match(lines[i]):
+                    block_has_manual = False
+                    block_has_import_account_id = False
+                    for j in range(i + 1, min(i + 10, len(lines))):
+                        if TXN_START_RE.match(lines[j]):
+                            break
+                        if ":manual:" in lines[j]:
+                            block_has_manual = True
+                        if "import_account_id:" in lines[j]:
+                            block_has_import_account_id = True
+                    if block_has_manual and not block_has_import_account_id:
                         found_start = i
                         break
-                if found_start is not None:
+
+            if found_start is None:
+                continue
+
+            # Find the end of this transaction block.
+            found_end = len(lines)
+            for i in range(found_start + 1, len(lines)):
+                if TXN_START_RE.match(lines[i]):
+                    found_end = i
                     break
 
-        if found_start is None:
-            continue
+            # Extract the block content (without trailing blank lines) for archiving.
+            archive_end = found_end
+            while archive_end > found_start + 1 and not lines[archive_end - 1].strip():
+                archive_end -= 1
+            block_lines = lines[found_start:archive_end]
 
-        # Find the end of this transaction block.
-        found_end = len(lines)
-        for i in range(found_start + 1, len(lines)):
-            if TXN_START_RE.match(lines[i]):
-                found_end = i
-                break
+            # Archive the manual entry block before removal.
+            # Edge case: a manual entry already carrying a match-id: tag implies a prior
+            # match. Skip archive write (don't risk duplicating), surface a warning, and
+            # continue with removal — strictly better than silent data loss.
+            if _block_has_match_id_tag(block_lines):
+                warnings.append({
+                    "groupKey": group_key,
+                    "warning": "Manual entry already carries a match-id tag; skipping archive write (possible prior match)",
+                })
+            else:
+                archive_manual_entry(archived_path, match_id, block_lines)
 
-        # Remove trailing blank lines.
-        while found_end < len(lines) and not lines[found_end].strip():
-            found_end += 1
+            # Remove trailing blank lines from the main journal range (existing behavior).
+            while found_end < len(lines) and not lines[found_end].strip():
+                found_end += 1
 
-        lines[found_start:found_end] = []
+            lines[found_start:found_end] = []
 
-    journal_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        journal_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    except Exception:
+        rollback_archive(archived_path, archive_size_before)
+        raise
+
     return applied_count, warnings
 
 
