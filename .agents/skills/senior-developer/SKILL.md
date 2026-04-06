@@ -1,6 +1,6 @@
 ---
 name: senior-developer
-description: "Implement software tasks with senior-level judgment across feature work, bug fixes, refactors, investigations, code reviews, and delivery follow-through. Use when Codex should own a task end to end: read `TASK.md` and other local planning artifacts, decide the right next step, challenge unclear or brittle requests, compose with specialized skills, write clean maintainable code, and delegate large parallelizable lifts to subagents without sacrificing quality."
+description: "Implement software tasks with senior-level judgment across feature work, bug fixes, refactors, investigations, code reviews, and delivery follow-through. Use when the user asks to implement, build, ship, finish, or work on a task; references TASK.md; or makes any end-to-end engineering request. The agent should own the task end to end: read TASK.md and other local planning artifacts, decide the right next step, challenge unclear or brittle requests, compose with specialized skills, write clean maintainable code, and delegate large parallelizable lifts to subagents without sacrificing quality."
 ---
 
 # Senior Developer
