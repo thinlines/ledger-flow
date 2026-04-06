@@ -93,3 +93,17 @@ This document records stable product and architecture choices that explain why t
 **Why:** Action card patterns assume a steady stream of heterogeneous alerts (bill due dates, budget alerts, sync failures, anomaly flags). Ledger Flow's data model produces 0–2 actionable signals at any given time. A dedicated section that's usually empty creates anxiety ("should something be here?") and imposes an abstraction tax: every future feature must decide whether it generates a card, cards need priority weights, and dismissal state needs persistence. Inline signals are cheaper to build, contextually richer, and avoid the empty-state problem entirely.
 
 **Implication:** New features that surface actionable state should embed indicators next to the data they relate to (e.g., staleness next to account balance, review badge next to transaction) rather than registering with a centralized action-card system. The Today rail remains the single CTA surface for the dominant next action.
+
+## 12. Event Sourcing for Undo; Journals Remain Canonical State
+
+**Decision:** Journal mutations are recorded as events in an append-only log at `workspace/events.jsonl`. Events capture user intent and enable undo via compensating events. Journals remain canonical state. Git serves as periodic snapshots — an escape hatch and future file-sync substrate — not as the undo mechanism.
+
+**Why:** Git auto-commits were initially positioned as the primary safety layer and undo mechanism. In practice they give file-level text diffs, not user-facing undo: `git revert` does not match the granularity users expect (per-transaction, partial, drift-aware), and per-mutation commits duplicate what an event log captures more faithfully. Event sourcing separates causality (why a change happened) from state (what the journal currently is), enables partial undo when some affected transactions have drifted, records user intent as first-class data, and generalizes cleanly to future multi-user sync.
+
+**Implication:**
+- `workspace/events.jsonl` holds append-only events with UUIDv7 identifiers, an `actor` field, a `compensates` link, and `journal_refs` with content hashes.
+- Compensating events are first-class event types (e.g., `unknowns.reverted.v1`) linked back to the forward event via `compensates`.
+- Undo walks the log backward, applies inverse actions, checks per-event `hash_after` against current state, and produces a partial-undo report when drift is detected.
+- External edits to journals (outside the app, while running or down) are detected by pre-mutation and startup hash checks, which append `journal.external_edit_detected.v1` marker events. The system does not attempt to reconstruct what the user did externally.
+- Git commits become periodic snapshots (on server shutdown or daily), not per-mutation. They preserve a file-level recovery path and remain the substrate for future multi-user file sync.
+- Precedence when sources disagree: journals > events > git. The app never overwrites journal content on the basis of the event log alone.

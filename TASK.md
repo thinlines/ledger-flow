@@ -2,215 +2,195 @@
 
 ## Title
 
-Dashboard drill-down: clickable insights and cross-account activity view (Feature 4)
+Preserve matched manual entries via UUID-linked archive journal
 
 ## Objective
 
-Dashboard category trends and cash flow rows become clickable links that open a filterable cross-account activity view on the transactions page. Users can investigate what they see on the dashboard without switching mental context or manually navigating to per-account registers.
+When a manual transaction is matched to an imported transaction during unknowns review, the manual entry is no longer deleted. It is moved to a non-canonical archive journal and linked to the imported transaction by a shared `match-id` UUID. This closes the acute data-loss bug where matched manual entries disappear permanently on import undo, and establishes the reversible link that a future unmatch action will use.
 
 ## Scope
 
 ### Included
 
-- Backend: new `/api/transactions/activity` endpoint returning cross-account transactions with optional category and month filters.
-- Frontend (transactions page): new "All activity" view mode alongside the existing per-account register, with date-period presets and optional category filter.
-- Frontend (dashboard): category trend rows link to `/transactions?view=activity&category={account}` filtered to the current month. Cash flow month rows link to `/transactions?view=activity&month={YYYY-MM}`.
-- URL-param filter state so dashboard links work as deep links and browser back preserves context.
+- New archive file: `workspace/journals/archived-manual.journal`, never `include`d in loaded journals.
+- Archive writer: append matched manual entry blocks, stamp each with `; match-id: <uuid>`.
+- `unknowns_service.apply_unknown_mappings` match branch: replace in-place deletion with archive-then-remove.
+- Stamp `; match-id: <uuid>` on the matched imported transaction, in addition to the existing `; :manual:` tag.
+- UUIDv4 generation per match group (one UUID per match, shared between archive entry and main-journal stamp).
+- Rollback safety: record archive file size before any write; truncate back on failure before raising.
+- Unit tests: archive creation with header, append on subsequent match, match-id consistency, main-journal integrity after archive-move, rollback on simulated write failure.
+- Ledger CLI round-trip test: main-journal balances unchanged before vs. after a match.
 
 ### Explicitly Excluded
 
-- Changes to the per-account register view (existing behavior untouched).
-- Transaction editing (deferred).
-- Custom date-range picker (presets only for now).
-- Changes to the dashboard layout, hero, balance sheet, or recent activity panel.
-- Changes to import, review, rules, setup, or accounts pages.
-- Pagination (the activity view returns all matching transactions; the 6-month window keeps volume manageable).
+- Unmatch UI, endpoint, or event (delivered by Feature 5d, Transaction Actions Menu).
+- Promotion of archived entries back to main journal (delivered by Feature 5d).
+- UI browsing or display of archived entries.
+- Changes to `include` directives or loaded-journal composition.
+- Historical migration of previously-matched entries (prospective only).
+- Event-log integration (`match.created.v1` event emission is deferred to Feature 5b).
+- Changes to matching logic, match quality ranking, or the `:manual:` tag semantics.
+- Git auto-commits of the archive file (deferred to Feature 5c snapshots).
 
 ## System Behavior
 
-### 1. Backend: Cross-Account Activity Endpoint
+### Inputs
 
-**Inputs**
+- User selects `match` in unknowns review and applies the stage.
+- `unknowns_service.apply_unknown_mappings(config, stage, selections)` invoked with one or more match selections in `selections`.
 
-- `GET /api/transactions/activity`
-- Optional query params:
-  - `category`: ledger account path (e.g., `Expenses:Food:Groceries`). Filters to transactions that have a posting to this account.
-  - `month`: `YYYY-MM` string. Filters to transactions with `posted_on` in that calendar month.
-  - `period`: preset name — `this-month`, `last-30`, `last-3-months`. Applied only when `month` is absent. Default: `last-3-months`.
+### Logic
 
-**Logic**
+**1. Generate one match-id per match group**
 
-- Load all transactions via `load_transactions(config)` (same as dashboard service).
-- Exclude generated opening balance transactions (`is_generated_opening_balance_transaction`).
-- Apply filters:
-  - If `month` is provided, include only transactions where `posted_on` falls within that calendar month.
-  - If `month` is absent, apply `period` preset relative to today: `this-month` = current calendar month, `last-30` = last 30 calendar days inclusive, `last-3-months` = current month and two prior months.
-  - If `category` is provided, include only transactions that have at least one posting whose account matches `category` exactly or starts with `category:` (to support parent-category filtering like `Expenses:Food` matching `Expenses:Food:Groceries`).
-- For each matching transaction, build a row using the same `_primary_posting`, `_primary_account_display`, and `_transaction_category` helpers from `dashboard_service.py`. Extract these helpers to a shared location if needed, or import them directly.
-- Sort results most-recent-first.
-- Return:
-  ```json
-  {
-    "baseCurrency": "USD",
-    "period": "last-3-months",
-    "category": "Expenses:Food:Groceries" | null,
-    "month": "2026-03" | null,
-    "transactions": [
-      {
-        "date": "2026-03-28",
-        "payee": "Grocery Market",
-        "accountLabel": "Wells Fargo Checking",
-        "importAccountId": "checking" | null,
-        "category": "Food / Groceries",
-        "categoryAccount": "Expenses:Food:Groceries",
-        "amount": -84.30,
-        "isIncome": false,
-        "isUnknown": false
-      }
-    ],
-    "totalCount": 42
-  }
-  ```
+For each `group` in `scanned_groups` where `selection.selectionType == "match"`:
+- Generate `match_id = str(uuid.uuid4())` once per group, stored in a `{group_key: match_id}` map.
+- Use the same `match_id` for both the archived manual entry and the imported-transaction stamp.
 
-**Outputs**
+**2. Stamp match-id on matched imported transactions**
 
-- JSON response with filtered transaction list, echo of active filters, and total count.
+Extend the existing `match_tag_start_lines` loop in [unknowns_service.py:774](app/backend/services/unknowns_service.py#L774). Currently it inserts `    ; :manual:` after the transaction header. After that insert, also insert `    ; match-id: <uuid>` on the following line.
 
-### 2. Frontend: Activity View on Transactions Page
+Resulting block order:
 
-**Inputs**
+```
+2026-03-15 * Whole Foods Market
+    ; :manual:
+    ; match-id: 8f3a2b1c-4d5e-6f78-9012-345678901234
+    ; source_identity: abc123...
+    Expenses:Groceries              $50.00
+    Assets:Checking                -$50.00
+```
 
-- URL query params: `view=activity`, optional `category`, `month`, `period`.
-- User interactions: period preset selector, optional category badge/clear.
+Preserve the existing dedup guard for `:manual:`; add an equivalent guard for `match-id:` (defensive only — collisions should not occur).
 
-**Logic**
+**3. Archive manual entry block before removal**
 
-- On mount, read `$page.url.searchParams`. If `view=activity`, enter activity mode; otherwise, existing per-account register behavior (unchanged).
-- In activity mode:
-  - Fetch `/api/transactions/activity` with the active filters.
-  - Display a period preset selector: **This month** | **Last 30 days** | **Last 3 months**. Default: `last-3-months` unless `month` param overrides it.
-  - When `month` is present, show it as the active time filter (e.g., "March 2026") with a clear button that returns to the default preset.
-  - When `category` is present, show it as an active filter chip (e.g., "Food / Groceries") with a clear button.
-  - Render transactions in a flat list grouped by date (reuse the day-grouping pattern from the dashboard: "Today", "Yesterday", "Mar 27").
-  - Each transaction row shows: payee, date, account label, category, amount (signed, colored).
-- The account-selector dropdown is hidden in activity mode. A "Back to account view" link or the account selector returning switches back to per-account mode.
-- View mode toggle: a segmented control or tab-like element near the top — "All activity" | per-account dropdown. "All activity" is selected when `view=activity`.
+For each match group, before the existing removal at [unknowns_service.py:820](app/backend/services/unknowns_service.py#L820):
+- Extract the manual entry block lines (`lines[found_start:found_end]`, excluding trailing blank lines).
+- Insert `    ; match-id: <uuid>` as the second line of the block (immediately after the transaction header).
+- Append the modified block to `workspace/journals/archived-manual.journal` via the archive writer helper.
+- Then remove the block from the main journal (existing behavior).
 
-**Outputs**
+**4. Archive file format**
 
-- Transactions page renders a cross-account activity list when `view=activity` is in the URL.
-- Filters update the URL via `goto()` so back/forward work.
+First write creates the file with a three-line header:
 
-### 3. Frontend: Dashboard Clickable Links
+```
+; Ledger Flow archived manual entries.
+; Do NOT include this file in main.journal — it duplicates transactions by design.
+; Each entry has a matching `match-id:` tag in a main-journal transaction.
 
-**Inputs**
+2026-03-15 Whole Foods Market
+    ; match-id: 8f3a2b1c-...
+    ; :manual:
+    Expenses:Groceries              $50.00
+    Assets:Checking                -$50.00
 
-- Category trend rows: `row.account` (ledger account path, e.g., `Expenses:Food:Groceries`).
-- Cash flow month rows: `row.month` (e.g., `2026-03`).
+```
 
-**Logic**
+Subsequent writes append only, separated by one blank line. Header is never rewritten.
 
-- Wrap each category trend row in an `<a>` linking to `/transactions?view=activity&category={row.account}`. The link filters to the current month implicitly (the default period will show recent activity including the current month).
-- Wrap each cash flow month row in an `<a>` linking to `/transactions?view=activity&month={row.month}`.
-- Links should be styled to not disrupt the existing visual pattern — no underlines or color changes. Use `text-decoration: none; color: inherit` with a subtle hover indicator (slight background shift or underline).
+**5. Rollback on failure**
 
-**Outputs**
+At entry to the match-apply section, capture `archive_size_before = archived_path.stat().st_size if archived_path.exists() else None`.
 
-- Category trend rows and cash flow rows are clickable. Clicking navigates to the transactions page with the appropriate filter pre-applied.
+On any exception after archive write but before main-journal write completes: truncate `archived-manual.journal` back to `archive_size_before` (or delete if it was `None`), then re-raise.
+
+### Outputs
+
+- `workspace/journals/archived-manual.journal` exists after any match apply, containing the pre-match manual entry(ies).
+- Matched imported transactions in the main journal carry both `; :manual:` and `; match-id: <uuid>` tags.
+- The `match-id` values are identical between the archive entry and the main-journal stamp (1:1 link).
+- Response payload from `unknowns/apply` is unchanged in shape.
 
 ## System Invariants
 
-- The activity view must use the same transaction data source as the dashboard (`load_transactions`). Numbers must be consistent — if the dashboard shows $84.30 in Groceries, the drill-down must include that transaction.
-- Finance-first language only. No "ledger account", "posting", or "journal" in UI copy.
-- The existing per-account register view must be completely unchanged. Activity mode is additive.
-- URL param state must survive page reload — all filters are encoded in query params.
-- Category filtering uses the ledger account path as the key (not the display name) to avoid ambiguity.
+- `archived-manual.journal` is never `include`d by any loaded journal. Ledger CLI must not see it as part of the user's books.
+- Every matched imported transaction has exactly one `match-id:` tag.
+- Every entry in `archived-manual.journal` has exactly one `match-id:` tag.
+- Each `match-id` in the archive corresponds to exactly one `match-id` in a main-journal transaction (1:1 link, no reuse).
+- The archive file is append-only within this task (no updates, no deletes, no rewrites).
+- Archive write failure MUST fail the entire apply operation — data integrity for manual entries outranks partial progress. (Contrast: git/snapshot layer is advisory and fails open. Archive is data-path and fails closed.)
+- The `.bak` backup of the main journal remains the rollback path for main-journal writes; the archive rollback path is size-truncation.
 
 ## States
 
-### Activity View
-- **Default (no filters)**: Shows last 3 months of cross-account activity.
-- **Month filter active**: Shows all transactions in the specified month.
-- **Category filter active**: Shows transactions matching the category, within the active time window.
-- **Both filters active**: Intersection — transactions matching the category within the specified month.
-- **No results**: "No transactions match these filters." with a clear-filters action.
-- **Loading**: Spinner or skeleton consistent with existing transaction page loading state.
-- **Error**: Existing error display pattern.
-
-### Dashboard Links
-- **Category row hover**: Subtle visual indicator (slight background, cursor pointer).
-- **Cash flow row hover**: Same treatment.
+- **No archive file yet**: first match creates the file with header + first entry.
+- **Archive file exists**: subsequent matches append entries with one-line separator.
+- **Match with missing manual entry**: existing warning path ("Manual entry is no longer available") — no archive write, no match-id stamp, no main-journal change.
+- **Multiple matches in one apply**: each group gets a distinct `match-id`; entries appended in deterministic (group) order.
+- **Archive write fails**: archive truncated/removed, main journal unchanged, HTTP 500 raised with context.
 
 ## Edge Cases
 
-- **Category with no activity in the time window**: Empty state with clear-filters option. Not an error.
-- **Month with zero transactions**: Same empty state.
-- **Category account path contains special characters**: URL-encode the `category` param. The backend receives the decoded path.
-- **User navigates directly to `/transactions?view=activity` with no filters**: Shows last 3 months of all activity (default period).
-- **User switches from activity view to per-account and back**: URL params update correctly; activity filters are preserved in the URL and restored when switching back.
-- **Very large result set**: The 3-month default window and optional category filter keep volume reasonable. No pagination in this task — acceptable for personal finance volumes (typically <500 transactions/month).
+- **Repeated structurally-identical manual entries**: each gets a distinct UUID. Archive may contain look-alike entries; this is correct — they are distinct matches.
+- **Manual entry already carries a `match-id:` tag**: should not occur (would imply prior match). Log warning, skip archive write for that group, continue with removal. Surface a warning in the apply response. This is strictly better than data loss.
+- **Concurrent apply requests**: the archive file append uses `open(path, "a", encoding="utf-8")` followed by `write()`. Each apply writes as a single block. Same concurrency caveat as existing journal writes (acknowledged in current codebase).
+- **Archive file becomes large**: no cap in v1. 10,000 matches ≈ 2MB. Acceptable. Rotation is deferred.
+- **User manually edits `archived-manual.journal`**: file is plain text in the workspace — we don't prevent this. If the `match-id` link is broken, future unmatch fails gracefully (warning, no action).
+- **Workspace has no `journals/` directory**: existing code already ensures `journal_path.parent`. Reuse that behavior for the archive path.
+- **Archive write succeeds, main journal write fails (disk full mid-write)**: existing `backup_file()` restores main journal via `.bak`. The archive entry is an orphan. Rollback path (step 5 above) truncates the archive to its pre-apply size, so orphan never surfaces.
 
 ## Failure Behavior
 
-- If the activity endpoint returns an error, show the standard error state. Do not fall back to the per-account view silently — the user clicked a specific filter and should see that it failed.
-- If a `category` param references a nonexistent account, return an empty result set (not a 404). The category may have existed in a prior month but have no current activity.
+- **Archive file write fails** (I/O error, permissions, disk full): log error with context, raise `HTTPException(500)`. Do not proceed with manual-entry removal from main journal. User sees an error; both files remain in pre-apply state.
+- **Exception between archive write and main-journal write**: truncate archive back to `archive_size_before`, then re-raise. Ensures no orphaned archive entries.
+- **Exception during `match-id` stamp insertion** (should be impossible given current validated ranges): main-journal backup via `.bak` is still intact; restore and raise. Archive rolls back per step 5.
+- **`uuid.uuid4()` failure**: treat as code error, let it propagate.
+- Never raise an HTTP error from archive-path logic without first rolling back archive state.
 
 ## Regression Risks
 
-- **Per-account register**: The existing register view must work identically. The `view=activity` param triggers a separate code path; the default (no `view` param or `view` absent) must load the register as before.
-- **Dashboard layout**: Wrapping rows in `<a>` tags could affect flex/grid layout or spacing. Verify category trend and cash flow sections render identically with clickable rows.
-- **Transaction helper extraction**: If `_primary_posting`, `_primary_account_display`, or `_transaction_category` are moved to a shared module, existing dashboard service imports must be updated. Run `uv run pytest -q` to verify.
-- **URL param conflicts**: The transactions page already uses `accountId` as a query param. Ensure `view=activity` and `accountId` don't produce conflicting states — when `view=activity`, `accountId` should be ignored.
+- **Archive file inadvertently `include`d**: if the archive is ever loaded by the ledger CLI, balances double-count matched transactions. **Mitigation**: the archive lives at `workspace/journals/archived-manual.journal` — a path that is NOT referenced in any `include` directive. Add a test that loads the main journal via `ledger_runner` after a match and asserts the balance is unchanged from pre-match.
+- **Tag insertion order**: `:manual:` on line 2, `match-id:` on line 3. Changing order risks breaking existing `:manual:` detection in `has_manual_tag()`. **Mitigation**: insert `match-id:` AFTER `:manual:`, and test that `has_manual_tag()` still returns true on post-stamp blocks.
+- **Existing fixtures without `match-id:` tags**: tests that assert exact matched-journal content must be updated to include the new line. **Mitigation**: grep tests for match-apply assertions and update each.
+- **Staged payloads in `.workflow/stages/*.json`**: already encode manual line ranges; no schema change required. The archive is invisible to staging.
+- **`backup_file()` coverage**: main-journal `.bak` is written by existing code before mutation. Archive has no `.bak` — rollback is by size-truncation. Ensure `archive_size_before` is captured BEFORE first archive write.
+- **Empty manual entry block extraction**: existing code trims trailing blank lines when computing `found_end`. Reuse that same range when archiving, so the archive entry is clean.
 
 ## Acceptance Criteria
 
-- Clicking a category trend row on the dashboard navigates to `/transactions?view=activity&category={account}` and shows matching transactions.
-- Clicking a cash flow month row navigates to `/transactions?view=activity&month={YYYY-MM}` and shows matching transactions.
-- The transactions page shows "All activity" mode with a cross-account transaction list when `view=activity` is in the URL.
-- Period presets (This month, Last 30 days, Last 3 months) filter the visible transactions.
-- Category and month filters can be cleared individually.
-- The per-account register view is completely unchanged when `view` param is absent.
-- Filters are encoded in URL params; page reload preserves filter state.
-- Empty state renders when no transactions match the active filters.
-- Transaction amounts and categories in the activity view match the dashboard exactly.
-- No layout regression in dashboard category trends or cash flow sections.
-- `pnpm check` passes.
-- `uv run pytest -q` passes.
+- After applying a match in unknowns review, `workspace/journals/archived-manual.journal` exists and contains the previously-manual transaction block.
+- The archive entry has a `; match-id: <uuid>` tag as the second line of the block.
+- The matched imported transaction in the main journal has both `; :manual:` and `; match-id: <uuid>` tags.
+- The `match-id` values on the two records are byte-for-byte identical.
+- Running `ledger -f workspace/journals/2026.journal bal` produces balances identical to a control run without this change (archive is not loaded).
+- Running `ledger -f workspace/journals/archived-manual.journal bal` loads successfully (valid ledger format).
+- A second match on a later apply produces a second archive entry with its own `match-id`; the file is appended to, not rewritten.
+- When archive write is simulated to fail, main journal is unchanged and the API returns 500.
+- When archive write succeeds but main-journal write is simulated to fail, archive is truncated back to pre-apply size.
+- `uv run pytest -q` passes in `app/backend`.
+- `pnpm check` passes in `app/frontend` (no frontend change, but verify API contract intact).
 
 ## Proposed Sequence
 
-1. **Backend: build activity service** — create `build_activity_view()` in a new `activity_service.py` (or extend `dashboard_service.py`). Reuse `_primary_posting`, `_primary_account_display`, `_transaction_category` from dashboard service. Accept optional `category`, `month`, `period` params. Write tests covering: unfiltered, month-only, category-only, both filters, empty result, category prefix matching.
-2. **Backend: wire endpoint** — add `GET /api/transactions/activity` in `main.py`. Pass query params to the service function.
-3. **Frontend: activity view scaffold** — add `view` URL param handling to the transactions page. When `view=activity`, render a new activity panel instead of the per-account register. Add the period preset selector. Fetch from the new endpoint.
-4. **Frontend: transaction list rendering** — render activity results with day-grouped date headers (reuse the pattern from dashboard 4b). Show payee, account label, category, and signed amount per row.
-5. **Frontend: filter controls** — add category chip display with clear button. Add month display with clear button. Wire preset selector to update URL and refetch.
-6. **Frontend: view toggle** — add "All activity" option alongside the account-selector dropdown so users can switch between modes.
-7. **Dashboard: clickable category rows** — wrap each category trend row in an `<a>` to `/transactions?view=activity&category={row.account}`. Style for no visual disruption + hover indicator.
-8. **Dashboard: clickable cash flow rows** — wrap each cash flow row in an `<a>` to `/transactions?view=activity&month={row.month}`. Same styling treatment.
-9. **Verify** — run `pnpm check` and `uv run pytest -q`. Test drill-down from dashboard to activity view for both category and cash flow links. Test all period presets. Test filter clearing. Test per-account register is unchanged. Check both breakpoints (1100px, 720px).
+1. **Add archive writer helper** in `unknowns_service.py` (or a new `archive_service.py` if cleaner — judgment call at implementation time). Signature: `archive_manual_entry(workspace_path: Path, match_id: str, block_lines: list[str]) -> None`. Responsibilities: ensure parent dir exists, write header on first call, insert `match-id:` at line 2 of block, append with separator. Unit tests: first write creates file with header; second write appends; path already contains archive with header doesn't duplicate header.
+2. **Modify `apply_unknown_mappings` match branch**: generate `match_id_by_group: dict[str, str]` at the top of the match loop; pass the id into the match-tag insertion loop and the manual-removal loop.
+3. **Update tag-insertion loop** to insert `match-id:` after `:manual:`. Preserve dedup guard for `:manual:`; add one for `match-id:`.
+4. **Update manual-removal loop** to call `archive_manual_entry()` with the extracted block BEFORE deletion. Capture `archive_size_before` at the top of the match-apply section.
+5. **Wrap match-apply section in rollback**: on exception, truncate archive to `archive_size_before`, re-raise.
+6. **Update affected tests** in `app/backend/tests/` — search for match-apply assertions and journal content comparisons that need the new `match-id:` line.
+7. **Add new tests**: archive creation + header, repeated-match append, match-id consistency between archive and main, ledger CLI round-trip (balances unchanged), rollback on simulated archive failure, rollback on simulated main-journal failure after archive write.
+8. **Manual verification**: run a real match through the UI; inspect `workspace/journals/archived-manual.journal`; grep the main journal for `match-id`; confirm the UUIDs match up pair by pair.
 
 ## Definition of Done
 
-- Dashboard insights are no longer dead ends — every category trend and cash flow row is a clickable path to transaction-level detail.
-- The cross-account activity view answers "show me all the Groceries transactions this month" without requiring the user to know which account they came from.
-- Per-account register is untouched.
-- Filters persist in the URL.
-- No regressions in dashboard layout, transaction page, or existing tests.
-- `pnpm check` and `uv run pytest -q` pass.
-
-## UX Notes
-
-- The activity view should feel like a natural extension of the transactions page, not a separate feature. Same visual language: card layout, typography, spacing.
-- Day-grouped date headers in the activity list should match the dashboard's recent activity pattern for visual consistency.
-- Filter chips (category, month) should look like the pill/badge pattern used elsewhere in the app — small, muted, with an "x" to clear.
-- The period preset selector should match the cash flow segmented toggle pattern (pill-shaped, text-level) for visual consistency.
-- Dashboard link hover should be very subtle — the rows don't currently look clickable, so the hover state signals interactivity without changing the resting visual.
-- Consider adding a small arrow or "View details" tooltip on hover for dashboard rows to signal the drill-down affordance.
+- Every match from unknowns review produces a paired record: main-journal imported transaction with `match-id:` stamp, archive-journal manual entry with the same `match-id:` stamp.
+- No scenario deletes user-entered manual transaction content.
+- Ledger CLI behavior on the main journal is unchanged (verified by balance comparison before/after).
+- The archive file is valid ledger format (verified by `ledger -f` loading).
+- Rollback verified: archive writes don't leave orphans when the apply fails.
+- All existing tests pass: `uv run pytest -q` and `pnpm check`.
+- No UI-visible change (archive is invisible to users until Feature 5d).
+- The `:manual:` + `match-id:` contract is documented in code comments at the stamp-insertion site, so a future reader understands the invariant.
 
 ## Out of Scope
 
-- Per-account register changes. Transaction editing. Custom date-range picker. Pagination. Changes to dashboard layout beyond adding click handlers. Changes to import, review, rules, setup, or accounts pages.
-
-## Replacement Rule
-
-Replace this file when the next active engineering task begins.
+- Unmatch action (endpoint, UI, or event emission).
+- Archive browsing or preview UI.
+- Automatic cleanup of orphaned archive entries.
+- Historical migration of matches made before this change ships.
+- Archive rotation, size caps, or multi-year splitting.
+- Event-log emission (deferred to Feature 5b).
+- Git auto-commits of the archive file (deferred to Feature 5c).
