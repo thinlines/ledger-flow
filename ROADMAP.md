@@ -30,8 +30,8 @@ Trust fix: journal mutations currently have no reliable undo mechanism. Matched 
 3. ~~**Overview dashboard facelift**~~ — shipped.
 4. ~~**Dashboard polish**~~ — shipped (4a–4d: momentum line, day-grouped activity, per-account staleness, cash flow presets).
 5. **Event-sourced undo** — trust fix. Five sub-features, shipped in order:
-   - **5a. Archive journal for matched manual entries** — standalone data-loss fix. Active `TASK.md`.
-   - **5b. Event log foundation** — append-only `workspace/events.jsonl`, event envelope, drift detection.
+   - ~~**5a. Archive journal for matched manual entries**~~ — shipped.
+   - **5b. Event log foundation** — append-only `workspace/events.jsonl`, event envelope, drift detection. Active `TASK.md`.
    - **5c. Git snapshot commits** — periodic workspace snapshots (shutdown + daily) as an escape hatch.
    - **5d. Transaction actions menu** — three-dot row menu: delete, re-categorize, unmatch. Each writes an event.
    - **5e. Semantic undo + toast** — compensating-event dispatcher, toast affordance, partial-undo report when drift is present.
@@ -54,13 +54,9 @@ Shipped. Balance sheet data path fixed (`dashboard.balances` from `config.tracke
 
 Shipped. Momentum line replaces Net chip, recent activity day-grouped (5-item cap, linked review badges), per-account staleness and missing opening balance indicators in balance sheet (backend `lastTransactionDate`), cash flow segmented preset toggle (This month / Last 3 / Last 6). See git history for implementation details.
 
-### Feature 5a: Archive Journal for Matched Manual Entries
+### Feature 5a: Archive Journal for Matched Manual Entries ✓
 
-When a manual entry is matched to an imported transaction during unknowns review, the manual entry is physically deleted from the journal today. If the import is later undone, the manual entry is gone for good. This is the acute data-loss bug behind the entire trust-fix sequence.
-
-This feature stops deleting matched manual entries. Instead, the manual entry is moved to a dedicated `workspace/journals/archived-manual.journal` file (never `include`d in loaded journals, so `ledger` CLI ignores it) and stamped with a `match-id:` UUID. The matched imported transaction carries the same `match-id:` tag, establishing a reversible link that future unmatch operations will use.
-
-Backend-only change. No UI. Standalone — does not depend on the event log or any other sub-feature. Delivers the data-preservation guarantee immediately. See active `TASK.md`.
+Shipped. Matched manual entries are preserved in `workspace/journals/archived-manual.journal` with `match-id:` UUID tags linking them to imported transactions. See git history for implementation details.
 
 ### Feature 5b: Event Log Foundation
 
