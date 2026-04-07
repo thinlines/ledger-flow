@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+import logging
 from pathlib import Path
 import re
 from uuid import uuid4
@@ -32,6 +33,7 @@ from models import (
     WorkspaceSelectRequest,
 )
 from services.backup_service import backup_file
+from services.event_log_service import check_drift, check_startup_drift, emit_event, hash_file, rel_path
 from services.header_parser import TransactionStatus, parse_header, set_header_status, HEADER_RE as _HEADER_RE
 from services.account_register_service import build_account_register
 from services.commodity_service import CommodityMismatchError
@@ -220,10 +222,19 @@ def _opening_balance_offset_request_value(req) -> object:
     return req.openingBalanceOffsetAccountId
 
 
+_log = logging.getLogger(__name__)
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     stages.cleanup_old(days=7)
     import_index.ensure_schema()
+    try:
+        config = workspace_manager.load_active_config()
+        if config is not None:
+            check_startup_drift(config.root_dir)
+    except Exception:
+        _log.warning("Startup drift check failed — skipping", exc_info=True)
     yield
 
 
@@ -419,8 +430,10 @@ def transactions_create(req: ManualTransactionRequest) -> dict:
     accounts_dat = config.init_dir / "10-accounts.dat"
     currency = str(config.workspace.get("base_currency", "USD"))
 
+    hash_before = check_drift(config.root_dir, journal_path)
+
     try:
-        return create_manual_transaction(
+        result = create_manual_transaction(
             journal_path=journal_path,
             accounts_dat=accounts_dat,
             tracked_account_cfg=tracked_account_cfg,
@@ -432,6 +445,32 @@ def transactions_create(req: ManualTransactionRequest) -> dict:
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
+
+    try:
+        hash_after = hash_file(journal_path)
+        source_account = tracked_account_cfg.get("name", req.trackedAccountId)
+        emit_event(
+            config.root_dir,
+            event_type="manual_entry.created.v1",
+            summary=f"Created manual entry: {req.payee or '(no payee)'} {req.amount} {currency}",
+            payload={
+                "date": req.date,
+                "payee": req.payee or "",
+                "amount": req.amount,
+                "currency": currency,
+                "destination_account": req.destinationAccount,
+                "source_account": source_account,
+            },
+            journal_refs=[{
+                "path": rel_path(journal_path, config.root_dir),
+                "hash_before": hash_before,
+                "hash_after": hash_after,
+            }],
+        )
+    except Exception:
+        _log.error("Event emission failed for transactions_create", exc_info=True)
+
+    return result
 
 
 @app.post("/api/transactions/manual-transfer-resolution/preview")
@@ -446,10 +485,45 @@ def transactions_manual_transfer_resolution_preview(req: ManualTransferResolutio
 @app.post("/api/transactions/manual-transfer-resolution/apply")
 def transactions_manual_transfer_resolution_apply(req: ManualTransferResolutionRequest) -> dict:
     config = _require_workspace_config()
+
+    # Pre-hash all journals — we can't know which one will be written until
+    # the service resolves the token internally.
+    journal_hashes: dict[str, str] = {}
+    if config.journal_dir.is_dir():
+        for jf in config.journal_dir.glob("*.journal"):
+            journal_hashes[str(jf.resolve())] = check_drift(config.root_dir, jf)
+
     try:
-        return apply_manual_transfer_resolution(config, req.resolutionToken)
+        result = apply_manual_transfer_resolution(config, req.resolutionToken)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
+
+    try:
+        journal_path = Path(result["journalPath"])
+        hash_before = journal_hashes.get(str(journal_path.resolve()), hash_file(Path(result["backupPath"])))
+        hash_after = hash_file(journal_path)
+        emit_event(
+            config.root_dir,
+            event_type="transfer_resolution.applied.v1",
+            summary=f"Transfer resolution: {result.get('payee', '')} {result.get('amount', '')}",
+            payload={
+                "journal_path": rel_path(journal_path, config.root_dir),
+                "date": result.get("date", ""),
+                "payee": result.get("payee", ""),
+                "source_account": result.get("sourceAccountName", ""),
+                "destination_account": result.get("destinationAccountName", ""),
+                "amount": str(result.get("amount", "")),
+            },
+            journal_refs=[{
+                "path": rel_path(journal_path, config.root_dir),
+                "hash_before": hash_before,
+                "hash_after": hash_after,
+            }],
+        )
+    except Exception:
+        _log.error("Event emission failed for transfer_resolution_apply", exc_info=True)
+
+    return result
 
 
 _STATUS_CYCLE = {
@@ -461,6 +535,7 @@ _STATUS_CYCLE = {
 
 @app.post("/api/transactions/toggle-status")
 def transactions_toggle_status(req: ToggleStatusRequest) -> dict:
+    config = _require_workspace_config()
     journal_path = Path(req.journalPath)
     if not journal_path.is_file():
         raise HTTPException(status_code=404, detail="Journal file not found")
@@ -475,6 +550,8 @@ def transactions_toggle_status(req: ToggleStatusRequest) -> dict:
     if not _HEADER_RE.match(new_line):
         raise HTTPException(status_code=500, detail="Rewritten header is invalid")
 
+    hash_before = check_drift(config.root_dir, journal_path)
+
     text = journal_path.read_text(encoding="utf-8")
     lines = text.splitlines()
 
@@ -486,6 +563,27 @@ def transactions_toggle_status(req: ToggleStatusRequest) -> dict:
 
     lines[match_indexes[0]] = new_line
     journal_path.write_text("\n".join(lines) + ("\n" if text.endswith("\n") else ""), encoding="utf-8")
+
+    try:
+        hash_after = hash_file(journal_path)
+        emit_event(
+            config.root_dir,
+            event_type="transaction.status_toggled.v1",
+            summary=f"Toggled status to {next_status.value}: {req.headerLine[:60]}",
+            payload={
+                "journal_path": rel_path(journal_path, config.root_dir),
+                "header_line": req.headerLine,
+                "previous_status": parsed.status.value,
+                "new_status": next_status.value,
+            },
+            journal_refs=[{
+                "path": rel_path(journal_path, config.root_dir),
+                "hash_before": hash_before,
+                "hash_after": hash_after,
+            }],
+        )
+    except Exception:
+        _log.error("Event emission failed for toggle_status", exc_info=True)
 
     return {"newStatus": next_status.value, "newHeaderLine": new_line}
 
@@ -866,6 +964,7 @@ def import_apply(req: StageApplyRequest) -> dict:
         return stage
 
     journal = Path(stage["targetJournalPath"])
+    hash_before = check_drift(config.root_dir, journal)
     backup = backup_file(journal, "import") if journal.exists() else None
 
     try:
@@ -900,6 +999,32 @@ def import_apply(req: StageApplyRequest) -> dict:
     history_entry = record_applied_import(config, stage)
     stage["result"]["historyId"] = history_entry["id"]
     stages.save(req.stageId, stage)
+
+    try:
+        hash_after = hash_file(journal)
+        source_file = Path(stage.get("csvPath", "")).name
+        emit_event(
+            config.root_dir,
+            event_type="import.applied.v1",
+            summary=f"Imported {appended_count} transactions from {source_file}",
+            payload={
+                "journal_path": rel_path(journal, config.root_dir),
+                "source_file": source_file,
+                "account_id": stage.get("importAccountId", ""),
+                "transactions_added": appended_count,
+                "duplicates_skipped": skipped_duplicate_count,
+                "conflicts": conflicts,
+                "history_id": history_entry["id"],
+            },
+            journal_refs=[{
+                "path": rel_path(journal, config.root_dir),
+                "hash_before": hash_before,
+                "hash_after": hash_after,
+            }],
+        )
+    except Exception:
+        _log.error("Event emission failed for import_apply", exc_info=True)
+
     return stage
 
 
@@ -912,12 +1037,50 @@ def import_history() -> dict:
 @app.post("/api/import/undo")
 def import_undo(req: ImportUndoRequest) -> dict:
     config = _require_workspace_config()
+
+    # Resolve journal path before mutation for drift check.
+    journal_path = None
+    hash_before = None
+    try:
+        for entry_item in list_import_history(config):
+            if str(entry_item.get("id")) == req.historyId:
+                jp = entry_item.get("targetJournalPath")
+                if jp:
+                    journal_path = Path(str(jp))
+                    hash_before = check_drift(config.root_dir, journal_path)
+                break
+    except Exception:
+        _log.warning("Could not resolve journal path for import undo drift check", exc_info=True)
+
     try:
         entry = undo_import(config, req.historyId)
     except KeyError as e:
         raise HTTPException(status_code=404, detail="import history entry not found") from e
     except (FileNotFoundError, OSError, ValueError) as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
+
+    try:
+        if journal_path is not None:
+            hash_after = hash_file(journal_path)
+            removed_count = entry.get("undo", {}).get("removedTxnCount", 0)
+            emit_event(
+                config.root_dir,
+                event_type="import.undone.v1",
+                summary=f"Undid import {req.historyId}: removed {removed_count} transactions",
+                payload={
+                    "journal_path": rel_path(journal_path, config.root_dir),
+                    "history_id": req.historyId,
+                    "transactions_removed": removed_count,
+                },
+                journal_refs=[{
+                    "path": rel_path(journal_path, config.root_dir),
+                    "hash_before": hash_before,
+                    "hash_after": hash_after,
+                }],
+            )
+    except Exception:
+        _log.error("Event emission failed for import_undo", exc_info=True)
+
     return {"entry": entry}
 
 
@@ -986,6 +1149,13 @@ def unknown_apply(req: StageApplyRequest) -> dict:
 
     journal_path = Path(stage["journalPath"])
     accounts_dat = config.init_dir / "10-accounts.dat"
+    archived_manual = journal_path.parent / "archived-manual.journal"
+
+    # Pre-mutation hashes for all files that may be written.
+    journal_hash_before = check_drift(config.root_dir, journal_path)
+    accounts_hash_before = hash_file(accounts_dat)
+    archive_hash_before = hash_file(archived_manual)
+
     journal_backup = backup_file(journal_path, "unknowns")
     accounts_backup = backup_file(accounts_dat, "rules")
 
@@ -1008,6 +1178,43 @@ def unknown_apply(req: StageApplyRequest) -> dict:
         "warnings": warnings,
     }
     stages.save(req.stageId, stage)
+
+    try:
+        journal_hash_after = hash_file(journal_path)
+        accounts_hash_after = hash_file(accounts_dat)
+        archive_hash_after = hash_file(archived_manual)
+
+        # Count match selections for payload.
+        match_ids = [
+            sel.get("matchId") or ""
+            for sel in selections.values()
+            if sel.get("selectionType") == "match"
+        ]
+
+        refs = [
+            {"path": rel_path(journal_path, config.root_dir), "hash_before": journal_hash_before, "hash_after": journal_hash_after},
+            {"path": rel_path(accounts_dat, config.root_dir), "hash_before": accounts_hash_before, "hash_after": accounts_hash_after},
+        ]
+        if archive_hash_after != archive_hash_before:
+            refs.append({"path": rel_path(archived_manual, config.root_dir), "hash_before": archive_hash_before, "hash_after": archive_hash_after})
+
+        mappings_applied = sum(1 for sel in selections.values() if sel.get("selectionType") == "category")
+        emit_event(
+            config.root_dir,
+            event_type="unknowns.applied.v1",
+            summary=f"Applied {mappings_applied} mappings and {len(match_ids)} matches",
+            payload={
+                "journal_path": rel_path(journal_path, config.root_dir),
+                "mappings_applied": mappings_applied,
+                "matches_applied": len(match_ids),
+                "match_ids": match_ids,
+                "warnings": warnings,
+            },
+            journal_refs=refs,
+        )
+    except Exception:
+        _log.error("Event emission failed for unknown_apply", exc_info=True)
+
     return stage
 
 
@@ -1112,6 +1319,7 @@ def rules_history_apply(req: RuleHistoryApplyRequest) -> dict:
 
     journal_path = Path(stage["journalPath"])
     accounts_dat = config.init_dir / "10-accounts.dat"
+    hash_before = check_drift(config.root_dir, journal_path)
     journal_backup = backup_file(journal_path, "rule-history")
 
     try:
@@ -1133,6 +1341,28 @@ def rules_history_apply(req: RuleHistoryApplyRequest) -> dict:
         "warnings": warnings,
     }
     stages.save(req.stageId, stage)
+
+    try:
+        hash_after = hash_file(journal_path)
+        emit_event(
+            config.root_dir,
+            event_type="rule.history_applied.v1",
+            summary=f"Applied rule history: {updated_count} transactions updated",
+            payload={
+                "journal_path": rel_path(journal_path, config.root_dir),
+                "transactions_updated": updated_count,
+                "selected_candidate_count": len(selected_candidate_ids),
+                "warnings": warnings,
+            },
+            journal_refs=[{
+                "path": rel_path(journal_path, config.root_dir),
+                "hash_before": hash_before,
+                "hash_after": hash_after,
+            }],
+        )
+    except Exception:
+        _log.error("Event emission failed for rules_history_apply", exc_info=True)
+
     return stage
 
 
