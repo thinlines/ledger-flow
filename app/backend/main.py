@@ -34,6 +34,7 @@ from models import (
 )
 from services.backup_service import backup_file
 from services.event_log_service import check_drift, check_startup_drift, emit_event, hash_file, rel_path
+from services.git_snapshot_service import hours_since_last_snapshot, snapshot_commit
 from services.header_parser import TransactionStatus, parse_header, set_header_status, HEADER_RE as _HEADER_RE
 from services.account_register_service import build_account_register
 from services.commodity_service import CommodityMismatchError
@@ -229,13 +230,29 @@ _log = logging.getLogger(__name__)
 async def lifespan(_app: FastAPI):
     stages.cleanup_old(days=7)
     import_index.ensure_schema()
+    config = None
     try:
         config = workspace_manager.load_active_config()
         if config is not None:
             check_startup_drift(config.root_dir)
     except Exception:
         _log.warning("Startup drift check failed — skipping", exc_info=True)
+    try:
+        if config is None:
+            config = workspace_manager.load_active_config()
+        if config is not None:
+            age = hours_since_last_snapshot(config.root_dir)
+            if age is None or age >= 24:
+                snapshot_commit(config.root_dir, trigger="startup")
+    except Exception:
+        _log.warning("Startup git snapshot failed — skipping", exc_info=True)
     yield
+    try:
+        shutdown_config = workspace_manager.load_active_config()
+        if shutdown_config is not None:
+            snapshot_commit(shutdown_config.root_dir, trigger="shutdown")
+    except Exception:
+        _log.warning("Shutdown git snapshot failed — skipping", exc_info=True)
 
 
 app = FastAPI(title="Ledger Flow API", lifespan=lifespan)
