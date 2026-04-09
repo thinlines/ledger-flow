@@ -2,379 +2,235 @@
 
 ## Title
 
-Append-only event log with drift detection for all journal mutations
+Git snapshot commits for workspace escape hatch
 
 ## Objective
 
-Every journal mutation emits a structured event to `workspace/events.jsonl`. Events form the causal record of what the app did and why, enabling future undo (Feature 5e). Pre-mutation and startup hash checks detect external edits and record them as marker events. Journals remain canonical state; events are advisory. See DECISIONS.md §12.
+Periodic git commits of `workspace/` provide a file-level recovery path independent of the event log. Snapshots are taken on server shutdown and on startup when >24 hours have passed since the last snapshot. This is the escape hatch described in DECISIONS.md §12: if `events.jsonl` is lost or corrupted, `git log -p` still shows every file state. Git is not the undo mechanism — it is the safety net beneath the event log.
 
 ## Scope
 
 ### Included
 
-- New service: `app/backend/services/event_log_service.py` — event writer, file hashing, drift detection, in-memory hash cache.
-- Event envelope: UUIDv7 `id`, ISO 8601 `ts`, `actor`, `type`, `summary`, `payload` (type-specific dict), `journal_refs` (list of `{path, hash_before, hash_after}`), nullable `compensates` link.
-- Seven event types for the seven mutating endpoints, plus one drift marker type.
-- Pre-mutation drift check in each of the 7 mutating route handlers.
-- Startup drift check in the FastAPI lifespan handler.
-- Unit tests for event log service (write, read-back, hash, drift detection, cache).
-- Integration tests for event emission from each endpoint.
+- New service: `app/backend/services/git_snapshot_service.py` — git init, `.gitignore` management, snapshot commit.
+- Shutdown snapshot in the FastAPI lifespan teardown (after `yield`).
+- Startup snapshot when the last commit is >24 hours old (or no commits exist yet).
+- Managed `.gitignore` inside the workspace that excludes transient artifacts but includes all canonical files.
+- Unit tests for the snapshot service.
+- Integration with the existing lifespan handler in `main.py`.
 
 ### Explicitly Excluded
 
-- Compensating event logic and undo dispatcher (Feature 5e).
-- Event-based projections, indexes, aggregations, or query endpoints.
-- UI for event history or undo affordances (Feature 5e).
-- Event file rotation, compaction, or size caps.
-- Multi-user sync or merge conflict handling on `events.jsonl`.
-- Git snapshot commits (Feature 5c).
-- Transaction actions menu (Feature 5d).
-- Changes to existing mutation logic — event emission wraps existing behavior, does not alter it.
+- Per-mutation commits (the event log is the primary audit trail; git snapshots are periodic).
+- Git push, remote configuration, or multi-user sync.
+- UI for browsing git history or restoring from snapshots.
+- Git hooks, signing, or branch management.
+- Snapshotting `.workflow/` contents (disposable by design).
+- Any changes to the event log service or mutation endpoints.
 
 ## System Behavior
 
 ### Inputs
 
-- Any of the 7 mutating API calls (see Logic §2 for the full list).
-- Server startup (lifespan handler).
+- Server startup (lifespan handler, before `yield`).
+- Server shutdown (lifespan handler, after `yield`).
 
 ### Logic
 
-**1. Event envelope schema**
+**1. Workspace git repository initialization**
 
-Each line in `workspace/events.jsonl` is a single JSON object:
+`ensure_workspace_repo(workspace_path: Path) -> None`:
 
-```json
-{
-  "id": "019d615b-8396-72ce-9618-ac67e6f5db32",
-  "ts": "2026-04-05T14:30:22.123456Z",
-  "actor": "user",
-  "type": "import.applied.v1",
-  "summary": "Imported 12 transactions from Chase Checking",
-  "payload": { },
-  "journal_refs": [
-    {
-      "path": "journals/2026.journal",
-      "hash_before": "sha256:abc123...",
-      "hash_after": "sha256:def456..."
-    }
-  ],
-  "compensates": null
-}
+1. Check if `workspace_path / ".git"` exists.
+2. If not, run `git init` in the workspace directory.
+3. Ensure `.gitignore` is present and up to date (see §2).
+4. If this is a fresh init (no commits yet), create an initial commit: `"chore: initialize workspace repository"`.
+
+The workspace git repo is separate from the app's own repo. The workspace directory (e.g., `~/Documents/MyBooks/`) is the user's financial data directory — it is not inside the app codebase.
+
+**2. Managed `.gitignore`**
+
+`ensure_gitignore(workspace_path: Path) -> None`:
+
+Write/overwrite `workspace_path/.gitignore` with a managed block. The file is fully managed by the app — user customizations are not preserved (the workspace repo is an app-managed safety net, not a user-curated repo).
+
+```gitignore
+# Managed by Ledger Flow — do not edit
+*.bak.*
+inbox/
+imports/
+.workflow/
 ```
 
-Field rules:
-- `id`: `str(uuid.uuid7())`. Native Python 3.14.
-- `ts`: `datetime.now(timezone.utc).isoformat()`. Always UTC.
-- `actor`: `"user"` for mutation endpoints, `"system"` for drift detection events.
-- `type`: dotted event type string with `.v1` suffix.
-- `summary`: human-readable one-liner for future UI display.
-- `payload`: type-specific dict (see §3 below). Must be JSON-serializable.
-- `journal_refs`: list of workspace-relative paths with SHA-256 hashes of file content immediately before and after the mutation. Only canonical `workspace/` files — never `.workflow/` files. Empty list for drift events (drift events carry the hash details in their payload).
-- `compensates`: nullable UUIDv7 string — populated by future undo events (Feature 5e). Always `null` for forward events emitted in this task.
+Rationale:
+- `*.bak.*` — backup files created by `backup_service.py` (e.g., `2026.journal.import.bak.20260405143022`). Noise in diffs, large over time.
+- `inbox/` — CSV files awaiting import. Transient; archived to `imports/` after successful import.
+- `imports/` — archived CSVs. Useful for re-import but not needed in the safety-net repo. Potentially large.
+- `.workflow/` — app state (stages, SQLite DB, import history). Disposable by design; rebuilt from journals.
 
-**2. Mutating endpoints and their event types**
+Files that **are** tracked (by not being ignored):
+- `journals/*.journal` — canonical financial data.
+- `journals/archived-manual.journal` — matched manual entry archive (needed for unmatch).
+- `events.jsonl` — the event log itself (the safety net backs up the safety net).
+- `settings/workspace.toml` — workspace configuration.
+- `rules/*.dat` — account declarations, tags, commodities, rule definitions.
+- `opening/*.journal` — opening balance journals.
 
-| # | Endpoint | Route handler | Event type | Files tracked in `journal_refs` |
-|---|----------|---------------|------------|---------------------------------|
-| 1 | `POST /api/transactions/create` | `main.py:411` `transactions_create` | `manual_entry.created.v1` | year journal |
-| 2 | `POST /api/transactions/toggle-status` | `main.py:463` `transactions_toggle_status` | `transaction.status_toggled.v1` | target journal |
-| 3 | `POST /api/unknowns/apply` | `main.py:971` `unknown_apply` | `unknowns.applied.v1` | year journal, `accounts.dat`, `archived-manual.journal` (if match occurred) |
-| 4 | `POST /api/import/apply` | `main.py:856` `import_apply` | `import.applied.v1` | target journal |
-| 5 | `POST /api/import/undo` | `main.py:913` `import_undo` | `import.undone.v1` | target journal |
-| 6 | `POST /api/rules/history/apply` | `main.py:1097` `rules_history_apply` | `rule.history_applied.v1` | year journal |
-| 7 | `POST /api/transactions/manual-transfer-resolution/apply` | `main.py:447` `transactions_manual_transfer_resolution_apply` | `transfer_resolution.applied.v1` | year journal |
+**3. Snapshot commit**
 
-Plus the drift marker:
+`snapshot_commit(workspace_path: Path, *, trigger: str) -> bool`:
 
-| | Trigger | Event type |
-|---|---------|------------|
-| 8 | Pre-mutation check or startup check | `journal.external_edit_detected.v1` |
+1. Call `ensure_workspace_repo(workspace_path)` (idempotent).
+2. Run `git -C <workspace> add -A` to stage all changes (respects `.gitignore`).
+3. Check `git -C <workspace> diff --cached --quiet`. If exit code 0, no changes — return `False`.
+4. Commit: `git -C <workspace> commit -m "snapshot: <trigger> at <ISO 8601 UTC timestamp>"`.
+5. Return `True`.
 
-**3. Payload definitions per event type**
+The `trigger` parameter is `"shutdown"`, `"startup"`, or `"initial"` — included in the commit message for auditability.
 
-Each payload captures enough to describe the operation for audit and to support future compensating-event construction (Feature 5e). Keep payloads minimal — include what's needed, not everything available.
+Use `subprocess.run` with `capture_output=True` and `check=True`. Require `git` to be on `PATH` (reasonable for a developer-facing tool that already depends on `ledger` CLI).
 
-**`manual_entry.created.v1`**
-```json
-{
-  "date": "2026-03-15",
-  "payee": "Whole Foods Market",
-  "amount": "50.00",
-  "currency": "USD",
-  "destination_account": "Expenses:Groceries",
-  "source_account": "Assets:Checking:Chase"
-}
-```
+**4. Last snapshot age check**
 
-**`transaction.status_toggled.v1`**
-```json
-{
-  "journal_path": "journals/2026.journal",
-  "header_line": "2026-03-15 * Whole Foods Market",
-  "previous_status": "unmarked",
-  "new_status": "cleared"
-}
-```
+`hours_since_last_snapshot(workspace_path: Path) -> float | None`:
 
-**`unknowns.applied.v1`**
-```json
-{
-  "journal_path": "journals/2026.journal",
-  "mappings_applied": 5,
-  "matches_applied": 2,
-  "match_ids": ["uuid1", "uuid2"],
-  "warnings": []
-}
-```
+1. Run `git -C <workspace> log -1 --format=%cI` to get the committer date of the most recent commit.
+2. Parse the ISO 8601 timestamp and compute hours elapsed.
+3. Return `None` if there are no commits (fresh repo or git not initialized).
 
-**`import.applied.v1`**
-```json
-{
-  "journal_path": "journals/2026.journal",
-  "source_file": "chase_checking_2026-03.csv",
-  "account_id": "chase-checking",
-  "transactions_added": 12,
-  "duplicates_skipped": 3,
-  "conflicts": 0,
-  "history_id": "abc123"
-}
-```
+**5. Lifespan integration**
 
-**`import.undone.v1`**
-```json
-{
-  "journal_path": "journals/2026.journal",
-  "history_id": "abc123",
-  "transactions_removed": 12
-}
-```
-
-**`rule.history_applied.v1`**
-```json
-{
-  "journal_path": "journals/2026.journal",
-  "transactions_updated": 8,
-  "selected_candidate_count": 8,
-  "warnings": []
-}
-```
-
-**`transfer_resolution.applied.v1`**
-```json
-{
-  "journal_path": "journals/2026.journal",
-  "date": "2026-03-15",
-  "payee": "Transfer",
-  "source_account": "Assets:Checking",
-  "destination_account": "Assets:Savings",
-  "amount": "500.00"
-}
-```
-
-**`journal.external_edit_detected.v1`**
-```json
-{
-  "journal_path": "journals/2026.journal",
-  "expected_hash": "sha256:abc123...",
-  "actual_hash": "sha256:def456...",
-  "trigger": "pre_mutation"
-}
-```
-`trigger` is `"pre_mutation"` or `"startup"`.
-
-**4. File hash computation**
-
-`hash_file(path: Path) -> str`: read file as bytes, compute SHA-256, return `"sha256:" + hexdigest`. If file does not exist, return `"sha256:none"` (sentinel for file-not-yet-created state, e.g., first import into a new year journal).
-
-Reuse the existing `hashlib.sha256` pattern from `import_identity_service.py`. Operate on raw bytes (`path.read_bytes()`), not decoded text, for exact round-trip fidelity.
-
-**5. In-memory hash cache**
-
-Module-level `_hash_cache: dict[str, str]` mapping absolute path strings to their last-known hash. Populated on startup drift check (see §7). Updated after each event emission. Purpose: avoid scanning `events.jsonl` to find the last known hash for a file. If the cache misses (first mutation after cold start without startup check), fall back to scanning the log backward.
-
-The cache is an optimization, not a persistence layer. If lost (process restart), it is rebuilt from the startup drift check or on first access.
-
-**6. Pre-mutation drift check**
-
-Before each of the 7 mutations, for each journal file that will be written:
-
-1. Compute `current_hash = hash_file(path)`.
-2. Look up `expected_hash` from `_hash_cache[str(path)]`. If not in cache, scan `events.jsonl` backward for the most recent event whose `journal_refs` includes this path, and use its `hash_after`. If no event found, the file predates the event log — skip drift check (no baseline).
-3. If `expected_hash` exists and `current_hash != expected_hash`: emit a `journal.external_edit_detected.v1` event and update the cache to `current_hash`.
-4. Update `_hash_cache[str(path)] = current_hash` (even if no drift — ensures cache is current for the upcoming mutation's `hash_before`).
-
-Return the `current_hash` so the caller can use it as `hash_before` in the mutation event's `journal_refs`.
-
-**7. Startup drift check**
-
-In the FastAPI lifespan handler, after existing initialization (`stages.cleanup_old`, `import_index.ensure_schema`):
-
-1. Attempt to load workspace config. If no workspace is configured yet, skip (nothing to check).
-2. Glob `workspace/journals/*.journal` plus `workspace/journals/archived-manual.journal` (if exists).
-3. For each file, compute current hash and compare to last known `hash_after` from the event log (scan backward). Emit `journal.external_edit_detected.v1` for each drifted file.
-4. Populate `_hash_cache` with current hashes for all discovered journal files.
-
-If `events.jsonl` does not exist yet, skip all drift checks (no baseline). This is the initial state — the first mutation event will establish the baseline.
-
-**8. Event writer**
+In the FastAPI lifespan handler:
 
 ```python
-def emit_event(
-    workspace_path: Path,
-    *,
-    event_type: str,
-    summary: str,
-    payload: dict,
-    journal_refs: list[dict],
-    actor: str = "user",
-    compensates: str | None = None,
-) -> str:
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    stages.cleanup_old(days=7)
+    import_index.ensure_schema()
+    # Existing startup drift check
+    try:
+        config = workspace_manager.load_active_config()
+        if config is not None:
+            check_startup_drift(config.root_dir)
+    except Exception:
+        _log.warning("Startup drift check failed — skipping", exc_info=True)
+    # Startup snapshot (if stale)
+    try:
+        config = workspace_manager.load_active_config()
+        if config is not None:
+            age = hours_since_last_snapshot(config.root_dir)
+            if age is None or age >= 24:
+                snapshot_commit(config.root_dir, trigger="startup")
+    except Exception:
+        _log.warning("Startup git snapshot failed — skipping", exc_info=True)
+    yield
+    # Shutdown snapshot
+    try:
+        config = workspace_manager.load_active_config()
+        if config is not None:
+            snapshot_commit(config.root_dir, trigger="shutdown")
+    except Exception:
+        _log.warning("Shutdown git snapshot failed — skipping", exc_info=True)
 ```
 
-1. Build the event dict per the envelope schema (§1).
-2. Serialize to a single JSON line (`json.dumps(event, separators=(",", ":"))` — compact, no pretty-print).
-3. Append to `workspace/events.jsonl` via `open(path, "a", encoding="utf-8")` + `write(line + "\n")`.
-4. Update `_hash_cache` entries for each `journal_refs` item using its `hash_after`.
-5. Return the event `id`.
+Both startup and shutdown snapshots are wrapped in `try/except` — git failures must never crash the server or prevent shutdown.
 
-**9. Integration pattern in route handlers**
+**6. Git failure behavior**
 
-Each of the 7 route handlers follows this pattern (illustrated for `import_apply`):
-
-```python
-# Before mutation:
-events_path = config.workspace_path  # or derive workspace root
-journal_path = Path(stage["targetJournalPath"])
-hash_before = check_drift_and_get_hash(events_path, journal_path)
-
-# Existing mutation call:
-journal_path, appended_count, ... = apply_import(config, stage)
-
-# After mutation:
-hash_after = hash_file(journal_path)
-emit_event(
-    events_path,
-    event_type="import.applied.v1",
-    summary=f"Imported {appended_count} transactions from ...",
-    payload={...},
-    journal_refs=[{"path": _rel(journal_path, events_path), "hash_before": hash_before, "hash_after": hash_after}],
-)
-```
-
-For endpoints that write multiple files (unknowns apply), compute `hash_before` for each file before the mutation and `hash_after` for each file after, producing multiple entries in `journal_refs`.
-
-**10. Event emission failure behavior**
-
-Event emission is advisory — it must NOT block the mutation. If `emit_event` raises (disk full, permissions, I/O error):
-- Log the error with full context (`logger.error`).
-- Continue — the journal write already succeeded, and the user's data is safe.
-- The in-memory cache may be stale; the next startup drift check will detect and recover the hash chain.
-
-Drift check failures (reading `events.jsonl`) follow the same rule: log and skip, never block the mutation.
-
-This matches the precedence rule from DECISIONS.md §12: journals > events > git.
+Git snapshot operations are advisory — same precedence as the event log (journals > events > git). If any git command fails:
+- Log the error with `logger.warning`.
+- Continue — the server starts/stops normally.
+- Do not retry (the next startup/shutdown will try again).
+- If `git` is not installed, every snapshot call logs a warning and returns. The app functions normally without git.
 
 ### Outputs
 
-- `workspace/events.jsonl` grows by one line per mutation (plus optional drift events).
-- Mutation endpoints return the same response payloads as before — no API contract change.
-- No UI-visible change.
+- `workspace/.git/` — git repository with periodic snapshot commits.
+- `workspace/.gitignore` — managed ignore rules.
+- Commit history viewable via `git -C <workspace> log` and `git -C <workspace> log -p`.
+- No API changes. No UI changes.
 
 ## System Invariants
 
-- `events.jsonl` is append-only within the app. No rewrites, no deletions, no compaction.
-- Event emission never blocks or fails a journal mutation. Journals are canonical; events are advisory.
-- Every event has a unique UUIDv7 `id` that sorts chronologically.
-- `journal_refs` paths are always relative to the workspace root (portable across machines).
-- `hash_before` and `hash_after` in `journal_refs` reflect the exact file content immediately before and after the mutation (byte-level SHA-256).
-- Drift events are informational — they do not modify journals or prevent mutations.
-- The event log file (`events.jsonl`) is never `include`d by ledger CLI (it's not a `.journal` file).
+- The workspace git repo is independent of the app's own git repo.
+- Snapshot commits never block server startup or shutdown.
+- `.gitignore` is fully managed — overwritten on every `ensure_workspace_repo` call.
+- Snapshots only commit when there are staged changes (no empty commits).
+- The commit message includes the trigger and timestamp for auditability.
+- Git is not required for the app to function — all git operations degrade gracefully.
 
 ## States
 
-- **No `events.jsonl` yet**: first mutation creates the file. No startup drift check (no baseline). First event establishes the hash chain.
-- **`events.jsonl` exists, workspace cold-started**: startup drift check runs, populates hash cache, emits drift events if any files changed while the server was down.
-- **Normal operation**: each mutation emits one event. Drift checks pass silently (hashes match). Cache is warm.
-- **External edit detected**: drift event emitted, hash cache updated to current state, mutation proceeds normally.
-- **Event emission fails**: logged, mutation succeeds, cache may be stale. Next startup recovers the chain.
-- **No workspace configured yet**: startup drift check skipped entirely. First workspace bootstrap does not emit events (workspace creation is not a journal mutation).
+- **No workspace configured**: all git operations skipped. No error.
+- **Workspace exists, no `.git/`**: first `ensure_workspace_repo` call initializes the repo and creates an initial commit.
+- **Workspace repo exists, no changes**: `snapshot_commit` returns `False`. No empty commit.
+- **Workspace repo exists, changes present**: `snapshot_commit` stages and commits. Returns `True`.
+- **Last snapshot <24h ago at startup**: startup snapshot skipped (no redundant commits during restarts/reloads).
+- **Last snapshot >=24h ago at startup**: startup snapshot taken (covers long-running sessions where no shutdown snapshot was taken).
+- **Git not installed**: all operations log a warning and return. App functions normally.
 
 ## Edge Cases
 
-- **First-ever mutation in the project**: `events.jsonl` doesn't exist, drift check is skipped (no baseline), mutation proceeds, event file is created with the first event line.
-- **Journal file doesn't exist yet** (first import into a new year): `hash_file` returns `"sha256:none"` for `hash_before`. After mutation, `hash_after` reflects the new file. No drift check against a nonexistent baseline.
-- **Multiple files mutated in one endpoint** (unknowns apply): each file gets its own entry in `journal_refs` with independent `hash_before`/`hash_after`. Drift is checked per-file.
-- **Concurrent requests**: same concurrency caveat as existing journal writes — `events.jsonl` append uses `open("a")` + `write()`. Single-process FastAPI with synchronous handlers means no true concurrency today, but the append pattern is safe for future use.
-- **Large `events.jsonl`**: backward scan for last known hash is O(n). Mitigated by the in-memory cache (constant-time lookup). Cold-start scan reads the full file once. 10,000 events ≈ 5–10 MB — acceptable.
-- **User manually edits `events.jsonl`**: the app does not validate log integrity. A corrupted line will cause a JSON parse error during backward scan — skip that line and continue. Log a warning.
-- **`events.jsonl` deleted while server is running**: next `emit_event` recreates the file. Hash cache is still warm, so no data loss for ongoing drift detection. On next restart, startup check treats it as no-baseline (skip).
+- **First-ever workspace bootstrap**: `bootstrap_workspace` creates the directory structure. The next server startup (or the shutdown of the current session) will initialize the git repo and create the initial commit.
+- **Workspace directory moved or renamed**: the `.git/` directory moves with it. Next snapshot works normally.
+- **Very large workspace**: `git add -A` + `commit` may be slow if many files exist. Journal files are typically <1 MB each; this is not a realistic concern. The `.gitignore` excludes the bulkiest artifacts (CSVs, backups).
+- **Concurrent app instances**: same caveat as existing journal writes — single-user assumption. Two instances committing simultaneously could conflict, but this is not a supported configuration.
+- **Shutdown during git operation**: `subprocess.run` will be interrupted. The git repo may have a stale lock file. The next startup's `git` command will either succeed (lock was cleaned up) or fail with a lock error (logged, skipped).
+- **User runs their own git commands in the workspace**: the app does not hold or check locks. The app's managed `.gitignore` will be overwritten, but the user's commits are preserved. The app's snapshot commits coexist with user commits in the same history.
 
 ## Failure Behavior
 
-- **Event file write fails** (I/O error, permissions, disk full): log error, do NOT fail the mutation. Return normally. The event is lost; the hash chain has a gap. Next startup drift check recovers by detecting the hash mismatch.
-- **Event file read fails** (corrupt JSON, permissions): log warning, skip drift check for that file. Proceed with mutation. Do not surface an error to the user.
-- **Hash computation fails** (file disappeared between check and mutation): log warning, emit event with `"sha256:none"` for that ref. Not a blocking error.
-- **Startup drift check fails** (no workspace, corrupt config): skip silently. The lifespan handler must not crash the server.
+- **`git init` fails**: log warning, skip all subsequent git operations for this call. App functions normally.
+- **`git add -A` fails**: log warning, skip commit. Next snapshot will retry.
+- **`git commit` fails**: log warning. If due to lock file, next attempt may succeed once lock is released.
+- **`git log` fails** (for age check): treat as `None` (no previous snapshot), proceed with snapshot.
+- **`git` not on PATH**: `FileNotFoundError` from `subprocess.run`. Caught, logged, skipped.
+- **Lifespan teardown interrupted** (SIGKILL): shutdown snapshot is best-effort. The next startup snapshot will capture the state.
 
 ## Regression Risks
 
-- **Import/apply performance**: adding `hash_file()` reads each journal file twice (once for hash_before, once for hash_after). Journal files are typically <1 MB; two extra reads are negligible. Do not read the file a third time — the mutation itself already reads it.
-- **Existing test assertions**: route handlers return the same response shapes. No test should break from event emission alone. If a test patches file I/O or freezes time, ensure `emit_event` doesn't interfere (it writes to a different file path).
-- **`events.jsonl` in workspace glob**: existing code globs `workspace/journals/*.journal` — `events.jsonl` is in `workspace/` root, not `journals/`, so it won't be picked up. Verify no broad `workspace/**` glob exists that could load it.
-- **Backup file naming**: `backup_service.backup_file` creates `.bak` files in the journal directory. Event log writes to `workspace/events.jsonl`. No naming collision.
-- **Toggle-status endpoint**: this endpoint receives `journalPath` from the client as an absolute path. Derive the workspace-relative path for `journal_refs` by stripping the workspace root prefix. Handle gracefully if the path is outside the workspace (log warning, use absolute path as fallback).
+- **Server startup time**: `git init` + initial commit + `git add -A` + `git status` adds latency on first run. Subsequent startups only check `git log -1` (fast). Acceptable for a developer-facing tool.
+- **Server shutdown time**: one `git add -A` + `git commit` on shutdown. Typically <100ms for a small workspace. Should not noticeably delay shutdown.
+- **Disk usage**: git objects accumulate over time. Without `git gc`, the `.git/` directory will grow. For a workspace with ~10 journal files and daily snapshots, this is ~50 KB/day. After a year, ~20 MB. Acceptable without compaction.
+- **Existing tests**: no test currently depends on the workspace being a non-git directory. The `tmp_path` fixtures create fresh directories that are not git repos. Snapshot service tests will use `tmp_path` with explicit `git init`.
+- **`workspace_manager.load_active_config()` called twice in lifespan**: once for drift check, once for snapshot. The function is cheap (reads a TOML file). Could be deduplicated, but clarity is worth more than the microsecond saved.
 
 ## Acceptance Criteria
 
-- After any of the 7 mutating API calls, `workspace/events.jsonl` contains a new line with the correct event type, valid UUIDv7 `id`, UTC timestamp, and populated `journal_refs`.
-- `journal_refs[].hash_before` matches the SHA-256 of the file content before the mutation; `hash_after` matches after.
-- `journal_refs[].path` is workspace-relative (e.g., `journals/2026.journal`, not an absolute path).
-- When a journal file is edited externally between mutations, a `journal.external_edit_detected.v1` event is emitted before the next mutation event for that file.
-- On server startup with a modified journal, a `journal.external_edit_detected.v1` event with `"trigger": "startup"` is emitted.
-- Event emission failure does not cause any mutation endpoint to return an error.
-- Each line in `events.jsonl` is valid JSON parseable by `json.loads()`.
-- `events.jsonl` is never read by `ledger` CLI (not a journal file, not `include`d anywhere).
+- On server shutdown, `workspace/.git/` contains a commit with the current state of all non-ignored files.
+- On server startup, if >24 hours have passed since the last commit (or no commits exist), a snapshot commit is created.
+- `workspace/.gitignore` excludes `*.bak.*`, `inbox/`, `imports/`, `.workflow/`.
+- `workspace/.gitignore` does not exclude `journals/`, `events.jsonl`, `settings/`, `rules/`, or `opening/`.
+- No empty commits are created when nothing has changed.
+- Commit messages include the trigger (`shutdown`/`startup`/`initial`) and UTC timestamp.
+- Git failures do not prevent server startup or shutdown.
+- The app functions normally when `git` is not installed (graceful degradation).
 - `uv run pytest -q` passes in `app/backend`.
-- `pnpm check` passes in `app/frontend` (no frontend change, but verify API contract intact).
-- Existing tests for all 7 mutation endpoints continue to pass without modification (event emission is transparent).
+- `pnpm check` passes in `app/frontend` (no frontend change).
 
 ## Proposed Sequence
 
-1. **Create `event_log_service.py`** with: `hash_file()`, `emit_event()`, `get_last_known_hash()` (backward JSONL scan), module-level `_hash_cache`, `check_drift()` (per-file drift check + cache update, returns `hash_before`), `check_startup_drift()` (all journals). Unit tests: event write creates file, second write appends, hash computation is stable, drift detected when hash mismatches, drift skipped when no baseline, corrupt JSONL line handled gracefully, cache populated after emit.
+1. **Create `git_snapshot_service.py`** with `ensure_gitignore()`, `ensure_workspace_repo()`, `snapshot_commit()`, `hours_since_last_snapshot()`. Unit tests: repo initialized, gitignore written, snapshot creates commit, no empty commit when unchanged, age check returns correct hours, graceful failure when git missing.
 
-2. **Integrate startup drift check** into the FastAPI lifespan in `main.py`. After `import_index.ensure_schema()`, call `check_startup_drift(workspace_path)` wrapped in try/except (never crash the server). Test: start server with modified journal → drift event in log; start server with no workspace → no crash.
+2. **Integrate into FastAPI lifespan**: startup snapshot (conditional on age), shutdown snapshot (unconditional). Verify existing startup drift check still runs. Test: startup with stale repo creates commit; startup with fresh repo skips; shutdown always attempts.
 
-3. **Integrate with simple single-journal endpoints** — `transactions_create` (endpoint 1), `transactions_toggle_status` (endpoint 2), `transactions_manual_transfer_resolution_apply` (endpoint 7). Each gets: `hash_before = check_drift(...)` before the mutation, `hash_after = hash_file(...)` + `emit_event(...)` after. Tests: call endpoint → event appears in log with correct type and hashes.
-
-4. **Integrate with `rules_history_apply`** (endpoint 6). Same pattern as step 3 but with stage-based flow. Test: apply rule history → event with correct `journal_refs`.
-
-5. **Integrate with `import_apply`** (endpoint 4). Compute `hash_before` before `apply_import()` call. Build payload from the stage and result. Test: import apply → event with transaction count, history ID.
-
-6. **Integrate with `import_undo`** (endpoint 5). The `undo_import` service already resolves the journal path internally — compute `hash_before` before the call using the same path resolution. Test: undo → event with history ID and removal count.
-
-7. **Integrate with `unknown_apply`** (endpoint 3). Most complex: tracks journal, `accounts.dat`, and optionally `archived-manual.journal`. Compute `hash_before` for all three files before `apply_unknown_mappings()`. Build `journal_refs` with entries for each file that was actually modified. Test: unknowns apply with match → event with 3 `journal_refs` entries including archive; unknowns apply without match → event with 2 entries (no archive ref).
-
-8. **Add drift integration test**: modify a journal file directly (simulating external edit), then call a mutation endpoint → verify drift event appears before the mutation event in the log.
-
-9. **Manual verification**: run the app, perform an import → review → apply cycle, inspect `events.jsonl`, verify event types and hash chains are correct.
+3. **Manual verification**: start the app with a workspace, make an import, stop the server, inspect `git -C <workspace> log --oneline` for snapshot commits.
 
 ## Definition of Done
 
-- Every journal mutation produces a structured event in `workspace/events.jsonl` with correct envelope, type, payload, and file hashes.
-- External edits to journal files are detected and recorded — both at startup and before mutations.
-- Event emission is transparent to existing behavior: no API changes, no mutation failures from event errors.
-- The hash chain in `journal_refs` is correct: `hash_after` of event N equals `hash_before` of event N+1 for the same file (assuming no external edits between them).
-- All existing tests pass: `uv run pytest -q` and `pnpm check`.
-- New tests cover: event writing, hash computation, drift detection, per-endpoint emission, emission failure resilience.
-- No UI-visible change.
+- Periodic git snapshot commits capture workspace state on shutdown and stale startup.
+- `.gitignore` excludes transient artifacts, includes all canonical files.
+- Git operations never block or crash the server.
+- The workspace git repo is independent of the app repo.
+- All existing tests pass. New tests cover the snapshot service.
+- No UI-visible change. No API change.
 
 ## Out of Scope
 
-- Undo logic, compensating events, or inverse-action dispatch (Feature 5e).
-- API endpoints for reading or querying the event log.
-- Event log UI (history list, undo button, toast).
-- Git snapshot commits (Feature 5c).
-- Transaction actions menu (Feature 5d).
-- Event file rotation, archival, or size management.
-- `accounts.dat` or rule-file drift detection (only journal files are tracked for drift — `accounts.dat` is tracked in `journal_refs` when mutated but not drift-checked at startup).
+- Per-mutation commits.
+- Git push, remote, or sync.
+- UI for git history browsing or restoration.
+- Git hooks, signing, tags, or branches.
+- `.workflow/` in the snapshot (disposable by design).
+- `git gc` or repository maintenance.
+- Event log changes.
