@@ -31,9 +31,9 @@ Trust fix: journal mutations currently have no reliable undo mechanism. Matched 
 4. ~~**Dashboard polish**~~ — shipped (4a–4d: momentum line, day-grouped activity, per-account staleness, cash flow presets).
 5. **Event-sourced undo** — trust fix. Five sub-features, shipped in order:
    - ~~**5a. Archive journal for matched manual entries**~~ — shipped.
-   - **5b. Event log foundation** — append-only `workspace/events.jsonl`, event envelope, drift detection. Active `TASK.md`.
-   - **5c. Git snapshot commits** — periodic workspace snapshots (shutdown + daily) as an escape hatch.
-   - **5d. Transaction actions menu** — three-dot row menu: delete, re-categorize, unmatch. Each writes an event.
+   - ~~**5b. Event log foundation**~~ — shipped.
+   - ~~**5c. Git snapshot commits**~~ — shipped.
+   - **5d. Transaction actions menu** — three-dot row menu: delete, re-categorize, unmatch. Each writes an event. Active `TASK.md`.
    - **5e. Semantic undo + toast** — compensating-event dispatcher, toast affordance, partial-undo report when drift is present.
 6. **Dashboard drill-down and activity view** — clickable category trends + cash flow rows, cross-account activity view with filters. Paused until event-sourced undo ships.
 7. **Transaction editing** — deferred. See Deferred for Now.
@@ -58,19 +58,13 @@ Shipped. Momentum line replaces Net chip, recent activity day-grouped (5-item ca
 
 Shipped. Matched manual entries are preserved in `workspace/journals/archived-manual.journal` with `match-id:` UUID tags linking them to imported transactions. See git history for implementation details.
 
-### Feature 5b: Event Log Foundation
+### Feature 5b: Event Log Foundation ✓
 
-Append-only event log at `workspace/events.jsonl`. Each journal mutation emits an event with UUIDv7 id, `actor`, `type`, `summary`, `payload`, `journal_refs` (with `hash_before`/`hash_after`), and `compensates` link. Events are the primary causal record; journals remain canonical state.
+Shipped. Append-only event log at `workspace/events.jsonl` with UUIDv7 ids, drift detection, and pre-mutation hash checks. All 7 mutating endpoints emit events. See git history for implementation details.
 
-Includes drift detection: pre-mutation and startup hash checks append `journal.external_edit_detected.v1` marker events when the journal was changed outside the app. Events are designed multi-user-ready (UUIDv7 for merge-friendly sorting, `actor` populated, file never rewritten) but multi-user sync itself is deferred.
+### Feature 5c: Git Snapshot Commits ✓
 
-Emits events from the same 7 mutating endpoints the original git safety layer targeted, plus archive-related events from 5a. No projections, no indexes, no snapshots — the log on disk is the entire system.
-
-### Feature 5c: Git Snapshot Commits
-
-Periodic snapshot commits of `workspace/` — one on server shutdown, and optionally one per 24h for long-running sessions. Preserves the file-level escape hatch (git log -p works as a last resort if events.jsonl is lost) and becomes the substrate for future multi-user file sync. Not per-mutation: the event log is the primary audit trail.
-
-Lightweight implementation (~30 lines). Workspace is a git repo; `.gitignore` excludes `.bak` and inbox artifacts.
+Shipped. Periodic workspace snapshots on shutdown and stale startup (>24h). Managed `.gitignore` excludes transient artifacts. See git history for implementation details.
 
 ### Feature 5d: Transaction Actions Menu
 
