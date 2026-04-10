@@ -50,6 +50,7 @@ class RegisterEvent:
     clearing_status: str = "unmarked"
     header_line: str = ""
     journal_path: str = ""
+    match_id: str | None = None
     affects_balance: bool = True
     counts_as_transaction: bool = True
 
@@ -786,6 +787,7 @@ def build_account_register(config: AppConfig, account_id: str) -> dict:
                     clearing_status=transaction.status.value,
                     header_line=transaction.header_line,
                     journal_path=transaction.source_journal,
+                    match_id=transaction.metadata.get("match-id") or None,
                     counts_as_transaction=not is_generated_opening,
                 )
             )
@@ -843,6 +845,7 @@ def build_account_register(config: AppConfig, account_id: str) -> dict:
                 "clearingStatus": event.clearing_status,
                 "headerLine": event.header_line,
                 "journalPath": event.journal_path,
+                "matchId": event.match_id,
             }
         )
         if event.counts_as_transaction and not event.is_opening_balance:

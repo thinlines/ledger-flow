@@ -198,6 +198,22 @@ class ToggleStatusRequest(BaseModel):
     headerLine: str
 
 
+class DeleteTransactionRequest(BaseModel):
+    journalPath: str
+    headerLine: str
+
+
+class RecategorizeTransactionRequest(BaseModel):
+    journalPath: str
+    headerLine: str
+
+
+class UnmatchTransactionRequest(BaseModel):
+    journalPath: str
+    headerLine: str
+    matchId: str
+
+
 class TrackedAccountUpsertRequest(BaseModel):
     accountId: str | None = None
     displayName: str = Field(min_length=1)

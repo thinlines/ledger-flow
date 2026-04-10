@@ -13,11 +13,13 @@ from models import (
     ImportCandidateRemoveRequest,
     CustomImportAccountUpsertRequest,
     CreateAccountRequest,
+    DeleteTransactionRequest,
     ImportPreviewRequest,
     ImportUndoRequest,
     ManualTransactionRequest,
     ManualTransferResolutionRequest,
     PayeeRuleRequest,
+    RecategorizeTransactionRequest,
     RuleHistoryApplyRequest,
     RuleHistoryScanRequest,
     RuleCreateRequest,
@@ -28,6 +30,7 @@ from models import (
     TrackedAccountUpsertRequest,
     UnknownScanRequest,
     UnknownStageRequest,
+    UnmatchTransactionRequest,
     WorkspaceImportAccountUpsertRequest,
     WorkspaceBootstrapRequest,
     WorkspaceSelectRequest,
@@ -36,6 +39,8 @@ from services.backup_service import backup_file
 from services.event_log_service import check_drift, check_startup_drift, emit_event, hash_file, rel_path
 from services.git_snapshot_service import hours_since_last_snapshot, snapshot_commit
 from services.header_parser import TransactionStatus, parse_header, set_header_status, HEADER_RE as _HEADER_RE
+from services.journal_query_service import TXN_START_RE
+from services.transfer_service import ACCOUNT_LINE_RE, ACCOUNT_ONLY_RE, rewrite_posting_account
 from services.account_register_service import build_account_register
 from services.commodity_service import CommodityMismatchError
 from services.custom_csv_service import inspect_csv_bytes
@@ -603,6 +608,371 @@ def transactions_toggle_status(req: ToggleStatusRequest) -> dict:
         _log.error("Event emission failed for toggle_status", exc_info=True)
 
     return {"newStatus": next_status.value, "newHeaderLine": new_line}
+
+
+# ---------------------------------------------------------------------------
+# Transaction actions: delete, re-categorize, unmatch
+# ---------------------------------------------------------------------------
+
+
+def _find_transaction_block(lines: list[str], header_idx: int) -> tuple[int, int]:
+    """Return (start, end) line indices for the transaction block at *header_idx*.
+
+    The block spans from *header_idx* to the line before the next transaction
+    header (or end-of-file). Trailing blank lines between blocks are included
+    in the range so removal leaves no extra whitespace.
+    """
+    end = header_idx + 1
+    while end < len(lines):
+        if TXN_START_RE.match(lines[end]):
+            break
+        end += 1
+    # Trim trailing blank lines that separate blocks (include them in removed range).
+    while end > header_idx + 1 and lines[end - 1].strip() == "":
+        end -= 1
+    return header_idx, end
+
+
+def _locate_header(lines: list[str], header_line: str) -> int:
+    """Find the unique line index matching *header_line*, or raise HTTPException."""
+    match_indexes = [i for i, line in enumerate(lines) if line == header_line]
+    if len(match_indexes) == 0:
+        raise HTTPException(
+            status_code=404,
+            detail="Transaction not found in journal (stale data — try refreshing)",
+        )
+    if len(match_indexes) > 1:
+        raise HTTPException(
+            status_code=409,
+            detail="Ambiguous: multiple matching header lines found",
+        )
+    return match_indexes[0]
+
+
+@app.post("/api/transactions/delete")
+def transactions_delete(req: DeleteTransactionRequest) -> dict:
+    config = _require_workspace_config()
+    journal_path = Path(req.journalPath)
+    if not journal_path.is_file():
+        raise HTTPException(status_code=404, detail="Journal file not found")
+
+    hash_before = check_drift(config.root_dir, journal_path)
+    backup_file(journal_path, "delete")
+
+    text = journal_path.read_text(encoding="utf-8")
+    lines = text.splitlines()
+    header_idx = _locate_header(lines, req.headerLine)
+    block_start, block_end = _find_transaction_block(lines, header_idx)
+    deleted_block = "\n".join(lines[block_start:block_end])
+
+    # Parse date and payee for the event summary.
+    parsed = parse_header(req.headerLine)
+    payee = parsed.payee if parsed else req.headerLine[:60]
+    date_str = parsed.date if parsed else ""
+
+    # Also consume a preceding blank line to avoid double-blank-line gaps.
+    remove_start = block_start
+    if remove_start > 0 and lines[remove_start - 1].strip() == "":
+        remove_start -= 1
+    new_lines = lines[:remove_start] + lines[block_end:]
+    journal_path.write_text("\n".join(new_lines) + ("\n" if text.endswith("\n") else ""), encoding="utf-8")
+
+    try:
+        hash_after = hash_file(journal_path)
+        emit_event(
+            config.root_dir,
+            event_type="transaction.deleted.v1",
+            summary=f"Deleted transaction: {payee} on {date_str}",
+            payload={
+                "journal_path": rel_path(journal_path, config.root_dir),
+                "header_line": req.headerLine,
+                "deleted_block": deleted_block,
+            },
+            journal_refs=[{
+                "path": rel_path(journal_path, config.root_dir),
+                "hash_before": hash_before,
+                "hash_after": hash_after,
+            }],
+        )
+    except Exception:
+        _log.error("Event emission failed for delete", exc_info=True)
+
+    return {"success": True}
+
+
+@app.post("/api/transactions/recategorize")
+def transactions_recategorize(req: RecategorizeTransactionRequest) -> dict:
+    config = _require_workspace_config()
+    journal_path = Path(req.journalPath)
+    if not journal_path.is_file():
+        raise HTTPException(status_code=404, detail="Journal file not found")
+
+    hash_before = check_drift(config.root_dir, journal_path)
+    backup_file(journal_path, "recategorize")
+
+    text = journal_path.read_text(encoding="utf-8")
+    lines = text.splitlines()
+    header_idx = _locate_header(lines, req.headerLine)
+    block_start, block_end = _find_transaction_block(lines, header_idx)
+
+    # Collect tracked account ledger names for distinguishing categories from
+    # tracked accounts (transfers).
+    tracked_ledger_accounts: set[str] = set()
+    for ta in config.tracked_accounts.values():
+        la = str(ta.get("ledger_account", "")).strip()
+        if la:
+            tracked_ledger_accounts.add(la)
+
+    # Find the single destination posting to rewrite.
+    destination_idx: int | None = None
+    previous_account: str | None = None
+    for i in range(block_start + 1, block_end):
+        line = lines[i]
+        # Skip metadata comments and blank lines.
+        stripped = line.strip()
+        if stripped.startswith(";") or stripped == "":
+            continue
+        # Parse the posting account.
+        m = ACCOUNT_LINE_RE.match(line) or ACCOUNT_ONLY_RE.match(line)
+        if m:
+            account = m.group(2).strip()
+            if account in tracked_ledger_accounts:
+                continue  # Source (tracked) account — skip.
+            if account == "Expenses:Unknown":
+                raise HTTPException(status_code=422, detail="Transaction is already uncategorized")
+            if destination_idx is not None:
+                # Multiple non-source postings — split transaction, not supported.
+                raise HTTPException(status_code=422, detail="Cannot re-categorize a split transaction")
+            destination_idx = i
+            previous_account = account
+
+    if destination_idx is None:
+        raise HTTPException(status_code=422, detail="Cannot re-categorize a transfer")
+
+    new_line, changed = rewrite_posting_account(lines[destination_idx], "Expenses:Unknown")
+    if not changed:
+        raise HTTPException(status_code=500, detail="Failed to rewrite posting account")
+    lines[destination_idx] = new_line
+
+    journal_path.write_text("\n".join(lines) + ("\n" if text.endswith("\n") else ""), encoding="utf-8")
+
+    parsed = parse_header(req.headerLine)
+    payee = parsed.payee if parsed else req.headerLine[:60]
+    date_str = parsed.date if parsed else ""
+
+    try:
+        hash_after = hash_file(journal_path)
+        emit_event(
+            config.root_dir,
+            event_type="transaction.recategorized.v1",
+            summary=f"Reset category: {payee} on {date_str} ({previous_account} → Expenses:Unknown)",
+            payload={
+                "journal_path": rel_path(journal_path, config.root_dir),
+                "header_line": req.headerLine,
+                "previous_account": previous_account,
+                "new_account": "Expenses:Unknown",
+            },
+            journal_refs=[{
+                "path": rel_path(journal_path, config.root_dir),
+                "hash_before": hash_before,
+                "hash_after": hash_after,
+            }],
+        )
+    except Exception:
+        _log.error("Event emission failed for recategorize", exc_info=True)
+
+    return {"success": True, "previousAccount": previous_account}
+
+
+@app.post("/api/transactions/unmatch")
+def transactions_unmatch(req: UnmatchTransactionRequest) -> dict:
+    config = _require_workspace_config()
+    journal_path = Path(req.journalPath)
+    if not journal_path.is_file():
+        raise HTTPException(status_code=404, detail="Journal file not found")
+
+    archive_path = config.root_dir / "journals" / "archived-manual.journal"
+    if not archive_path.is_file():
+        raise HTTPException(status_code=404, detail="No archived entries exist")
+
+    # --- Locate the archived manual entry by match-id ---
+    archive_text = archive_path.read_text(encoding="utf-8")
+    archive_lines = archive_text.splitlines()
+    archived_block_start: int | None = None
+    archived_block_end: int | None = None
+
+    for i, line in enumerate(archive_lines):
+        stripped = line.strip()
+        if stripped == f"; match-id: {req.matchId}":
+            # The match-id tag is on line 2 of the block (header is the previous line).
+            if i == 0 or not TXN_START_RE.match(archive_lines[i - 1]):
+                continue
+            archived_block_start = i - 1
+            # Find end of this block.
+            archived_block_end = i + 1
+            while archived_block_end < len(archive_lines):
+                if TXN_START_RE.match(archive_lines[archived_block_end]):
+                    break
+                archived_block_end += 1
+            # Trim trailing blank lines.
+            while archived_block_end > archived_block_start + 1 and archive_lines[archived_block_end - 1].strip() == "":
+                archived_block_end -= 1
+            break
+
+    if archived_block_start is None:
+        raise HTTPException(status_code=404, detail="Archived manual entry not found for this match")
+
+    archived_block_lines = archive_lines[archived_block_start:archived_block_end]
+
+    # --- Drift checks and backups ---
+    hash_before_main = check_drift(config.root_dir, journal_path)
+    hash_before_archive = check_drift(config.root_dir, archive_path)
+    backup_file(journal_path, "unmatch")
+    backup_file(archive_path, "unmatch")
+
+    # --- Modify the main journal: remove :manual: and match-id: tags,
+    #     rewrite destination to Expenses:Unknown ---
+    main_text = journal_path.read_text(encoding="utf-8")
+    main_lines = main_text.splitlines()
+    header_idx = _locate_header(main_lines, req.headerLine)
+    block_start, block_end = _find_transaction_block(main_lines, header_idx)
+
+    from services.transfer_service import ACCOUNT_LINE_RE, ACCOUNT_ONLY_RE
+
+    tracked_ledger_accounts: set[str] = set()
+    for ta in config.tracked_accounts.values():
+        la = str(ta.get("ledger_account", "")).strip()
+        if la:
+            tracked_ledger_accounts.add(la)
+
+    lines_to_remove: list[int] = []
+    destination_idx: int | None = None
+    for i in range(block_start + 1, block_end):
+        stripped = main_lines[i].strip()
+        if stripped == "; :manual:":
+            lines_to_remove.append(i)
+        elif stripped == f"; match-id: {req.matchId}":
+            lines_to_remove.append(i)
+        elif not stripped.startswith(";") and stripped != "":
+            m = ACCOUNT_LINE_RE.match(main_lines[i]) or ACCOUNT_ONLY_RE.match(main_lines[i])
+            if m:
+                account = m.group(2).strip()
+                if account not in tracked_ledger_accounts and destination_idx is None:
+                    destination_idx = i
+
+    # Remove tag lines in reverse order to preserve indices.
+    for idx in sorted(lines_to_remove, reverse=True):
+        del main_lines[idx]
+
+    # Adjust destination_idx for removed lines above it.
+    if destination_idx is not None:
+        removed_above = sum(1 for idx in lines_to_remove if idx < destination_idx)
+        destination_idx -= removed_above
+        new_line, _ = rewrite_posting_account(main_lines[destination_idx], "Expenses:Unknown")
+        main_lines[destination_idx] = new_line
+
+    journal_path.write_text(
+        "\n".join(main_lines) + ("\n" if main_text.endswith("\n") else ""),
+        encoding="utf-8",
+    )
+
+    # --- Prepare the restored manual entry (strip the match-id tag) ---
+    restored_lines: list[str] = []
+    for line in archived_block_lines:
+        stripped = line.strip()
+        if stripped == f"; match-id: {req.matchId}":
+            continue
+        restored_lines.append(line)
+    restored_block = "\n".join(restored_lines)
+
+    # --- Insert restored manual entry into main journal in date order ---
+    # Re-read after the first write.
+    main_text2 = journal_path.read_text(encoding="utf-8")
+    main_lines2 = main_text2.splitlines()
+
+    # Parse the date from the restored entry header.
+    restored_date = ""
+    if restored_lines and TXN_START_RE.match(restored_lines[0]):
+        restored_date = restored_lines[0][:10]
+
+    # Find insertion point: after the last transaction with date <= restored_date.
+    insert_idx = len(main_lines2)
+    for i in range(len(main_lines2) - 1, -1, -1):
+        if TXN_START_RE.match(main_lines2[i]) and main_lines2[i][:10] <= restored_date:
+            # Find end of this block to insert after it.
+            end_i = i + 1
+            while end_i < len(main_lines2):
+                if TXN_START_RE.match(main_lines2[end_i]):
+                    break
+                end_i += 1
+            insert_idx = end_i
+            break
+
+    # Insert with a blank line separator.
+    insert_block = [""] + restored_lines if insert_idx > 0 else restored_lines
+    main_lines2[insert_idx:insert_idx] = insert_block
+
+    journal_path.write_text(
+        "\n".join(main_lines2) + ("\n" if main_text2.endswith("\n") else ""),
+        encoding="utf-8",
+    )
+
+    # --- Remove the archived block from the archive journal ---
+    # Also remove any trailing blank line that separated this block from the next.
+    remove_end = archived_block_end
+    while remove_end < len(archive_lines) and archive_lines[remove_end].strip() == "":
+        remove_end += 1
+    # If removing from the beginning, also remove leading blank line of next block.
+    new_archive_lines = archive_lines[:archived_block_start] + archive_lines[remove_end:]
+
+    # Clean up: if only the header comment remains, remove the file entirely.
+    non_empty = [l for l in new_archive_lines if l.strip() and not l.strip().startswith(";")]
+    if non_empty:
+        archive_path.write_text(
+            "\n".join(new_archive_lines) + ("\n" if archive_text.endswith("\n") else ""),
+            encoding="utf-8",
+        )
+    else:
+        archive_path.unlink(missing_ok=True)
+
+    # --- Emit event ---
+    parsed = parse_header(req.headerLine)
+    payee = parsed.payee if parsed else req.headerLine[:60]
+    date_str = parsed.date if parsed else ""
+
+    try:
+        hash_after_main = hash_file(journal_path)
+        hash_after_archive = hash_file(archive_path)
+        refs = [
+            {
+                "path": rel_path(journal_path, config.root_dir),
+                "hash_before": hash_before_main,
+                "hash_after": hash_after_main,
+            },
+        ]
+        if archive_path.is_file():
+            refs.append({
+                "path": rel_path(archive_path, config.root_dir),
+                "hash_before": hash_before_archive,
+                "hash_after": hash_after_archive,
+            })
+        emit_event(
+            config.root_dir,
+            event_type="transaction.unmatched.v1",
+            summary=f"Unmatched: {payee} on {date_str} (match-id: {req.matchId})",
+            payload={
+                "journal_path": rel_path(journal_path, config.root_dir),
+                "archive_path": rel_path(archive_path, config.root_dir),
+                "header_line": req.headerLine,
+                "match_id": req.matchId,
+                "restored_manual_block": restored_block,
+            },
+            journal_refs=refs,
+        )
+    except Exception:
+        _log.error("Event emission failed for unmatch", exc_info=True)
+
+    return {"success": True}
 
 
 @app.post("/api/workspace/bootstrap")

@@ -46,6 +46,7 @@
     clearingStatus?: 'unmarked' | 'pending' | 'cleared';
     headerLine?: string;
     journalPath?: string;
+    matchId?: string | null;
   };
 
   type AccountRegister = {
@@ -160,6 +161,105 @@
   let manualResolutionError = '';
   let manualResolutionSuccess = '';
   let manualResolutionLoading: 'preview' | 'apply' | null = null;
+
+  // Transaction actions menu state
+  let actionMenuEntry: RegisterEntry | null = null;
+  let confirmDeleteEntry: RegisterEntry | null = null;
+  let confirmUnmatchEntry: RegisterEntry | null = null;
+  let actionError = '';
+  let actionBusy = false;
+
+  function entryHasActions(entry: RegisterEntry): boolean {
+    return !entry.isOpeningBalance;
+  }
+
+  function canDelete(entry: RegisterEntry): boolean {
+    return !entry.isOpeningBalance;
+  }
+
+  function canRecategorize(entry: RegisterEntry): boolean {
+    if (entry.isOpeningBalance || entry.isUnknown) return false;
+    if (entry.transferState) return false;
+    // Split transactions: more than 1 non-source detail line means split
+    const categoryLines = entry.detailLines.filter((l) => l.kind !== 'source');
+    if (categoryLines.length > 1) return false;
+    return true;
+  }
+
+  function canUnmatch(entry: RegisterEntry): boolean {
+    return !!entry.matchId;
+  }
+
+  function openActionMenu(entry: RegisterEntry, event: MouseEvent) {
+    event.preventDefault();
+    event.stopPropagation();
+    if (actionMenuEntry === entry) {
+      actionMenuEntry = null;
+    } else {
+      actionMenuEntry = entry;
+    }
+  }
+
+  function closeActionMenu() {
+    actionMenuEntry = null;
+  }
+
+  async function executeDelete(entry: RegisterEntry) {
+    if (!entry.headerLine || !entry.journalPath) return;
+    actionBusy = true;
+    actionError = '';
+    try {
+      await apiPost('/api/transactions/delete', {
+        journalPath: entry.journalPath,
+        headerLine: entry.headerLine,
+      });
+      confirmDeleteEntry = null;
+      closeActionMenu();
+      await loadRegister(selectedAccountId);
+    } catch (e) {
+      actionError = String(e);
+    } finally {
+      actionBusy = false;
+    }
+  }
+
+  async function executeRecategorize(entry: RegisterEntry) {
+    if (!entry.headerLine || !entry.journalPath) return;
+    actionBusy = true;
+    actionError = '';
+    try {
+      await apiPost('/api/transactions/recategorize', {
+        journalPath: entry.journalPath,
+        headerLine: entry.headerLine,
+      });
+      closeActionMenu();
+      await loadRegister(selectedAccountId);
+    } catch (e) {
+      actionError = String(e);
+    } finally {
+      actionBusy = false;
+    }
+  }
+
+  async function executeUnmatch(entry: RegisterEntry) {
+    if (!entry.headerLine || !entry.journalPath || !entry.matchId) return;
+    actionBusy = true;
+    actionError = '';
+    try {
+      await apiPost('/api/transactions/unmatch', {
+        journalPath: entry.journalPath,
+        headerLine: entry.headerLine,
+        matchId: entry.matchId,
+      });
+      confirmUnmatchEntry = null;
+      closeActionMenu();
+      await loadRegister(selectedAccountId);
+    } catch (e) {
+      actionError = String(e);
+    } finally {
+      actionBusy = false;
+    }
+  }
 
   function titleCase(value: string): string {
     return value.charAt(0).toUpperCase() + value.slice(1);
@@ -667,6 +767,8 @@
   </section>
 {/if}
 
+<svelte:window on:click={() => { if (actionMenuEntry) actionMenuEntry = null; }} />
+
 {#if loading}
   <section class="view-card transactions-hero">
     <p class="eyebrow">Transactions</p>
@@ -1009,6 +1111,7 @@
         <span>Description</span>
         <span class="align-right">Amount</span>
         <span>Status</span>
+        <span></span>
       </div>
 
       <div class="pending-list">
@@ -1112,6 +1215,7 @@
         <span>Description</span>
         <span class="align-right">Amount</span>
         <span class="align-right">Balance</span>
+        <span></span>
       </div>
 
       <div class="register-list">
@@ -1153,6 +1257,38 @@
                   {formatCurrency(entry.runningBalance)}
                 </p>
               </div>
+
+              {#if entryHasActions(entry)}
+                <div class="register-cell register-actions">
+                  <button
+                    class="action-menu-btn"
+                    title="Actions"
+                    type="button"
+                    on:click={(e) => openActionMenu(entry, e)}
+                  >⋮</button>
+                  {#if actionMenuEntry === entry}
+                    <div class="action-menu-popover">
+                      {#if canDelete(entry)}
+                        <button class="action-menu-item danger" type="button" on:click={(e) => { e.stopPropagation(); closeActionMenu(); confirmDeleteEntry = entry; }}>
+                          Remove transaction
+                        </button>
+                      {/if}
+                      {#if canRecategorize(entry)}
+                        <button class="action-menu-item" type="button" on:click={(e) => { e.stopPropagation(); closeActionMenu(); void executeRecategorize(entry); }}>
+                          Reset category
+                        </button>
+                      {/if}
+                      {#if canUnmatch(entry)}
+                        <button class="action-menu-item" type="button" on:click={(e) => { e.stopPropagation(); closeActionMenu(); confirmUnmatchEntry = entry; }}>
+                          Undo match
+                        </button>
+                      {/if}
+                    </div>
+                  {/if}
+                </div>
+              {:else}
+                <span></span>
+              {/if}
             </summary>
 
             <div class="register-details">
@@ -1253,6 +1389,46 @@
     </DialogPrimitive.Content>
   </DialogPrimitive.Portal>
 </DialogPrimitive.Root>
+
+<!-- Delete confirmation dialog -->
+{#if confirmDeleteEntry}
+  <div class="confirm-backdrop" on:click={() => { confirmDeleteEntry = null; actionError = ''; }} role="presentation">
+    <div class="confirm-modal" on:click|stopPropagation on:keydown={(e) => { if (e.key === 'Escape') { confirmDeleteEntry = null; actionError = ''; } }} role="dialog" tabindex="-1" aria-labelledby="confirm-delete-title">
+      <h3 id="confirm-delete-title">Remove transaction</h3>
+      <p>Remove <strong>{confirmDeleteEntry.payee}</strong> on {confirmDeleteEntry.date}?</p>
+      <p class="muted small">This removes the transaction from your records. You'll be able to undo this soon.</p>
+      {#if actionError}
+        <p class="action-error">{actionError}</p>
+      {/if}
+      <div class="modal-actions">
+        <button class="btn" type="button" on:click={() => { confirmDeleteEntry = null; actionError = ''; }}>Cancel</button>
+        <button class="btn btn-danger" type="button" disabled={actionBusy} on:click={() => confirmDeleteEntry && void executeDelete(confirmDeleteEntry)}>
+          {actionBusy ? 'Removing…' : 'Remove'}
+        </button>
+      </div>
+    </div>
+  </div>
+{/if}
+
+<!-- Unmatch confirmation dialog -->
+{#if confirmUnmatchEntry}
+  <div class="confirm-backdrop" on:click={() => { confirmUnmatchEntry = null; actionError = ''; }} role="presentation">
+    <div class="confirm-modal" on:click|stopPropagation on:keydown={(e) => { if (e.key === 'Escape') { confirmUnmatchEntry = null; actionError = ''; } }} role="dialog" tabindex="-1" aria-labelledby="confirm-unmatch-title">
+      <h3 id="confirm-unmatch-title">Undo match</h3>
+      <p>Undo the match for <strong>{confirmUnmatchEntry.payee}</strong> on {confirmUnmatchEntry.date}?</p>
+      <p class="muted small">This will restore the original manual entry and move the imported transaction back to the review queue.</p>
+      {#if actionError}
+        <p class="action-error">{actionError}</p>
+      {/if}
+      <div class="modal-actions">
+        <button class="btn" type="button" on:click={() => { confirmUnmatchEntry = null; actionError = ''; }}>Cancel</button>
+        <button class="btn btn-danger" type="button" disabled={actionBusy} on:click={() => confirmUnmatchEntry && void executeUnmatch(confirmUnmatchEntry)}>
+          {actionBusy ? 'Undoing…' : 'Undo match'}
+        </button>
+      </div>
+    </div>
+  </div>
+{/if}
 
 <style>
   h3,
@@ -1415,7 +1591,7 @@
   .pending-header,
   .pending-summary {
     display: grid;
-    grid-template-columns: 1.5rem minmax(7.5rem, 0.75fr) minmax(0, 2fr) minmax(7.5rem, 0.75fr) minmax(8rem, 0.85fr);
+    grid-template-columns: 1.5rem minmax(7.5rem, 0.75fr) minmax(0, 2fr) minmax(7.5rem, 0.75fr) minmax(8rem, 0.85fr) 2rem;
     gap: 1rem;
     align-items: center;
   }
@@ -1647,6 +1823,124 @@
     gap: 1rem;
   }
 
+  /* --- Transaction Actions Menu --- */
+
+  .register-actions {
+    position: relative;
+  }
+
+  .action-menu-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.6rem;
+    height: 1.6rem;
+    padding: 0;
+    border: none;
+    border-radius: 0.4rem;
+    background: transparent;
+    color: var(--muted-foreground);
+    font-size: 1.1rem;
+    font-weight: 700;
+    line-height: 1;
+    cursor: pointer;
+    transition: background 0.12s, color 0.12s;
+  }
+
+  .action-menu-btn:hover {
+    background: rgba(10, 61, 89, 0.08);
+    color: var(--foreground);
+  }
+
+  .action-menu-popover {
+    position: absolute;
+    right: 0;
+    top: 100%;
+    z-index: 20;
+    min-width: 11rem;
+    background: #fff;
+    border: 1px solid rgba(10, 61, 89, 0.12);
+    border-radius: 0.7rem;
+    box-shadow: 0 4px 16px rgba(10, 20, 30, 0.12);
+    padding: 0.3rem;
+    display: grid;
+    gap: 0.1rem;
+  }
+
+  .action-menu-item {
+    display: block;
+    width: 100%;
+    padding: 0.55rem 0.75rem;
+    border: none;
+    border-radius: 0.45rem;
+    background: transparent;
+    color: var(--foreground);
+    font-size: 0.88rem;
+    font-weight: 600;
+    text-align: left;
+    cursor: pointer;
+    transition: background 0.12s;
+  }
+
+  .action-menu-item:hover {
+    background: rgba(10, 61, 89, 0.06);
+  }
+
+  .action-menu-item.danger {
+    color: var(--error, #c53030);
+  }
+
+  .action-menu-item.danger:hover {
+    background: rgba(197, 48, 48, 0.08);
+  }
+
+  /* --- Confirmation dialogs --- */
+
+  .confirm-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(10, 20, 30, 0.35);
+    z-index: 30;
+  }
+
+  .confirm-modal {
+    width: min(480px, calc(100vw - 2rem));
+    max-height: calc(100vh - 2rem);
+    background: #fff;
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    box-shadow: var(--shadow);
+    padding: 1.25rem;
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    overflow: auto;
+    z-index: 31;
+    display: grid;
+    gap: 0.75rem;
+  }
+
+  .action-error {
+    color: var(--error, #c53030);
+    font-size: 0.88rem;
+  }
+
+  .btn-danger {
+    background: var(--error, #c53030);
+    color: #fff;
+    border-color: var(--error, #c53030);
+  }
+
+  .btn-danger:hover {
+    opacity: 0.9;
+  }
+
+  .btn-danger:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+  }
+
   @media (max-width: 980px) {
     .transactions-hero,
     .summary-grid {
@@ -1671,7 +1965,7 @@
 
     .register-summary,
     .pending-summary {
-      grid-template-columns: 1.5rem 1fr;
+      grid-template-columns: 1.5rem 1fr 2rem;
       gap: 0.45rem;
     }
 
