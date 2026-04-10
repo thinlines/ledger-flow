@@ -39,6 +39,13 @@ from services.backup_service import backup_file
 from services.event_log_service import check_drift, check_startup_drift, emit_event, hash_file, rel_path
 from services.git_snapshot_service import hours_since_last_snapshot, snapshot_commit
 from services.header_parser import TransactionStatus, parse_header, set_header_status, HEADER_RE as _HEADER_RE
+from services.undo_service import UndoOutcome, undo_event
+from services.journal_block_service import (
+    AmbiguousHeaderError,
+    HeaderNotFoundError,
+    find_transaction_block,
+    locate_header,
+)
 from services.journal_query_service import TXN_START_RE
 from services.transfer_service import ACCOUNT_LINE_RE, ACCOUNT_ONLY_RE, rewrite_posting_account
 from services.account_register_service import build_account_register
@@ -468,10 +475,11 @@ def transactions_create(req: ManualTransactionRequest) -> dict:
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
 
+    event_id = None
     try:
         hash_after = hash_file(journal_path)
         source_account = tracked_account_cfg.get("name", req.trackedAccountId)
-        emit_event(
+        event_id = emit_event(
             config.root_dir,
             event_type="manual_entry.created.v1",
             summary=f"Created manual entry: {req.payee or '(no payee)'} {req.amount} {currency}",
@@ -492,7 +500,7 @@ def transactions_create(req: ManualTransactionRequest) -> dict:
     except Exception:
         _log.error("Event emission failed for transactions_create", exc_info=True)
 
-    return result
+    return {**result, "eventId": event_id}
 
 
 @app.post("/api/transactions/manual-transfer-resolution/preview")
@@ -586,9 +594,10 @@ def transactions_toggle_status(req: ToggleStatusRequest) -> dict:
     lines[match_indexes[0]] = new_line
     journal_path.write_text("\n".join(lines) + ("\n" if text.endswith("\n") else ""), encoding="utf-8")
 
+    event_id = None
     try:
         hash_after = hash_file(journal_path)
-        emit_event(
+        event_id = emit_event(
             config.root_dir,
             event_type="transaction.status_toggled.v1",
             summary=f"Toggled status to {next_status.value}: {req.headerLine[:60]}",
@@ -607,7 +616,7 @@ def transactions_toggle_status(req: ToggleStatusRequest) -> dict:
     except Exception:
         _log.error("Event emission failed for toggle_status", exc_info=True)
 
-    return {"newStatus": next_status.value, "newHeaderLine": new_line}
+    return {"newStatus": next_status.value, "newHeaderLine": new_line, "eventId": event_id}
 
 
 # ---------------------------------------------------------------------------
@@ -615,38 +624,20 @@ def transactions_toggle_status(req: ToggleStatusRequest) -> dict:
 # ---------------------------------------------------------------------------
 
 
-def _find_transaction_block(lines: list[str], header_idx: int) -> tuple[int, int]:
-    """Return (start, end) line indices for the transaction block at *header_idx*.
-
-    The block spans from *header_idx* to the line before the next transaction
-    header (or end-of-file). Trailing blank lines between blocks are included
-    in the range so removal leaves no extra whitespace.
-    """
-    end = header_idx + 1
-    while end < len(lines):
-        if TXN_START_RE.match(lines[end]):
-            break
-        end += 1
-    # Trim trailing blank lines that separate blocks (include them in removed range).
-    while end > header_idx + 1 and lines[end - 1].strip() == "":
-        end -= 1
-    return header_idx, end
-
-
 def _locate_header(lines: list[str], header_line: str) -> int:
-    """Find the unique line index matching *header_line*, or raise HTTPException."""
-    match_indexes = [i for i, line in enumerate(lines) if line == header_line]
-    if len(match_indexes) == 0:
+    """Thin wrapper around :func:`locate_header` that raises HTTPException."""
+    try:
+        return locate_header(lines, header_line)
+    except HeaderNotFoundError:
         raise HTTPException(
             status_code=404,
             detail="Transaction not found in journal (stale data — try refreshing)",
         )
-    if len(match_indexes) > 1:
+    except AmbiguousHeaderError:
         raise HTTPException(
             status_code=409,
             detail="Ambiguous: multiple matching header lines found",
         )
-    return match_indexes[0]
 
 
 @app.post("/api/transactions/delete")
@@ -662,7 +653,7 @@ def transactions_delete(req: DeleteTransactionRequest) -> dict:
     text = journal_path.read_text(encoding="utf-8")
     lines = text.splitlines()
     header_idx = _locate_header(lines, req.headerLine)
-    block_start, block_end = _find_transaction_block(lines, header_idx)
+    block_start, block_end = find_transaction_block(lines, header_idx)
     deleted_block = "\n".join(lines[block_start:block_end])
 
     # Parse date and payee for the event summary.
@@ -677,9 +668,10 @@ def transactions_delete(req: DeleteTransactionRequest) -> dict:
     new_lines = lines[:remove_start] + lines[block_end:]
     journal_path.write_text("\n".join(new_lines) + ("\n" if text.endswith("\n") else ""), encoding="utf-8")
 
+    event_id = None
     try:
         hash_after = hash_file(journal_path)
-        emit_event(
+        event_id = emit_event(
             config.root_dir,
             event_type="transaction.deleted.v1",
             summary=f"Deleted transaction: {payee} on {date_str}",
@@ -697,7 +689,7 @@ def transactions_delete(req: DeleteTransactionRequest) -> dict:
     except Exception:
         _log.error("Event emission failed for delete", exc_info=True)
 
-    return {"success": True}
+    return {"success": True, "eventId": event_id}
 
 
 @app.post("/api/transactions/recategorize")
@@ -713,7 +705,7 @@ def transactions_recategorize(req: RecategorizeTransactionRequest) -> dict:
     text = journal_path.read_text(encoding="utf-8")
     lines = text.splitlines()
     header_idx = _locate_header(lines, req.headerLine)
-    block_start, block_end = _find_transaction_block(lines, header_idx)
+    block_start, block_end = find_transaction_block(lines, header_idx)
 
     # Collect tracked account ledger names for distinguishing categories from
     # tracked accounts (transfers).
@@ -760,9 +752,10 @@ def transactions_recategorize(req: RecategorizeTransactionRequest) -> dict:
     payee = parsed.payee if parsed else req.headerLine[:60]
     date_str = parsed.date if parsed else ""
 
+    event_id = None
     try:
         hash_after = hash_file(journal_path)
-        emit_event(
+        event_id = emit_event(
             config.root_dir,
             event_type="transaction.recategorized.v1",
             summary=f"Reset category: {payee} on {date_str} ({previous_account} → Expenses:Unknown)",
@@ -781,7 +774,7 @@ def transactions_recategorize(req: RecategorizeTransactionRequest) -> dict:
     except Exception:
         _log.error("Event emission failed for recategorize", exc_info=True)
 
-    return {"success": True, "previousAccount": previous_account}
+    return {"success": True, "previousAccount": previous_account, "eventId": event_id}
 
 
 @app.post("/api/transactions/unmatch")
@@ -835,7 +828,7 @@ def transactions_unmatch(req: UnmatchTransactionRequest) -> dict:
     main_text = journal_path.read_text(encoding="utf-8")
     main_lines = main_text.splitlines()
     header_idx = _locate_header(main_lines, req.headerLine)
-    block_start, block_end = _find_transaction_block(main_lines, header_idx)
+    block_start, block_end = find_transaction_block(main_lines, header_idx)
 
     from services.transfer_service import ACCOUNT_LINE_RE, ACCOUNT_ONLY_RE
 
@@ -956,7 +949,7 @@ def transactions_unmatch(req: UnmatchTransactionRequest) -> dict:
                 "hash_before": hash_before_archive,
                 "hash_after": hash_after_archive,
             })
-        emit_event(
+        event_id = emit_event(
             config.root_dir,
             event_type="transaction.unmatched.v1",
             summary=f"Unmatched: {payee} on {date_str} (match-id: {req.matchId})",
@@ -970,9 +963,46 @@ def transactions_unmatch(req: UnmatchTransactionRequest) -> dict:
             journal_refs=refs,
         )
     except Exception:
+        event_id = None
         _log.error("Event emission failed for unmatch", exc_info=True)
 
-    return {"success": True}
+    return {"success": True, "eventId": event_id}
+
+
+# ---------------------------------------------------------------------------
+# Undo
+# ---------------------------------------------------------------------------
+
+_UNDO_STATUS_MAP = {
+    UndoOutcome.SUCCESS: 200,
+    UndoOutcome.ALREADY_COMPENSATED: 200,
+    UndoOutcome.NOT_FOUND: 404,
+    UndoOutcome.DRIFT: 409,
+    UndoOutcome.UNSUPPORTED: 422,
+    UndoOutcome.FAILED: 422,
+}
+
+
+@app.post("/api/events/undo/{event_id}")
+def events_undo(event_id: str) -> dict:
+    config = _require_workspace_config()
+    result = undo_event(config.root_dir, event_id)
+    status = _UNDO_STATUS_MAP.get(result.outcome, 500)
+    if status >= 400:
+        raise HTTPException(
+            status_code=status,
+            detail={
+                "outcome": result.outcome.value,
+                "message": result.message,
+                "forwardEventId": result.forward_event_id,
+            },
+        )
+    return {
+        "outcome": result.outcome.value,
+        "message": result.message,
+        "compensatingEventId": result.compensating_event_id,
+        "forwardEventId": result.forward_event_id,
+    }
 
 
 @app.post("/api/workspace/bootstrap")

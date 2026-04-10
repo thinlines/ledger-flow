@@ -1,6 +1,7 @@
 <script lang="ts">
 	import '../app.css';
 	import { page } from '$app/stores';
+	import UndoToast from '$lib/components/UndoToast.svelte';
 
 	const navSections = [
 		{
@@ -96,6 +97,8 @@
 
 	<main class="content"><slot /></main>
 </div>
+
+<UndoToast />
 
 <style>
 	.app-shell {

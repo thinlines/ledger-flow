@@ -4,6 +4,7 @@
   import { page } from '$app/stores';
   import { onMount } from 'svelte';
   import { apiGet, apiPost } from '$lib/api';
+  import { showUndoToast } from '$lib/undo-toast';
   import AccountCombobox from '$lib/components/AccountCombobox.svelte';
   import { describeBalanceTrust } from '$lib/account-trust';
   import { normalizeCurrencyCode } from '$lib/currency-format';
@@ -209,13 +210,15 @@
     actionBusy = true;
     actionError = '';
     try {
-      await apiPost('/api/transactions/delete', {
+      const res = await apiPost<{ success: boolean; eventId: string | null }>('/api/transactions/delete', {
         journalPath: entry.journalPath,
         headerLine: entry.headerLine,
       });
       confirmDeleteEntry = null;
       closeActionMenu();
-      await loadRegister(selectedAccountId);
+      const reloadRegister = () => loadRegister(selectedAccountId);
+      if (res.eventId) showUndoToast(res.eventId, `Removed ${entry.payee} on ${entry.date}`, reloadRegister);
+      await reloadRegister();
     } catch (e) {
       actionError = String(e);
     } finally {
@@ -228,12 +231,14 @@
     actionBusy = true;
     actionError = '';
     try {
-      await apiPost('/api/transactions/recategorize', {
+      const res = await apiPost<{ success: boolean; eventId: string | null }>('/api/transactions/recategorize', {
         journalPath: entry.journalPath,
         headerLine: entry.headerLine,
       });
       closeActionMenu();
-      await loadRegister(selectedAccountId);
+      const reloadRegister = () => loadRegister(selectedAccountId);
+      if (res.eventId) showUndoToast(res.eventId, `Reset category on ${entry.payee}`, reloadRegister);
+      await reloadRegister();
     } catch (e) {
       actionError = String(e);
     } finally {
@@ -246,14 +251,16 @@
     actionBusy = true;
     actionError = '';
     try {
-      await apiPost('/api/transactions/unmatch', {
+      const res = await apiPost<{ success: boolean; eventId: string | null }>('/api/transactions/unmatch', {
         journalPath: entry.journalPath,
         headerLine: entry.headerLine,
         matchId: entry.matchId,
       });
       confirmUnmatchEntry = null;
       closeActionMenu();
-      await loadRegister(selectedAccountId);
+      const reloadRegister = () => loadRegister(selectedAccountId);
+      if (res.eventId) showUndoToast(res.eventId, `Undid match for ${entry.payee}`, reloadRegister);
+      await reloadRegister();
     } catch (e) {
       actionError = String(e);
     } finally {
@@ -710,7 +717,7 @@
     addError = '';
     addSubmitting = true;
     try {
-      const result = await apiPost<{ created: boolean; warning?: string | null }>('/api/transactions/create', {
+      const result = await apiPost<{ created: boolean; warning?: string | null; eventId?: string | null }>('/api/transactions/create', {
         trackedAccountId: selectedAccountId,
         date: addDate,
         payee: addPayee.trim(),
@@ -718,8 +725,10 @@
         destinationAccount: addDestination.trim()
       });
       addSuccess = `Added: ${addPayee.trim()} on ${addDate}${result.warning ? ` (${result.warning})` : ''}`;
+      const reloadRegister = () => loadRegister(selectedAccountId);
+      if (result.eventId) showUndoToast(result.eventId, `Added ${addPayee.trim()}`, reloadRegister);
       showAddForm = false;
-      await loadRegister(selectedAccountId);
+      await reloadRegister();
     } catch (e) {
       addError = String(e);
     } finally {
