@@ -89,8 +89,7 @@ ARCHIVE_CONTENT = """\
 # Delete endpoint logic
 # ---------------------------------------------------------------------------
 
-# Import the helpers from main.py — they are module-level functions.
-from main import _find_transaction_block, _locate_header
+from services.journal_block_service import find_transaction_block, locate_header
 
 
 class TestFindTransactionBlock:
@@ -98,7 +97,7 @@ class TestFindTransactionBlock:
         lines = SAMPLE_JOURNAL.splitlines()
         # "2026-03-15 * Whole Foods" is at index 3 (after blank line separator).
         idx = next(i for i, l in enumerate(lines) if "Whole Foods" in l)
-        start, end = _find_transaction_block(lines, idx)
+        start, end = find_transaction_block(lines, idx)
         assert start == idx
         block = "\n".join(lines[start:end])
         assert "Whole Foods" in block
@@ -109,7 +108,7 @@ class TestFindTransactionBlock:
     def test_finds_last_block(self) -> None:
         lines = SAMPLE_JOURNAL.splitlines()
         idx = next(i for i, l in enumerate(lines) if "Target" in l)
-        start, end = _find_transaction_block(lines, idx)
+        start, end = find_transaction_block(lines, idx)
         block = "\n".join(lines[start:end])
         assert "Target" in block
         assert "Expenses:Unknown" in block
@@ -118,24 +117,22 @@ class TestFindTransactionBlock:
 class TestLocateHeader:
     def test_unique_match(self) -> None:
         lines = SAMPLE_JOURNAL.splitlines()
-        idx = _locate_header(lines, "2026-03-15 * Whole Foods")
+        idx = locate_header(lines, "2026-03-15 * Whole Foods")
         assert lines[idx] == "2026-03-15 * Whole Foods"
 
-    def test_not_found_raises_404(self) -> None:
-        from fastapi import HTTPException
+    def test_not_found_raises(self) -> None:
+        from services.journal_block_service import HeaderNotFoundError
 
         lines = SAMPLE_JOURNAL.splitlines()
-        with pytest.raises(HTTPException) as exc_info:
-            _locate_header(lines, "2099-01-01 * Nonexistent")
-        assert exc_info.value.status_code == 404
+        with pytest.raises(HeaderNotFoundError):
+            locate_header(lines, "2099-01-01 * Nonexistent")
 
-    def test_ambiguous_raises_409(self) -> None:
-        from fastapi import HTTPException
+    def test_ambiguous_raises(self) -> None:
+        from services.journal_block_service import AmbiguousHeaderError
 
         lines = ["2026-03-15 * Dupe", "    posting", "", "2026-03-15 * Dupe", "    posting"]
-        with pytest.raises(HTTPException) as exc_info:
-            _locate_header(lines, "2026-03-15 * Dupe")
-        assert exc_info.value.status_code == 409
+        with pytest.raises(AmbiguousHeaderError):
+            locate_header(lines, "2026-03-15 * Dupe")
 
 
 # ---------------------------------------------------------------------------
@@ -159,8 +156,8 @@ class TestDeleteTransaction:
 
         text = journal.read_text(encoding="utf-8")
         lines = text.splitlines()
-        header_idx = _locate_header(lines, header_line)
-        block_start, block_end = _find_transaction_block(lines, header_idx)
+        header_idx = locate_header(lines, header_line)
+        block_start, block_end = find_transaction_block(lines, header_idx)
         deleted_block = "\n".join(lines[block_start:block_end])
 
         new_lines = lines[:block_start] + lines[block_end:]
@@ -194,8 +191,8 @@ class TestDeleteTransaction:
 
         text = journal.read_text(encoding="utf-8")
         lines = text.splitlines()
-        header_idx = _locate_header(lines, "2026-03-15 * Whole Foods")
-        block_start, block_end = _find_transaction_block(lines, header_idx)
+        header_idx = locate_header(lines, "2026-03-15 * Whole Foods")
+        block_start, block_end = find_transaction_block(lines, header_idx)
         # Mirror the endpoint logic: consume a preceding blank line.
         remove_start = block_start
         if remove_start > 0 and lines[remove_start - 1].strip() == "":
@@ -228,8 +225,8 @@ class TestRecategorizeTransaction:
 
         text = journal.read_text(encoding="utf-8")
         lines = text.splitlines()
-        header_idx = _locate_header(lines, header_line)
-        block_start, block_end = _find_transaction_block(lines, header_idx)
+        header_idx = locate_header(lines, header_line)
+        block_start, block_end = find_transaction_block(lines, header_idx)
 
         tracked_accounts = {"Assets:Bank:Checking"}
 
@@ -286,8 +283,8 @@ class TestRecategorizeTransaction:
 
         text = journal.read_text(encoding="utf-8")
         lines = text.splitlines()
-        header_idx = _locate_header(lines, "2026-03-20 * Target")
-        block_start, block_end = _find_transaction_block(lines, header_idx)
+        header_idx = locate_header(lines, "2026-03-20 * Target")
+        block_start, block_end = find_transaction_block(lines, header_idx)
 
         from services.transfer_service import ACCOUNT_LINE_RE, ACCOUNT_ONLY_RE
 
@@ -355,8 +352,8 @@ class TestUnmatchTransaction:
 
         main_text = journal.read_text(encoding="utf-8")
         main_lines = main_text.splitlines()
-        header_idx = _locate_header(main_lines, header_line)
-        block_start, block_end = _find_transaction_block(main_lines, header_idx)
+        header_idx = locate_header(main_lines, header_line)
+        block_start, block_end = find_transaction_block(main_lines, header_idx)
 
         lines_to_remove = []
         destination_idx = None
