@@ -124,21 +124,23 @@
   $: extraItems = actions.map((action, index) => ({ action, index })).filter((item) => item.action.type !== 'set_account');
 </script>
 
-<section class="editor-section">
-  <p class="section-title">Match</p>
-  <div class="conditions-block">
+<section class="mb-4 grid gap-2.5">
+  <p class="eyebrow mb-0">Match</p>
+  <div class="grid gap-2.5">
     {#each conditions as condition, i}
-      <div class="condition-row">
+      <div
+        class="condition-row grid min-w-0 items-center gap-2 grid-cols-[max-content_max-content_max-content_minmax(20rem,1fr)_auto] max-[760px]:grid-cols-1"
+      >
         {#if i === 0}
-          <span class="joiner-spacer" aria-hidden="true"></span>
+          <span class="block w-full" aria-hidden="true"></span>
         {:else}
           <button class="joiner-pill" type="button" on:click={() => toggleJoiner(i)}>{condition.joiner.toUpperCase()}</button>
         {/if}
-        <select class="condition-field-select" value={condition.field} on:change={(e) => setConditionField(i, (e.currentTarget as HTMLSelectElement).value as RuleCondition['field'])}>
+        <select class="min-w-26" value={condition.field} on:change={(e) => setConditionField(i, (e.currentTarget as HTMLSelectElement).value as RuleCondition['field'])}>
           <option value="payee">Payee</option>
           <option value="date">Date</option>
         </select>
-        <select class="condition-operator-select" value={condition.operator} on:change={(e) => setConditionOperator(i, (e.currentTarget as HTMLSelectElement).value as RuleCondition['operator'])}>
+        <select class="min-w-32" value={condition.operator} on:change={(e) => setConditionOperator(i, (e.currentTarget as HTMLSelectElement).value as RuleCondition['operator'])}>
           {#if condition.field === 'date'}
             <option value="on_or_after">is on or after</option>
             <option value="between">is between</option>
@@ -148,15 +150,15 @@
             <option value="contains">contains</option>
           {/if}
         </select>
-        <div class="condition-values">
+        <div class="flex min-w-0 items-center gap-2">
           {#if condition.field === 'date'}
-            <input class="condition-value-input" type="date" bind:value={condition.value} />
+            <input class="min-w-80 max-[760px]:min-w-0" type="date" bind:value={condition.value} />
             {#if condition.operator === 'between'}
-              <span class="condition-date-divider">and</span>
-              <input class="condition-value-input" type="date" bind:value={condition.secondaryValue} />
+              <span class="shrink-0 text-sm text-muted-foreground">and</span>
+              <input class="min-w-80 max-[760px]:min-w-0" type="date" bind:value={condition.secondaryValue} />
             {/if}
           {:else}
-            <input class="condition-value-input" bind:value={condition.value} placeholder="Type a payee or keyword" />
+            <input class="min-w-80 max-[760px]:min-w-0" bind:value={condition.value} placeholder="Type a payee or keyword" />
           {/if}
         </div>
         <button class="btn row-button" type="button" on:click={() => removeCondition(i)} disabled={conditions.length <= 1}>
@@ -168,11 +170,11 @@
   </div>
 </section>
 
-<section class="editor-section editor-section-tight">
-  <p class="section-title">{actionsTitle}</p>
-  <div class="action-stack">
-    <div class="action-primary">
-      <p class="field-label">{accountLabel}</p>
+<section class="grid gap-2.5 border-t border-card-edge pt-4">
+  <p class="eyebrow mb-0">{actionsTitle}</p>
+  <div class="grid gap-3">
+    <div class="grid gap-2">
+      <p class="m-0 text-sm font-semibold text-muted-foreground">{accountLabel}</p>
       <AccountCombobox
         {accounts}
         value={getAccount()}
@@ -184,12 +186,14 @@
     </div>
 
     {#if extraItems.length > 0}
-      <div class="actions-block">
+      <div class="grid gap-2.5">
         {#each extraItems as item, rowIndex}
-          <div class="action-row">
+          <div
+            class="action-row grid min-w-0 items-center gap-2 grid-cols-[max-content_minmax(12rem,1fr)_minmax(12rem,1fr)_auto] max-[760px]:grid-cols-1"
+          >
             <select
               bind:this={actionTypeRefs[rowIndex]}
-              class="action-type-select"
+              class="min-w-40"
               value={item.action.type}
               on:change={(e) => setActionType(item.index, (e.currentTarget as HTMLSelectElement).value as RuleAction['type'])}
             >
@@ -199,33 +203,29 @@
             </select>
             {#if item.action.type === 'add_tag'}
               <input
-                class="action-input"
                 value={item.action.tag ?? ''}
                 placeholder="reimbursable"
                 on:input={(e) => setActionField(item.index, 'tag', (e.currentTarget as HTMLInputElement).value)}
               />
-              <span class="action-spacer" aria-hidden="true"></span>
+              <span class="block w-full" aria-hidden="true"></span>
             {:else if item.action.type === 'set_kv'}
               <input
-                class="action-input"
                 value={item.action.key ?? ''}
                 placeholder="project"
                 on:input={(e) => setActionField(item.index, 'key', (e.currentTarget as HTMLInputElement).value)}
               />
               <input
-                class="action-input"
                 value={item.action.value ?? ''}
                 placeholder="client-x"
                 on:input={(e) => setActionField(item.index, 'value', (e.currentTarget as HTMLInputElement).value)}
               />
             {:else}
               <input
-                class="action-input"
                 value={item.action.text ?? ''}
                 placeholder="Add a note"
                 on:input={(e) => setActionField(item.index, 'text', (e.currentTarget as HTMLInputElement).value)}
               />
-              <span class="action-spacer" aria-hidden="true"></span>
+              <span class="block w-full" aria-hidden="true"></span>
             {/if}
             <button class="btn row-button" type="button" on:click={() => removeAction(item.index)}>Remove</button>
           </div>
@@ -238,96 +238,11 @@
 </section>
 
 <style>
-  .editor-section {
-    display: grid;
-    gap: 0.55rem;
-    margin-bottom: 1rem;
-  }
-
-  .editor-section-tight {
-    margin-bottom: 0;
-  }
-
-  .editor-section + .editor-section {
-    padding-top: 0.95rem;
-    border-top: 1px solid rgba(10, 61, 89, 0.07);
-  }
-
-  .section-title {
-    margin: 0;
-    font-size: 0.8rem;
-    font-weight: 700;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-    color: var(--muted-foreground);
-  }
-
-  .action-stack {
-    display: grid;
-    gap: 0.75rem;
-  }
-
-  .action-primary {
-    display: grid;
-    gap: 0.45rem;
-  }
-
-  .field-label {
-    margin: 0;
-    font-size: 0.92rem;
-    font-weight: 600;
-    color: var(--muted-foreground);
-  }
-
-  .conditions-block {
-    display: grid;
-    gap: 0.55rem;
-  }
-
-  .condition-row {
-    display: grid;
-    grid-template-columns: max-content max-content max-content minmax(20rem, 1fr) auto;
-    gap: 0.5rem;
-    align-items: center;
-    min-width: 0;
-  }
-
   .condition-row select,
   .condition-row input,
   .action-row select,
   .action-row input {
-    width: 100%;
     min-width: 0;
-  }
-
-  .condition-values {
-    display: flex;
-    gap: 0.45rem;
-    align-items: center;
-    min-width: 0;
-  }
-
-  .condition-date-divider {
-    flex-shrink: 0;
-    font-size: 0.85rem;
-    color: var(--muted-foreground);
-  }
-
-  .condition-field-select {
-    min-width: 6.5rem;
-  }
-
-  .condition-operator-select {
-    min-width: 8rem;
-  }
-
-  .condition-value-input {
-    min-width: 20rem;
-  }
-
-  .joiner-spacer {
-    display: block;
-    width: 100%;
   }
 
   .joiner-pill {
@@ -342,28 +257,6 @@
 
   .joiner-pill:hover {
     background: #e2f0ec;
-  }
-
-  .actions-block {
-    display: grid;
-    gap: 0.55rem;
-  }
-
-  .action-row {
-    display: grid;
-    grid-template-columns: max-content minmax(12rem, 1fr) minmax(12rem, 1fr) auto;
-    gap: 0.5rem;
-    align-items: center;
-    min-width: 0;
-  }
-
-  .action-type-select {
-    min-width: 10rem;
-  }
-
-  .action-spacer {
-    display: block;
-    width: 100%;
   }
 
   .row-button {
@@ -400,16 +293,5 @@
   .section-link:focus-visible {
     outline: 2px solid rgba(15, 95, 136, 0.35);
     outline-offset: 4px;
-  }
-
-  @media (max-width: 760px) {
-    .condition-row,
-    .action-row {
-      grid-template-columns: 1fr;
-    }
-
-    .condition-value-input {
-      min-width: 0;
-    }
   }
 </style>
