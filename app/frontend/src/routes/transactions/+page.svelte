@@ -6,6 +6,7 @@
   import { apiGet, apiPost } from '$lib/api';
   import { showUndoToast } from '$lib/undo-toast';
   import AccountCombobox from '$lib/components/AccountCombobox.svelte';
+  import TransactionsExplanationHeader from '$lib/components/transactions/TransactionsExplanationHeader.svelte';
   import { describeBalanceTrust } from '$lib/account-trust';
   import type {
     TrackedAccount,
@@ -324,81 +325,6 @@
       eyebrow: 'Transactions',
       title: 'All activity',
       subtitle: periodPresetLabel(period)
-    };
-  }
-
-  function isCurrentPeriodSingleMonth(month: string | null): boolean {
-    return month !== null;
-  }
-
-  function nounForCategory(category: string | null, count: number): string {
-    const plural = count !== 1;
-    const leading = categoryLeadingSegment(category);
-    if (leading === 'Expenses') return plural ? 'purchases' : 'purchase';
-    if (leading === 'Income') return plural ? 'deposits' : 'deposit';
-    return plural ? 'transactions' : 'transaction';
-  }
-
-  function mixedSigns(transactions: ActivityTransaction[]): boolean {
-    let hasPositive = false;
-    let hasNegative = false;
-    for (const tx of transactions) {
-      if (tx.amount > 0) hasPositive = true;
-      else if (tx.amount < 0) hasNegative = true;
-      if (hasPositive && hasNegative) return true;
-    }
-    return false;
-  }
-
-  function priorComparisonLabel(month: string | null): string {
-    return isCurrentPeriodSingleMonth(month) ? 'Last month' : 'Prior period';
-  }
-
-  type DeltaPresentation = {
-    arrow: string;
-    className: string;
-    displayPercent: number;
-  };
-
-  function presentDelta(
-    periodTotal: number,
-    priorTotal: number | null,
-    category: string | null
-  ): DeltaPresentation | null {
-    if (priorTotal === null) return null;
-
-    const leading = categoryLeadingSegment(category);
-
-    // Mixed/all-activity views sum income and outflows together. A percentage
-    // change on that net total is mathematically defined but hard to read —
-    // the sign can flip with small swings and the base can be near zero. Skip
-    // the delta entirely; the prior total itself is the comparison line.
-    if (leading !== 'Expenses' && leading !== 'Income') return null;
-
-    // For expenses, the user thinks in absolute-spending terms. Normalize to
-    // positive "how much was spent" values before computing the percent change
-    // so that `periodTotal` going from -$2,917 to -$2,817 reads as spending
-    // dropping 3% (↓3% green), not the signed delta flipping 3% in the other
-    // direction (↑3% red).
-    //
-    // For income categories, signed totals already match intuition
-    // (positive totals, positive delta = more income).
-    const useAbs = leading === 'Expenses';
-    const current = useAbs ? Math.abs(periodTotal) : periodTotal;
-    const prior = useAbs ? Math.abs(priorTotal) : priorTotal;
-
-    if (prior === 0) return null; // can't compute percent change from zero
-
-    const signedPercent = ((current - prior) / Math.abs(prior)) * 100;
-    if (signedPercent === 0) return null;
-
-    const increasing = signedPercent > 0;
-    const favorable = leading === 'Expenses' ? !increasing : increasing;
-
-    return {
-      arrow: increasing ? '↑' : '↓',
-      className: favorable ? 'positive' : 'negative',
-      displayPercent: Math.abs(signedPercent)
     };
   }
 
@@ -752,18 +678,6 @@
   $: secondaryActions = registerSecondaryActions(selectedAccount);
   $: activityGroups = groupActivityByDate(activityResult?.transactions ?? []);
   $: activityHero = buildActivityHero(activityCategory, activityMonth, activityPeriod);
-  $: activitySummary = activityResult?.summary ?? null;
-  $: activityPeriodIsMixed = mixedSigns(activityResult?.transactions ?? []);
-  $: activityDeltaPresentation = presentDelta(
-    activitySummary?.periodTotal ?? 0,
-    activitySummary?.priorPeriodTotal ?? null,
-    activityCategory
-  );
-  $: activityPriorLabel = priorComparisonLabel(activityMonth);
-  $: activityPeriodNoun = nounForCategory(
-    activityCategory,
-    activitySummary?.periodCount ?? 0
-  );
 
   onMount(async () => {
     loading = true;
@@ -881,31 +795,14 @@
       </div>
     </section>
   {:else}
-    {#if activitySummary}
-      <section class="view-card explanation-header-card">
-        <p class="explanation-period">
-          {formatCurrency(activitySummary.periodTotal, baseCurrency)} across {activitySummary.periodCount} {activityPeriodNoun}{#if !activityPeriodIsMixed && activitySummary.periodCount > 0} · avg {formatCurrency(activitySummary.averageAmount, baseCurrency)} each{/if}
-        </p>
+    <TransactionsExplanationHeader
+      summary={activityResult.summary ?? null}
+      category={activityCategory}
+      month={activityMonth}
+      transactions={activityResult.transactions}
+      {baseCurrency}
+    />
 
-        {#if activitySummary.priorPeriodTotal !== null && activitySummary.priorPeriodCount !== null}
-          <p class="explanation-prior">
-            {activityPriorLabel}: {formatCurrency(activitySummary.priorPeriodTotal, baseCurrency)} across {activitySummary.priorPeriodCount} {nounForCategory(activityCategory, activitySummary.priorPeriodCount)}{#if activityDeltaPresentation} — <span class={activityDeltaPresentation.className}>{activityDeltaPresentation.arrow}{activityDeltaPresentation.displayPercent.toFixed(0)}%</span>{/if}
-          </p>
-        {/if}
-
-        {#if activitySummary.rollingMonthlyAverage !== null}
-          <p class="explanation-baseline">
-            6-month average: {formatCurrency(activitySummary.rollingMonthlyAverage, baseCurrency)}/mo
-          </p>
-        {/if}
-
-        {#if activitySummary.topTransaction && activitySummary.periodCount > 1}
-          <p class="explanation-top">
-            Biggest: {formatCurrency(Math.abs(activitySummary.topTransaction.amount), baseCurrency)} at {truncatePayee(activitySummary.topTransaction.payee, 30)} on {activityShortDate(activitySummary.topTransaction.date)}
-          </p>
-        {/if}
-      </section>
-    {/if}
 
     <section class="view-card activity-list-card">
       <div class="section-head">
@@ -2254,30 +2151,6 @@
   .activity-meta {
     color: var(--muted-foreground);
     font-size: 0.88rem;
-  }
-
-  .explanation-header-card {
-    display: grid;
-    gap: 0.4rem;
-    padding: 1rem 1.15rem;
-  }
-
-  .explanation-period {
-    font-size: 1.05rem;
-    font-weight: 600;
-    margin: 0;
-  }
-
-  .explanation-prior {
-    font-size: 0.95rem;
-    margin: 0;
-  }
-
-  .explanation-baseline,
-  .explanation-top {
-    color: var(--muted-foreground);
-    font-size: 0.88rem;
-    margin: 0;
   }
 
   .activity-side {
