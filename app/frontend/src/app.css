@@ -136,8 +136,12 @@
   --font-display: 'Space Grotesk', sans-serif;
 
   --shadow-card: var(--shadow);
+  --shadow-shell: 0 12px 24px rgba(17, 35, 52, 0.06);
 
   --radius-card: 1.15rem;
+
+  --breakpoint-tablet: 720px;
+  --breakpoint-shell: 980px;
 }
 
 @layer base {
