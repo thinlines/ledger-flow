@@ -31,7 +31,7 @@ Dashboard direction: the dashboard answers "Where do I stand right now?" and "Wh
    - **5e. Semantic undo + toast** — paused. Resumes after Feature 7.
 6. ~~**Dashboard drill-down and activity view**~~ — shipped. Drill-through links, cross-account activity view, and URL-param filters are live. Quality and depth addressed by Feature 7.
 7. **Dashboard insight loop and financial direction** — current focus. Three sub-features, shipped in order:
-   - **7a. Activity view explanation and hierarchy** — explanation header, category prominence in rows, payee truncation, rolling baselines in the activity endpoint. Active `TASK.md`.
+   - ~~**7a. Activity view explanation and hierarchy**~~ — shipped. Activity endpoint returns a `summary` block with prior-period and 6-month rolling baselines; the activity view leads with a context-aware hero and an explanation header; rows promote category to a leading pill and truncate raw bank payees.
    - **7b. Dashboard direction panel and health signals** — "Where should I go next?" section with compact charts (runway, net worth trend, recurring vs discretionary), low-code notable signals, and a loose-ends aggregator.
    - **7c. Shell and copy polish** — sidebar copy, nav notes, hero CTA fallthrough, /rules loading state, mobile nav drawer.
 8. **Semantic undo + toast (5e)** — resumes after Feature 7.

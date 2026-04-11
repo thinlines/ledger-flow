@@ -76,6 +76,26 @@
     isUnknown: boolean;
   };
 
+  type ActivityTopTransaction = {
+    date: string;
+    payee: string;
+    amount: number;
+    accountLabel: string;
+  };
+
+  type ActivitySummary = {
+    periodTotal: number;
+    periodCount: number;
+    averageAmount: number;
+    priorPeriodTotal: number | null;
+    priorPeriodCount: number | null;
+    deltaAmount: number | null;
+    deltaPercent: number | null;
+    rollingMonthlyAverage: number | null;
+    rollingMonths: number;
+    topTransaction: ActivityTopTransaction | null;
+  };
+
   type ActivityResult = {
     baseCurrency: string;
     period: string | null;
@@ -83,6 +103,7 @@
     month: string | null;
     transactions: ActivityTransaction[];
     totalCount: number;
+    summary?: ActivitySummary | null;
   };
 
   type ActivityDateGroup = {
@@ -405,6 +426,130 @@
   function activityShortDate(value: string): string {
     const parsed = new Date(`${value}T00:00:00`);
     return new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' }).format(parsed);
+  }
+
+  function truncatePayee(payee: string, max = 50): string {
+    if (payee.length <= max) return payee;
+    return payee.slice(0, max - 1) + '…';
+  }
+
+  function categoryDisplayName(category: string | null): string {
+    if (!category) return '';
+    const parts = category.split(':');
+    if (parts.length <= 1) return category;
+    return parts
+      .slice(1)
+      .map((segment) => segment.replace(/_/g, ' '))
+      .join(' / ');
+  }
+
+  function categoryLeadingSegment(category: string | null): string {
+    if (!category) return '';
+    return category.split(':')[0] ?? '';
+  }
+
+  function periodPresetLabel(period: 'this-month' | 'last-30' | 'last-3-months'): string {
+    if (period === 'this-month') return 'This month';
+    if (period === 'last-30') return 'Last 30 days';
+    return 'Last 3 months';
+  }
+
+  type ActivityHeroCopy = {
+    eyebrow: string;
+    title: string;
+    subtitle: string;
+  };
+
+  function buildActivityHero(
+    category: string | null,
+    month: string | null,
+    period: 'this-month' | 'last-30' | 'last-3-months'
+  ): ActivityHeroCopy {
+    if (category) {
+      const leading = categoryLeadingSegment(category);
+      const eyebrow = leading === 'Expenses'
+        ? 'Spending category'
+        : leading === 'Income'
+        ? 'Income category'
+        : 'Activity';
+      const title = categoryDisplayName(category) || category;
+      const subtitle = month ? monthTitle(month) : periodPresetLabel(period);
+      return { eyebrow, title, subtitle };
+    }
+    if (month) {
+      return {
+        eyebrow: 'Activity',
+        title: monthTitle(month),
+        subtitle: 'All cross-account spending and income'
+      };
+    }
+    return {
+      eyebrow: 'Transactions',
+      title: 'All activity',
+      subtitle: periodPresetLabel(period)
+    };
+  }
+
+  function isCurrentPeriodSingleMonth(month: string | null): boolean {
+    return month !== null;
+  }
+
+  function nounForCategory(category: string | null, count: number): string {
+    const plural = count !== 1;
+    const leading = categoryLeadingSegment(category);
+    if (leading === 'Expenses') return plural ? 'purchases' : 'purchase';
+    if (leading === 'Income') return plural ? 'deposits' : 'deposit';
+    return plural ? 'transactions' : 'transaction';
+  }
+
+  function mixedSigns(transactions: ActivityTransaction[]): boolean {
+    let hasPositive = false;
+    let hasNegative = false;
+    for (const tx of transactions) {
+      if (tx.amount > 0) hasPositive = true;
+      else if (tx.amount < 0) hasNegative = true;
+      if (hasPositive && hasNegative) return true;
+    }
+    return false;
+  }
+
+  function priorComparisonLabel(month: string | null): string {
+    return isCurrentPeriodSingleMonth(month) ? 'Last month' : 'Prior period';
+  }
+
+  type DeltaPresentation = {
+    arrow: string;
+    className: string;
+  };
+
+  function presentDelta(
+    deltaPercent: number | null,
+    category: string | null
+  ): DeltaPresentation | null {
+    if (deltaPercent === null || deltaPercent === 0) return null;
+    // For expense categories, an increase (delta > 0 on negative amounts actually
+    // means spending is less negative — but we are comparing totals directly, so
+    // a spike in spending produces a more negative period total than prior,
+    // i.e., delta < 0. An "increase in spending" is deltaPercent < 0 for expenses.
+    //
+    // Simplification: favorable = delta moves the total in the user-positive
+    // direction. For expense totals (negative), favorable means less negative
+    // (delta > 0). For income totals (positive), favorable means more positive
+    // (delta > 0). For mixed / all activity, we use raw direction.
+    const leading = categoryLeadingSegment(category);
+    const increasing = deltaPercent > 0;
+    let favorable: boolean;
+    if (leading === 'Expenses') {
+      favorable = !increasing; // spending down is good
+    } else if (leading === 'Income') {
+      favorable = increasing; // income up is good
+    } else {
+      favorable = increasing; // net positive delta is good
+    }
+    return {
+      arrow: increasing ? '↑' : '↓',
+      className: favorable ? 'positive' : 'negative'
+    };
   }
 
   function groupActivityByDate(transactions: ActivityTransaction[]): ActivityDateGroup[] {
@@ -756,6 +901,18 @@
   $: primaryAction = registerPrimaryAction(selectedAccount, registerUnknownCount);
   $: secondaryActions = registerSecondaryActions(selectedAccount);
   $: activityGroups = groupActivityByDate(activityResult?.transactions ?? []);
+  $: activityHero = buildActivityHero(activityCategory, activityMonth, activityPeriod);
+  $: activitySummary = activityResult?.summary ?? null;
+  $: activityPeriodIsMixed = mixedSigns(activityResult?.transactions ?? []);
+  $: activityDeltaPresentation = presentDelta(
+    activitySummary?.deltaPercent ?? null,
+    activityCategory
+  );
+  $: activityPriorLabel = priorComparisonLabel(activityMonth);
+  $: activityPeriodNoun = nounForCategory(
+    activityCategory,
+    activitySummary?.periodCount ?? 0
+  );
 
   onMount(async () => {
     loading = true;
@@ -806,9 +963,9 @@
 {:else if activityMode}
   <section class="view-card transactions-hero activity-hero">
     <div class="hero-copy">
-      <p class="eyebrow">Transactions</p>
-      <h2 class="page-title">All activity</h2>
-      <p class="subtitle">Cross-account transactions matching your filters.</p>
+      <p class="eyebrow">{activityHero.eyebrow}</p>
+      <h2 class="page-title">{activityHero.title}</h2>
+      <p class="subtitle">{activityHero.subtitle}</p>
     </div>
 
     <div class="hero-side">
@@ -873,6 +1030,32 @@
       </div>
     </section>
   {:else}
+    {#if activitySummary}
+      <section class="view-card explanation-header-card">
+        <p class="explanation-period">
+          {formatCurrency(activitySummary.periodTotal)} across {activitySummary.periodCount} {activityPeriodNoun}{#if !activityPeriodIsMixed && activitySummary.periodCount > 0} · avg {formatCurrency(activitySummary.averageAmount)} each{/if}
+        </p>
+
+        {#if activitySummary.priorPeriodTotal !== null && activitySummary.priorPeriodCount !== null}
+          <p class="explanation-prior">
+            {activityPriorLabel}: {formatCurrency(activitySummary.priorPeriodTotal)} across {activitySummary.priorPeriodCount} {nounForCategory(activityCategory, activitySummary.priorPeriodCount)}{#if activityDeltaPresentation} — <span class={activityDeltaPresentation.className}>{activityDeltaPresentation.arrow}{Math.abs(activitySummary.deltaPercent ?? 0).toFixed(0)}%</span>{/if}
+          </p>
+        {/if}
+
+        {#if activitySummary.rollingMonthlyAverage !== null}
+          <p class="explanation-baseline">
+            6-month average: {formatCurrency(activitySummary.rollingMonthlyAverage)}/mo
+          </p>
+        {/if}
+
+        {#if activitySummary.topTransaction && activitySummary.periodCount > 1}
+          <p class="explanation-top">
+            Biggest: {formatCurrency(Math.abs(activitySummary.topTransaction.amount))} at {truncatePayee(activitySummary.topTransaction.payee, 30)} on {activityShortDate(activitySummary.topTransaction.date)}
+          </p>
+        {/if}
+      </section>
+    {/if}
+
     <section class="view-card activity-list-card">
       <div class="section-head">
         <div>
@@ -888,9 +1071,14 @@
             {#each group.transactions as tx}
               <div class="activity-row">
                 <div class="activity-main">
-                  <p class="activity-payee">{tx.payee}</p>
+                  <div class="activity-headline">
+                    {#if !activityCategory}
+                      <span class="activity-category-pill">{tx.category}</span>
+                    {/if}
+                    <span class="activity-payee" title={tx.payee}>{truncatePayee(tx.payee)}</span>
+                  </div>
                   <p class="activity-meta">
-                    {activityShortDate(tx.date)} · {tx.accountLabel} · {tx.category}
+                    {activityShortDate(tx.date)} · {tx.accountLabel}
                   </p>
                 </div>
                 <div class="activity-side">
@@ -2186,13 +2374,59 @@
     min-width: 0;
   }
 
+  .activity-headline {
+    display: flex;
+    align-items: center;
+    gap: 0.55rem;
+    min-width: 0;
+  }
+
+  .activity-category-pill {
+    flex-shrink: 0;
+    font-size: 0.76rem;
+    font-weight: 600;
+    padding: 0.18rem 0.55rem;
+    border-radius: 999px;
+    background: rgba(15, 95, 136, 0.08);
+    color: var(--brand-strong);
+    white-space: nowrap;
+  }
+
   .activity-payee {
     font-weight: 700;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
   }
 
   .activity-meta {
     color: var(--muted-foreground);
     font-size: 0.88rem;
+  }
+
+  .explanation-header-card {
+    display: grid;
+    gap: 0.4rem;
+    padding: 1rem 1.15rem;
+  }
+
+  .explanation-period {
+    font-size: 1.05rem;
+    font-weight: 600;
+    margin: 0;
+  }
+
+  .explanation-prior {
+    font-size: 0.95rem;
+    margin: 0;
+  }
+
+  .explanation-baseline,
+  .explanation-top {
+    color: var(--muted-foreground);
+    font-size: 0.88rem;
+    margin: 0;
   }
 
   .activity-side {
@@ -2230,6 +2464,10 @@
 
     .activity-side {
       justify-items: start;
+    }
+
+    .activity-headline {
+      flex-wrap: wrap;
     }
   }
 </style>

@@ -242,3 +242,238 @@ def test_transaction_row_shape(tmp_path: Path) -> None:
     assert tx["amount"] == -84.30
     assert tx["isIncome"] is False
     assert tx["isUnknown"] is False
+
+
+# ---------------------------------------------------------------------------
+# Summary block
+# ---------------------------------------------------------------------------
+
+
+def test_summary_is_null_when_no_results(tmp_path: Path) -> None:
+    config = _make_config(tmp_path / "workspace")
+    _write_journal(config)
+
+    result = build_activity_view(
+        config, category="Expenses:Nonexistent", today=date(2026, 3, 9)
+    )
+
+    assert result["summary"] is None
+
+
+def test_summary_month_filter_compares_to_prior_month(tmp_path: Path) -> None:
+    config = _make_config(tmp_path / "workspace")
+    _write_journal(config)
+
+    result = build_activity_view(config, month="2026-03", today=date(2026, 3, 9))
+    summary = result["summary"]
+
+    assert summary is not None
+    # Mar: Coffee -7.50, Grocery -84.30, Unknown -25.00
+    assert summary["periodTotal"] == -116.80
+    assert summary["periodCount"] == 3
+    assert summary["averageAmount"] == round(-116.80 / 3, 2)
+    # Feb: Paycheck +3000, Groceries -140.50
+    assert summary["priorPeriodTotal"] == 2859.50
+    assert summary["priorPeriodCount"] == 2
+    assert summary["deltaAmount"] == round(-116.80 - 2859.50, 2)
+    assert summary["deltaPercent"] is not None
+    # Top of the March block by absolute value is Grocery Market
+    assert summary["topTransaction"] is not None
+    assert summary["topTransaction"]["payee"] == "Grocery Market"
+    assert summary["topTransaction"]["amount"] == -84.30
+
+
+def test_summary_month_filter_rolling_average(tmp_path: Path) -> None:
+    config = _make_config(tmp_path / "workspace")
+    _write_journal(config)
+
+    result = build_activity_view(config, month="2026-03", today=date(2026, 3, 9))
+    summary = result["summary"]
+
+    assert summary is not None
+    # Rolling window = 2025-09 .. 2026-02. Only Jan and Feb have data.
+    # Jan total: 3000 - 120 = 2880; Feb total: 3000 - 140.50 = 2859.50.
+    # Average across months with data = (2880 + 2859.50) / 2.
+    assert summary["rollingMonths"] == 2
+    assert summary["rollingMonthlyAverage"] == round((2880 + 2859.50) / 2, 2)
+
+
+def test_summary_last_3_months_prior_null_when_no_earlier_data(tmp_path: Path) -> None:
+    config = _make_config(tmp_path / "workspace")
+    _write_journal(config)
+
+    result = build_activity_view(config, today=date(2026, 3, 9))
+    summary = result["summary"]
+
+    assert summary is not None
+    assert summary["periodCount"] == 7
+    # Nothing exists before 2026-01-01, so prior period is genuinely absent.
+    assert summary["priorPeriodTotal"] is None
+    assert summary["priorPeriodCount"] is None
+    assert summary["deltaAmount"] is None
+    assert summary["deltaPercent"] is None
+    # Rolling window = 2025-07 .. 2025-12, also empty.
+    assert summary["rollingMonths"] == 0
+    assert summary["rollingMonthlyAverage"] is None
+
+
+def test_summary_this_month_prior_zero_when_earlier_data_exists(tmp_path: Path) -> None:
+    """Feb 1-9 has no activity but Jan has data — prior should be 0/0, not null."""
+    config = _make_config(tmp_path / "workspace")
+    _write_journal(config)
+
+    result = build_activity_view(config, period="this-month", today=date(2026, 3, 9))
+    summary = result["summary"]
+
+    assert summary is not None
+    # March 1-9: Coffee, Grocery, Unknown = 3 txns totalling -116.80
+    assert summary["periodCount"] == 3
+    assert summary["periodTotal"] == -116.80
+    # Prior window Feb 1 .. Feb 9: no transactions, but Jan has data → 0/0 not null.
+    assert summary["priorPeriodTotal"] == 0
+    assert summary["priorPeriodCount"] == 0
+    # Delta amount = periodTotal - 0 = periodTotal. Delta percent = null (div by 0).
+    assert summary["deltaAmount"] == -116.80
+    assert summary["deltaPercent"] is None
+
+
+def test_summary_category_filter_rolling_uses_category_only(tmp_path: Path) -> None:
+    config = _make_config(tmp_path / "workspace")
+    _write_journal(config)
+
+    result = build_activity_view(
+        config,
+        category="Expenses:Food:Groceries",
+        month="2026-03",
+        today=date(2026, 3, 9),
+    )
+    summary = result["summary"]
+
+    assert summary is not None
+    # March groceries: Grocery Market -84.30 (1 txn)
+    assert summary["periodCount"] == 1
+    assert summary["periodTotal"] == -84.30
+    # Prior (Feb) groceries: February Groceries -140.50
+    assert summary["priorPeriodTotal"] == -140.50
+    assert summary["priorPeriodCount"] == 1
+    # Rolling groceries: Jan -120, Feb -140.50 → 2 months with data, avg -130.25
+    assert summary["rollingMonths"] == 2
+    assert summary["rollingMonthlyAverage"] == -130.25
+
+
+def test_summary_last_30_prior_window(tmp_path: Path) -> None:
+    config = _make_config(tmp_path / "workspace")
+    _write_journal(config)
+
+    # last-30 from Mar 9 covers Feb 8 .. Mar 9. Prior covers Jan 9 .. Feb 7.
+    result = build_activity_view(config, period="last-30", today=date(2026, 3, 9))
+    summary = result["summary"]
+
+    assert summary is not None
+    # Current window has Feb 12, Feb 18, Mar 1, Mar 7, Mar 8 — 5 transactions.
+    assert summary["periodCount"] == 5
+    # Prior window (Jan 9 .. Feb 7) has Jan 10 Paycheck and Jan 15 Groceries — 2 transactions.
+    assert summary["priorPeriodCount"] == 2
+    assert summary["priorPeriodTotal"] == round(3000 - 120, 2)
+
+
+def test_summary_top_transaction_by_absolute_amount(tmp_path: Path) -> None:
+    config = _make_config(tmp_path / "workspace")
+    _write_journal(config)
+
+    result = build_activity_view(config, month="2026-01", today=date(2026, 3, 9))
+    summary = result["summary"]
+
+    assert summary is not None
+    assert summary["topTransaction"] is not None
+    # Jan has Paycheck +3000 and Groceries -120. +3000 has the largest |amount|.
+    assert summary["topTransaction"]["payee"] == "January Paycheck"
+    assert summary["topTransaction"]["amount"] == 3000.00
+
+
+def test_summary_single_transaction_period_still_returns_top(tmp_path: Path) -> None:
+    config = _make_config(tmp_path / "workspace")
+    _write_journal(config)
+
+    result = build_activity_view(
+        config,
+        category="Expenses:Food:Coffee",
+        month="2026-03",
+        today=date(2026, 3, 9),
+    )
+    summary = result["summary"]
+
+    assert summary is not None
+    assert summary["periodCount"] == 1
+    assert summary["topTransaction"] is not None
+    assert summary["topTransaction"]["payee"] == "Coffee Shop"
+
+
+def test_summary_rolling_null_when_fewer_than_two_months_with_data(tmp_path: Path) -> None:
+    """A category with data in only one rolling-window month should return null rolling avg."""
+    config = _make_config(tmp_path / "workspace")
+    _write_journal(config)
+
+    # Coffee only appears in March. Rolling window for month=2026-03 is Sep-Feb — no coffee there.
+    result = build_activity_view(
+        config,
+        category="Expenses:Food:Coffee",
+        month="2026-03",
+        today=date(2026, 3, 9),
+    )
+    summary = result["summary"]
+
+    assert summary is not None
+    assert summary["rollingMonths"] == 0
+    assert summary["rollingMonthlyAverage"] is None
+
+
+def test_summary_null_prior_when_first_period_of_category(tmp_path: Path) -> None:
+    """Category that first appears in the current window has null prior, not 0."""
+    config = _make_config(tmp_path / "workspace")
+    _write_journal(config)
+
+    result = build_activity_view(
+        config,
+        category="Expenses:Food:Coffee",
+        month="2026-03",
+        today=date(2026, 3, 9),
+    )
+    summary = result["summary"]
+
+    assert summary is not None
+    assert summary["periodCount"] == 1
+    # No coffee transactions exist before March at all.
+    assert summary["priorPeriodTotal"] is None
+    assert summary["priorPeriodCount"] is None
+    assert summary["deltaAmount"] is None
+    assert summary["deltaPercent"] is None
+
+
+def test_summary_preserves_existing_response_fields(tmp_path: Path) -> None:
+    """The summary field is additive — existing fields must be unchanged."""
+    config = _make_config(tmp_path / "workspace")
+    _write_journal(config)
+
+    result = build_activity_view(config, today=date(2026, 3, 9))
+
+    assert "baseCurrency" in result
+    assert "period" in result
+    assert "category" in result
+    assert "month" in result
+    assert "transactions" in result
+    assert "totalCount" in result
+    assert "summary" in result
+    # Transaction row shape is unchanged — still the same fields as before the refactor.
+    first = result["transactions"][0]
+    assert set(first.keys()) == {
+        "date",
+        "payee",
+        "accountLabel",
+        "importAccountId",
+        "category",
+        "categoryAccount",
+        "amount",
+        "isIncome",
+        "isUnknown",
+    }
