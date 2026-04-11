@@ -7,7 +7,6 @@
   import { showUndoToast } from '$lib/undo-toast';
   import AccountCombobox from '$lib/components/AccountCombobox.svelte';
   import { describeBalanceTrust } from '$lib/account-trust';
-  import { normalizeCurrencyCode } from '$lib/currency-format';
   import type {
     TrackedAccount,
     RegisterEntry,
@@ -20,6 +19,7 @@
     ManualResolutionPreview,
     ManualResolutionApplyResult
   } from '$lib/transactions/types';
+  import { formatCurrency, formatStoredAmount, shortDate, countLabel } from '$lib/format';
 
   type AppState = {
     initialized: boolean;
@@ -163,45 +163,6 @@
     } finally {
       actionBusy = false;
     }
-  }
-
-  function titleCase(value: string): string {
-    return value.charAt(0).toUpperCase() + value.slice(1);
-  }
-
-  function countLabel(count: number, singular: string, plural = `${singular}s`): string {
-    return `${count} ${count === 1 ? singular : plural}`;
-  }
-
-  function formatCurrency(
-    value: number | null | undefined,
-    options: { signed?: boolean } = {}
-  ): string {
-    if (value == null) return 'No balance yet';
-
-    return new Intl.NumberFormat(undefined, {
-      style: 'currency',
-      currency: normalizeCurrencyCode(baseCurrency),
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 2,
-      signDisplay: options.signed ? 'always' : 'auto'
-    }).format(value);
-  }
-
-  function formatStoredAmount(value: string | null | undefined): string {
-    if (!value) return 'Not set';
-    const parsed = Number(value);
-    if (!Number.isNaN(parsed)) return formatCurrency(parsed);
-    return value;
-  }
-
-  function shortDate(value: string | null | undefined): string {
-    if (!value) return 'No activity yet';
-    return new Intl.DateTimeFormat(undefined, {
-      month: 'short',
-      day: 'numeric',
-      year: 'numeric'
-    }).format(new Date(`${value}T00:00:00`));
   }
 
   function resetManualResolutionDialog() {
@@ -923,24 +884,24 @@
     {#if activitySummary}
       <section class="view-card explanation-header-card">
         <p class="explanation-period">
-          {formatCurrency(activitySummary.periodTotal)} across {activitySummary.periodCount} {activityPeriodNoun}{#if !activityPeriodIsMixed && activitySummary.periodCount > 0} · avg {formatCurrency(activitySummary.averageAmount)} each{/if}
+          {formatCurrency(activitySummary.periodTotal, baseCurrency)} across {activitySummary.periodCount} {activityPeriodNoun}{#if !activityPeriodIsMixed && activitySummary.periodCount > 0} · avg {formatCurrency(activitySummary.averageAmount, baseCurrency)} each{/if}
         </p>
 
         {#if activitySummary.priorPeriodTotal !== null && activitySummary.priorPeriodCount !== null}
           <p class="explanation-prior">
-            {activityPriorLabel}: {formatCurrency(activitySummary.priorPeriodTotal)} across {activitySummary.priorPeriodCount} {nounForCategory(activityCategory, activitySummary.priorPeriodCount)}{#if activityDeltaPresentation} — <span class={activityDeltaPresentation.className}>{activityDeltaPresentation.arrow}{activityDeltaPresentation.displayPercent.toFixed(0)}%</span>{/if}
+            {activityPriorLabel}: {formatCurrency(activitySummary.priorPeriodTotal, baseCurrency)} across {activitySummary.priorPeriodCount} {nounForCategory(activityCategory, activitySummary.priorPeriodCount)}{#if activityDeltaPresentation} — <span class={activityDeltaPresentation.className}>{activityDeltaPresentation.arrow}{activityDeltaPresentation.displayPercent.toFixed(0)}%</span>{/if}
           </p>
         {/if}
 
         {#if activitySummary.rollingMonthlyAverage !== null}
           <p class="explanation-baseline">
-            6-month average: {formatCurrency(activitySummary.rollingMonthlyAverage)}/mo
+            6-month average: {formatCurrency(activitySummary.rollingMonthlyAverage, baseCurrency)}/mo
           </p>
         {/if}
 
         {#if activitySummary.topTransaction && activitySummary.periodCount > 1}
           <p class="explanation-top">
-            Biggest: {formatCurrency(Math.abs(activitySummary.topTransaction.amount))} at {truncatePayee(activitySummary.topTransaction.payee, 30)} on {activityShortDate(activitySummary.topTransaction.date)}
+            Biggest: {formatCurrency(Math.abs(activitySummary.topTransaction.amount), baseCurrency)} at {truncatePayee(activitySummary.topTransaction.payee, 30)} on {activityShortDate(activitySummary.topTransaction.date)}
           </p>
         {/if}
       </section>
@@ -973,7 +934,7 @@
                 </div>
                 <div class="activity-side">
                   <p class:positive={tx.amount > 0} class:negative={tx.amount < 0} class="activity-amount">
-                    {formatCurrency(tx.amount, { signed: true })}
+                    {formatCurrency(tx.amount, baseCurrency, { signed: true })}
                   </p>
                   {#if tx.isUnknown}
                     <a class="pill warn" href="/unknowns">Needs review</a>
@@ -994,7 +955,7 @@
       <p class="subtitle">{selectedAccountTrust()?.note || 'Review recent activity and running balances for this account.'}</p>
       {#if selectedAccount?.openingBalance}
         <p class="supporting-note">
-          Starting balance {formatStoredAmount(selectedAccount.openingBalance)}
+          Starting balance {formatStoredAmount(selectedAccount.openingBalance, baseCurrency)}
           {#if selectedAccount.openingBalanceDate}
             on {shortDate(selectedAccount.openingBalanceDate)}
           {/if}
@@ -1131,7 +1092,7 @@
     <article class="view-card summary-card summary-balance-card">
       <p class="stat-label">Current balance</p>
       <p class:positive={(register?.currentBalance ?? 0) > 0} class:negative={(register?.currentBalance ?? 0) < 0} class="stat-value">
-        {formatCurrency(register?.currentBalance ?? null)}
+        {formatCurrency(register?.currentBalance ?? null, baseCurrency)}
       </p>
       <p class="stat-note">
         {selectedAccount?.institutionDisplayName || 'Tracked account'}{#if selectedAccount?.last4} •••• {selectedAccount.last4}{/if}
@@ -1141,11 +1102,11 @@
     <article class="view-card summary-card summary-balance-card summary-balance-pending">
       <p class="stat-label">Balance with pending</p>
       <p class:positive={(balanceWithPending ?? 0) > 0} class:negative={(balanceWithPending ?? 0) < 0} class="stat-value">
-        {formatCurrency(balanceWithPending)}
+        {formatCurrency(balanceWithPending, baseCurrency)}
       </p>
       <p class="stat-note">
         {#if pendingTransferCount > 0}
-          {countLabel(pendingTransferCount, 'pending transfer')} worth {formatCurrency(pendingTransferTotal, { signed: true })} still waiting to settle.
+          {countLabel(pendingTransferCount, 'pending transfer')} worth {formatCurrency(pendingTransferTotal, baseCurrency, { signed: true })} still waiting to settle.
         {:else}
           Matches current balance when nothing is pending.
         {/if}
@@ -1184,11 +1145,11 @@
         <div>
           <p class="pending-banner-label">Balance with pending</p>
           <p class:positive={(balanceWithPending ?? 0) > 0} class:negative={(balanceWithPending ?? 0) < 0} class="pending-banner-value">
-            {formatCurrency(balanceWithPending)}
+            {formatCurrency(balanceWithPending, baseCurrency)}
           </p>
         </div>
         <p class="pending-banner-note">
-          Current balance remains {formatCurrency(register?.currentBalance ?? null)} until the missing side is imported or resolved.
+          Current balance remains {formatCurrency(register?.currentBalance ?? null, baseCurrency)} until the missing side is imported or resolved.
         </p>
       </div>
 
@@ -1226,7 +1187,7 @@
 
               <div class="register-cell register-money align-right">
                 <p class:positive={entry.amount > 0} class:negative={entry.amount < 0} class="money-value">
-                  {formatCurrency(entry.amount, { signed: true })}
+                  {formatCurrency(entry.amount, baseCurrency, { signed: true })}
                 </p>
               </div>
 
@@ -1335,13 +1296,13 @@
 
               <div class="register-cell register-money align-right">
                 <p class:positive={entry.amount > 0} class:negative={entry.amount < 0} class="money-value">
-                  {formatCurrency(entry.amount, { signed: true })}
+                  {formatCurrency(entry.amount, baseCurrency, { signed: true })}
                 </p>
               </div>
 
               <div class="register-cell register-money align-right">
                 <p class:positive={entry.runningBalance > 0} class:negative={entry.runningBalance < 0} class="money-value">
-                  {formatCurrency(entry.runningBalance)}
+                  {formatCurrency(entry.runningBalance, baseCurrency)}
                 </p>
               </div>
 
@@ -1445,7 +1406,7 @@
             </div>
             <div>
               <p class="stat-label">Amount</p>
-              <p>{formatCurrency(manualResolutionPreview.amount)}</p>
+              <p>{formatCurrency(manualResolutionPreview.amount, baseCurrency)}</p>
             </div>
           </div>
 
