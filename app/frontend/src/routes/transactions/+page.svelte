@@ -1,11 +1,11 @@
 <script lang="ts">
-  import { Dialog as DialogPrimitive } from 'bits-ui';
   import { goto } from '$app/navigation';
   import { page } from '$app/stores';
   import { onMount } from 'svelte';
   import { apiGet, apiPost } from '$lib/api';
   import { showUndoToast } from '$lib/undo-toast';
   import AddTransactionForm from '$lib/components/transactions/AddTransactionForm.svelte';
+  import ManualResolutionDialog from '$lib/components/transactions/ManualResolutionDialog.svelte';
   import TransactionsExplanationHeader from '$lib/components/transactions/TransactionsExplanationHeader.svelte';
   import { describeBalanceTrust } from '$lib/account-trust';
   import type {
@@ -17,7 +17,6 @@
     ActivityDateGroup,
     ActionLink,
     RegisterAction,
-    ManualResolutionPreview,
     ManualResolutionApplyResult
   } from '$lib/transactions/types';
   import { formatCurrency, formatStoredAmount, shortDate, countLabel } from '$lib/format';
@@ -54,12 +53,8 @@
   let registerUnknownCount = 0;
   let primaryAction: RegisterAction | null = null;
   let secondaryActions: ActionLink[] = [];
-  let manualResolutionOpen = false;
   let manualResolutionEntry: RegisterEntry | null = null;
-  let manualResolutionPreview: ManualResolutionPreview | null = null;
-  let manualResolutionError = '';
   let manualResolutionSuccess = '';
-  let manualResolutionLoading: 'preview' | 'apply' | null = null;
 
   // Transaction actions menu state
   let actionMenuEntry: RegisterEntry | null = null;
@@ -163,20 +158,6 @@
       actionError = String(e);
     } finally {
       actionBusy = false;
-    }
-  }
-
-  function resetManualResolutionDialog() {
-    manualResolutionOpen = false;
-    manualResolutionEntry = null;
-    manualResolutionPreview = null;
-    manualResolutionError = '';
-    manualResolutionLoading = null;
-  }
-
-  function handleManualResolutionOpenChange(nextOpen: boolean) {
-    if (!nextOpen) {
-      resetManualResolutionDialog();
     }
   }
 
@@ -436,7 +417,7 @@
     if (accountId === selectedAccountId && register?.accountId === accountId) return;
 
     manualResolutionSuccess = '';
-    resetManualResolutionDialog();
+    manualResolutionEntry = null;
     selectedAccountId = accountId;
     const params = new URLSearchParams($page.url.searchParams);
     params.set('accountId', accountId);
@@ -495,54 +476,15 @@
     void syncSelection(nextAccountId);
   }
 
-  async function openManualResolution(entry: RegisterEntry) {
+  function openManualResolution(entry: RegisterEntry) {
     if (!entry.manualResolutionToken) return;
-
     manualResolutionSuccess = '';
     manualResolutionEntry = entry;
-    manualResolutionPreview = null;
-    manualResolutionError = '';
-    manualResolutionOpen = true;
-    manualResolutionLoading = 'preview';
-
-    try {
-      manualResolutionPreview = await apiPost<ManualResolutionPreview>(
-        '/api/transactions/manual-transfer-resolution/preview',
-        {
-          resolutionToken: entry.manualResolutionToken
-        }
-      );
-      baseCurrency = manualResolutionPreview.baseCurrency;
-    } catch (e) {
-      manualResolutionError = String(e);
-    } finally {
-      manualResolutionLoading = null;
-    }
   }
 
-  async function confirmManualResolution() {
-    const resolutionToken =
-      manualResolutionPreview?.resolutionToken ?? manualResolutionEntry?.manualResolutionToken ?? null;
-    if (!resolutionToken) return;
-
-    manualResolutionError = '';
-    manualResolutionLoading = 'apply';
-
-    try {
-      const result = await apiPost<ManualResolutionApplyResult>(
-        '/api/transactions/manual-transfer-resolution/apply',
-        {
-          resolutionToken
-        }
-      );
-      await loadRegister(selectedAccountId);
-      manualResolutionSuccess = `Resolved manually: ${result.sourceAccountName} to ${result.destinationAccountName}.`;
-      resetManualResolutionDialog();
-    } catch (e) {
-      manualResolutionError = String(e);
-    } finally {
-      manualResolutionLoading = null;
-    }
+  async function handleResolved(result: ManualResolutionApplyResult) {
+    await loadRegister(selectedAccountId);
+    manualResolutionSuccess = `Resolved manually: ${result.sourceAccountName} to ${result.destinationAccountName}.`;
   }
 
   // --- Clearing Status Toggle ---
@@ -1161,73 +1103,11 @@
   </section>
 {/if}
 
-<DialogPrimitive.Root bind:open={manualResolutionOpen} onOpenChange={handleManualResolutionOpenChange}>
-  <DialogPrimitive.Portal>
-    <DialogPrimitive.Overlay class="manual-resolution-backdrop" />
-
-    <DialogPrimitive.Content
-      class="manual-resolution-modal"
-      aria-labelledby="manual-resolution-title"
-      aria-describedby="manual-resolution-description"
-    >
-      <h3 id="manual-resolution-title">Resolve manually</h3>
-      <p id="manual-resolution-description" class="muted">
-        Add the missing side of this transfer only when no imported counterpart is expected.
-      </p>
-
-      {#if manualResolutionLoading === 'preview'}
-        <div class="empty-panel">
-          <h4>Loading preview</h4>
-          <p>Validating the pending transfer and building the missing side.</p>
-        </div>
-      {:else if manualResolutionPreview}
-        <div class="manual-resolution-preview">
-          <div class="manual-resolution-grid">
-            <div>
-              <p class="stat-label">From</p>
-              <p>{manualResolutionPreview.fromAccountName}</p>
-            </div>
-            <div>
-              <p class="stat-label">To</p>
-              <p>{manualResolutionPreview.toAccountName}</p>
-            </div>
-            <div>
-              <p class="stat-label">Date</p>
-              <p>{shortDate(manualResolutionPreview.date)}</p>
-            </div>
-            <div>
-              <p class="stat-label">Amount</p>
-              <p>{formatCurrency(manualResolutionPreview.amount, baseCurrency)}</p>
-            </div>
-          </div>
-
-          <div class="detail-line preview-payee">
-            <p>{manualResolutionPreview.payee}</p>
-            <p class="muted small">The imported side stays in place. The missing destination-side transaction will be added and marked matched.</p>
-          </div>
-
-          <p class="details-note pending-details-note">{manualResolutionPreview.warning}</p>
-        </div>
-      {/if}
-
-      {#if manualResolutionError}
-        <p class="error-text">{manualResolutionError}</p>
-      {/if}
-
-      <div class="modal-actions">
-        <button class="btn" type="button" on:click={resetManualResolutionDialog}>Cancel</button>
-        <button
-          class="btn btn-primary"
-          type="button"
-          disabled={!manualResolutionPreview || manualResolutionLoading === 'apply'}
-          on:click={() => void confirmManualResolution()}
-        >
-          {manualResolutionLoading === 'apply' ? 'Applying...' : 'Confirm resolution'}
-        </button>
-      </div>
-    </DialogPrimitive.Content>
-  </DialogPrimitive.Portal>
-</DialogPrimitive.Root>
+<ManualResolutionDialog
+  bind:entry={manualResolutionEntry}
+  bind:baseCurrency
+  onResolved={handleResolved}
+/>
 
 <!-- Delete confirmation dialog -->
 {#if confirmDeleteEntry}
@@ -1622,45 +1502,6 @@
     background: rgba(255, 255, 255, 0.85);
   }
 
-  .manual-resolution-preview {
-    display: grid;
-    gap: 0.9rem;
-  }
-
-  .manual-resolution-grid {
-    display: grid;
-    gap: 0.8rem;
-    grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
-  }
-
-  .preview-payee {
-    background: rgba(255, 255, 255, 0.72);
-  }
-
-  :global(.manual-resolution-backdrop) {
-    position: fixed;
-    inset: 0;
-    background: rgba(10, 20, 30, 0.35);
-    z-index: 30;
-  }
-
-  :global(.manual-resolution-modal) {
-    width: min(640px, calc(100vw - 2rem));
-    max-height: calc(100vh - 2rem);
-    background: #fff;
-    border: 1px solid var(--line);
-    border-radius: 14px;
-    box-shadow: var(--shadow);
-    padding: 1rem;
-    position: fixed;
-    top: 50%;
-    left: 50%;
-    transform: translate(-50%, -50%);
-    overflow: auto;
-    z-index: 31;
-    display: grid;
-    gap: 1rem;
-  }
 
   /* --- Transaction Actions Menu --- */
 
