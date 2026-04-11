@@ -520,35 +520,48 @@
   type DeltaPresentation = {
     arrow: string;
     className: string;
+    displayPercent: number;
   };
 
   function presentDelta(
-    deltaPercent: number | null,
+    periodTotal: number,
+    priorTotal: number | null,
     category: string | null
   ): DeltaPresentation | null {
-    if (deltaPercent === null || deltaPercent === 0) return null;
-    // For expense categories, an increase (delta > 0 on negative amounts actually
-    // means spending is less negative — but we are comparing totals directly, so
-    // a spike in spending produces a more negative period total than prior,
-    // i.e., delta < 0. An "increase in spending" is deltaPercent < 0 for expenses.
-    //
-    // Simplification: favorable = delta moves the total in the user-positive
-    // direction. For expense totals (negative), favorable means less negative
-    // (delta > 0). For income totals (positive), favorable means more positive
-    // (delta > 0). For mixed / all activity, we use raw direction.
+    if (priorTotal === null) return null;
+
     const leading = categoryLeadingSegment(category);
-    const increasing = deltaPercent > 0;
-    let favorable: boolean;
-    if (leading === 'Expenses') {
-      favorable = !increasing; // spending down is good
-    } else if (leading === 'Income') {
-      favorable = increasing; // income up is good
-    } else {
-      favorable = increasing; // net positive delta is good
-    }
+
+    // Mixed/all-activity views sum income and outflows together. A percentage
+    // change on that net total is mathematically defined but hard to read —
+    // the sign can flip with small swings and the base can be near zero. Skip
+    // the delta entirely; the prior total itself is the comparison line.
+    if (leading !== 'Expenses' && leading !== 'Income') return null;
+
+    // For expenses, the user thinks in absolute-spending terms. Normalize to
+    // positive "how much was spent" values before computing the percent change
+    // so that `periodTotal` going from -$2,917 to -$2,817 reads as spending
+    // dropping 3% (↓3% green), not the signed delta flipping 3% in the other
+    // direction (↑3% red).
+    //
+    // For income categories, signed totals already match intuition
+    // (positive totals, positive delta = more income).
+    const useAbs = leading === 'Expenses';
+    const current = useAbs ? Math.abs(periodTotal) : periodTotal;
+    const prior = useAbs ? Math.abs(priorTotal) : priorTotal;
+
+    if (prior === 0) return null; // can't compute percent change from zero
+
+    const signedPercent = ((current - prior) / Math.abs(prior)) * 100;
+    if (signedPercent === 0) return null;
+
+    const increasing = signedPercent > 0;
+    const favorable = leading === 'Expenses' ? !increasing : increasing;
+
     return {
       arrow: increasing ? '↑' : '↓',
-      className: favorable ? 'positive' : 'negative'
+      className: favorable ? 'positive' : 'negative',
+      displayPercent: Math.abs(signedPercent)
     };
   }
 
@@ -905,7 +918,8 @@
   $: activitySummary = activityResult?.summary ?? null;
   $: activityPeriodIsMixed = mixedSigns(activityResult?.transactions ?? []);
   $: activityDeltaPresentation = presentDelta(
-    activitySummary?.deltaPercent ?? null,
+    activitySummary?.periodTotal ?? 0,
+    activitySummary?.priorPeriodTotal ?? null,
     activityCategory
   );
   $: activityPriorLabel = priorComparisonLabel(activityMonth);
@@ -1038,7 +1052,7 @@
 
         {#if activitySummary.priorPeriodTotal !== null && activitySummary.priorPeriodCount !== null}
           <p class="explanation-prior">
-            {activityPriorLabel}: {formatCurrency(activitySummary.priorPeriodTotal)} across {activitySummary.priorPeriodCount} {nounForCategory(activityCategory, activitySummary.priorPeriodCount)}{#if activityDeltaPresentation} — <span class={activityDeltaPresentation.className}>{activityDeltaPresentation.arrow}{Math.abs(activitySummary.deltaPercent ?? 0).toFixed(0)}%</span>{/if}
+            {activityPriorLabel}: {formatCurrency(activitySummary.priorPeriodTotal)} across {activitySummary.priorPeriodCount} {nounForCategory(activityCategory, activitySummary.priorPeriodCount)}{#if activityDeltaPresentation} — <span class={activityDeltaPresentation.className}>{activityDeltaPresentation.arrow}{activityDeltaPresentation.displayPercent.toFixed(0)}%</span>{/if}
           </p>
         {/if}
 
