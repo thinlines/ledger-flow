@@ -516,23 +516,27 @@
     <p class="error-text">{error}</p>
   </section>
 {:else if loading}
-  <section class="view-card dashboard-loading">
+  <section class="view-card p-6">
     <p class="eyebrow">Loading</p>
     <h2 class="page-title">Building your overview</h2>
     <p class="subtitle">Pulling together balances, recent activity, and next actions.</p>
   </section>
 {:else if !state?.initialized}
-  <section class="view-card dashboard-hero landing-hero">
-    <div class="hero-copy">
+  <section
+    class="dashboard-hero view-card grid items-start gap-6 p-6 grid-cols-[minmax(0,1.7fr)_minmax(16rem,0.9fr)] max-desktop:grid-cols-1 max-tablet:p-5"
+  >
+    <div class="min-w-0">
       <p class="eyebrow">Start here</p>
-      <h2 class="page-title page-title-xl">See your money at a glance.</h2>
-      <p class="subtitle hero-subtitle">
+      <h2 class="page-title m-0 max-w-[12ch] leading-[0.95] text-[clamp(2.3rem,5vw,4.4rem)]">
+        See your money at a glance.
+      </h2>
+      <p class="subtitle mt-3.5 max-w-3xl text-base leading-relaxed">
         Start with a workspace and one statement. From there, Ledger Flow turns the routine work into balances,
         recent activity, and a clear next step.
       </p>
     </div>
 
-    <div class="hero-side">
+    <div class="grid items-start justify-items-start gap-3.5 rounded-lg border border-card-edge bg-white/72 p-4 max-tablet:justify-items-start">
       <a class="btn btn-primary" href={activeTask.href}>{activeTask.label}</a>
       {#each secondary as action}
         <a class="text-link" href={action.href}>{action.label}</a>
@@ -540,36 +544,46 @@
     </div>
   </section>
 
-  <section class="landing-grid">
-    <article class="view-card value-card">
+  <section class="grid grid-cols-3 gap-4 max-desktop:grid-cols-2 max-tablet:grid-cols-1">
+    <article class="view-card">
       <p class="eyebrow">What matters</p>
-      <h3>Daily visibility</h3>
-      <p>The home screen is built to answer three questions quickly: where you stand, what changed, and what needs attention.</p>
+      <h3 class="m-0 font-display text-xl">Daily visibility</h3>
+      <p class="m-0 text-muted-foreground leading-relaxed">
+        The home screen is built to answer three questions quickly: where you stand, what changed, and what needs attention.
+      </p>
     </article>
 
-    <article class="view-card value-card">
+    <article class="view-card">
       <p class="eyebrow">What stays hidden</p>
-      <h3>Advanced details</h3>
-      <p>Paths, journal files, and setup internals stay in secondary views unless you explicitly need them.</p>
+      <h3 class="m-0 font-display text-xl">Advanced details</h3>
+      <p class="m-0 text-muted-foreground leading-relaxed">
+        Paths, journal files, and setup internals stay in secondary views unless you explicitly need them.
+      </p>
     </article>
 
-    <article class="view-card value-card">
+    <article class="view-card">
       <p class="eyebrow">What stays strong</p>
-      <h3>Safe imports</h3>
-      <p>Preview and apply still work the same way: append new activity, skip duplicates, and surface conflicts instead of rewriting history.</p>
+      <h3 class="m-0 font-display text-xl">Safe imports</h3>
+      <p class="m-0 text-muted-foreground leading-relaxed">
+        Preview and apply still work the same way: append new activity, skip duplicates, and surface conflicts instead of rewriting history.
+      </p>
     </article>
   </section>
 {:else if state.setup?.needsAccounts || state.setup?.needsFirstImport || !dashboard?.hasData}
-  <section class="view-card dashboard-hero onboarding-hero">
-    <div class="hero-copy">
+  <section
+    class="dashboard-hero view-card grid items-start gap-6 p-6 grid-cols-[minmax(0,1.7fr)_minmax(16rem,0.9fr)] max-desktop:grid-cols-1 max-tablet:p-5"
+  >
+    <div class="min-w-0">
       <p class="eyebrow">Finish setup</p>
-      <h2 class="page-title page-title-xl">{state.workspaceName || 'Your workspace'} is ready for the next step.</h2>
-      <p class="subtitle hero-subtitle">
+      <h2 class="page-title m-0 max-w-[12ch] leading-[0.95] text-[clamp(2.3rem,5vw,4.4rem)]">
+        {state.workspaceName || 'Your workspace'} is ready for the next step.
+      </h2>
+      <p class="subtitle mt-3.5 max-w-3xl text-base leading-relaxed">
         Finish one clean pass through setup so the overview can show balances, spending movement, and recent activity.
       </p>
     </div>
 
-    <div class="hero-side">
+    <div class="grid items-start justify-items-start gap-3.5 rounded-lg border border-card-edge bg-white/72 p-4">
       <a class="btn btn-primary" href={activeTask.href}>{activeTask.label}</a>
       {#each secondary as action}
         <a class="text-link" href={action.href}>{action.label}</a>
@@ -577,28 +591,40 @@
     </div>
   </section>
 
-  <section class="progress-grid">
+  <section class="grid grid-cols-4 gap-4 max-desktop:grid-cols-2 max-tablet:grid-cols-1">
     {#each steps as step}
-      <article class:step-complete={step.complete} class:step-current={step.current} class="view-card progress-card">
-        <p class="progress-kicker">{step.complete ? 'Done' : step.current ? 'Now' : 'Next'}</p>
-        <h3>{step.label}</h3>
-        <p>{step.note}</p>
+      <article
+        class:step-complete={step.complete}
+        class:step-current={step.current}
+        class="view-card p-5"
+      >
+        <p class="m-0 mb-1.5 text-xs font-bold uppercase tracking-wider text-muted-foreground">
+          {step.complete ? 'Done' : step.current ? 'Now' : 'Next'}
+        </p>
+        <h3 class="m-0 font-display text-xl">{step.label}</h3>
+        <p class="m-0 text-muted-foreground leading-relaxed">{step.note}</p>
       </article>
     {/each}
   </section>
 
-  <section class="view-card next-action-card">
+  <section class="view-card p-6">
     <p class="eyebrow">Next action</p>
-    <h3>Keep the first-run path moving.</h3>
-    <p>Setup is now staged on purpose. Finish one clear step at a time rather than dealing with configuration detail up front.</p>
+    <h3 class="m-0 font-display text-xl">Keep the first-run path moving.</h3>
+    <p class="m-0 text-muted-foreground leading-relaxed">
+      Setup is now staged on purpose. Finish one clear step at a time rather than dealing with configuration detail up front.
+    </p>
   </section>
 {:else}
-  <section class="view-card dashboard-hero overview-hero">
-    <div class="hero-copy">
+  <section
+    class="dashboard-hero view-card grid items-start gap-6 p-6 grid-cols-[minmax(0,1.7fr)_minmax(16rem,0.9fr)] max-desktop:grid-cols-1 max-tablet:p-5"
+  >
+    <div class="min-w-0">
       <p class="eyebrow">Overview</p>
-      <h2 class="page-title hero-worth">{formatCurrency(dashboard.summary.netWorth, { compact: true })}</h2>
-      <p class="hero-label">Net worth</p>
-      <p class="hero-momentum">
+      <h2 class="page-title m-0 leading-[0.92] text-[clamp(3rem,6vw,5.2rem)]">
+        {formatCurrency(dashboard.summary.netWorth, { compact: true })}
+      </h2>
+      <p class="m-0 mt-2 text-sm font-bold uppercase tracking-widest text-muted-foreground">Net worth</p>
+      <p class="m-0 mt-1 text-base leading-snug text-muted-foreground">
         {#if dashboard.summary.savingsThisMonth > 0}
           You're <span class="positive">{formatCurrency(dashboard.summary.savingsThisMonth, { signed: true, compact: true })}</span> ahead this month
         {:else if dashboard.summary.savingsThisMonth < 0}
@@ -607,29 +633,29 @@
           Breaking even this month
         {/if}
       </p>
-      <div class="hero-stats">
-        <span class="hero-chip">
-          <span class="hero-chip-label">Tracked</span>
-          <span class="hero-chip-value">{formatCurrency(dashboard.summary.trackedBalanceTotal, { compact: true })}</span>
+      <div class="mt-3 flex flex-wrap gap-2.5 max-tablet:gap-1.5">
+        <span class="inline-flex items-baseline gap-1.5 rounded-full border border-card-edge bg-white/60 px-2.5 py-1 text-sm leading-none">
+          <span class="text-[0.68rem] font-bold uppercase tracking-wider text-muted-foreground">Tracked</span>
+          <span class="font-display font-semibold">{formatCurrency(dashboard.summary.trackedBalanceTotal, { compact: true })}</span>
         </span>
-        <span class="hero-chip">
-          <span class="hero-chip-label">Income</span>
-          <span class="hero-chip-value positive">{formatCurrency(dashboard.summary.incomeThisMonth, { compact: true })}</span>
+        <span class="inline-flex items-baseline gap-1.5 rounded-full border border-card-edge bg-white/60 px-2.5 py-1 text-sm leading-none">
+          <span class="text-[0.68rem] font-bold uppercase tracking-wider text-muted-foreground">Income</span>
+          <span class="positive font-display font-semibold">{formatCurrency(dashboard.summary.incomeThisMonth, { compact: true })}</span>
         </span>
-        <span class="hero-chip">
-          <span class="hero-chip-label">Spent</span>
-          <span class="hero-chip-value negative">{formatCurrency(dashboard.summary.spendingThisMonth, { compact: true })}</span>
+        <span class="inline-flex items-baseline gap-1.5 rounded-full border border-card-edge bg-white/60 px-2.5 py-1 text-sm leading-none">
+          <span class="text-[0.68rem] font-bold uppercase tracking-wider text-muted-foreground">Spent</span>
+          <span class="negative font-display font-semibold">{formatCurrency(dashboard.summary.spendingThisMonth, { compact: true })}</span>
         </span>
       </div>
-      <p class="subtitle hero-subtitle">
+      <p class="subtitle mt-3.5 max-w-3xl text-base leading-relaxed">
         Through {formatDate(dashboard.lastUpdated)}, with {countLabel(dashboard.summary.transactionCount, 'transaction')} in view.
       </p>
     </div>
 
-    <div class="hero-side hero-side-compact today-rail">
-      <p class="today-status">{heroRailTitle()}</p>
+    <div class="grid w-full min-h-full items-start justify-items-start gap-3.5 rounded-lg border border-card-edge bg-white/72 p-4 max-tablet:justify-items-start">
+      <p class="m-0 font-display text-lg font-bold leading-tight">{heroRailTitle()}</p>
       <a class="btn btn-primary" href={activeTask.href}>{activeTask.label}</a>
-      <div class="hero-links">
+      <div class="flex flex-wrap gap-3.5">
         {#each secondary as action}
           <a class="text-link" href={action.href}>{action.label}</a>
         {/each}
@@ -637,34 +663,38 @@
     </div>
   </section>
 
-  <section class="detail-grid">
-    <article class="view-card recent-panel">
-      <div class="section-head">
+  <section class="grid gap-4 grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)] max-desktop:grid-cols-1">
+    <article class="view-card p-5">
+      <div class="mb-4 flex items-start justify-between gap-4 max-tablet:grid max-tablet:grid-cols-1">
         <div>
           <p class="eyebrow">Recent activity</p>
-          <h3>Latest transactions</h3>
+          <h3 class="m-0 font-display text-xl">Latest transactions</h3>
         </div>
         <a class="text-link" href={recentAction.href}>{recentAction.label}</a>
       </div>
 
-      <div class="transaction-list">
-        {#each recentGroups as group, gi}
-          <div class="date-group" class:date-group-first={gi === 0}>
-            <h4 class="date-header">{group.header}</h4>
+      <div class="grid gap-3.5">
+        {#each recentGroups as group}
+          <div class="date-group">
+            <h4 class="m-0 text-xs font-bold uppercase tracking-wider text-muted-foreground">{group.header}</h4>
             {#each group.transactions as transaction}
-              <div class="transaction-row">
-                <div class="transaction-main">
-                  <p class="transaction-payee">{transaction.payee}</p>
-                  <p class="transaction-meta">
+              <div class="transaction-row flex items-center justify-between gap-4 py-3.5 max-tablet:grid max-tablet:grid-cols-1">
+                <div class="grid gap-0.5">
+                  <p class="m-0 font-bold">{transaction.payee}</p>
+                  <p class="m-0 text-sm text-muted-foreground">
                     {shortDate(transaction.date)} · {transaction.accountLabel} · {transaction.category}
                   </p>
                 </div>
-                <div class="transaction-side">
-                  <p class:positive={transaction.amount > 0} class:negative={transaction.amount < 0} class="transaction-amount">
+                <div class="grid gap-0.5 justify-items-end max-tablet:justify-items-start">
+                  <p
+                    class:positive={transaction.amount > 0}
+                    class:negative={transaction.amount < 0}
+                    class="m-0 font-display text-base"
+                  >
                     {formatCurrency(transaction.amount, { signed: true })}
                   </p>
                   {#if transaction.isUnknown}
-                    <a class="pill warn" href="/unknowns">Needs review</a>
+                    <a class="pill warn no-underline" href="/unknowns">Needs review</a>
                   {/if}
                 </div>
               </div>
@@ -674,32 +704,35 @@
       </div>
     </article>
 
-    <article class="view-card categories-panel">
-      <div class="section-head">
+    <article class="categories-panel view-card p-5">
+      <div class="mb-4 flex items-start justify-between gap-4 max-tablet:grid max-tablet:grid-cols-1">
         <div>
           <p class="eyebrow">Category trends</p>
-          <h3>Where spending moved the most</h3>
+          <h3 class="m-0 font-display text-xl">Where spending moved the most</h3>
         </div>
-        <p class="section-note">{monthTitle(dashboard.cashFlow.currentMonth)} vs {monthTitle(dashboard.cashFlow.previousMonth)}</p>
+        <p class="m-0 text-sm text-muted-foreground">{monthTitle(dashboard.cashFlow.currentMonth)} vs {monthTitle(dashboard.cashFlow.previousMonth)}</p>
       </div>
 
       {#if dashboard.categoryTrends.length > 0}
-        <div class="category-list">
+        <div class="grid gap-3.5">
           {#each dashboard.categoryTrends as row}
-            <a class="category-row drilldown-link" href={`/transactions?view=activity&category=${encodeURIComponent(row.account)}`}>
-              <div class="category-head">
-                <p>{row.category}</p>
+            <a
+              class="category-row drilldown-link grid gap-1.5 -mx-2 -my-1.5 rounded-xl px-2 py-1.5 text-inherit no-underline transition-colors"
+              href={`/transactions?view=activity&category=${encodeURIComponent(row.account)}`}
+            >
+              <div class="flex items-center justify-between gap-3 max-tablet:grid max-tablet:grid-cols-1">
+                <p class="m-0 font-bold">{row.category}</p>
                 <span class:negative={row.delta > 0} class:positive={row.delta < 0}>{formatTrend(row.delta)}</span>
               </div>
-              <div class="category-bars">
-                <div class="category-meter current">
-                  <span style={`width: ${barWidth(row.current, categoryMax)}`}></span>
+              <div class="grid gap-1.5">
+                <div class="category-meter current h-2.5 overflow-hidden rounded-full bg-card-edge">
+                  <span class="block h-full rounded-[inherit]" style={`width: ${barWidth(row.current, categoryMax)}`}></span>
                 </div>
-                <div class="category-meter previous">
-                  <span style={`width: ${barWidth(row.previous, categoryMax)}`}></span>
+                <div class="category-meter previous h-2.5 overflow-hidden rounded-full bg-card-edge">
+                  <span class="block h-full rounded-[inherit]" style={`width: ${barWidth(row.previous, categoryMax)}`}></span>
                 </div>
               </div>
-              <div class="category-values">
+              <div class="flex items-center justify-between gap-3 text-sm text-muted-foreground max-tablet:grid max-tablet:grid-cols-1">
                 <span>Now {formatCurrency(row.current)}</span>
                 <span>Prev {formatCurrency(row.previous)}</span>
               </div>
@@ -707,20 +740,22 @@
           {/each}
         </div>
       {:else}
-        <p class="empty-copy">Once expenses land in at least two months of activity, category movement will show up here.</p>
+        <p class="m-0 text-sm text-muted-foreground">
+          Once expenses land in at least two months of activity, category movement will show up here.
+        </p>
       {/if}
     </article>
   </section>
 
-  <section class="view-card cashflow-panel">
-    <div class="section-head">
+  <section class="view-card p-5">
+    <div class="mb-4 flex items-start justify-between gap-4 max-tablet:grid max-tablet:grid-cols-1">
       <div>
         <p class="eyebrow">Cash flow</p>
-        <h3>Monthly income and spending</h3>
+        <h3 class="m-0 font-display text-xl">Monthly income and spending</h3>
       </div>
-      <div class="cashflow-controls">
-        <p class="section-note">{formatCurrency(dashboard.cashFlow.net, { signed: true })} this month</p>
-        <div class="cashflow-presets">
+      <div class="grid justify-items-end gap-1.5 text-right">
+        <p class="m-0 text-sm text-muted-foreground">{formatCurrency(dashboard.cashFlow.net, { signed: true })} this month</p>
+        <div class="cashflow-presets inline-flex gap-0.5 rounded-full p-0.5">
           <button class:active={cashFlowPreset === 'month'} on:click={() => cashFlowPreset = 'month'}>This month</button>
           <button class:active={cashFlowPreset === 'last3'} on:click={() => cashFlowPreset = 'last3'}>Last 3</button>
           <button class:active={cashFlowPreset === 'last6'} on:click={() => cashFlowPreset = 'last6'}>Last 6</button>
@@ -728,58 +763,70 @@
       </div>
     </div>
 
-    <div class="cashflow-list">
+    <div class="grid gap-3.5">
       {#each visibleCashFlow as row}
-        <a class="cashflow-row-compact drilldown-link" href={`/transactions?view=activity&month=${row.month}`}>
-          <div class="cashflow-meta">
-            <p>{row.label}</p>
+        <a
+          class="cashflow-row drilldown-link grid gap-1.5 -mx-2 -my-1.5 rounded-xl px-2 py-1.5 text-inherit no-underline transition-colors"
+          href={`/transactions?view=activity&month=${row.month}`}
+        >
+          <div class="flex items-center justify-between gap-3 max-tablet:grid max-tablet:grid-cols-1">
+            <p class="m-0 font-bold">{row.label}</p>
             <span class:positive={row.net >= 0} class:negative={row.net < 0}>{formatCurrency(row.net, { signed: true, compact: true })}</span>
           </div>
-          <div class="cashflow-bar-pair">
-            <span class="bar-income" style={`width: ${barWidth(row.income, cashFlowMax)}`}></span>
-            <span class="bar-spending" style={`width: ${barWidth(row.spending, cashFlowMax)}`}></span>
+          <div class="flex h-2.5 gap-1">
+            <span class="bar-income h-full min-w-[2px] rounded-full" style={`width: ${barWidth(row.income, cashFlowMax)}`}></span>
+            <span class="bar-spending h-full min-w-[2px] rounded-full" style={`width: ${barWidth(row.spending, cashFlowMax)}`}></span>
           </div>
         </a>
       {/each}
     </div>
-
   </section>
 
-  <section class="view-card balances-panel balance-sheet-panel">
-    <div class="section-head">
+  <section class="view-card p-5">
+    <div class="mb-4 flex items-start justify-between gap-4 max-tablet:grid max-tablet:grid-cols-1">
       <div>
         <p class="eyebrow">Balance sheet</p>
-        <h3>Tracked accounts</h3>
+        <h3 class="m-0 font-display text-xl">Tracked accounts</h3>
       </div>
       <a class="text-link" href="/accounts">Manage accounts</a>
     </div>
 
     {#if overviewAccounts.length > 0}
-      <div class="balance-group-list">
+      <div class="grid gap-3">
         {#each balanceGroups as group}
           <section class={`balance-group ${group.key}`}>
-            <div class="balance-group-head-compact">
-              <h4>{group.title}</h4>
-              <strong class:negative={group.total < 0} class:positive={group.total > 0}>{formatCurrency(group.total)}</strong>
+            <div class="mb-1 flex items-baseline justify-between gap-4">
+              <h4 class="m-0 text-sm font-bold uppercase tracking-wider text-muted-foreground">{group.title}</h4>
+              <strong
+                class:negative={group.total < 0}
+                class:positive={group.total > 0}
+                class="font-display text-base"
+              >
+                {formatCurrency(group.total)}
+              </strong>
             </div>
 
-            <table class="balance-table">
+            <table class="w-full border-collapse">
               <tbody>
                 {#each group.accounts as account}
                   <tr>
-                    <td class="balance-table-name">
+                    <td class="py-1.5 align-baseline border-t border-card-edge first:border-t-0 font-medium">
                       <span>
                         {account.displayName}
-                        <span class={`pill subtype-pill ${account.kind}`}>{accountSubtypeLabel(account, 'short')}</span>
+                        <span class={`pill subtype-pill ${account.kind} ml-1.5 align-baseline`}>{accountSubtypeLabel(account, 'short')}</span>
                       </span>
                       {#if account.importConfigured && !account.hasOpeningBalance}
-                        <a class="account-note text-link" href="/accounts">Needs opening balance</a>
+                        <a class="text-link block text-xs font-normal" href="/accounts">Needs opening balance</a>
                       {/if}
                     </td>
-                    <td class:negative={account.balance < 0} class:positive={account.balance > 0} class="balance-table-value">
+                    <td
+                      class:negative={account.balance < 0}
+                      class:positive={account.balance > 0}
+                      class="py-1.5 align-baseline border-t border-card-edge first:border-t-0 text-right font-display font-semibold whitespace-nowrap"
+                    >
                       <span>{formatCurrency(account.balance)}</span>
                       {#if isAccountStale(account.lastTransactionDate)}
-                        <span class="staleness-note">{accountStalenessLabel(account.lastTransactionDate)}</span>
+                        <span class="block text-xs font-normal text-muted-foreground">{accountStalenessLabel(account.lastTransactionDate)}</span>
                       {/if}
                     </td>
                   </tr>
@@ -790,197 +837,26 @@
         {/each}
       </div>
     {:else}
-      <p class="empty-copy">No tracked accounts configured yet. <a class="text-link" href="/accounts">Add accounts</a> to see balances here.</p>
+      <p class="m-0 text-sm text-muted-foreground">
+        No tracked accounts configured yet. <a class="text-link" href="/accounts">Add accounts</a> to see balances here.
+      </p>
     {/if}
   </section>
 {/if}
 
 <style>
-  .dashboard-loading,
-  .dashboard-hero,
-  .next-action-card {
-    padding: 1.5rem;
-  }
-
   .dashboard-hero {
-    display: grid;
-    grid-template-columns: minmax(0, 1.7fr) minmax(16rem, 0.9fr);
-    gap: 1.5rem;
-    align-items: start;
     background:
       radial-gradient(circle at top left, rgba(211, 238, 225, 0.9), transparent 34%),
       linear-gradient(155deg, #fbfdf8 0%, #f6fbff 60%, #eef6f3 100%);
   }
 
-  .hero-copy {
-    min-width: 0;
+  .positive {
+    color: var(--ok);
   }
 
-  .page-title-xl {
-    font-size: clamp(2.3rem, 5vw, 4.4rem);
-    line-height: 0.95;
-    max-width: 12ch;
-  }
-
-  .hero-worth {
-    font-size: clamp(3rem, 6vw, 5.2rem);
-    line-height: 0.92;
-  }
-
-  .hero-label {
-    margin: 0.45rem 0 0;
-    font-size: 0.92rem;
-    text-transform: uppercase;
-    letter-spacing: 0.14em;
-    color: var(--muted-foreground);
-    font-weight: 700;
-  }
-
-  .hero-momentum {
-    margin: 0.3rem 0 0;
-    font-size: 1rem;
-    color: var(--muted-foreground);
-    line-height: 1.4;
-  }
-
-  .hero-subtitle {
-    max-width: 48rem;
-    margin-top: 0.85rem;
-    line-height: 1.65;
-    font-size: 1rem;
-  }
-
-  .hero-side {
-    display: grid;
-    gap: 0.85rem;
-    align-content: start;
-    justify-items: start;
-    padding: 1rem;
-    border-radius: calc(var(--radius) - 0.15rem);
-    background: rgba(255, 255, 255, 0.72);
-    border: 1px solid rgba(10, 61, 89, 0.08);
-  }
-
-  .hero-side-compact {
-    min-height: 100%;
-  }
-
-  .text-link {
+  .negative {
     color: var(--brand-strong);
-    text-decoration: none;
-    font-weight: 700;
-  }
-
-  .text-link:hover {
-    text-decoration: underline;
-  }
-
-  .landing-grid,
-  .progress-grid,
-  .detail-grid {
-    display: grid;
-    gap: 1rem;
-  }
-
-  .landing-grid {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
-
-  .progress-grid {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-  }
-
-  .detail-grid {
-    grid-template-columns: minmax(0, 1.1fr) minmax(0, 0.9fr);
-  }
-
-  h3,
-  h4 {
-    margin: 0;
-  }
-
-  .today-rail {
-    gap: 0.85rem;
-    width: 100%;
-  }
-
-  .today-status {
-    margin: 0;
-    font-family: 'Space Grotesk', sans-serif;
-    font-size: 1.1rem;
-    font-weight: 700;
-    line-height: 1.2;
-  }
-
-  .hero-stats {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.6rem;
-    margin-top: 0.7rem;
-  }
-
-  .hero-chip {
-    display: inline-flex;
-    align-items: baseline;
-    gap: 0.35rem;
-    padding: 0.3rem 0.65rem;
-    border-radius: 999px;
-    border: 1px solid rgba(10, 61, 89, 0.08);
-    background: rgba(255, 255, 255, 0.6);
-    font-size: 0.82rem;
-    line-height: 1;
-  }
-
-  .hero-chip-label {
-    color: var(--muted-foreground);
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-    font-size: 0.68rem;
-  }
-
-  .hero-chip-value {
-    font-family: 'Space Grotesk', sans-serif;
-    font-weight: 600;
-  }
-
-  .hero-links {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.85rem;
-  }
-
-  .value-card h3,
-  .progress-card h3,
-  .balances-panel h3,
-  .cashflow-panel h3,
-  .categories-panel h3,
-  .recent-panel h3,
-  .next-action-card h3 {
-    margin: 0;
-    font-family: 'Space Grotesk', sans-serif;
-    font-size: 1.2rem;
-  }
-
-  .value-card p:last-child,
-  .progress-card p:last-child,
-  .next-action-card p:last-child {
-    margin-bottom: 0;
-    color: var(--muted-foreground);
-    line-height: 1.65;
-  }
-
-  .progress-card {
-    padding: 1.2rem;
-  }
-
-  .progress-kicker {
-    margin: 0 0 0.4rem;
-    font-size: 0.78rem;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-    font-weight: 700;
-    color: var(--muted-foreground);
   }
 
   .step-complete {
@@ -991,138 +867,6 @@
   .step-current {
     border-color: rgba(15, 95, 136, 0.22);
     box-shadow: 0 16px 30px rgba(8, 45, 68, 0.09);
-  }
-
-  .section-note,
-  .transaction-meta,
-  .empty-copy,
-  .category-values,
-  .cashflow-meta span {
-    margin: 0;
-    color: var(--muted-foreground);
-  }
-
-  .balances-panel,
-  .cashflow-panel,
-  .categories-panel,
-  .recent-panel {
-    padding: 1.25rem;
-  }
-
-  .section-head {
-    display: flex;
-    gap: 1rem;
-    justify-content: space-between;
-    align-items: flex-start;
-    margin-bottom: 1rem;
-  }
-
-  .cashflow-list,
-  .category-list,
-  .transaction-list {
-    display: grid;
-    gap: 0.85rem;
-  }
-
-  .transaction-row {
-    display: flex;
-    gap: 1rem;
-    justify-content: space-between;
-    align-items: center;
-    padding: 0.95rem 0;
-  }
-
-  .transaction-row + .transaction-row {
-    border-top: 1px solid rgba(10, 61, 89, 0.08);
-  }
-
-  .transaction-payee,
-  .category-head p,
-  .cashflow-meta p {
-    margin: 0;
-    font-weight: 700;
-  }
-
-  .transaction-amount {
-    margin: 0;
-    font-family: 'Space Grotesk', sans-serif;
-    font-size: 1.1rem;
-  }
-
-  .balance-group-list {
-    display: grid;
-    gap: 0.75rem;
-  }
-
-  .balance-group + .balance-group {
-    padding-top: 0.75rem;
-    border-top: 1px solid rgba(10, 61, 89, 0.08);
-  }
-
-  .balance-group-head-compact {
-    display: flex;
-    align-items: baseline;
-    justify-content: space-between;
-    gap: 1rem;
-    margin-bottom: 0.25rem;
-  }
-
-  .balance-group-head-compact h4 {
-    font-size: 0.82rem;
-    text-transform: uppercase;
-    letter-spacing: 0.07em;
-    color: var(--muted-foreground);
-    font-weight: 700;
-  }
-
-  .balance-group-head-compact strong {
-    font-family: 'Space Grotesk', sans-serif;
-    font-size: 1rem;
-  }
-
-  .balance-table {
-    width: 100%;
-    border-collapse: collapse;
-  }
-
-  .balance-table td {
-    padding: 0.4rem 0;
-    border-top: 1px solid rgba(10, 61, 89, 0.06);
-    vertical-align: baseline;
-  }
-
-  .balance-table tr:first-child td {
-    border-top: none;
-  }
-
-  .balance-table-name {
-    font-weight: 500;
-  }
-
-  .balance-table-name .subtype-pill {
-    margin-left: 0.4rem;
-    vertical-align: baseline;
-  }
-
-  .balance-table-value {
-    text-align: right;
-    font-family: 'Space Grotesk', sans-serif;
-    font-weight: 600;
-    white-space: nowrap;
-  }
-
-  .account-note {
-    display: block;
-    font-size: 0.75rem;
-    font-weight: 400;
-    color: var(--muted-foreground);
-  }
-
-  .staleness-note {
-    display: block;
-    font-size: 0.75rem;
-    font-weight: 400;
-    color: var(--muted-foreground);
   }
 
   .subtype-pill.asset {
@@ -1137,52 +881,23 @@
     border-color: rgba(154, 81, 41, 0.18);
   }
 
-  .cashflow-row-compact,
-  .category-row {
-    display: grid;
-    gap: 0.45rem;
+  .bar-income {
+    background: linear-gradient(90deg, #1d9f6e, #6fd6ae);
   }
 
-  .cashflow-row-compact + .cashflow-row-compact,
-  .category-row + .category-row {
-    padding-top: 0.65rem;
-    border-top: 1px solid rgba(10, 61, 89, 0.08);
+  .bar-spending {
+    background: linear-gradient(90deg, #0a3d59, #2f88b7);
   }
 
-  .cashflow-meta,
-  .category-head,
-  .category-values {
-    display: flex;
-    gap: 0.75rem;
-    justify-content: space-between;
-    align-items: center;
+  .category-meter.current span {
+    background: linear-gradient(90deg, #0f5f88, #47a5d8);
   }
 
-  .cashflow-bar-pair {
-    display: flex;
-    gap: 0.25rem;
-    height: 0.7rem;
-  }
-
-  .cashflow-bar-pair .bar-income,
-  .cashflow-bar-pair .bar-spending {
-    height: 100%;
-    border-radius: 999px;
-    min-width: 2px;
-  }
-
-  .cashflow-controls {
-    display: grid;
-    gap: 0.4rem;
-    justify-items: end;
-    text-align: right;
+  .category-meter.previous span {
+    background: linear-gradient(90deg, #d5dee8, #b7c9da);
   }
 
   .cashflow-presets {
-    display: inline-flex;
-    gap: 0.15rem;
-    padding: 0.15rem;
-    border-radius: 999px;
     background: rgba(10, 61, 89, 0.06);
   }
 
@@ -1208,80 +923,25 @@
     color: var(--foreground);
   }
 
-  .category-bars {
-    display: grid;
-    gap: 0.4rem;
-  }
-
-  .category-meter {
-    height: 0.7rem;
-    border-radius: 999px;
-    background: rgba(10, 61, 89, 0.08);
-    overflow: hidden;
-  }
-
-  .bar-income,
-  .bar-spending,
-  .category-meter span {
-    display: block;
-    height: 100%;
-    border-radius: inherit;
-  }
-
-  .bar-income {
-    background: linear-gradient(90deg, #1d9f6e, #6fd6ae);
-  }
-
-  .bar-spending {
-    background: linear-gradient(90deg, #0a3d59, #2f88b7);
-  }
-
-  .category-meter.current span {
-    background: linear-gradient(90deg, #0f5f88, #47a5d8);
-  }
-
-  .category-meter.previous span {
-    background: linear-gradient(90deg, #d5dee8, #b7c9da);
-  }
-
-  .drilldown-link {
-    text-decoration: none;
-    color: inherit;
-    border-radius: 0.65rem;
-    transition: background 0.15s;
-  }
-
   .drilldown-link:hover {
     background: rgba(10, 61, 89, 0.04);
   }
 
-  a.cashflow-row-compact {
-    padding: 0.35rem 0.5rem;
-    margin: -0.35rem -0.5rem;
+  .transaction-row + .transaction-row {
+    border-top: 1px solid rgba(10, 61, 89, 0.08);
   }
 
-  a.category-row {
-    padding: 0.35rem 0.5rem;
-    margin: -0.35rem -0.5rem;
+  .cashflow-row + .cashflow-row,
+  .category-row + .category-row {
+    margin-top: 0.65rem;
+    padding-top: 0.65rem;
+    border-top: 1px solid rgba(10, 61, 89, 0.08);
   }
 
-  .transaction-main,
-  .transaction-side {
-    display: grid;
-    gap: 0.2rem;
-  }
-
-  .transaction-side {
-    justify-items: end;
-  }
-
-  .date-header {
-    margin: 0;
-    font-size: 0.75rem;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-    color: var(--muted-foreground);
-    font-weight: 700;
+  .balance-group + .balance-group {
+    margin-top: 0.75rem;
+    padding-top: 0.75rem;
+    border-top: 1px solid rgba(10, 61, 89, 0.08);
   }
 
   .date-group + .date-group {
@@ -1290,63 +950,9 @@
     border-top: 1px solid rgba(10, 61, 89, 0.08);
   }
 
-  a.pill.warn {
-    text-decoration: none;
-  }
-
-  .positive {
-    color: var(--ok);
-  }
-
-  .negative {
-    color: var(--brand-strong);
-  }
-
   @media (max-width: 1100px) {
-    .dashboard-hero,
-    .detail-grid {
-      grid-template-columns: 1fr;
-    }
-
     .categories-panel {
       order: -1;
-    }
-
-    .landing-grid {
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-    }
-
-    .progress-grid {
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-    }
-  }
-
-  @media (max-width: 720px) {
-    .landing-grid,
-    .progress-grid {
-      grid-template-columns: 1fr;
-    }
-
-    .dashboard-hero {
-      padding: 1.2rem;
-    }
-
-    .hero-stats {
-      gap: 0.4rem;
-    }
-
-    .section-head,
-    .transaction-row,
-    .cashflow-meta,
-    .category-head,
-    .category-values {
-      grid-template-columns: 1fr;
-      display: grid;
-    }
-
-    .transaction-side,
-    .hero-side {
-      justify-items: start;
     }
   }
 </style>

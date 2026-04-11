@@ -142,6 +142,7 @@
 
   --breakpoint-tablet: 720px;
   --breakpoint-shell: 980px;
+  --breakpoint-desktop: 1100px;
 }
 
 @layer base {
@@ -275,6 +276,14 @@ body {
 
   .error-text {
     color: var(--bad);
+  }
+
+  .text-link {
+    @apply font-bold text-brand-strong no-underline;
+  }
+
+  .text-link:hover {
+    @apply underline;
   }
 }
 
