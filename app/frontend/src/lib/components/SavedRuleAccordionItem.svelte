@@ -120,7 +120,7 @@
   on:dragover|preventDefault
   on:drop={handleDrop}
 >
-  <div class="rule-shell">
+  <div class="grid items-start gap-3.5 px-3.5 py-3.5 grid-cols-[auto_minmax(0,1fr)] max-[760px]:gap-2.5 max-[760px]:p-3">
     <button
       type="button"
       class="drag-handle"
@@ -138,12 +138,19 @@
       <span class="drag-dot"></span>
     </button>
 
-    <div class="rule-content">
-      <button type="button" class="rule-toggle" aria-expanded={expanded} on:click={onToggle}>
-        <div class="rule-head">
-          <div class="rule-summary-block">
-            <div class="rule-title-row">
-              <p class="rule-title">{name || namePlaceholder || 'Untitled rule'}</p>
+    <div class="min-w-0">
+      <button
+        type="button"
+        class="block w-full cursor-pointer rounded-xl border-0 bg-transparent p-0 text-left focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-brand/40"
+        aria-expanded={expanded}
+        on:click={onToggle}
+      >
+        <div class="flex items-center justify-between gap-3.5 max-[760px]:flex-col max-[760px]:items-start">
+          <div class="grid min-w-0 gap-0.5">
+            <div class="flex flex-wrap items-center gap-2">
+              <p class="m-0 wrap-anywhere text-base font-bold leading-tight text-brand-strong">
+                {name || namePlaceholder || 'Untitled rule'}
+              </p>
               {#if highlighted}
                 <span class="highlight-pill">History updated</span>
               {/if}
@@ -152,20 +159,30 @@
               {/if}
             </div>
             {#if !expanded}
-              <p class="rule-summary" title={conditionSummary}>{conditionSummary}</p>
-              <p class="rule-summary muted" title={actionSummary}>{actionSummary}</p>
+              <p
+                class="m-0 truncate text-sm leading-snug max-[760px]:line-clamp-2 max-[760px]:whitespace-normal"
+                title={conditionSummary}
+              >
+                {conditionSummary}
+              </p>
+              <p
+                class="m-0 truncate text-sm leading-snug text-muted-foreground max-[760px]:line-clamp-2 max-[760px]:whitespace-normal"
+                title={actionSummary}
+              >
+                {actionSummary}
+              </p>
             {/if}
           </div>
 
-          <div class="rule-head-side">
+          <div class="flex shrink-0 items-center max-[760px]:justify-start">
             <span class="chevron" class:chevron-expanded={expanded} aria-hidden="true"></span>
           </div>
         </div>
       </button>
 
       {#if expanded}
-        <div class="rule-body">
-          <div class="field rule-name-field">
+        <div class="mt-3 grid gap-4 border-t border-card-edge pt-4">
+          <div class="field">
             <label for={`rule-name-${ruleId}`}>Rule Name</label>
             <input
               id={`rule-name-${ruleId}`}
@@ -187,8 +204,10 @@
             onAccountCreate={(seed) => void onAccountCreate(seed)}
           />
 
-          <div class="rule-footer">
-            <div class="rule-secondary-actions">
+          <div
+            class="flex flex-wrap items-center justify-between gap-3 border-t border-card-edge pt-3 max-[760px]:items-start"
+          >
+            <div class="flex flex-wrap items-center gap-1.5">
               <button class="btn utility-btn" on:click={() => onMoveUp()} disabled={ruleIndex === 0}>Move Earlier</button>
               <button class="btn utility-btn" on:click={() => onMoveDown()} disabled={ruleIndex === ruleCount - 1}>
                 Move Later
@@ -198,7 +217,7 @@
               </button>
             </div>
 
-            <div class="rule-primary-actions">
+            <div class="flex flex-wrap items-center gap-1.5 ml-auto max-[760px]:ml-0">
               <button class="btn utility-btn" on:click={() => void onRemove()} disabled={loading}>Delete</button>
               <button class="btn btn-primary" on:click={() => void onSave()} disabled={loading}>Save Changes</button>
             </div>
@@ -244,14 +263,6 @@
     transform: translateY(-1px);
   }
 
-  .rule-shell {
-    display: grid;
-    grid-template-columns: auto minmax(0, 1fr);
-    gap: 0.9rem;
-    align-items: start;
-    padding: 0.85rem 0.9rem;
-  }
-
   .drag-handle {
     width: 2rem;
     min-height: 2.7rem;
@@ -294,58 +305,6 @@
     background: rgba(15, 95, 136, 0.55);
   }
 
-  .rule-content {
-    min-width: 0;
-  }
-
-  .rule-toggle {
-    width: 100%;
-    border: 0;
-    background: transparent;
-    padding: 0;
-    text-align: left;
-    cursor: pointer;
-    border-radius: 10px;
-  }
-
-  .rule-toggle:focus-visible {
-    outline: 2px solid rgba(15, 95, 136, 0.4);
-    outline-offset: 4px;
-  }
-
-  .rule-head {
-    display: flex;
-    justify-content: space-between;
-    gap: 0.9rem;
-    align-items: center;
-  }
-
-  .rule-summary-block {
-    min-width: 0;
-    display: grid;
-    gap: 0.18rem;
-  }
-
-  .rule-title-row {
-    display: flex;
-    gap: 0.5rem;
-    align-items: center;
-    flex-wrap: wrap;
-  }
-
-  .rule-title,
-  .rule-summary {
-    margin: 0;
-  }
-
-  .rule-title {
-    font-size: 0.98rem;
-    font-weight: 700;
-    color: var(--brand-strong);
-    line-height: 1.25;
-    overflow-wrap: anywhere;
-  }
-
   .dirty-pill {
     border-radius: 999px;
     background: rgba(255, 244, 220, 0.92);
@@ -368,24 +327,6 @@
     line-height: 1.2;
   }
 
-  .rule-summary {
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    font-size: 0.9rem;
-    line-height: 1.35;
-  }
-
-  .muted {
-    color: var(--muted-foreground);
-  }
-
-  .rule-head-side {
-    display: flex;
-    align-items: center;
-    flex-shrink: 0;
-  }
-
   .chevron {
     width: 0.78rem;
     height: 0.78rem;
@@ -397,40 +338,6 @@
 
   .chevron-expanded {
     transform: rotate(225deg);
-  }
-
-  .rule-body {
-    margin-top: 0.7rem;
-    border-top: 1px solid rgba(10, 61, 89, 0.08);
-    padding-top: 0.95rem;
-    display: grid;
-    gap: 0.95rem;
-  }
-
-  .rule-name-field {
-    gap: 0.38rem;
-  }
-
-  .rule-footer {
-    display: flex;
-    justify-content: space-between;
-    gap: 0.75rem;
-    flex-wrap: wrap;
-    align-items: center;
-    padding-top: 0.8rem;
-    border-top: 1px solid rgba(10, 61, 89, 0.06);
-  }
-
-  .rule-secondary-actions,
-  .rule-primary-actions {
-    display: flex;
-    gap: 0.45rem;
-    flex-wrap: wrap;
-    align-items: center;
-  }
-
-  .rule-primary-actions {
-    margin-left: auto;
   }
 
   .utility-btn {
@@ -445,37 +352,5 @@
   .utility-btn:hover {
     background: rgba(10, 61, 89, 0.04);
     color: var(--brand-strong);
-  }
-
-  @media (max-width: 760px) {
-    .rule-shell {
-      gap: 0.65rem;
-      padding: 0.72rem;
-    }
-
-    .rule-head {
-      flex-direction: column;
-      align-items: start;
-    }
-
-    .rule-head-side {
-      justify-content: flex-start;
-    }
-
-    .rule-summary {
-      white-space: normal;
-      display: -webkit-box;
-      line-clamp: 2;
-      -webkit-line-clamp: 2;
-      -webkit-box-orient: vertical;
-    }
-
-    .rule-footer {
-      align-items: start;
-    }
-
-    .rule-primary-actions {
-      margin-left: 0;
-    }
   }
 </style>
