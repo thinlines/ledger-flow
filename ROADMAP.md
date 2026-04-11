@@ -7,21 +7,15 @@ It is a planning document, not a strict delivery contract.
 
 ## Current Delivery Focus
 
-Trust fix: journal mutations currently have no reliable undo mechanism. Matched manual entries are permanently lost on import undo, and the only safety net is scattered `.bak` files with no operation history. Current focus is an event-sourced undo stack: an append-only event log in the workspace, compensating events for reversal, drift detection for external edits, and a transaction actions menu with a semantic undo affordance. Git is demoted to periodic snapshot commits — an escape hatch, not the undo mechanism. See `DECISIONS.md` §12. Dashboard drill-down resumes after this sequence ships.
+Dashboard direction: the dashboard answers "Where do I stand right now?" and "What changed recently?" well, but the third question — reframed from "What needs my attention next?" to **"Where should I go next?"** — has no real home. The Today rail surfaces one rotating signal at a time. Activity drilldowns from category trends and cash flow rows land on raw transaction lists that don't explain what changed or why. Category is the quietest element in activity rows despite being the most useful dimension for scanning. The dashboard surfaces no derived health signals (runway, net worth trend, recurring vs discretionary) despite the data to compute them. Current focus is closing the insight loop: richer activity view explanations, a dashboard direction section with health signals rendered as compact charts, and shell polish. Semantic undo + toast (5e) is paused and resumes after Feature 7 ships. See `DECISIONS.md` §13.
 
 ### Current Status
 
-- Transfer-specific flows are complete:
-  - Unknown review supports direct transfers, pending import-match transfers, and automatic matching.
-  - Grouped-settlement trust fix is shipped.
-  - Guided manual resolution is shipped.
-  - Bilateral auto-reconciliation is shipped (read-time detection, no journal writes).
-  - Transfer suggestion matching works correctly after the CSV comment parsing fix.
-- Import-time auto-linking (bypassing the unknowns review queue) was considered and rejected — it reduces trust by removing the human confirmation step. The current flow (import → review → confirm → auto-reconcile display) is the correct trust model.
-- Manual transaction entry with import matching is shipped:
-  - Users can add transactions from the register with a `:manual:` tag.
-  - Unknowns review offers a "match" mode to match imports to manual entries.
-  - Match quality ranking, amount-delta display, and metadata carryover are complete.
+- Event-sourced undo sub-features 5a–5d are shipped: archive journal for matched manual entries, append-only event log with drift detection, git snapshot commits, and the transaction actions menu (delete, re-categorize, unmatch). Semantic undo + toast (5e) is paused until after Feature 7.
+- Dashboard drill-down infrastructure (Feature 6) is shipped: clickable category trends and cash flow rows, cross-account activity view with date-range and category filtering, URL-param filter state. The quality and depth of those drilldowns is the gap Feature 7 closes.
+- Manual transaction entry with import matching is complete: users add transactions from the register with a `:manual:` tag, unknowns review offers a "match" mode to match imports to manual entries, and match quality ranking, amount-delta display, and metadata carryover are all in place.
+- Transfer-specific flows are complete: unknown review supports direct transfers, pending import-match transfers, and automatic matching; grouped-settlement trust fix and guided manual resolution shipped; bilateral auto-reconciliation is read-time only with no journal writes.
+- Import-time auto-linking (bypassing the unknowns review queue) was considered and rejected — it removes the human confirmation step. The current flow (import → review → confirm → auto-reconcile display) is the correct trust model.
 
 ### Delivery Sequence
 
@@ -29,14 +23,19 @@ Trust fix: journal mutations currently have no reliable undo mechanism. Matched 
 2. ~~**Transaction clearing status**~~ — shipped.
 3. ~~**Overview dashboard facelift**~~ — shipped.
 4. ~~**Dashboard polish**~~ — shipped (4a–4d: momentum line, day-grouped activity, per-account staleness, cash flow presets).
-5. **Event-sourced undo** — trust fix. Five sub-features, shipped in order:
+5. **Event-sourced undo** — trust fix. Sub-features 5a–5d shipped. 5e paused until after Feature 7.
    - ~~**5a. Archive journal for matched manual entries**~~ — shipped.
    - ~~**5b. Event log foundation**~~ — shipped.
    - ~~**5c. Git snapshot commits**~~ — shipped.
-   - **5d. Transaction actions menu** — three-dot row menu: delete, re-categorize, unmatch. Each writes an event. Active `TASK.md`.
-   - **5e. Semantic undo + toast** — compensating-event dispatcher, toast affordance, partial-undo report when drift is present.
-6. **Dashboard drill-down and activity view** — clickable category trends + cash flow rows, cross-account activity view with filters. Paused until event-sourced undo ships.
-7. **Transaction editing** — deferred. See Deferred for Now.
+   - ~~**5d. Transaction actions menu**~~ — shipped.
+   - **5e. Semantic undo + toast** — paused. Resumes after Feature 7.
+6. ~~**Dashboard drill-down and activity view**~~ — shipped. Drill-through links, cross-account activity view, and URL-param filters are live. Quality and depth addressed by Feature 7.
+7. **Dashboard insight loop and financial direction** — current focus. Three sub-features, shipped in order:
+   - **7a. Activity view explanation and hierarchy** — explanation header, category prominence in rows, payee truncation, rolling baselines in the activity endpoint. Active `TASK.md`.
+   - **7b. Dashboard direction panel and health signals** — "Where should I go next?" section with compact charts (runway, net worth trend, recurring vs discretionary), low-code notable signals, and a loose-ends aggregator.
+   - **7c. Shell and copy polish** — sidebar copy, nav notes, hero CTA fallthrough, /rules loading state, mobile nav drawer.
+8. **Semantic undo + toast (5e)** — resumes after Feature 7.
+9. **Transaction editing** — deferred. See Deferred for Now.
 
 ### Feature 1: Manual Entry + Import Matching ✓
 
@@ -66,33 +65,52 @@ Shipped. Append-only event log at `workspace/events.jsonl` with UUIDv7 ids, drif
 
 Shipped. Periodic workspace snapshots on shutdown and stale startup (>24h). Managed `.gitignore` excludes transient artifacts. See git history for implementation details.
 
-### Feature 5d: Transaction Actions Menu
+### Feature 5d: Transaction Actions Menu ✓
 
-Three-dot overflow menu on transaction register rows: Delete (remove transaction), Re-categorize (rewrite destination to Unknown, resurfaces in review queue), and Unmatch (restore manual entry from archive, revert imported transaction to pre-match state). Each action emits an event through the log.
-
-Depends on 5a (archive journal for unmatch) and 5b (event log for recording actions).
+Shipped. Three-dot overflow menu on register rows with delete, re-categorize, and unmatch actions. Each action emits a structured event to the event log following the established mutation pattern (drift check, backup, modify, emit). See git history for implementation details.
 
 ### Feature 5e: Semantic Undo + Toast
 
-Endpoint `POST /api/events/undo/<event_id>` walks the log backward, dispatches on forward-event type to compute the inverse, checks `hash_after` against current state per-transaction, applies the compensating action for unchanged transactions, skips drifted ones, and returns a partial-undo report. Writes a new compensating event.
+**Paused until after Feature 7.** Endpoint `POST /api/events/undo/<event_id>` walks the log backward, dispatches on forward-event type to compute the inverse, checks `hash_after` against current state per-transaction, applies the compensating action for unchanged transactions, skips drifted ones, and returns a partial-undo report. Writes a new compensating event.
 
 UX: toast with Undo button appears after each mutating action and persists ~8 seconds (Gmail/Simplifi pattern). A lightweight operation history list provides access to older events. Undo is linear from most recent to earliest.
 
 Depends on 5b (event log) and 5d (coherent per-transaction compensating semantics).
 
-### Feature 6: Dashboard Drill-Down and Activity View
+### Feature 6: Dashboard Drill-Down and Activity View ✓
 
-The dashboard surfaces insights — category spending spikes, negative cash flow months — but provides no path to investigate them. Category trend rows and cash flow month rows are visual dead ends. The transactions page only shows per-account registers with no date or category filtering, so even navigating there manually doesn't help.
+Shipped. Clickable category trends and cash flow rows link to a filtered cross-account activity view. The activity view supports period presets (this month, last 30 days, last 3 months) and category filtering. URL-param filter state preserves browser back-button behavior. The backend exposes `GET /api/transactions/activity` for cross-account queries with optional date-range and category filters.
 
-This feature closes the gap between dashboard insight and transaction-level detail:
+Feature 6 delivered the *infrastructure* for drilldowns. Feature 7a addresses the *quality* gap: every drilldown currently lands on a raw transaction list with no period comparison, decomposition, or top-mover context. See Feature 7 below.
 
-- **Clickable category trends**: each category row on the dashboard links to the transactions page filtered by that category and the current month. The `categoryTrends` API response already includes the raw `account` field needed as the filter key.
-- **Clickable cash flow months**: each cash flow row links to the transactions page filtered to that month.
-- **Cross-account activity view**: the transactions page gains an "all activity" mode alongside the existing per-account register. This mode shows transactions across all tracked accounts, with date range filtering (presets: this month, last 30 days, last 3 months, custom) and category filtering.
-- **New backend endpoint**: a cross-account transaction query that accepts optional date-range and category filters. The existing `build_dashboard_overview` already queries all activity transactions — the new endpoint can share the same query infrastructure with filter parameters.
-- **URL-param filter state**: filters are encoded in query params (`?category=Expenses:Shopping&period=2026-03`) so dashboard links work as deep links and the browser back button preserves filter state.
+### Feature 7: Dashboard Insight Loop and Financial Direction
 
-This is the minimum needed to make "What needs attention next?" actionable. Without it, every dashboard insight is a dead end.
+The dashboard answers "Where do I stand right now?" and "What changed recently?" but the third question has no real home. The Today rail shows one rotating signal at a time. Activity drilldowns from category trends and cash flow rows land on raw transaction lists that don't explain what changed or why. Category is the quietest element in activity rows despite being the most useful dimension for scanning. The dashboard surfaces no derived health signals despite the data to compute them.
+
+The third question is reframed from **"What needs my attention next?"** (which sounded like an inbox of chores) to **"Where should I go next?"** (which encompasses tasks, investigable questions, and health checks). The bookkeeping work — review queue, statement inbox, conflicts — should be the price of admission for a financial conversation, not the point of the product.
+
+This feature closes three gaps:
+
+- **Explanation over data**: every drilldown leads with a period comparison, frequency decomposition, rolling baseline, and top mover before showing transactions. The bridge between "What changed?" and "Where should I go next?" is the activity view's ability to answer "why".
+- **Financial direction**: the dashboard gains a "Where should I go next?" section with derived health signals rendered as compact charts — runway (weeks of typical spending covered by spendable cash), net worth trend (6-month sparkline), and recurring vs discretionary spending split. Plus low-code notable signals (largest transaction this week, category-above-average spikes, spending-exceeds-income streaks) and a loose-ends aggregator (review queue, statement inbox, stale accounts, missing opening balances).
+- **Shell polish**: sidebar copy currently leaks implementation language ("accounting internals", "matching and categorization logic"), the hero CTA is hollow when nothing is pending, /rules shows a misleading "not initialized" loading state, and mobile stacks the entire sidebar above financial data on every page.
+
+#### Sub-features
+
+- **7a. Activity view explanation and hierarchy**: extend the activity endpoint with a `summary` block (period comparison, prior period, 6-month rolling baseline, transaction count, average amount, top transaction). Add an explanation header above the activity list whenever a filter is active. Make the activity hero title context-aware. Promote category to a leading pill in transaction rows, truncate raw bank payees, simplify the meta line. The same explanation applies whether the user arrived from a dashboard insight or opened the activity view directly.
+
+- **7b. Dashboard direction panel and health signals**: new dashboard section rendered with the same visual weight as Recent Activity and Category Trends. Three chart tiles: a runway gauge (`spendable cash / 6-month average monthly spending`), a 6-month net worth sparkline (computed from month-end balances), and a recurring vs discretionary stacked bar (heuristic: a category appearing in 4+ of the last 6 months counts as recurring). Three low-code notable signals rendered as one-line bullets above the charts: largest transaction this week, any category running >2× its rolling average, any month where spending exceeded income. The bookkeeping loose ends — review queue, statement inbox, stale accounts, missing opening balances — collapse into a single subordinate list at the bottom of the same panel.
+
+- **7c. Shell and copy polish**: rewrite the sidebar brand line and nav notes to remove implementation leaks. Fix the hero CTA fallthrough so an "all caught up" state doesn't surface a redundant "Open transactions" primary action. Fix the /rules loading-state copy that incorrectly says "not initialized". Filter zero-vs-zero rows from the dashboard cash flow and category trends panels. Replace the stacked sidebar on `< 980px` with a top bar plus drawer so financial data is the first thing on mobile.
+
+#### Constraints
+
+- Health signals are derived metrics only. Goals, targets, and budgets remain deferred — no partial implementation. Runway, net worth trend, and recurring vs discretionary all compute from existing data without user input.
+- Notable signals must be low-code arithmetic. Largest transaction (`max(abs(amount))`), category spike (`current > 2 × rolling avg`), spending streak (consecutive months `spending > income`). No statistical models, anomaly detection, or ML.
+- GenAI analysis (Ollama, ChatGPT API) is a future direction for richer signals but requires data-privacy planning and is not in scope for Feature 7.
+- Investment tracking (401(k), HSA, pretax contributions) is out of scope. These accounts don't appear in tracked balances and the runway/net worth signals reflect only what the workspace knows about.
+- A consolidated "needs attention" panel is allowed here only because it's part of the broader direction section — it does not violate `DECISIONS.md` §11. The loose-ends list is one component of a panel whose primary purpose is health signals and investigation hooks, not a notification center. See §13 for the rationale.
+- This feature does not introduce a notification center, dismissable cards, or persistent alert state. Signals are computed each load from current data.
 
 ### Constraints
 

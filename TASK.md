@@ -2,391 +2,483 @@
 
 ## Title
 
-Semantic undo with toast affordance
+Activity view explanation header and transaction hierarchy
 
 ## Objective
 
-Every journal mutation a user can perform from the UI is undoable for ~8 seconds via a toast that appears immediately after the action. Clicking Undo walks the event log backward, dispatches on the forward-event type to compute the inverse, verifies the relevant journal hasn't drifted since the event was written, applies the compensating action, and writes a new event linked back to the original via `compensates`. This is the trust deliverable that closes Feature 5: every action the app makes to a user's journal is reversible from the same screen, with explicit safety when external edits intervene.
+Make the cross-account activity view the explanation layer behind every dashboard insight. Today, clicking a category trend or cash flow row from the dashboard lands the user on a generic "All activity" page with one filter chip and a date-sorted list of raw bank descriptors — no period comparison, no decomposition, no top mover, and the category (the dimension the user came to investigate) is the smallest, lowest-contrast text in every row. This task fixes both gaps:
 
-Git is the escape hatch (already shipped). The event log is the audit trail (already shipped). This task wires undo on top of both.
+1. **Explanation header.** When any filter is active (category, month, or period preset), the page leads with a period summary, prior-period comparison, 6-month rolling baseline, and top mover, computed server-side and rendered as a card above the transaction list. The same explanation appears whether the user arrived from a dashboard insight or opened the activity view directly.
+2. **Row hierarchy.** Category is promoted from the muted meta line to a leading pill before the payee. Raw bank payees are truncated. The meta line collapses to date and account.
+
+This is the bridge between "What changed recently?" and "Where should I go next?". Without it, every dashboard insight is a dead end. With it, every dashboard click answers *why* before it shows the data. See `DECISIONS.md` §13 for the broader rationale.
 
 ## Scope
 
 ### Included
 
-- New backend service `app/backend/services/undo_service.py` — dispatch table, hash verification, compensating-action implementations.
-- New endpoint `POST /api/events/undo/{event_id}` — looks up the event, dispatches, returns a structured result.
-- Mutating endpoints return the emitted `eventId` so the frontend can offer Undo.
-- Compensating events emitted with `type: <forward_type>.compensated.v1` and `compensates: <forward_event_id>`.
-- Drift handling: refuse-and-report when the target file's current hash differs from the event's `hash_after`. The user sees a clear "external edit detected" message.
-- Frontend toast component (top-right, ~8s, single Undo button) shown after every mutating action.
-- Toast queueing: the latest mutation replaces the visible toast (single-toast model).
-- Idempotency: an event that has already been compensated cannot be compensated again.
-- Backend tests for the undo dispatcher and each supported event type.
-- Frontend wiring on the four single-row actions where the same gesture cannot reverse the change: delete, re-categorize, unmatch, manual entry create. **Status toggle deliberately excluded** — see §1 below.
+- **Backend:** Extend `build_activity_view` in `app/backend/services/activity_service.py` to return a `summary` block alongside the existing `transactions` list. The summary contains period totals, prior-period comparison, 6-month rolling monthly average, and the top transaction by absolute amount.
+- **Backend:** A single-pass refactor of the existing transaction loop that buckets matching transactions by month while filtering, so the summary fields can be derived without additional `load_transactions()` calls.
+- **Backend:** Tests covering category filter, month filter, period preset filter, insufficient-history fallback, and top-transaction selection.
+- **Frontend:** Update `ActivityResult` type in `app/frontend/src/routes/transactions/+page.svelte` with the new `summary` field. The field is optional so the page degrades gracefully if the backend response is missing it.
+- **Frontend:** Context-aware activity hero title — render the category display name or month title when those filters are active, fall back to "All activity" otherwise.
+- **Frontend:** New `ExplanationHeader` rendered as a `view-card` between the filters card and the transaction list card. Reads from `summary` and conditionally renders each line based on data availability.
+- **Frontend:** Activity row layout change — extract category from the meta line into a leading pill, truncate payees longer than 50 characters, simplify the meta line to date + account.
+- **Frontend:** Hide the per-row category pill when a category filter is active (the explanation header already says what these all are).
 
 ### Explicitly Excluded
 
-- A persistent operation history list / panel (deferred to a follow-up task).
-- Undo for bulk events: `import.applied.v1`, `import.undone.v1`, `unknowns.applied.v1`, `rule.history_applied.v1`, `transfer_resolution.applied.v1`. These already have their own undo paths or modify many transactions at once; they need their own design.
-- Undo of an undo (redo). The compensating event is final.
-- Undo for `journal.external_edit_detected.v1` system events (not user-initiated, not undoable).
-- Cross-file undo coordination beyond what the event's `journal_refs` already encode.
-- Per-transaction partial undo within a single bulk event (out of scope for the supported event types — each supported type touches exactly one transaction).
-- Multi-toast stacks. One visible toast at a time.
-- Keyboard shortcut for undo (e.g., `Cmd+Z`). Defer.
-- A "Last action" indicator outside the toast lifetime.
+- Dashboard panel changes, health signals, or charts (Feature 7b).
+- Notable-signal generation or category spike detection on the dashboard (Feature 7b).
+- Sidebar copy rewrites, hero CTA fallthrough, /rules loading-state fix, mobile nav drawer (Feature 7c).
+- Per-account register view changes. This task only touches the cross-account activity view (`activityMode === true`).
+- Sort-order toggle (amount vs date). Default date-descending sorting is preserved.
+- Color-coding category pills by category type (expense vs income). Neutral pills are sufficient for this cut.
+- Goals, targets, budgets (deferred per roadmap).
+- GenAI trend analysis (deferred — needs data-privacy planning).
+- Payee alias suggestions or "clean up this payee" affordances from the activity view.
+- Investment tracking (401(k), HSA, pretax contributions — out of scope).
+- Changes to dashboard category trend rows or cash flow rows. Their existing `?view=activity&category=...` and `?view=activity&month=...` link patterns are unchanged.
 
 ## System Behavior
 
 ### Inputs
 
-- Mutating endpoint emits an event and returns `{ "eventId": "<uuidv7>", ... }`.
-- Frontend shows a toast with the event's `summary` and an Undo button for ~8 seconds.
-- User clicks Undo → `POST /api/events/undo/{event_id}`.
-- Backend dispatches and returns a structured result.
-- Frontend reloads the affected register and shows a confirmation or error toast.
+- User clicks a category trend row on the dashboard → navigates to `/transactions?view=activity&category=Expenses:Shopping:Groceries`.
+- User clicks a cash flow month row on the dashboard → navigates to `/transactions?view=activity&month=2026-03`.
+- User opens the activity view directly and selects a period preset (This month / Last 30 days / Last 3 months).
+- User opens the activity view with the default `last-3-months` period and no category or month filter.
 
 ### Logic
 
-#### 1. Event return contract and toast eligibility
+#### 1. Activity endpoint summary block
 
-**Toast principle.** A toast undo is shown only when the same gesture that performed the action cannot reverse it. If a single click of the same control would already cycle back, a toast is noise on top of an existing affordance.
-
-Every mutating endpoint that already calls `emit_event` must capture the returned `eventId` and include it in the response payload as `eventId`. If event emission fails (the existing `try/except` path), `eventId` is `null` — the action still succeeds but Undo is unavailable for it.
-
-The endpoints in scope and their toast eligibility:
-
-| Endpoint | Forward event type | Toast? | Reason |
-|---|---|---|---|
-| `POST /api/transactions/delete` | `transaction.deleted.v1` | **Yes** | Row is gone — no in-place reversal |
-| `POST /api/transactions/recategorize` | `transaction.recategorized.v1` | **Yes** | Reversal requires walking the unknowns review queue |
-| `POST /api/transactions/unmatch` | `transaction.unmatched.v1` | **Yes** | Multi-file change; reversal requires re-doing the unknowns match |
-| `POST /api/transactions/create` | `manual_entry.created.v1` | **Yes** | Reversal requires locating the row and deleting it |
-| `POST /api/transactions/toggle-status` | `transaction.status_toggled.v1` | **No** | The clearing indicator dot itself is the undo — clicking it again cycles back |
-
-**Why status toggle is excluded:** During reconciliation, users click through 20-30 transactions in a row marking them bank-confirmed. A toast after each click would be hostile. The clearing indicator is already a direct, in-place toggle — the user has zero-friction reversal without ever leaving the row. The backend endpoint still emits `transaction.status_toggled.v1` (for the audit log and future bulk-undo), and the undo handler still implements it (so a future history-list UI can use it), but the frontend does not call `showUndoToast` after a status change.
-
-The other event-emitting endpoints (`import.applied.v1`, `unknowns.applied.v1`, `rule.history_applied.v1`, `transfer_resolution.applied.v1`) are not wired in this task. They may still return `eventId` for forward compatibility, but the frontend does not show an Undo toast for them.
-
-#### 2. `undo_service.py`
-
-Public surface:
-
-```python
-class UndoOutcome(Enum):
-    SUCCESS = "success"
-    DRIFT = "drift"
-    NOT_FOUND = "not_found"
-    ALREADY_COMPENSATED = "already_compensated"
-    UNSUPPORTED = "unsupported"
-    FAILED = "failed"
-
-@dataclass(frozen=True)
-class UndoResult:
-    outcome: UndoOutcome
-    message: str
-    compensating_event_id: str | None
-    forward_event_id: str
-
-def undo_event(workspace_path: Path, event_id: str, *, config: AppConfig) -> UndoResult: ...
-```
-
-Internal flow:
-
-1. **Locate the forward event.** Read `events.jsonl`, find the event whose `id == event_id`. If not found → `NOT_FOUND`.
-2. **Idempotency check.** Scan forward (toward end of file) for any event whose `compensates == event_id`. If one exists → `ALREADY_COMPENSATED` with a reference to the existing compensating event.
-3. **Dispatch table lookup.** Map the forward event's `type` to a compensating-action callable. If not in the table → `UNSUPPORTED`.
-4. **Drift verification.** For each entry in the forward event's `journal_refs`, compute the current hash of `<workspace>/<path>`. If any current hash differs from the event's `hash_after`, return `DRIFT` with a message naming the file. (Drift means: something changed the file between the forward action and now, so the inverse may not be safe.)
-5. **Apply the compensating action.** Each handler:
-   - Reads the journal (and archive, if relevant), finds the affected transaction by `header_line` from the payload, and applies the inverse mutation.
-   - Backs up via `backup_file()` first, with operation name `undo`.
-   - Writes the file.
-   - Returns the new file hashes for the new event's `journal_refs`.
-   - Raises `UndoFailedError(message)` if the affected transaction cannot be found or the inverse cannot be applied cleanly.
-6. **Emit the compensating event** with `type = "<forward_type>.compensated.v1"`, `compensates = forward_event_id`, `summary = f"Undid: {forward.summary}"`, and the same `payload` shape extended with `compensated_event_id: forward_event_id`. Hashes in `journal_refs` reflect the post-undo state.
-7. **Return** `UndoResult(SUCCESS, message, compensating_event_id, forward_event_id)`.
-
-If the handler raises `UndoFailedError`, return `FAILED` with the message — and do **not** emit a compensating event. The backup is left in place for manual recovery.
-
-#### 3. Compensating-action handlers
-
-Each handler is a pure function: `(workspace_path, config, forward_event) -> dict[str, str]` that returns the post-undo file hashes keyed by relative path.
-
-**a. `transaction.deleted.v1` → restore the deleted block**
-
-Payload available: `journal_path`, `header_line`, `deleted_block`.
-
-1. Read the target journal.
-2. Parse the date from `header_line` (first 10 chars).
-3. Find the insertion index in the existing journal where the restored transaction's date is `<=` the next transaction's date. Match the existing date-ordered insert behavior used by unmatch.
-4. Insert the `deleted_block` lines at the chosen position, with one blank line separator from neighbors.
-5. Write and return the new hash.
-
-Failure: if a transaction with the same `header_line` already exists in the file, raise `UndoFailedError("Transaction was re-created — refusing to duplicate")`.
-
-**b. `transaction.recategorized.v1` → restore the previous account**
-
-Payload available: `journal_path`, `header_line`, `previous_account`, `new_account`.
-
-1. Read the journal, locate the unique transaction block by `header_line` (use the existing `_locate_header` + `_find_transaction_block` helpers — they need to move from `main.py` into a shared helper module, see §6).
-2. Find the destination posting whose account == `new_account` (`Expenses:Unknown`). If multiple match, fail.
-3. Use `rewrite_posting_account()` to rewrite back to `previous_account`.
-4. Write and return the new hash.
-
-Failure: header not found, or destination account no longer matches `new_account` → `UndoFailedError`.
-
-**c. `transaction.status_toggled.v1` → toggle back to the previous status**
-
-Payload available: `journal_path`, `header_line`, `previous_status`, `new_status`.
-
-1. Read the journal, locate the header line.
-2. Use `set_header_status()` to rewrite the line with `previous_status`.
-3. Write and return the new hash.
-
-Failure: header not found, or current status differs from the recorded `new_status` → `UndoFailedError`. (The drift check would normally catch this earlier via file hash; this is a per-transaction safety check for completeness.)
-
-**d. `manual_entry.created.v1` → delete the created entry**
-
-Payload available: `date`, `payee`, `amount`, `currency`, `destination_account`, `source_account`. The journal_refs entry tells us which file. There is no `header_line` field today.
-
-1. Reconstruct the header line from `(date, payee)`. Manual entries are created with `unmarked` clearing status, so the header is `f"{date} {payee}"`.
-2. Read the target journal, find the transaction block with that header AND a destination posting account matching `destination_account` AND a posting on `source_account` with the recorded amount. The combined match disambiguates from any other entry sharing the same payee + date.
-3. Remove the block (with the same blank-line cleanup used in delete).
-4. Write and return the new hash.
-
-Failure: no unique block matches the criteria → `UndoFailedError("Could not locate the manual entry to undo")`.
-
-> **Implementation note.** The disambiguation logic above is the only place this task adds complexity to the existing manual-entry payload shape. We deliberately don't change `manual_entry_service.create_manual_transaction` to also write `header_line` into the event payload, because the value is trivially derivable from `date + payee` for unmarked entries. If this turns out to be too brittle in practice, the follow-up is to enrich the payload, not to widen this task.
-
-**e. `transaction.unmatched.v1` → re-create the match**
-
-Payload available: `journal_path`, `archive_path`, `header_line`, `match_id`, `restored_manual_block`.
-
-1. Read both the main journal and the archive (creating the archive file with the standard header if absent — same as `archive_service.archive_manual_entry`).
-2. Locate the `header_line` in the main journal and find its block.
-3. Re-stamp the imported transaction: insert `; :manual:` and `; match-id: {match_id}` lines after the header (matching the `unknowns_service` order: `:manual:` first, then `match-id`).
-4. Rewrite the destination posting from `Expenses:Unknown` back to the matched manual entry's category (which we recover from `restored_manual_block` by parsing its non-source posting).
-5. Find the restored manual entry in the main journal (it was inserted there by the original unmatch). It is identified by exact match on `restored_manual_block` lines starting from a matching header + payee. Remove that block.
-6. Append the manual entry back to the archive via `archive_service.archive_manual_entry(archive_path, match_id, original_block_lines)`. The original block lines are derived from `restored_manual_block` (split on newlines).
-7. Write both files and return their new hashes.
-
-Failure modes:
-- `restored_manual_block` cannot be parsed for its category → `UndoFailedError`.
-- The imported transaction in the main journal cannot be located → `UndoFailedError`.
-- The restored manual entry cannot be located in the main journal → `UndoFailedError`.
-
-> **Risk callout.** Re-match is the most complex handler. The clean v1 boundary is: it works when no further edits happened between unmatch and undo. The drift check on the file hash provides this guarantee. If we discover edge cases during implementation, the right cut is to mark `transaction.unmatched.v1` as `UNSUPPORTED` for v1 rather than ship a half-working handler. Document the cut in the task close-out and ship the other four handlers.
-
-#### 4. Endpoint
-
-```
-POST /api/events/undo/{event_id}
-```
-
-Response shape:
+`GET /api/transactions/activity` currently returns:
 
 ```json
 {
-  "outcome": "success" | "drift" | "not_found" | "already_compensated" | "unsupported" | "failed",
-  "message": "Undid: Deleted transaction: Whole Foods on 2026-03-15",
-  "compensatingEventId": "0192…" | null,
-  "forwardEventId": "0192…"
+  "baseCurrency": "USD",
+  "period": "last-3-months",
+  "category": null,
+  "month": null,
+  "transactions": [...],
+  "totalCount": 24
 }
 ```
 
-HTTP status:
-- `200` on `SUCCESS` and `ALREADY_COMPENSATED` (the latter is a no-op, not an error).
-- `404` on `NOT_FOUND`.
-- `409` on `DRIFT` (state conflict).
-- `422` on `UNSUPPORTED` and `FAILED`.
+Add a `summary` field:
 
-#### 5. Frontend toast
-
-A new shared component `app/frontend/src/lib/components/UndoToast.svelte`:
-
-- Position: fixed, bottom-right, above content, `z-index: 50`.
-- Width: `min(360px, calc(100vw - 2rem))`.
-- Visual: white card, soft border, subtle shadow, finance-first copy.
-- Single visible toast — newer toasts replace older ones.
-- Auto-dismiss after 8000ms.
-- Two slots: a `summary` line and an `Undo` button.
-- After clicking Undo: show inline loading state on the button. On success, replace toast with "Restored" for 2s. On drift / failure, replace with the error message and a Dismiss button (no auto-dismiss).
-- Cancellable: another mutation that arrives before auto-dismiss replaces the current toast.
-
-A small global store `app/frontend/src/lib/undo-toast.ts`:
-
-```ts
-type ToastState = {
-  eventId: string;
-  summary: string;
-  status: 'idle' | 'undoing' | 'restored' | 'error';
-  message?: string;
-};
-export const undoToast = writable<ToastState | null>(null);
-export function showUndoToast(eventId: string, summary: string) { ... }
-export async function triggerUndo(refresh: () => Promise<void>) { ... }
+```json
+{
+  "summary": {
+    "periodTotal": -1800.00,
+    "periodCount": 5,
+    "averageAmount": -360.00,
+    "priorPeriodTotal": -1200.00,
+    "priorPeriodCount": 4,
+    "deltaAmount": -600.00,
+    "deltaPercent": 50.0,
+    "rollingMonthlyAverage": -1350.00,
+    "rollingMonths": 6,
+    "topTransaction": {
+      "date": "2026-03-22",
+      "payee": "Costco",
+      "amount": -420.00,
+      "accountLabel": "Wells Fargo Credit Card"
+    }
+  }
+}
 ```
 
-The store owns the auto-dismiss timer and the lifecycle. `triggerUndo` accepts a callback so the caller (e.g., the transactions page) can refresh its own data after a successful undo. The store does not know about the register.
+Field definitions:
 
-Mount the toast component once in the root layout (`+layout.svelte`) so it appears across routes.
+| Field | Type | Description |
+|---|---|---|
+| `periodTotal` | `number` | Sum of `amount` across all transactions in the filtered period. Negative for net spending. |
+| `periodCount` | `int` | Transaction count in the filtered period. Equal to `len(transactions)` from the existing response. |
+| `averageAmount` | `number` | `periodTotal / periodCount`. Returns `0` if `periodCount` is `0`. |
+| `priorPeriodTotal` | `number \| null` | Same filter applied to the immediately prior period of equal length. `null` when no prior data exists or when the prior window has zero matching transactions and zero matching transactions in any preceding window (i.e., this is genuinely the first period of activity). |
+| `priorPeriodCount` | `int \| null` | Transaction count in the prior period. `null` when `priorPeriodTotal` is `null`. |
+| `deltaAmount` | `number \| null` | `periodTotal - priorPeriodTotal`. `null` when `priorPeriodTotal` is `null`. |
+| `deltaPercent` | `number \| null` | Percentage change from prior period. `null` when `priorPeriodTotal` is `null` or when `priorPeriodTotal` is exactly `0` (division by zero). |
+| `rollingMonthlyAverage` | `number \| null` | Average monthly total for the filter over the 6 calendar months immediately preceding the current period's start month. `null` when fewer than 2 of those 6 months have any matching transactions (insufficient history). |
+| `rollingMonths` | `int` | How many of the 6 preceding months had at least one matching transaction. Always `0..6`. |
+| `topTransaction` | `object \| null` | The transaction in the filtered period with the largest absolute amount. `null` when `periodCount == 0`. Object shape: `{ date, payee, amount, accountLabel }` — same field names as items in the existing `transactions` array. |
 
-#### 6. Helper extraction
+**Prior period definition:**
 
-`_locate_header` and `_find_transaction_block` are currently private helpers in `main.py`. Move them to a new module `app/backend/services/journal_block_service.py` so the undo service and the existing transaction-action endpoints can share them. Update `main.py` to import from the new module. This is a pure refactor — no behavior change. Verify by running the existing tests.
+| Active filter | Current period | Prior period |
+|---|---|---|
+| `month=YYYY-MM` | The named calendar month | The preceding calendar month |
+| `period=this-month` | 1st of current month → today | 1st of prior month → same day-of-month in prior month (or last day of prior month if shorter) |
+| `period=last-30` | (today - 29 days) → today | (today - 59 days) → (today - 30 days) |
+| `period=last-3-months` (default) | First day of (current_month - 2) → today | First day of (current_month - 5) → last day of (current_month - 3) |
 
-> **Why this matters.** The undo service needs the same block-finding logic. Duplicating it would split the source of truth on what counts as a "transaction block." Extracting now keeps both call sites correct.
+When a category filter is also active, it applies identically to both the current and prior windows. The category never mixes filtered and unfiltered data.
+
+**Rolling average definition:**
+
+The 6-month window is the 6 calendar months immediately preceding the current period's *start month*. For each of those 6 months, sum the amounts of all transactions matching the active category filter (or all transactions if no category filter). The rolling monthly average is `total_across_window / count_of_months_with_data`. If fewer than 2 of the 6 months have any matching transactions, return `null` (insufficient history). `rollingMonths` reports how many of the 6 had data.
+
+Examples:
+- Current filter: `month=2026-03`, no category. The window is 2025-09 through 2026-02. Sum monthly totals for those 6 months. Average across months that had any transactions.
+- Current filter: `period=this-month` evaluated on 2026-04-09. The current period start month is 2026-04. The window is 2025-10 through 2026-03.
+- Current filter: `period=last-3-months` evaluated on 2026-04-09. The current period covers 2026-02 through 2026-04, so the start month is 2026-02. The window is 2025-08 through 2026-01.
+
+**Computation approach:**
+
+The existing function iterates `load_transactions(config)` once and applies time + category filters inline. Refactor to a single pass that:
+
+1. Walks every transaction once.
+2. For each transaction, applies the category filter (the same `posting.account == category or posting.account.startswith(category + ":")` test that exists today).
+3. If the transaction passes the category filter, place it in a per-month bucket keyed by `transaction.posted_on.strftime("%Y-%m")`.
+
+After the pass, derive:
+
+- The current-period bucket: union of months that fall within the resolved current period date range. Sum amounts for `periodTotal`, count for `periodCount`. Build the `transactions` array from this bucket (preserving the existing field shape and date-descending sort). Find `max(abs(amount))` for `topTransaction`.
+- The prior-period bucket: union of months that fall within the resolved prior period date range. Sum and count.
+- The rolling 6-month window: the 6 calendar months preceding the current period's start month. For each month in the window, sum the bucketed transactions. Average across months with data.
+
+Edge case: when the user specifies `month=YYYY-MM`, the "current period" is exactly that one month. The prior period is the immediately preceding calendar month. The rolling window is the 6 months before the named month.
+
+Edge case: a transaction whose `posted_on` falls within a partial-month current-period window (e.g., `period=this-month` evaluated mid-month) is bucketed into its calendar month, but only counted toward the current-period totals if it also falls within the resolved date range. The bucketing is by calendar month, but the period-membership filter is by date range.
+
+#### 2. Context-aware activity hero title
+
+The activity hero today renders:
+
+```svelte
+<div class="hero-copy">
+  <p class="eyebrow">Transactions</p>
+  <h2 class="page-title">All activity</h2>
+  <p class="subtitle">Cross-account transactions matching your filters.</p>
+</div>
+```
+
+Replace with conditional copy based on the active filter:
+
+| Filter state | Eyebrow | Title | Subtitle |
+|---|---|---|---|
+| Category active (any period) | "Spending category" or "Income category" (derived from the leading account segment) | `categoryDisplayName` (e.g., "Shopping / Groceries") | Period label (e.g., "March 2026" if month filter, otherwise "Last 30 days" / "Last 3 months" / "This month") |
+| Month active (no category) | "Activity" | `monthTitle(month)` (e.g., "March 2026") | "All cross-account spending and income" |
+| Period preset only (no category, no month) | "Transactions" | "All activity" | Period label |
+
+`categoryDisplayName` is derived the same way the existing filter chip does it: `category.split(':').slice(1).join(' / ')`. The eyebrow uses the leading segment of the category account: `Expenses:*` → "Spending category", `Income:*` → "Income category", anything else → "Activity".
+
+The view toggle button group on the right side of the hero is unchanged.
+
+#### 3. Explanation header card
+
+A new `view-card` rendered between the existing `activity-filters-card` and the existing `activity-list-card`. Visible whenever `activityResult?.summary` is non-null and `activityResult.totalCount > 0`. Hidden in empty / loading / error states (the existing handling for those states is unchanged).
+
+Markup outline:
+
+```svelte
+{#if activityResult?.summary && activityResult.totalCount > 0}
+  <section class="view-card explanation-header-card">
+    <p class="explanation-period">
+      {formatCurrency(summary.periodTotal)} across {summary.periodCount} {nounForCount(summary.periodCount)}
+      {#if !mixedSigns}
+        · avg {formatCurrency(summary.averageAmount)} each
+      {/if}
+    </p>
+
+    {#if summary.priorPeriodTotal !== null}
+      <p class="explanation-prior">
+        {priorPeriodLabel}: {formatCurrency(summary.priorPeriodTotal)} across {summary.priorPeriodCount}
+        {#if summary.deltaPercent !== null}
+          — <span class={deltaClass}>{deltaArrow}{Math.abs(summary.deltaPercent).toFixed(0)}%</span> from prior period
+        {/if}
+      </p>
+    {/if}
+
+    {#if summary.rollingMonthlyAverage !== null}
+      <p class="explanation-baseline">
+        6-month average: {formatCurrency(summary.rollingMonthlyAverage)}/mo
+      </p>
+    {/if}
+
+    {#if summary.topTransaction && summary.periodCount > 1}
+      <p class="explanation-top">
+        Biggest: {formatCurrency(Math.abs(summary.topTransaction.amount))}
+        at {truncatePayee(summary.topTransaction.payee, 30)}
+        on {activityShortDate(summary.topTransaction.date)}
+      </p>
+    {/if}
+  </section>
+{/if}
+```
+
+Conditional rendering rules:
+
+| Line | Show when |
+|---|---|
+| Period summary | Always (when the header is visible at all) |
+| Prior comparison | `summary.priorPeriodTotal !== null` |
+| Delta percent within prior comparison | `summary.deltaPercent !== null` |
+| Rolling baseline | `summary.rollingMonthlyAverage !== null` |
+| Top transaction | `summary.topTransaction !== null && summary.periodCount > 1` |
+
+Helpers:
+
+- `nounForCount(count)`: returns `"purchase" / "purchases"` when the active category filter is an `Expenses:*` account, `"deposit" / "deposits"` when it's `Income:*`, and `"transaction" / "transactions"` otherwise. Singular when `count === 1`.
+- `mixedSigns`: `true` when the filtered transactions contain both positive and negative amounts. When `true`, the "avg X each" clause is omitted (the average across mixed signs is misleading).
+- `priorPeriodLabel`: `"Last month"` when the current period is exactly one calendar month, otherwise `"Prior period"`.
+- `deltaArrow`: `"↑"` when spending increased (more negative for expenses, more positive for income), `"↓"` when decreased, omitted when zero.
+- `deltaClass`: applies the existing `negative` class for unfavorable deltas (more spending, less income), `positive` for favorable deltas, neutral otherwise. Reuses the same coloring convention as the rest of the app.
+
+Styling:
+
+- Card uses the existing `.view-card` base. Add `.explanation-header-card` for spacing tweaks (slightly tighter padding than the activity hero, no section heading, lines stacked vertically with 0.4rem gap).
+- The period summary line is the headline (~1.05rem, semibold).
+- The prior comparison line is body text (~0.95rem, normal weight).
+- The rolling baseline line is muted (`var(--muted-foreground)`, ~0.88rem).
+- The "Biggest" line is muted (~0.88rem) — it's a subtle nudge, not an alert.
+
+#### 4. Activity row layout change
+
+Current row template (`+page.svelte:889-904`):
+
+```svelte
+<div class="activity-row">
+  <div class="activity-main">
+    <p class="activity-payee">{tx.payee}</p>
+    <p class="activity-meta">
+      {activityShortDate(tx.date)} · {tx.accountLabel} · {tx.category}
+    </p>
+  </div>
+  <div class="activity-side">
+    <p class:positive={tx.amount > 0} class:negative={tx.amount < 0} class="activity-amount">
+      {formatCurrency(tx.amount, { signed: true })}
+    </p>
+    {#if tx.isUnknown}
+      <a class="pill warn" href="/unknowns">Needs review</a>
+    {/if}
+  </div>
+</div>
+```
+
+New row template:
+
+```svelte
+<div class="activity-row">
+  <div class="activity-main">
+    <div class="activity-headline">
+      {#if !activityCategory}
+        <span class="activity-category-pill">{tx.category}</span>
+      {/if}
+      <span class="activity-payee" title={tx.payee}>{truncatePayee(tx.payee)}</span>
+    </div>
+    <p class="activity-meta">
+      {activityShortDate(tx.date)} · {tx.accountLabel}
+    </p>
+  </div>
+  <div class="activity-side">
+    <p class:positive={tx.amount > 0} class:negative={tx.amount < 0} class="activity-amount">
+      {formatCurrency(tx.amount, { signed: true })}
+    </p>
+    {#if tx.isUnknown}
+      <a class="pill warn" href="/unknowns">Needs review</a>
+    {/if}
+  </div>
+</div>
+```
+
+Changes:
+
+- Category extracted from the meta line and promoted into a new `activity-headline` flex container alongside the payee.
+- Category pill hidden when `activityCategory` is set (the explanation header already shows the category).
+- Payee wrapped in a `<span>` (not `<p>`) to sit inline with the category pill. Truncated via `truncatePayee()` with `title={tx.payee}` for the full text on hover.
+- Meta line simplified to date + account (category removed).
+
+Helper:
+
+```ts
+function truncatePayee(payee: string, max = 50): string {
+  if (payee.length <= max) return payee;
+  return payee.slice(0, max - 1) + '…';
+}
+```
+
+Styling additions to the existing `<style>` block:
+
+```css
+.activity-headline {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  min-width: 0;
+}
+
+.activity-category-pill {
+  flex-shrink: 0;
+  font-size: 0.76rem;
+  font-weight: 600;
+  padding: 0.18rem 0.55rem;
+  border-radius: 999px;
+  background: rgba(15, 95, 136, 0.08);
+  color: var(--brand-strong);
+  white-space: nowrap;
+}
+
+.activity-payee {
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+@media (max-width: 720px) {
+  .activity-headline {
+    flex-wrap: wrap;
+  }
+}
+```
+
+The existing `.activity-payee` class is repurposed from a block `<p>` selector to an inline `<span>` selector. The `font-weight: 700` rule from the existing `.activity-payee` block is preserved.
 
 ### Outputs
 
-- New file `app/backend/services/undo_service.py` (~300 lines).
-- New file `app/backend/services/journal_block_service.py` (~40 lines).
-- New endpoint registered in `main.py`.
-- Five mutation endpoints return `eventId` (status toggle included for forward compat).
-- New frontend store `app/frontend/src/lib/undo-toast.ts`.
-- New frontend component `app/frontend/src/lib/components/UndoToast.svelte`.
-- Toast mounted in `+layout.svelte`.
-- Four mutation call sites in `transactions/+page.svelte` call `showUndoToast` with the event id and summary: delete, recategorize, unmatch, create. Status toggle does **not** call `showUndoToast`.
-- New backend test file `app/backend/tests/test_undo_service.py`.
-- Compensating events appear in `events.jsonl` linked via `compensates`.
+- `GET /api/transactions/activity` returns a `summary` block alongside the existing fields.
+- Activity hero title and eyebrow reflect the active filter.
+- Explanation header card appears between filters and the transaction list whenever a filter has results.
+- Activity rows show the category as a leading pill before the payee (when no category filter is active).
+- Long payees are truncated with `…` and reveal the full text on hover.
+- Existing dashboard drilldown URLs continue to work without modification.
 
 ## System Invariants
 
-- Journals remain canonical state. Undo writes journals; the event log records the change. No undo path skips the journal write.
-- The compensating event is written **after** the journal mutation succeeds, never before. If the journal write fails, no compensating event exists, and the user sees a clear failure message.
-- Undo always backs up the affected journal (`backup_file(path, "undo")`) before writing.
-- A forward event can be compensated at most once. The idempotency check is authoritative.
-- Drift detection is preventative for undo: if any ref'd file has changed since the forward event, undo refuses without modifying anything.
-- The event log itself is never rewritten or trimmed by undo. Compensating events are appended.
-- An undone event remains in the log — undo creates a new linked event, it does not delete the forward event.
-- Git snapshots are unaffected. They continue to capture the workspace independently.
-- The toast is purely UI. Undo correctness does not depend on whether the toast was shown or dismissed.
+- The summary is computed in a single pass alongside the existing transaction filtering. No additional `load_transactions()` calls and no second walk over the full transaction list.
+- The existing `transactions` array, `totalCount`, `period`, `category`, and `month` fields are unchanged in shape and meaning. The summary is purely additive.
+- Prior-period and rolling-average computations apply the same category filter as the main query. They never mix filtered and unfiltered data.
+- Payee truncation is display-only. The underlying `tx.payee` value is never modified. Full payee is always accessible via the `title` attribute.
+- The per-account register view (`activityMode === false`) is untouched. All changes are scoped to the cross-account activity view.
+- The explanation header reads exclusively from the `summary` block returned by the backend. The frontend does no client-side aggregation, comparison math, or rolling-average computation.
+- The dashboard's existing drilldown link patterns (`?view=activity&category=...`, `?view=activity&month=...`) are unchanged. No frontend or backend code outside the activity view is touched.
 
 ## States
 
-- **Default**: no toast visible. Register behaves normally.
-- **Toast visible**: bottom-right card with summary + Undo. Auto-dismiss timer running.
-- **Toast undoing**: Undo button shows loading state, disabled. Other actions still work.
-- **Toast restored**: success card with "Restored" message, 2s, then dismiss.
-- **Toast drift error**: red-tinted card with "External edit detected — undo unavailable" + Dismiss. No auto-dismiss.
-- **Toast failed**: red-tinted card with the failure message + Dismiss. No auto-dismiss.
-- **Toast already-compensated**: shouldn't be reachable from the toast (the toast disappears after one click), but if it does occur (e.g., double-click), display "Already undone" briefly and dismiss.
-- **Toast not-found**: same handling as failed.
+- **No filter active (default `last-3-months`)**: hero title is "All activity" with the period as subtitle. Explanation header shows period summary and (when there is enough history) prior-period comparison and rolling baseline. Top transaction line appears when `periodCount > 1`. Category pills visible on every row.
+- **Category filter active**: hero shows the category display name with the period or month as subtitle. Explanation header shows full comparison (current vs prior vs rolling). Category pills hidden on rows.
+- **Month filter active (no category)**: hero shows the month title. Explanation header compares the named month against the immediately preceding month with a 6-month rolling baseline.
+- **Category + month active**: hero shows the category name with the month name as subtitle. Explanation header shows category-scoped comparison for that month vs the preceding month, with the category-scoped rolling average.
+- **Empty result (no transactions match filters)**: existing empty state ("No transactions match these filters") is preserved unchanged. Explanation header is not shown.
+- **Insufficient history (first month, new category)**: explanation header is shown but the prior-comparison line and the rolling-baseline line are conditionally hidden. The header gracefully degrades to just the period summary line.
+- **Loading**: existing loading state is unchanged. Explanation header is not rendered until data arrives.
+- **Backend response missing `summary` (forward compat)**: explanation header is not rendered. The transaction list and existing filter behavior continue to work.
 
 ## Edge Cases
 
-- **Mutation A, mutation B, click Undo.** Toast shows for B (the latest). Undo undoes B. The event for A is still in the log but no longer surfaced via toast. This is intentional — multi-step undo is in the deferred history list.
-- **Two mutations on the same transaction in quick succession.** A: re-categorize. B: delete. Click Undo. Undoes B (restores deleted block with the post-recategorize state). Correct.
-- **Drift between mutation and undo (external edit).** Drift check fails. Toast shows "External edit detected — refusing to undo." User can resolve manually.
-- **Drift between mutation and undo (in-app edit).** Same as above — the in-app edit changes the file hash. The user sees the message and can undo the more recent action first (via the deferred history list — for v1, they cannot, and the message tells them why).
-- **Server restart between mutation and undo.** The event log persists across restarts. The toast does not. After a restart there is no toast affordance — the user must wait for the history list (deferred). Acceptable for v1.
-- **Undo of `transaction.unmatched.v1` when the imported transaction has been re-categorized since.** Drift check triggers. Refuses cleanly.
-- **Undo of `manual_entry.created.v1` when the entry was matched after creation.** The match would change the file hash → drift refuses. Correct: the user should undo the match first, then the creation.
-- **Undo of `transaction.deleted.v1` when a new transaction with the same header was added.** The handler catches this in step 5 of (a) and refuses with "Transaction was re-created — refusing to duplicate."
-- **Event id from a different workspace.** The event log is workspace-scoped. The `_require_workspace_config()` call resolves the active workspace; the lookup happens in that workspace's `events.jsonl`. An id from a different workspace returns `NOT_FOUND`.
-- **Malformed event id.** Treated as not found. No 500.
-- **`events.jsonl` corruption mid-line.** Already handled by the event log scanner — it skips bad lines and continues.
+- **First month of any data**: prior period is `null`, rolling average is `null`. Explanation header shows only the period summary line.
+- **Single transaction in period**: top transaction line is hidden (`periodCount <= 1` — it would just repeat the only transaction). The period summary line still shows "$X across 1 transaction · avg $X each".
+- **Mixed income and expense in a category filter**: the filter `Expenses:*` excludes income postings, so this case mainly arises with custom categories or hierarchical filters that span both. When the filtered transactions contain both positive and negative amounts, omit the "avg X each" clause from the period summary line. The "Biggest" line still shows the largest by absolute value.
+- **Very long category names** (e.g., `Expenses:Shopping:Groceries:Bulk Warehouse`): no truncation. Render the full display name in the hero title and let the layout wrap naturally.
+- **All-zero prior period**: `priorPeriodTotal === 0` and `priorPeriodCount === 0`. `deltaPercent` is `null` (division by zero). Show "Last month: $0 across 0 transactions" without a percentage. Don't show "↑∞%" or similar.
+- **Rolling window with only 1 month of data**: `rollingMonthlyAverage` is `null`, line hidden. Threshold is 2 months minimum.
+- **Period preset windows that span calendar boundaries**: e.g., `last-30` evaluated on April 9 covers March 11 → April 9. The bucket-by-calendar-month approach still works because the period-membership check is by date range, while the rolling baseline and prior-period computation use calendar month boundaries.
+- **Transaction with zero amount**: included in the transaction count, contributes zero to totals. Cannot be the top transaction (since `abs(0) === 0`). If the period contains only zero-amount transactions, `topTransaction` is `null`.
+- **Payee with multibyte characters**: `truncatePayee` slices on character index, which is correct for most European text but could split surrogate pairs. Acceptable for v1 — bank descriptors are ASCII in practice.
+- **Category filter that matches no transactions**: empty result state, no explanation header. Existing handling.
+- **Month filter for a future month**: empty result state, no explanation header. Existing handling.
 
 ## Failure Behavior
 
-- **Journal write fails mid-undo**: backup file remains. No compensating event written. User sees "Undo failed" with a generic message and the backup path in logs.
-- **Compensating event emission fails**: the journal mutation has already succeeded. Log the error but return `SUCCESS` to the caller. The undo is durable in the journal; the link is best-effort. (The next undo of the same event would be blocked by the journal hash mismatch, which is the correct behavior.)
-- **Drift detected**: refuse, no journal change, no event.
-- **Backup creation fails**: refuse, no journal change.
-- **Frontend network error during undo**: toast shows "Undo failed — try again." Does not retry automatically.
+- If the activity endpoint returns an error, the existing error state applies. The explanation header has no independent failure mode — it renders from the same response payload.
+- If the backend response is well-formed but `summary` is missing or `null`, the frontend simply does not render the explanation header. The transaction list and filters continue to work. This is the forward-compatibility path during deployment.
+- If `summary.topTransaction` is malformed (missing fields), the top-transaction line is omitted. The other summary lines are unaffected.
+- Backend errors during summary computation must not poison the rest of the response. If the rolling-average computation raises (e.g., on a corrupt date), log the error and return the rest of the summary with `rollingMonthlyAverage: null` and `rollingMonths: 0`. The user still sees period totals and prior comparison.
 
 ## Regression Risks
 
-- **Mutation endpoints now return `eventId`.** This is an additive payload change. Existing frontend callers that ignore unknown fields are unaffected. Verify by reading every existing call site of the five endpoints (delete, recategorize, unmatch, toggle-status, create).
-- **`_locate_header` / `_find_transaction_block` move from `main.py` to `journal_block_service.py`.** Pure refactor. The existing transaction action tests must continue to pass without modification.
-- **Toast component mounted in root layout.** Must not interfere with existing dialogs (manual resolution modal, confirm-delete, confirm-unmatch). Z-index hierarchy: confirm dialogs at 31, toast at 50. The toast appears above dialogs intentionally (e.g., if a confirm dialog is open and another tab triggers an action — unlikely, but the layering is well-defined).
-- **Undo of unmatch is the most complex handler.** If it ships broken, it can corrupt the archive ↔ main journal link. Mitigation: comprehensive tests for the unmatch undo path that verify both files end up in the exact pre-unmatch state, byte-for-byte where possible. If the tests are flaky, mark unsupported and ship the other four.
-- **Manual entry undo relies on header reconstruction from `date + payee`.** If a future change adds a clearing flag to manual entries, the reconstruction breaks. Mitigation: add an explicit assertion in the handler that the located header line starts with `f"{date} {payee}"` and contains no `*`/`!` flag. If this becomes a real concern, enrich the payload in a follow-up.
-- **Hash check is per-file, not per-transaction.** Any unrelated edit to the journal (e.g., the user adds a new transaction in another tool) blocks undo. This is a deliberate trust choice — false-positive refusals are safer than false-positive applies. Document in the failure-message copy.
+- **Activity endpoint response shape**: the `summary` field is additive. Existing frontend code that reads `transactions`, `totalCount`, `period`, `category`, `month`, or `baseCurrency` is unaffected. Verify by running the activity view with the new backend and confirming filters, presets, and the existing transaction list still render.
+- **`build_activity_view` refactor to single-pass bucketing**: the existing transaction filter logic is preserved exactly, just reorganized. Existing tests that verify filter correctness must continue to pass without modification. Add new tests for the summary fields, but don't modify existing tests of filter behavior.
+- **Dashboard drilldown links**: the existing `?view=activity&category=...` and `?view=activity&month=...` URLs from `+page.svelte` (dashboard) and the cash-flow drilldown in the same file are unchanged. The activity view reads the same query params and applies the same filters. Verify by clicking through both link types after the change.
+- **Filter chip display text**: the category filter chip currently renders `activityResult?.transactions[0]?.category` as fallback display text. This still works — the `transactions` array shape is unchanged.
+- **Date grouping in the transaction list**: `activityGroups` groups by date for the existing list. The row template change is inside the per-day group loop, so date grouping is unaffected. Verify the day headers ("Apr 7", "Mar 28", etc.) still render correctly.
+- **The existing `.activity-payee` CSS rule**: the selector now applies to a `<span>` instead of a `<p>`. Verify the inherited line-height and weight render correctly. The `text-overflow: ellipsis` rule requires `min-width: 0` on the parent flex container, which is added to `.activity-headline`.
+- **Performance**: the single-pass bucketing adds one map insertion per transaction. For typical workspaces (hundreds to low thousands of transactions), the overhead is negligible. No additional I/O.
+- **Truncation of payees that contain meaningful suffixes**: e.g., `"COSTCO WHSE #0071 BOISE ID"` (28 chars) is unchanged. `"PURCHASE AUTHORIZED ON 03/19 WINCO FOODS #1 ..."` (truncated) loses information about the merchant number, but the full text is available on hover. For users who need the full text without hovering, the per-account register view (which has different layout) is unchanged.
+- **Mobile layout**: the new `.activity-headline` flex container wraps on narrow screens via the existing `@media (max-width: 720px)` breakpoint. Verify rows still render legibly at 400px width.
 
 ## Acceptance Criteria
 
-- After delete, re-categorize, unmatch, and create mutations, a toast appears in the bottom-right with a summary and Undo button.
-- After a status toggle, **no toast appears**. The clearing indicator remains the only undo affordance for that action.
-- Clicking Undo within 8s reverses the mutation and reloads the register.
-- Undo of delete restores the exact transaction block at the correct date-ordered position.
-- Undo of re-categorize restores the previous category account on the correct transaction.
-- Undo of toggle-status (via the backend handler — exercised in tests, not surfaced in the UI) restores the previous clearing flag.
-- Undo of create deletes the created manual entry (and only that entry).
-- Undo of unmatch restores both the imported transaction's match tags and the archived manual entry, byte-equivalent to the pre-unmatch state.
-- Compensating events appear in `events.jsonl` with `compensates` linking to the forward event.
-- A second undo of the same event returns `ALREADY_COMPENSATED` and does not modify the journal.
-- An undo where the journal hash has changed since the forward event returns `DRIFT` and modifies nothing.
-- Toast auto-dismisses after 8s. A new mutation replaces the visible toast.
-- The four other mutating endpoints (`import.applied.v1`, `unknowns.applied.v1`, `rule.history_applied.v1`, `transfer_resolution.applied.v1`) are not affected by this change. They continue to work and emit events as before. They simply have no toast affordance.
+- `GET /api/transactions/activity?category=Expenses:Shopping:Groceries` returns a `summary` block with the period total, prior-period comparison, 6-month rolling average, transaction count, average amount, and top transaction.
+- `GET /api/transactions/activity?month=2026-03` returns a summary scoped to March 2026 with February 2026 as the prior period.
+- `GET /api/transactions/activity?period=this-month` returns a summary with this-month vs prior-month comparison.
+- `GET /api/transactions/activity?period=last-3-months` (default) returns a summary that compares the last 3 months against the preceding 3 months and computes rolling averages from the 6 months before the current window.
+- When the prior period has no data, `priorPeriodTotal` is `null` and the prior-comparison line in the explanation header is hidden.
+- When fewer than 2 of the 6 preceding months have data, `rollingMonthlyAverage` is `null` and the rolling-baseline line is hidden.
+- When the active filter has only one transaction, the top-transaction line is hidden but the period summary line still renders.
+- The activity hero title shows the category display name when a category filter is active, the month title when a month filter is active (without category), and "All activity" otherwise.
+- The explanation header card appears between the filters card and the transaction list whenever the filtered period has at least one transaction.
+- Activity rows show the category as a leading pill before the payee.
+- When a category filter is active, the per-row category pill is hidden.
+- Payees longer than 50 characters are truncated with `…` and the full text appears on hover via the `title` attribute.
+- The meta line in each row is simplified to date + account (category is removed from it).
+- The per-account register view (`activityMode === false`) renders identically to before this task.
+- Existing dashboard drilldown URLs continue to work without modification.
 - `uv run pytest -q` passes in `app/backend`.
 - `pnpm check` passes in `app/frontend`.
 
 ## Proposed Sequence
 
-1. **Refactor: extract `journal_block_service.py`.** Move `_locate_header`, `_find_transaction_block`, and the preceding-blank-line cleanup helper into the new module. Update `main.py` imports. Run existing tests — no failures expected. Behavior-preserving step.
+1. **Backend: refactor `build_activity_view` to single-pass bucketing.** Walk transactions once. For each transaction that passes the category filter, place it in a `dict[str, list[Transaction]]` keyed by `YYYY-MM`. Preserve the existing filter logic exactly. After the loop, derive the existing `transactions` array from the buckets that fall in the current period date range. Verify all existing activity tests still pass without modification. This step is a behavior-preserving refactor.
 
-2. **Backend: mutation endpoints return `eventId`.** Capture the return value of `emit_event` in each of the five wired endpoints. Add `eventId` to the response dict. Update existing tests if any assert on the response shape (none should — they're at the service layer).
+2. **Backend: compute `periodTotal`, `periodCount`, `averageAmount`, `topTransaction` from the current-period buckets.** Add to the response payload. Add tests covering: empty period (top is null), single-transaction period (top hidden by frontend), multi-transaction period, mixed-sign period.
 
-3. **Backend: build `undo_service.py` skeleton.** `UndoOutcome`, `UndoResult`, `UndoFailedError`, `undo_event()` with the lookup, idempotency, dispatch, and drift-check skeleton. Empty handler stubs. Test: `UNSUPPORTED` for unknown event types, `NOT_FOUND` for missing ids, `ALREADY_COMPENSATED` when a `compensates` link already exists, `DRIFT` when file hash differs.
+3. **Backend: implement prior-period date-range resolution and compute `priorPeriodTotal`, `priorPeriodCount`, `deltaAmount`, `deltaPercent`.** One helper function takes the current period filter state and returns the prior period's date range. Apply the same category filter to the bucketed data within the prior range. Add tests for each filter type (month, this-month, last-30, last-3-months) and the null cases (no prior data, zero prior total → null delta percent).
 
-4. **Backend: handler for `transaction.deleted.v1`.** Implement and test: round-trip (delete + undo restores the block exactly), failure on duplicate, drift refusal.
+4. **Backend: implement 6-month rolling average computation.** Iterate the 6 calendar months preceding the current period's start month. For each month, sum the bucket. Average across months that have any matching transactions. Return `null` when fewer than 2 months have data. Set `rollingMonths` to the count of months with data. Add tests for each filter type with sparse history, full history, and exactly-1-month-of-data history.
 
-5. **Backend: handler for `transaction.recategorized.v1`.** Implement and test: round-trip restores the previous account, failure when destination changed.
+5. **Backend: assemble the `summary` dict and return it from `build_activity_view`.** Verify the response shape with the FastAPI test client. Confirm the existing fields are unchanged.
 
-6. **Backend: handler for `transaction.status_toggled.v1`.** Implement and test: round-trip, failure when current status differs.
+6. **Frontend: update the `ActivityResult` TypeScript type with an optional `summary` field.** Add a new `ActivitySummary` type matching the backend shape. Make the field optional so the page degrades gracefully if the backend response lacks it.
 
-7. **Backend: handler for `manual_entry.created.v1`.** Implement and test: round-trip removes the created entry, failure when ambiguous (e.g., two entries with same date + payee + amount + accounts → fall back to refusal).
+7. **Frontend: context-aware activity hero.** Compute the hero title and subtitle from `activityCategory`, `activityMonth`, and `activityPeriod`. Replace the static "All activity" / "Cross-account transactions matching your filters." copy with the conditional copy defined in §2 of Logic. Verify the hero renders correctly for each filter combination.
 
-8. **Backend: handler for `transaction.unmatched.v1`.** Implement and test: full round-trip from match → unmatch → undo unmatch, verifying main journal and archive both return to their pre-unmatch state. If tests reveal edge cases that can't be cleanly handled, mark unsupported with a clear comment and skip the handler.
+8. **Frontend: explanation header component.** Add the new `view-card` between the existing `activity-filters-card` and the existing `activity-list-card`. Wire the conditional rendering rules from §3 of Logic. Add the helper functions (`nounForCount`, `truncatePayee` for the top-transaction payee, `priorPeriodLabel`, `deltaArrow`, `deltaClass`). Add the corresponding CSS to the existing `<style>` block.
 
-9. **Backend: register `POST /api/events/undo/{event_id}` in `main.py`.** Wire response codes from `UndoOutcome`. Integration test: end-to-end via the FastAPI test client with a real workspace fixture.
+9. **Frontend: activity row layout change.** Update the row template to extract the category into a leading `.activity-category-pill` and wrap the payee in an inline `<span>` with `title={tx.payee}` and a `truncatePayee(tx.payee)` call. Hide the category pill when `activityCategory` is set. Update the meta line to omit the category. Add the corresponding CSS for `.activity-headline`, `.activity-category-pill`, and the updated `.activity-payee` selector.
 
-10. **Frontend: toast store and component.** Build `undo-toast.ts` and `UndoToast.svelte`. Mount in `+layout.svelte`. Visual sanity check.
+10. **Manual verification.** Click through from a dashboard category trend → activity view. Confirm the hero shows the category name, the explanation header shows comparison data, and rows show category pills hidden because the filter is active. Click a cash flow month from the dashboard → confirm the month-titled hero, monthly comparison, and visible category pills (no category filter active). Open the activity view directly with no filters → confirm "All activity" title, period summary, visible category pills. Open the activity view with a deliberately sparse category → confirm graceful degradation when prior or rolling data is unavailable.
 
-11. **Frontend: wire the four mutation call sites.** Update callers in `transactions/+page.svelte` to capture `eventId` from the response and call `showUndoToast` for delete, recategorize, unmatch, and create. Manual entry create is in the "Add transaction" panel. **Do not** call `showUndoToast` after `toggleClearingStatus` — leave that flow exactly as it is today.
-
-12. **Manual verification.** Make a manual entry, see the toast, click Undo, verify it's gone. Delete a transaction, undo, verify it's back. Re-categorize, undo, verify. Toggle status — **verify no toast appears** and the clearing indicator still cycles correctly. Match a manual entry via unknowns review, then unmatch via the row menu, then undo the unmatch — verify both files are exact.
-
-13. **Run full test suite.** `uv run pytest -q` and `pnpm check`. Update `ROADMAP.md` to mark 5d shipped and 5e active, then mark 5e shipped on close. Update `DECISIONS.md` only if the implementation forced a decision the original §12 didn't capture.
+11. **Run the full test suite.** `uv run pytest -q` in `app/backend` and `pnpm check` in `app/frontend`. Update `ROADMAP.md` to mark 7a shipped on close.
 
 ## Definition of Done
 
-- Five mutation actions are undoable from the toast within 8s of the action.
-- Undo preserves canonical journal state. Compensating events link forward and backward.
-- Drift refusal works correctly: the user gets a clear message, no journal changes, no compensating event.
-- Idempotency works: a forward event can be compensated at most once.
-- Backups are created on every undo path. Failures leave the backup in place.
-- All five handlers have unit tests covering happy path + drift + per-handler failure modes.
-- Integration test exercises the endpoint via the FastAPI test client.
-- Frontend toast appears in the bottom-right, dismisses after 8s, replaces older toasts, shows clear errors.
-- All existing tests pass. New tests cover the undo service.
-- Feature 5 (event-sourced undo) is shipped end-to-end.
+- Every filtered activity view leads with an explanation header that answers "how does this compare?" before showing the transaction list.
+- Category is visually primary in activity rows. Raw bank payees are truncated with full text on hover.
+- The summary block is computed in a single pass alongside the existing transaction filter — no additional backend queries or file I/O.
+- Graceful degradation when history is sparse (first month, new category, single transaction).
+- No regressions in the existing activity view behavior, filter chips, period presets, dashboard drilldown links, or the per-account register view.
+- All existing tests continue to pass. New tests cover the summary computation for each filter type and edge case.
+- The explanation header reads exclusively from the backend `summary` block. The frontend performs no comparison math.
 
 ## UX Notes
 
-- Toast copy is finance-first, never technical. The four toast-eligible actions:
-  - "Removed Whole Foods on Mar 15 · Undo"
-  - "Reset category on Whole Foods · Undo"
-  - "Added Whole Foods · Undo"
-  - "Undid match for Whole Foods · Undo"
-- **No toast** for status toggle. The clearing indicator's color change is the entire feedback.
-- After a successful undo: "Restored" with a brief checkmark, then dismiss.
-- After a drift refusal: "We can't undo this — the file changed since the action. Open the journal to investigate." (No technical hash language.)
-- After a generic failure: "Couldn't undo — please try again."
-- Toast button: text-only "Undo", with focus ring for keyboard users. The toast itself is not focusable; only the button is.
-- Toast is dismissable by pressing Escape when focused, or by clicking outside (no — clicking outside would conflict with normal interaction; just rely on auto-dismiss or the Dismiss button on error states).
-- Color: neutral white card for normal/restored states, light red tint for drift/failed states. Never use the brand color for error states.
+- The explanation header is read-only context. No buttons, no toggles, no expand/collapse, no interactivity.
+- Copy is finance-first: "5 purchases", "avg $360 each", "6-month average". No technical terms, no "transactions" when "purchases" is more accurate.
+- The category pill uses a small, neutral, brand-tinted background — visually distinct but not loud. Color-coding by category type (expense vs income) is optional polish for a future task; neutral is fine for v1.
+- Payee truncation at 50 chars is the default. On narrow viewports, the CSS `text-overflow: ellipsis` can take over with a smaller effective limit driven by the available column width. JS truncation is the floor, CSS is the ceiling.
+- The "Biggest" line is a subtle nudge: it surfaces the one transaction worth investigating. Muted text, no icon, no color. It must not feel like an alert.
+- Delta arrows (↑ ↓) follow the existing app convention: spending increases use the negative class (red-tinted), spending decreases use the positive class (green-tinted), income follows the inverse.
+- The header lines stack vertically with tight spacing — this is a compact context strip, not a hero.
+- When the category filter is active, the redundant per-row category pill is hidden. This is a small but important touch: it removes visual noise that would otherwise repeat the same category 24 times in a 24-row list.
 
 ## Out of Scope
 
-- Persistent operation history list / panel (deferred).
-- Undo for bulk events (`import.*`, `unknowns.*`, `rule.*`, `transfer_resolution.*`).
-- Redo. The compensating event is final.
-- Keyboard shortcut (`Cmd+Z`).
-- Multi-toast stack.
-- Toast for non-mutating actions.
-- Per-transaction partial undo of bulk events.
-- Cross-workspace undo.
-- Surfacing `journal.external_edit_detected.v1` events in the UI (separate trust feature).
+- Dashboard "Where should I go next?" panel (Feature 7b).
+- Health signal charts: runway gauge, net worth sparkline, recurring vs discretionary bar (Feature 7b).
+- Notable-signal generation: largest transaction this week, category spikes, spending streaks (Feature 7b).
+- Loose-ends aggregator panel on the dashboard (Feature 7b).
+- Sidebar copy rewrites, hero CTA fallthrough, /rules loading-state fix, mobile nav drawer, cash flow zero-row hygiene (Feature 7c).
+- Sort toggle (amount vs date) in the activity list — defer to future polish.
+- Per-account register changes — this task is scoped to the cross-account activity view only.
+- Color-coding category pills by category type — neutral pills for v1.
+- Payee alias suggestions or a "clean up this payee" affordance from the activity view.
+- Goals, targets, or budgets — deferred per roadmap.
+- GenAI trend analysis — deferred.
+- Investment tracking (401(k), HSA) — out of scope.
+- Bulk-edit or multi-select on the activity list.
+- Drilldown from a row in the activity view into a per-transaction detail page.
