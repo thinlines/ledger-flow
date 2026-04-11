@@ -42,15 +42,15 @@
 
 <DialogPrimitive.Root bind:open onOpenChange={handleOpenChange}>
   <DialogPrimitive.Portal>
-    <DialogPrimitive.Overlay class="create-account-modal-backdrop" />
+    <DialogPrimitive.Overlay class="fixed inset-0 z-30 bg-black/35" />
 
     <DialogPrimitive.Content
-      class="create-account-modal"
+      class="fixed top-1/2 left-1/2 z-40 w-[620px] max-w-[calc(100vw-2rem)] max-h-[calc(100vh-2rem)] -translate-x-1/2 -translate-y-1/2 overflow-auto rounded-2xl border border-line bg-white p-4 shadow-card"
       aria-labelledby="create-account-title"
       aria-describedby="create-account-description"
       onOpenAutoFocus={handleOpenAutoFocus}
     >
-      <h3 id="create-account-title">{title}</h3>
+      <h3 id="create-account-title" class="mx-0 mt-0.5 mb-3">{title}</h3>
       <p id="create-account-description" class="muted">{description}</p>
 
       <div class="field">
@@ -82,14 +82,14 @@
           placeholder="Optional account note"
           on:keydown={handleEnterKey}
         />
-        <p class="muted small">Optional. Saved to `10-accounts.dat` as `; description: ...`.</p>
+        <p class="muted">Optional. Saved to `10-accounts.dat` as `; description: ...`.</p>
       </div>
 
       {#if error}
         <p class="error-text">{error}</p>
       {/if}
 
-      <div class="modal-actions">
+      <div class="flex flex-wrap gap-2.5">
         <button class="btn" type="button" on:click={onClose}>Cancel</button>
         <button
           class="btn btn-primary"
@@ -103,38 +103,3 @@
     </DialogPrimitive.Content>
   </DialogPrimitive.Portal>
 </DialogPrimitive.Root>
-
-<style>
-  h3 {
-    margin: 0.1rem 0 0.8rem;
-  }
-
-  :global(.create-account-modal-backdrop) {
-    position: fixed;
-    inset: 0;
-    background: rgba(10, 20, 30, 0.35);
-    z-index: 30;
-  }
-
-  :global(.create-account-modal) {
-    width: min(620px, calc(100vw - 2rem));
-    max-height: calc(100vh - 2rem);
-    background: #fff;
-    border: 1px solid var(--line);
-    border-radius: 14px;
-    box-shadow: var(--shadow);
-    padding: 1rem;
-    position: fixed;
-    top: 50%;
-    left: 50%;
-    transform: translate(-50%, -50%);
-    overflow: auto;
-    z-index: 31;
-  }
-
-  .modal-actions {
-    display: flex;
-    gap: 0.6rem;
-    flex-wrap: wrap;
-  }
-</style>
