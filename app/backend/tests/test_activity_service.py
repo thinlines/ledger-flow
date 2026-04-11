@@ -223,6 +223,28 @@ def test_opening_balances_excluded(tmp_path: Path) -> None:
     assert "Opening balance" not in payees
 
 
+def test_archived_manual_entries_excluded(tmp_path: Path) -> None:
+    config = _make_config(tmp_path / "workspace")
+    _write_journal(config)
+    (config.journal_dir / "archived-manual.journal").write_text(
+        """
+; Ledger Flow archived manual entries.
+
+2026/03/05 Archived Manual Entry
+    ; match-id: c7312d43-3dec-4912-8a4f-f061827a7acf
+    ; :manual:
+    Expenses:Food:Groceries  $483.00
+    Assets:Bank:Checking
+""".strip() + "\n",
+        encoding="utf-8",
+    )
+
+    result = build_activity_view(config, today=date(2026, 3, 9))
+
+    payees = {tx["payee"] for tx in result["transactions"]}
+    assert "Archived Manual Entry" not in payees
+
+
 def test_transaction_row_shape(tmp_path: Path) -> None:
     config = _make_config(tmp_path / "workspace")
     _write_journal(config)

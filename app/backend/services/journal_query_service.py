@@ -7,6 +7,7 @@ import glob
 from pathlib import Path
 import re
 
+from .archive_service import ARCHIVED_MANUAL_JOURNAL_NAME
 from .commodity_service import CommodityMismatchError, commodity_label, parse_amount
 from .config_service import AppConfig
 from .header_parser import HEADER_RE, TransactionStatus, parse_header
@@ -178,6 +179,11 @@ def load_transactions(config: AppConfig) -> list[ParsedTransaction]:
     transactions: list[ParsedTransaction] = []
     for journal_path in sorted(config.journal_dir.glob("*.journal")):
         if not journal_path.exists():
+            continue
+        # archived-manual.journal is a sidecar that holds matched manual entries
+        # for undo. Loading it duplicates each matched transaction next to its
+        # imported counterpart in the register.
+        if journal_path.name == ARCHIVED_MANUAL_JOURNAL_NAME:
             continue
         text = "\n".join(_expand_journal_lines(journal_path))
         for lines in _split_transactions(text):

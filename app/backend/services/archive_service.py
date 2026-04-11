@@ -15,6 +15,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+ARCHIVED_MANUAL_JOURNAL_NAME = "archived-manual.journal"
+
 _ARCHIVE_HEADER = (
     "; Ledger Flow archived manual entries.\n"
     "; Do NOT include this file in main.journal — it duplicates transactions by design.\n"
