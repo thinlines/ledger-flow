@@ -465,53 +465,55 @@
   });
 </script>
 
-<section class="setup-shell">
-  <aside class="view-card setup-sidebar">
+<section
+  class="grid items-start gap-4 grid-cols-[minmax(250px,300px)_minmax(0,1fr)] max-desktop:grid-cols-1"
+>
+  <aside class="view-card grid sticky top-4 gap-4 max-desktop:static">
     <p class="eyebrow">Workspace Setup</p>
     <h2 class="page-title">Set up Ledger Flow one step at a time</h2>
     <p class="subtitle">{sidebarCopy(state, currentStepId)}</p>
 
-    <section class="sidebar-progress">
+    <section class="grid gap-3">
       {#each sidebarSteps as step}
         <article
-          class="sidebar-step"
+          class="sidebar-step grid items-start gap-3 grid-cols-[auto_minmax(0,1fr)]"
           class:complete={step.status === 'complete'}
           class:current={step.status === 'current'}
           class:pending={step.status === 'pending'}
           aria-current={step.status === 'current' ? 'step' : undefined}
         >
-          <p class="step-number">{step.status === 'complete' ? '✓' : step.number}</p>
-          <div class="step-copy">
-            <div class="step-row">
-              <p class="step-label">{step.label}</p>
+          <p class="step-number m-0 grid place-items-center font-display text-sm">{step.status === 'complete' ? '✓' : step.number}</p>
+          <div class="grid gap-1.5">
+            <div class="flex items-center justify-between gap-3">
+              <p class="m-0 font-bold">{step.label}</p>
               {#if step.status === 'current'}
                 <span class="step-badge">Current</span>
               {:else if step.status === 'complete'}
                 <span class="step-badge complete">Done</span>
               {/if}
             </div>
-            <p class="step-detail">{step.detail}</p>
+            <p class="step-detail m-0 text-sm text-muted-foreground">{step.detail}</p>
           </div>
         </article>
       {/each}
     </section>
 
-    <p class="sidebar-note">Storage and bookkeeping details stay hidden unless you explicitly open them.</p>
+    <p class="m-0 text-sm text-muted-foreground">Storage and bookkeeping details stay hidden unless you explicitly open them.</p>
   </aside>
 
-  <div class="setup-main">
+  <div class="grid gap-4">
     {#if error}
-      <section class="view-card error-card">
+      <section class="view-card border-bad/20">
         <p class="error-text">{error}</p>
       </section>
     {/if}
 
     {#if currentStepId === 'workspace'}
-      <section class="view-card active-step-card">
-        <div class="step-head">
+      <section class="active-step-card view-card">
+        <div class="flex items-start justify-between gap-4 max-tablet:flex-col">
           <div>
             <p class="eyebrow">Step 1</p>
-            <h3>{showExisting ? 'Use an existing workspace' : 'Create your workspace'}</h3>
+            <h3 class="mx-0 mt-0.5 mb-2.5 font-display text-xl">{showExisting ? 'Use an existing workspace' : 'Create your workspace'}</h3>
             <p class="muted">
               {#if showExisting}
                 Choose the folder for a workspace that Ledger Flow already uses.
@@ -528,18 +530,18 @@
             <input id="existingWorkspacePath" bind:value={workspacePath} />
           </div>
 
-          <div class="actions">
+          <div class="flex flex-wrap items-center gap-2.5">
             <button class="btn btn-primary" disabled={loading} on:click={selectExisting}>
               {loading ? 'Selecting...' : 'Select Workspace'}
             </button>
           </div>
-          <p class="secondary-note">Choose the workspace folder itself, not a subfolder inside it.</p>
+          <p class="m-0 text-muted-foreground">Choose the workspace folder itself, not a subfolder inside it.</p>
 
-          <div class="choice-links">
-            <button class="inline-link" type="button" on:click={openCreateWorkspace}>Create a new workspace instead</button>
+          <div class="flex flex-wrap gap-y-3.5 gap-x-5">
+            <button class="text-link cursor-pointer" type="button" on:click={openCreateWorkspace}>Create a new workspace instead</button>
           </div>
         {:else}
-          <div class="field-grid">
+          <div class="grid grid-cols-2 gap-3.5 max-tablet:grid-cols-1">
             <div class="field">
               <label for="workspaceName">Workspace Name</label>
               <input id="workspaceName" bind:value={workspaceName} />
@@ -551,8 +553,8 @@
             </div>
           </div>
 
-          <details class="advanced-panel" bind:open={showWorkspaceAdvanced}>
-            <summary>Advanced workspace settings</summary>
+          <details class="mt-4" bind:open={showWorkspaceAdvanced}>
+            <summary class="cursor-pointer font-bold text-brand-strong">Advanced workspace settings</summary>
             <div class="field">
               <label for="newWorkspacePath">Workspace Path</label>
               <input id="newWorkspacePath" bind:value={workspacePath} />
@@ -563,26 +565,26 @@
             </div>
           </details>
 
-          <div class="actions">
+          <div class="flex flex-wrap items-center gap-2.5">
             <button class="btn btn-primary" disabled={loading} on:click={bootstrap}>
               {loading ? 'Creating...' : 'Create Workspace'}
             </button>
           </div>
-          <p class="secondary-note">You can add the actual accounts you want to track after the workspace exists.</p>
+          <p class="m-0 text-muted-foreground">You can add the actual accounts you want to track after the workspace exists.</p>
 
-          <div class="choice-links">
-            <button class="inline-link" type="button" on:click={openExisting}>Use an existing workspace instead</button>
+          <div class="flex flex-wrap gap-y-3.5 gap-x-5">
+            <button class="text-link cursor-pointer" type="button" on:click={openExisting}>Use an existing workspace instead</button>
           </div>
         {/if}
       </section>
     {/if}
 
     {#if currentStepId === 'accounts' && state?.initialized}
-      <section class="view-card active-step-card">
-        <div class="step-head">
+      <section class="active-step-card view-card">
+        <div class="flex items-start justify-between gap-4 max-tablet:flex-col">
           <div>
             <p class="eyebrow">Step 2</p>
-            <h3>{accountEditorOpen ? accountEditorTitle : 'Add your first account'}</h3>
+            <h3 class="mx-0 mt-0.5 mb-2.5 font-display text-xl">{accountEditorOpen ? accountEditorTitle : 'Add your first account'}</h3>
             <p class="muted">
               {#if accountEditorOpen}
                 Pick the institution, then say whether the first account is something you own or something you owe.
@@ -594,18 +596,18 @@
         </div>
 
         {#if accountEditorOpen}
-          <section class="kind-panel">
-            <p class="selection-label">What are you tracking?</p>
-            <div class="kind-choice-grid">
+          <section class="grid gap-2.5">
+            <p class="m-0 text-xs font-bold uppercase tracking-wider text-muted-foreground">What are you tracking?</p>
+            <div class="grid grid-cols-2 gap-3 max-tablet:grid-cols-1">
               {#each BALANCE_SHEET_KIND_OPTIONS as kindOption}
                 <button
                   class:active={accountDraft.kind === kindOption.value}
-                  class="kind-choice"
+                  class="kind-choice grid gap-1 cursor-pointer text-left"
                   type="button"
                   on:click={() => setAccountKind(kindOption.value)}
                 >
-                  <span class="kind-choice-label">{kindOption.label}</span>
-                  <span class="kind-choice-note">{accountKindHelp(kindOption.value)}</span>
+                  <span class="font-display text-brand-strong">{kindOption.label}</span>
+                  <span class="text-sm leading-snug text-muted-foreground">{accountKindHelp(kindOption.value)}</span>
                 </button>
               {/each}
             </div>
@@ -619,10 +621,10 @@
                 <option value={template.id}>{template.displayName}</option>
               {/each}
             </select>
-            <p class="muted small">The institution controls the parser. Asset vs liability is set above.</p>
+            <p class="muted text-sm">The institution controls the parser. Asset vs liability is set above.</p>
           </div>
 
-          <div class="field-grid">
+          <div class="grid grid-cols-2 gap-3.5 max-tablet:grid-cols-1">
             <div class="field">
               <label for="displayName">Account Name</label>
               <input
@@ -651,10 +653,10 @@
                 <option value={option.value}>{option.label}</option>
               {/each}
             </select>
-            <p class="muted small">{subtypeHelperText()}</p>
+            <p class="muted text-sm">{subtypeHelperText()}</p>
           </div>
 
-          <div class="field-grid">
+          <div class="grid grid-cols-2 gap-3.5 max-tablet:grid-cols-1">
             <div class="field">
               <label for="openingBalance">Opening balance</label>
               <input
@@ -675,10 +677,10 @@
             </div>
           </div>
 
-          <p class="secondary-note">{openingBalanceHint(accountDraft.kind)}</p>
+          <p class="m-0 text-muted-foreground">{openingBalanceHint(accountDraft.kind)}</p>
 
-          <details class="advanced-panel" bind:open={showAccountAdvanced}>
-            <summary>Advanced account settings</summary>
+          <details class="mt-4" bind:open={showAccountAdvanced}>
+            <summary class="cursor-pointer font-bold text-brand-strong">Advanced account settings</summary>
             <div class="field">
               <label for="ledgerAccount">Advanced account name</label>
               <input
@@ -688,12 +690,12 @@
                 on:input={(e) => updateAccountDraft({ ledgerAccount: (e.currentTarget as HTMLInputElement).value }, true)}
               />
             </div>
-            <p class="muted small">Accounting name in use: {effectiveLedgerAccount(accountDraft) || 'Choose an institution and account name first'}</p>
+            <p class="muted text-sm">Accounting name in use: {effectiveLedgerAccount(accountDraft) || 'Choose an institution and account name first'}</p>
           </details>
 
-          <div class="selection-summary">
-            <p class="selection-label">What this adds to Accounts</p>
-            <p class="selection-value">
+          <div class="rounded-2xl border border-card-edge bg-white/72 px-4 py-3.5">
+            <p class="m-0 text-xs font-bold uppercase tracking-wider text-muted-foreground">What this adds to Accounts</p>
+            <p class="mx-0 mt-1 mb-1.5 font-display text-base text-brand-strong">
               {accountDraft.displayName.trim() || 'Fill in the account details to continue'}
               {#if accountDraft.displayName.trim()}
                 {` · ${draftSubtypePreview}`}
@@ -702,7 +704,7 @@
             <p class="muted">Save this once, then import the first statement from the next step.</p>
           </div>
 
-          <div class="actions">
+          <div class="flex flex-wrap items-center gap-2.5">
             <button class="btn btn-primary" disabled={loading || accountDraftInvalid} on:click={saveAccount}>
               {loading ? 'Saving...' : accountEditorAction}
             </button>
@@ -710,20 +712,20 @@
           </div>
 
           {#if accountDraftInvalid}
-            <p class="secondary-note">Choose an institution and account name before saving.</p>
+            <p class="m-0 text-muted-foreground">Choose an institution and account name before saving.</p>
           {/if}
         {:else}
-          <section class="quick-start-panel">
-            <p class="selection-label">Quick start</p>
+          <section class="grid gap-3.5">
+            <p class="m-0 text-xs font-bold uppercase tracking-wider text-muted-foreground">Quick start</p>
             <p class="muted">Pick a supported institution to prefill the form. You will choose asset vs liability on the next screen.</p>
 
-            <div class="chips">
+            <div class="chips flex flex-wrap gap-2">
               {#each state.institutionTemplates.slice(0, 6) as template}
                 <button type="button" on:click={() => startNewAccount(template.id)}>Add {template.displayName}</button>
               {/each}
             </div>
 
-            <div class="actions">
+            <div class="flex flex-wrap items-center gap-2.5">
               <button class="btn btn-primary" type="button" on:click={() => startNewAccount()}>Choose institution</button>
             </div>
           </section>
@@ -732,11 +734,11 @@
     {/if}
 
     {#if currentStepId === 'import' && state?.initialized}
-      <section class="view-card active-step-card">
-        <div class="step-head">
+      <section class="active-step-card view-card">
+        <div class="flex items-start justify-between gap-4 max-tablet:flex-col">
           <div>
             <p class="eyebrow">Step 3</p>
-            <h3>Import your first statement</h3>
+            <h3 class="mx-0 mt-0.5 mb-2.5 font-display text-xl">Import your first statement</h3>
             <p class="muted">Stay in setup for this first statement. Preview first, then apply when the result looks right.</p>
           </div>
           <span class="pill">{state.importAccounts.length} {pluralize(state.importAccounts.length, 'account')} ready</span>
@@ -747,32 +749,32 @@
     {/if}
 
     {#if currentStepId === 'finish' && state?.initialized && finishAction}
-      <section class="view-card active-step-card">
-        <div class="step-head">
+      <section class="active-step-card view-card">
+        <div class="flex items-start justify-between gap-4 max-tablet:flex-col">
           <div>
             <p class="eyebrow">Step 4</p>
-            <h3>{state.setup.needsReview ? 'Review what still needs attention' : 'Setup is complete'}</h3>
+            <h3 class="mx-0 mt-0.5 mb-2.5 font-display text-xl">{state.setup.needsReview ? 'Review what still needs attention' : 'Setup is complete'}</h3>
             <p class="muted">{finishAction.secondary}</p>
           </div>
           <span class={`pill ${state.setup.needsReview ? 'warn' : 'ok'}`}>{state.setup.needsReview ? 'Review next' : 'Ready'}</span>
         </div>
 
-        <div class="metric-grid">
-          <article class="metric-card">
-            <strong>{state.importAccounts.length}</strong>
-            <span>Accounts ready</span>
+        <div class="grid grid-cols-3 gap-3 max-tablet:grid-cols-1">
+          <article class="grid gap-0.5 rounded-2xl border border-line bg-white/78 p-3.5">
+            <strong class="font-display text-xl">{state.importAccounts.length}</strong>
+            <span class="text-sm text-muted-foreground">Accounts ready</span>
           </article>
-          <article class="metric-card">
-            <strong>{lastAppliedSummary?.appendedTxnCount ?? (state.setup.hasImportedActivity ? 'Imported' : 'Pending')}</strong>
-            <span>First import</span>
+          <article class="grid gap-0.5 rounded-2xl border border-line bg-white/78 p-3.5">
+            <strong class="font-display text-xl">{lastAppliedSummary?.appendedTxnCount ?? (state.setup.hasImportedActivity ? 'Imported' : 'Pending')}</strong>
+            <span class="text-sm text-muted-foreground">First import</span>
           </article>
-          <article class="metric-card">
-            <strong>{state.setup.needsReview ? (lastAppliedSummary?.unknownCount ?? 'Open') : 'Clear'}</strong>
-            <span>Review queue</span>
+          <article class="grid gap-0.5 rounded-2xl border border-line bg-white/78 p-3.5">
+            <strong class="font-display text-xl">{state.setup.needsReview ? (lastAppliedSummary?.unknownCount ?? 'Open') : 'Clear'}</strong>
+            <span class="text-sm text-muted-foreground">Review queue</span>
           </article>
         </div>
 
-        <div class="actions">
+        <div class="flex flex-wrap items-center gap-2.5">
           <a class="btn btn-primary" href={finishAction.href}>{finishAction.label}</a>
           {#if state.setup.needsReview}
             <a class="btn" href="/">Open Overview</a>
@@ -781,9 +783,9 @@
           {/if}
         </div>
 
-        <div class="choice-links">
-          <a class="inline-link" href="/accounts">Manage accounts</a>
-          <a class="inline-link" href="/import">Open full import workspace</a>
+        <div class="flex flex-wrap gap-y-3.5 gap-x-5">
+          <a class="text-link" href="/accounts">Manage accounts</a>
+          <a class="text-link" href="/import">Open full import workspace</a>
         </div>
       </section>
     {/if}
@@ -791,35 +793,8 @@
 </section>
 
 <style>
-  h3 {
-    margin: 0.1rem 0 0.6rem;
-  }
-
-  .setup-shell {
-    display: grid;
-    grid-template-columns: minmax(250px, 300px) minmax(0, 1fr);
-    gap: 1rem;
-    align-items: start;
-  }
-
-  .setup-sidebar {
-    position: sticky;
-    top: 1rem;
-    display: grid;
-    gap: 1rem;
-  }
-
-  .sidebar-progress {
-    display: grid;
-    gap: 0.7rem;
-  }
-
   .sidebar-step {
     position: relative;
-    display: grid;
-    grid-template-columns: auto minmax(0, 1fr);
-    gap: 0.75rem;
-    align-items: start;
     border: 1px solid var(--line);
     border-radius: 14px;
     padding: 0.85rem;
@@ -851,17 +826,7 @@
     transform: translateX(2px);
   }
 
-  .step-number,
-  .step-label,
-  .step-detail {
-    margin: 0;
-  }
-
   .step-number {
-    display: grid;
-    place-items: center;
-    font-family: 'Space Grotesk', sans-serif;
-    font-size: 0.86rem;
     color: var(--muted-foreground);
     min-width: 2.3rem;
     min-height: 2.3rem;
@@ -883,33 +848,8 @@
     background: rgba(243, 250, 245, 0.95);
   }
 
-  .step-label {
-    font-weight: 700;
-  }
-
-  .sidebar-step.current .step-label {
-    color: var(--foreground);
-  }
-
-  .step-detail {
-    color: var(--muted-foreground);
-    font-size: 0.92rem;
-  }
-
   .sidebar-step.current .step-detail {
     color: color-mix(in srgb, var(--foreground) 72%, var(--muted-foreground));
-  }
-
-  .step-copy {
-    display: grid;
-    gap: 0.35rem;
-  }
-
-  .step-row {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 0.75rem;
   }
 
   .step-badge {
@@ -929,73 +869,17 @@
     color: color-mix(in srgb, #2c7a4a 72%, var(--muted-foreground));
   }
 
-  .sidebar-note {
-    margin: 0;
-    color: var(--muted-foreground);
-    font-size: 0.92rem;
-  }
-
-  .setup-main {
-    display: grid;
-    gap: 1rem;
-  }
-
   .active-step-card {
     background: linear-gradient(145deg, #fffef8, #f8fcff);
     border-color: rgba(12, 103, 138, 0.18);
   }
 
-  .error-card {
-    border-color: rgba(183, 58, 58, 0.18);
-  }
-
-  .step-head {
-    display: flex;
-    justify-content: space-between;
-    gap: 1rem;
-    align-items: flex-start;
-  }
-
-  .actions {
-    display: flex;
-    gap: 0.6rem;
-    flex-wrap: wrap;
-    align-items: center;
-  }
-
-  .choice-links {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.9rem 1.2rem;
-  }
-
-  .field-grid {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 0.9rem;
-  }
-
-  .kind-panel {
-    display: grid;
-    gap: 0.7rem;
-  }
-
-  .kind-choice-grid {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 0.8rem;
-  }
-
   .kind-choice {
-    display: grid;
-    gap: 0.3rem;
     padding: 0.95rem 1rem;
     border-radius: 1rem;
     border: 1px solid rgba(10, 61, 89, 0.12);
     background: rgba(255, 255, 255, 0.82);
     color: inherit;
-    text-align: left;
-    cursor: pointer;
     transition:
       border-color 120ms ease,
       box-shadow 120ms ease,
@@ -1008,28 +892,6 @@
     transform: translateY(-1px);
   }
 
-  .kind-choice-label {
-    font-family: 'Space Grotesk', sans-serif;
-    color: var(--brand-strong);
-  }
-
-  .kind-choice-note {
-    color: var(--muted-foreground);
-    font-size: 0.92rem;
-    line-height: 1.45;
-  }
-
-  .quick-start-panel {
-    display: grid;
-    gap: 0.9rem;
-  }
-
-  .chips {
-    display: flex;
-    gap: 0.5rem;
-    flex-wrap: wrap;
-  }
-
   .chips button {
     border: 1px solid var(--line);
     border-radius: 999px;
@@ -1037,122 +899,5 @@
     padding: 0.3rem 0.65rem;
     cursor: pointer;
     font-weight: 600;
-  }
-
-  .status-row,
-  .secondary-note {
-    margin: 0;
-  }
-
-  .status-row {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.45rem;
-    margin-top: 0.8rem;
-  }
-
-  .selection-label,
-  .small {
-    font-size: 0.86rem;
-  }
-
-  .selection-label {
-    font-size: 0.82rem;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-    color: var(--muted-foreground);
-    font-weight: 700;
-    margin: 0;
-  }
-
-  .selection-summary {
-    border: 1px solid rgba(10, 61, 89, 0.08);
-    border-radius: 1rem;
-    background: rgba(255, 255, 255, 0.72);
-    padding: 0.9rem 1rem;
-  }
-
-  .selection-value {
-    margin: 0.2rem 0 0.3rem;
-    font-family: 'Space Grotesk', sans-serif;
-    font-size: 1.1rem;
-    color: var(--brand-strong);
-  }
-
-  .inline-link {
-    border: 0;
-    background: transparent;
-    padding: 0;
-    color: var(--brand-strong);
-    font: inherit;
-    font-weight: 700;
-    cursor: pointer;
-    text-decoration: none;
-  }
-
-  .inline-link:hover {
-    text-decoration: underline;
-  }
-
-  .secondary-note {
-    margin: 0;
-    color: var(--muted-foreground);
-  }
-
-  .advanced-panel {
-    margin-top: 1rem;
-  }
-
-  .advanced-panel summary {
-    cursor: pointer;
-    font-weight: 700;
-    color: var(--brand-strong);
-  }
-
-  .metric-grid {
-    display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 0.8rem;
-  }
-
-  .metric-card {
-    border: 1px solid var(--line);
-    border-radius: 14px;
-    background: rgba(255, 255, 255, 0.78);
-    padding: 0.9rem;
-    display: grid;
-    gap: 0.2rem;
-  }
-
-  .metric-card strong {
-    font-family: 'Space Grotesk', sans-serif;
-    font-size: 1.2rem;
-  }
-
-  .metric-card span {
-    color: var(--muted-foreground);
-    font-size: 0.9rem;
-  }
-
-  @media (max-width: 1100px) {
-    .setup-shell {
-      grid-template-columns: 1fr;
-    }
-
-    .setup-sidebar {
-      position: static;
-    }
-  }
-
-  @media (max-width: 720px) {
-    .kind-choice-grid,
-    .field-grid,
-    .metric-grid {
-      grid-template-columns: 1fr;
-    }
-
-    .step-head {
-      flex-direction: column;
-    }
   }
 </style>
