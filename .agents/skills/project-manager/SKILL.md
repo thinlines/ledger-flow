@@ -234,7 +234,12 @@ When writing concurrent tasks:
 No ordering constraints — merge in any order.
 ```
 
-5. **Clean up after completion.** When all concurrent tasks are shipped and merged, archive the `tasks/` directory contents and update `ROADMAP.md`. The next iteration returns to single-task mode unless the next delivery focus also supports concurrency.
+5. **Clean up after completion.** When all concurrent tasks are shipped and merged:
+   - Delete the task files and `MANIFEST.md` from `tasks/`
+   - Remove the `tasks/` directory
+   - Update `ROADMAP.md` to reflect completed work
+   - The git history preserves the task definitions — no separate archive is needed
+   - The next iteration returns to single-task mode unless the next delivery focus also supports concurrency
 
 ---
 
