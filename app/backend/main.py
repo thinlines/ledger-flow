@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+from datetime import date
 import logging
 from pathlib import Path
 import re
@@ -54,6 +55,10 @@ from services.commodity_service import CommodityMismatchError
 from services.custom_csv_service import inspect_csv_bytes
 from services.activity_service import build_activity_view
 from services.dashboard_service import build_dashboard_overview
+from services.unified_transactions_service import (
+    UnifiedTransactionFilters,
+    build_unified_transactions,
+)
 from services.import_history_service import list_import_history, record_applied_import, undo_import
 from services.import_index import ImportIndex
 from services.import_service import (
@@ -442,6 +447,36 @@ def transactions_register(accountId: str) -> dict:
     config = _require_workspace_config()
     try:
         return build_account_register(config, accountId)
+    except CommodityMismatchError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+
+
+@app.get("/api/transactions")
+def transactions_unified(
+    accounts: str | None = None,
+    categories: str | None = None,
+    period: str | None = None,
+    from_date: str | None = None,
+    to_date: str | None = None,
+    month: str | None = None,
+    status: str | None = None,
+    search: str | None = None,
+) -> dict:
+    config = _require_workspace_config()
+    filters = UnifiedTransactionFilters(
+        accounts=[a.strip() for a in accounts.split(",") if a.strip()] if accounts else [],
+        categories=[c.strip() for c in categories.split(",") if c.strip()] if categories else [],
+        period=period,
+        from_date=date.fromisoformat(from_date) if from_date else None,
+        to_date=date.fromisoformat(to_date) if to_date else None,
+        month=month,
+        status=[s.strip() for s in status.split(",") if s.strip()] if status else None,
+        search=search,
+    )
+    try:
+        return build_unified_transactions(config, filters)
     except CommodityMismatchError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     except ValueError as e:
