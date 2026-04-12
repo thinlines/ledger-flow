@@ -187,12 +187,54 @@ A task is invalid if:
 
 1. Build context — see `context-building.md`
 2. Select next task from current delivery focus (`ROADMAP.md`)
-3. Write implementation-ready task in `TASK.md`
-4. Execute
+3. Write implementation-ready task — see "Task Output Modes" below
+4. Execute (or hand off to `$ship-task` for autonomous execution)
 5. Run existing tests; verify regression risks listed in the task are not triggered (`AGENT_RULES.md` has verification commands)
 6. Evaluate UX and correctness — see `ux-quality-bar.md`
 7. Refine before expanding scope — see `scope-control.md` for cut decisions
-8. When Definition of Done is met, draft the next `TASK.md` before closing the current one
+8. When Definition of Done is met, draft the next task(s) before closing the current one
+
+## Task Output Modes
+
+### Single task (default)
+
+Write to `TASK.md` in the project root. Use this when:
+- There is one clear next task
+- The task is the only active work
+
+### Concurrent tasks
+
+Write to `tasks/<slug>.md` (e.g., `tasks/unified-endpoint.md`, `tasks/search-syntax.md`). Use this when:
+- Multiple tasks from the current delivery focus are independent
+- Independence means: no shared file modifications, no shared API contract changes, no ordering dependency
+
+When writing concurrent tasks:
+
+1. **Assess independence explicitly.** For each task, list the files and modules in scope. If any two tasks share a file, they are not concurrent — sequence them or restructure the split.
+
+2. **Write each task as a standalone spec.** Each file must be self-contained — full TASK.md standard with its own acceptance criteria, invariants, edge cases, and proposed sequence. Do not reference sibling task files for context.
+
+3. **Note merge-order constraints.** If task B builds on task A's output (even though they touch different files), note the dependency in both task files under a `## Dependencies` section.
+
+4. **Include a manifest.** Create `tasks/MANIFEST.md` listing all concurrent tasks with their independence assessment:
+
+```markdown
+# Concurrent Tasks
+
+## Tasks
+- [unified-endpoint.md](unified-endpoint.md) — backend unified transactions API
+- [search-syntax.md](search-syntax.md) — frontend search formula parsing
+
+## Independence Assessment
+- unified-endpoint.md: touches `services/unified_transactions_service.py`, `main.py`, `tests/`
+- search-syntax.md: touches `frontend/src/lib/search.ts`, `frontend/src/routes/transactions/`
+- **No file overlap. Safe for concurrent execution.**
+
+## Merge Order
+No ordering constraints — merge in any order.
+```
+
+5. **Clean up after completion.** When all concurrent tasks are shipped and merged, archive the `tasks/` directory contents and update `ROADMAP.md`. The next iteration returns to single-task mode unless the next delivery focus also supports concurrency.
 
 ---
 

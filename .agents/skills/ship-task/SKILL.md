@@ -1,25 +1,43 @@
 ---
 name: ship-task
-description: "End-to-end task execution pipeline: implement the active TASK.md, verify with QA, review the code, update task status, commit, and report results. Use when the user has an approved TASK.md and wants to execute it with minimal interaction. Assumes the PM and user have already agreed on scope — this skill owns implementation through delivery, not planning."
+description: "End-to-end task execution pipeline: implement the active TASK.md (or concurrent tasks from tasks/), verify with QA, review the code, update task status, commit, and report results. Use when the user has an approved task and wants to execute it with minimal interaction. Assumes the PM and user have already agreed on scope — this skill owns implementation through delivery, not planning. Supports both single-task and multi-task concurrent modes."
 ---
 
 # Ship Task
 
 ## Overview
 
-You are an orchestrator. You do not write code, run tests, or review diffs yourself. You coordinate a pipeline of specialized skills to take an approved TASK.md from "ready" to "shipped on a branch." Your output to the user is a delivery report.
+You are an orchestrator. You do not write code, run tests, or review diffs yourself. You coordinate a pipeline of specialized skills to take approved tasks from "ready" to "shipped on a branch." Your output to the user is a delivery report.
+
+## Modes
+
+### Single-task mode (default)
+
+Triggered when `TASK.md` exists and no `tasks/` directory is present, or when the user invokes with a specific task reference.
+
+### Multi-task concurrent mode
+
+Triggered when a `tasks/` directory contains multiple `.md` task files. Each task runs its own pipeline in a separate worktree, in parallel.
+
+---
 
 ## Preconditions
 
 Before starting, verify:
 
-1. `TASK.md` exists and has acceptance criteria, system invariants, and a definition of done
-2. The task has not already been completed (check for "COMPLETED" status marker)
+1. Task file(s) exist and each has acceptance criteria, system invariants, and a definition of done
+2. No task has a "COMPLETED" status marker
 3. The working tree is clean (`git status` shows no uncommitted changes beyond expected working files)
+
+**Multi-task additional checks:**
+4. Read all task files in `tasks/` and identify file-scope overlap — if two tasks name the same file in their scope, they are not independent
+5. If tasks overlap, stop and report which tasks conflict and on what files — the user or PM must split them differently or sequence them
 
 If any precondition fails, stop and report why. Do not proceed with an incomplete task definition.
 
-## Pipeline
+---
+
+## Single-Task Pipeline
 
 ### Phase 1: Implement
 
@@ -32,57 +50,60 @@ Invoke the `senior-developer` skill in a worktree:
 
 **Gate:** The developer must report that implementation is complete and initial checks pass. If the developer reports blockers or ambiguity that requires user input, stop the pipeline and report the blocker to the user.
 
-### Phase 2: QA Verify
+### Phase 2: QA + Code Review (parallel)
 
-Invoke the `qa-verifier` skill against the implementation branch:
+Invoke `qa-verifier` and `code-reviewer` simultaneously against the implementation branch:
 
+**qa-verifier:**
 - Walk through every acceptance criterion
 - Check system invariants
 - Exercise edge cases
 - Run regression checks
-- Produce a verdict: PASS, PASS WITH FINDINGS, or FAIL
+- Produce verdict: PASS, PASS WITH FINDINGS, or FAIL
 
-**Gate: FAIL → fix loop.** If QA fails:
-1. Send the QA report back to the senior-developer
-2. The developer fixes the issues
-3. Re-run QA
-4. Maximum 2 fix cycles. If still failing after 2 cycles, stop the pipeline and report the QA failures to the user with the developer's assessment of what's blocking.
-
-**Gate: PASS or PASS WITH FINDINGS → proceed to review.**
-
-### Phase 3: Code Review
-
-Invoke the `code-reviewer` skill against the implementation branch:
-
+**code-reviewer:**
 - Review the full diff for correctness, conventions, safety
 - Check scope discipline
-- Produce a verdict: SHIP, SHIP WITH NOTES, or REQUEST CHANGES
+- Produce verdict: SHIP, SHIP WITH NOTES, or REQUEST CHANGES
 
-**Gate: REQUEST CHANGES → fix loop.** If the reviewer requests changes:
-1. Send the review report back to the senior-developer
-2. The developer addresses blocking issues
-3. Re-run QA (regression check only — confirm fixes didn't break passing criteria)
-4. Re-run code review
-5. Maximum 2 fix cycles. If still blocked after 2 cycles, stop the pipeline and report to the user.
+**Gate logic (after both complete):**
 
-**Gate: SHIP or SHIP WITH NOTES → proceed to task update.**
+| QA Verdict | Review Verdict | Action |
+|---|---|---|
+| PASS | SHIP | Proceed to Phase 3 |
+| PASS | SHIP WITH NOTES | Proceed to Phase 3 |
+| PASS WITH FINDINGS | SHIP | Proceed to Phase 3 |
+| PASS WITH FINDINGS | SHIP WITH NOTES | Proceed to Phase 3 |
+| FAIL | any | → fix loop |
+| any | REQUEST CHANGES | → fix loop |
 
-### Phase 4: Update Task Status
+**Fix loop:**
+1. Merge findings from both QA and review into a single remediation brief
+2. Send the combined brief to the senior-developer
+3. The developer addresses all issues in one pass
+4. Re-run both QA and review in parallel (fixes may have introduced new issues)
+5. Maximum 2 fix cycles. If still failing after 2 cycles, stop the pipeline and report to the user with:
+   - The original findings
+   - What was fixed
+   - What remains unresolved
+   - The developer's assessment of what's blocking
 
-Update `TASK.md` to reflect completion:
+### Phase 3: Update Task Status
+
+Update the task file to reflect completion:
 
 - Add a status line at the top: `**Status: COMPLETED — [date]**`
 - If QA had findings or the reviewer had notes, append a `## Delivery Notes` section summarizing them
 - Do not rewrite the task definition — only append status information
 
-### Phase 5: Commit
+### Phase 4: Commit
 
 Invoke the `git-committer` skill:
 
 - Commit the implementation with clean conventional commit messages
 - The task status update goes in a separate commit: `docs: mark [task title] complete`
 
-### Phase 6: Report
+### Phase 5: Report
 
 Produce a delivery report for the user:
 
@@ -100,6 +121,9 @@ Produce a delivery report for the user:
 ### Review Verdict: [SHIP | SHIP WITH NOTES]
 [If notes: brief summary]
 
+### Fix cycles: [0 | 1 | 2]
+[If >0: what was caught and fixed]
+
 ### Branch
 `[branch name]` — ready for review and merge
 
@@ -113,36 +137,122 @@ Produce a delivery report for the user:
 [1-3 concrete steps the user can take to confirm the result]
 ```
 
+---
+
+## Multi-Task Concurrent Pipeline
+
+### Phase 0: Validate independence
+
+For each pair of tasks in `tasks/`:
+- Parse the **Scope > Included** section to extract file paths and modules
+- If any two tasks share a file, module, or API endpoint: flag the conflict
+- Present the independence assessment to the user:
+
+```markdown
+## Task Independence Check
+
+### Independent (can run concurrently)
+- task-4a.md: unified backend endpoint (backend services, tests)
+- task-4c.md: search formula syntax (frontend components)
+
+### Conflicting (must be sequenced)
+- task-4a.md and task-4b.md: both touch transaction_helpers.py
+
+### Recommendation
+Run task-4a and task-4c concurrently. Queue task-4b after task-4a merges.
+```
+
+If all tasks are independent, proceed. If conflicts exist and the user hasn't acknowledged them, stop and report.
+
+### Phase 1: Parallel implementation
+
+For each independent task, spawn a separate pipeline. Each pipeline gets:
+- Its own worktree (isolated branch)
+- Its own task file as the active spec
+- Full access to the codebase (read-only for files outside its scope)
+
+All pipelines run the full single-task pipeline (implement → parallel QA+review → commit) concurrently.
+
+### Phase 2: Collect results
+
+Wait for all pipelines to complete. Produce a combined report:
+
+```markdown
+## Concurrent Delivery Report
+
+### Overview
+[N] tasks executed concurrently. [X] shipped, [Y] blocked.
+
+---
+
+### Task: [Title from task-4a.md]
+**Result:** SHIPPED
+**Branch:** `feat/unified-endpoint`
+**Commits:** [list]
+[QA and review summary]
+
+---
+
+### Task: [Title from task-4c.md]
+**Result:** SHIPPED WITH NOTES
+**Branch:** `feat/search-syntax`
+**Commits:** [list]
+[QA and review summary]
+[Notes]
+
+---
+
+### Merge Order
+[If tasks have dependencies, recommend merge order. Otherwise: "No ordering constraints — merge in any order."]
+
+### Cross-Task Concerns
+[Any issues that span tasks: shared type changes, migration conflicts, test interactions. Empty if none.]
+
+### How to verify
+[Per-task verification steps]
+```
+
+---
+
 ## Failure Modes
 
 ### Pipeline stops early
 
 If the pipeline stops at any phase, report:
-- Which phase failed
+- Which phase failed (and which task, in multi-task mode)
 - The specific blocker
 - What was completed before the failure
 - The branch state (partial work committed or not)
 - What the user needs to decide or provide to unblock
 
-### Ambiguity in TASK.md
+### Ambiguity in task definition
 
-If the developer or QA encounters ambiguity in the task definition:
+If the developer or QA encounters ambiguity:
 - Do not guess. Do not let the developer interpret creatively.
-- Stop the pipeline and report the specific ambiguity to the user.
+- Stop that task's pipeline (other concurrent tasks continue).
+- Report the specific ambiguity to the user.
 - Include the developer's or QA's interpretation and the alternative reading.
 
 ### Scope expansion
 
-If the developer needs to change files outside TASK.md scope to complete the task:
+If the developer needs to change files outside the task scope:
 - Necessary scope expansion (e.g., shared helper extraction called for by the task) is acceptable
 - Unnecessary scope expansion triggers a review finding, not a pipeline stop
 - If the developer believes the task scope is fundamentally wrong, stop and report
+
+### Cross-task conflict (multi-task mode)
+
+If two concurrent tasks produce changes that conflict at merge time:
+- This should have been caught in Phase 0, but if it wasn't:
+- Report which tasks conflict and on what files
+- Do not attempt to merge-resolve — the user decides which takes priority
 
 ## Rules
 
 - You are the orchestrator, not a participant. Do not write code, run tests, or review diffs.
 - Each skill runs with full access to the codebase and tools. You pass context and collect results.
 - Do not skip phases. The pipeline exists because each phase catches different classes of problems.
-- Do not combine QA and code review into one step. Independent verification requires independent perspectives.
+- QA and code review run in parallel — do not sequence them. They check different failure classes and neither depends on the other.
 - Be transparent in the delivery report. Do not hide findings, workarounds, or partial results.
 - The user's time is the most expensive resource. The pipeline exists to minimize it. Only stop for decisions that genuinely require human judgment.
+- In multi-task mode, a failure in one task does not stop other tasks. Each pipeline is independent. Report all results together.
