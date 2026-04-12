@@ -51,6 +51,7 @@ class RegisterEvent:
     header_line: str = ""
     journal_path: str = ""
     match_id: str | None = None
+    notes: str | None = None
     affects_balance: bool = True
     counts_as_transaction: bool = True
 
@@ -788,6 +789,7 @@ def build_account_register(config: AppConfig, account_id: str) -> dict:
                     header_line=transaction.header_line,
                     journal_path=transaction.source_journal,
                     match_id=transaction.metadata.get("match-id") or None,
+                    notes=transaction.metadata.get("notes") or None,
                     counts_as_transaction=not is_generated_opening,
                 )
             )
@@ -846,6 +848,7 @@ def build_account_register(config: AppConfig, account_id: str) -> dict:
                 "headerLine": event.header_line,
                 "journalPath": event.journal_path,
                 "matchId": event.match_id,
+                "notes": event.notes,
             }
         )
         if event.counts_as_transaction and not event.is_opening_balance:

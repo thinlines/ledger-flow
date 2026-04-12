@@ -206,12 +206,19 @@ class DeleteTransactionRequest(BaseModel):
 class RecategorizeTransactionRequest(BaseModel):
     journalPath: str
     headerLine: str
+    newCategory: str | None = None
 
 
 class UnmatchTransactionRequest(BaseModel):
     journalPath: str
     headerLine: str
     matchId: str
+
+
+class UpdateNotesRequest(BaseModel):
+    journalPath: str
+    headerLine: str
+    notes: str
 
 
 class TrackedAccountUpsertRequest(BaseModel):
