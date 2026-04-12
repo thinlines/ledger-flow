@@ -370,3 +370,17 @@ These don't block the plan but need answers when Phase 4 is scoped:
 
 - [`monarch_money_transactions_filter.png`](../monarch_money_transactions_filter.png) — Filter modal: left rail of filter types, search, checkbox tree of categories grouped by parent (Income / Housing / Auto & Transport / …), Cancel/Apply footer. Drives `TransactionsFilterDialog.svelte`.
 - [`monarch_money_transaction_split.png`](../monarch_money_transaction_split.png) — Split transaction dialog: original transaction at top, multiple split rows below with Tags / Goals / Review status / Notes per split, By Amount / By Percent toggle, "Add a split", "Remove all splits", "Split into N transactions" CTA. Reference for the deferred split-editing feature; not built in v1 but informs the row display rules above.
+- **Monarch detail sidebar** (analyzed from screenshot, 2026-04-11) — Right-side sheet showing a single transaction. Features observed:
+  1. **Review status badge** — green "Reviewed" pill at the top with checkmark toggle + visibility (eye) icon. Allows marking a transaction as reviewed/unreviewed.
+  2. **Merchant branding** — merchant logo icon (square, rounded) displayed prominently above the payee name.
+  3. **Amount + account** — amount top-right in large text, account label ("Joint Credit Card") below it with a small icon.
+  4. **Merchant history link** — "View 29 transactions" link below the payee, scopes to all transactions from that merchant.
+  5. **Editable date field** — full date input with calendar picker icon. Shows a secondary "Original Date" line when the date has been edited (original import date preserved).
+  6. **Category combobox** — dropdown showing current category with an icon (e.g., paw icon for "Pets"). "Split" link to the right of the label opens the split-transaction dialog.
+  7. **Goal selector** — dropdown to assign the transaction to a financial goal. Placeholder: "Select goal...".
+  8. **Notes textarea** — free-text field. Placeholder: "Add notes to this transaction...".
+  9. **Tags input** — searchable tag input. Placeholder: "Search tags...".
+  10. **Attachments** — "Add an attachment" link with paperclip icon (receipt photos, documents).
+  11. **Three-dot overflow menu** — top-right, for less-frequent actions.
+  12. **Close button** — X icon, top-right corner.
+  See `plans/monarch-detail-sidebar-features.md` for mapping of each feature to our roadmap status.
