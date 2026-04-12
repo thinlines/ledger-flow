@@ -32,6 +32,7 @@ export type RegisterEntry = {
   headerLine?: string;
   journalPath?: string;
   matchId?: string | null;
+  notes?: string | null;
 };
 
 export type AccountRegister = {

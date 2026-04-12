@@ -2,6 +2,7 @@
   import type { RegisterEntry, ActivityTransaction } from '$lib/transactions/types';
   import { formatCurrency, shortDate } from '$lib/format';
   import { truncatePayee, activityShortDate, CLEARING_TOOLTIPS } from '$lib/transactions/helpers';
+  import ChevronRightIcon from '@lucide/svelte/icons/chevron-right';
 
   export let mode: 'activity' | 'register';
 
@@ -19,7 +20,7 @@
 </script>
 
 {#if mode === 'activity' && transaction}
-  <button class="activity-row" type="button" on:click={() => onRowClick?.()}>
+  <div class="activity-row">
     <div class="grid gap-0.5 min-w-0">
       <div class="flex items-center gap-2 min-w-0 max-tablet:flex-wrap">
         <span
@@ -43,9 +44,12 @@
         <a class="pill warn no-underline" href="/unknowns" on:click|stopPropagation>Needs review</a>
       {/if}
     </div>
-  </button>
+    <button class="row-chevron" type="button" on:click={() => onRowClick?.()} aria-label="View details">
+      <ChevronRightIcon class="size-4" />
+    </button>
+  </div>
 {:else if mode === 'register' && entry}
-  <div class:opening-row={entry.isOpeningBalance} class="register-row" role="button" tabindex="0" on:click={() => onRowClick?.()} on:keydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onRowClick?.(); } }}>
+  <div class:opening-row={entry.isOpeningBalance} class="register-row">
     <div class="register-summary">
       <button
         class="clearing-indicator clearing-{entry.clearingStatus ?? 'unmarked'}"
@@ -83,7 +87,9 @@
         </p>
       </div>
 
-      <span></span>
+      <button class="row-chevron" type="button" on:click|stopPropagation={() => onRowClick?.()} aria-label="View details">
+        <ChevronRightIcon class="size-4" />
+      </button>
     </div>
   </div>
 {/if}
@@ -101,16 +107,10 @@
     background: transparent;
     width: 100%;
     text-align: left;
-    cursor: pointer;
-    transition: background 0.12s;
   }
 
   .activity-row:last-child {
     border-bottom: none;
-  }
-
-  .activity-row:hover {
-    background: rgba(10, 61, 89, 0.03);
   }
 
   @media (max-width: 720px) {
@@ -136,16 +136,10 @@
   .register-row {
     border-bottom: 1px solid rgba(10, 61, 89, 0.08);
     background: rgba(255, 255, 255, 0.35);
-    cursor: pointer;
-    transition: background 0.12s;
   }
 
   .register-row:last-child {
     border-bottom: none;
-  }
-
-  .register-row:hover {
-    background: rgba(244, 249, 255, 0.72);
   }
 
   .opening-row {
@@ -217,5 +211,26 @@
     .register-money {
       text-align: left;
     }
+  }
+
+  /* --- Chevron disclosure button --- */
+  .row-chevron {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.5rem;
+    height: 1.5rem;
+    padding: 0;
+    border: none;
+    border-radius: 0.4rem;
+    background: transparent;
+    color: var(--muted-foreground);
+    cursor: pointer;
+    transition: color 0.12s, background 0.12s;
+  }
+
+  .row-chevron:hover {
+    color: var(--foreground);
+    background: rgba(10, 61, 89, 0.06);
   }
 </style>
