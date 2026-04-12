@@ -12,14 +12,23 @@
     TrackedAccount,
     RegisterEntry,
     AccountRegister,
-    ActivityTransaction,
     ActivityResult,
-    ActivityDateGroup,
     ActionLink,
     RegisterAction,
     ManualResolutionApplyResult
   } from '$lib/transactions/types';
   import { formatCurrency, formatStoredAmount, shortDate, countLabel } from '$lib/format';
+  import {
+    truncatePayee,
+    activityShortDate,
+    categoryLeadingSegment,
+    entryHasActions,
+    canDelete,
+    canRecategorize,
+    canUnmatch,
+    CLEARING_TOOLTIPS,
+    groupActivityByDate
+  } from '$lib/transactions/helpers';
 
   type AppState = {
     initialized: boolean;
@@ -62,27 +71,6 @@
   let confirmUnmatchEntry: RegisterEntry | null = null;
   let actionError = '';
   let actionBusy = false;
-
-  function entryHasActions(entry: RegisterEntry): boolean {
-    return !entry.isOpeningBalance;
-  }
-
-  function canDelete(entry: RegisterEntry): boolean {
-    return !entry.isOpeningBalance;
-  }
-
-  function canRecategorize(entry: RegisterEntry): boolean {
-    if (entry.isOpeningBalance || entry.isUnknown) return false;
-    if (entry.transferState) return false;
-    // Split transactions: more than 1 non-source detail line means split
-    const categoryLines = entry.detailLines.filter((l) => l.kind !== 'source');
-    if (categoryLines.length > 1) return false;
-    return true;
-  }
-
-  function canUnmatch(entry: RegisterEntry): boolean {
-    return !!entry.matchId;
-  }
 
   function openActionMenu(entry: RegisterEntry, event: MouseEvent) {
     event.preventDefault();
@@ -242,16 +230,6 @@
     return new Intl.DateTimeFormat(undefined, { month: 'long', year: 'numeric' }).format(parsed);
   }
 
-  function activityShortDate(value: string): string {
-    const parsed = new Date(`${value}T00:00:00`);
-    return new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' }).format(parsed);
-  }
-
-  function truncatePayee(payee: string, max = 50): string {
-    if (payee.length <= max) return payee;
-    return payee.slice(0, max - 1) + '…';
-  }
-
   function categoryDisplayName(category: string | null): string {
     if (!category) return '';
     const parts = category.split(':');
@@ -260,11 +238,6 @@
       .slice(1)
       .map((segment) => segment.replace(/_/g, ' '))
       .join(' / ');
-  }
-
-  function categoryLeadingSegment(category: string | null): string {
-    if (!category) return '';
-    return category.split(':')[0] ?? '';
   }
 
   function periodPresetLabel(period: 'this-month' | 'last-30' | 'last-3-months'): string {
@@ -307,31 +280,6 @@
       title: 'All activity',
       subtitle: periodPresetLabel(period)
     };
-  }
-
-  function groupActivityByDate(transactions: ActivityTransaction[]): ActivityDateGroup[] {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const yesterday = new Date(today);
-    yesterday.setDate(yesterday.getDate() - 1);
-    const todayStr = today.toISOString().slice(0, 10);
-    const yesterdayStr = yesterday.toISOString().slice(0, 10);
-
-    const groups: ActivityDateGroup[] = [];
-    let currentGroup: ActivityDateGroup | null = null;
-
-    for (const tx of transactions) {
-      const header = tx.date === todayStr ? 'Today'
-        : tx.date === yesterdayStr ? 'Yesterday'
-        : activityShortDate(tx.date);
-
-      if (!currentGroup || currentGroup.header !== header) {
-        currentGroup = { header, transactions: [] };
-        groups.push(currentGroup);
-      }
-      currentGroup.transactions.push(tx);
-    }
-    return groups;
   }
 
   async function loadActivity() {
@@ -488,12 +436,6 @@
   }
 
   // --- Clearing Status Toggle ---
-  const CLEARING_TOOLTIPS: Record<string, string> = {
-    cleared: 'Bank-confirmed',
-    pending: 'Flagged',
-    unmarked: 'Manual entry'
-  };
-
   const CLEARING_CYCLE: Record<string, string> = {
     unmarked: 'pending',
     pending: 'cleared',

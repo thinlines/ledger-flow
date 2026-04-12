@@ -1,30 +1,13 @@
 <script lang="ts">
   import type { ActivitySummary, ActivityTransaction } from '$lib/transactions/types';
   import { formatCurrency } from '$lib/format';
+  import { truncatePayee, activityShortDate, categoryLeadingSegment } from '$lib/transactions/helpers';
 
   export let summary: ActivitySummary | null;
   export let category: string | null;
   export let month: string | null;
   export let transactions: ActivityTransaction[];
   export let baseCurrency: string;
-
-  // Helpers below are duplicated from +page.svelte; Phase 2 of the
-  // transactions rethink will consolidate them once the row template also
-  // lives in a component.
-  function activityShortDate(value: string): string {
-    const parsed = new Date(`${value}T00:00:00`);
-    return new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' }).format(parsed);
-  }
-
-  function truncatePayee(payee: string, max = 50): string {
-    if (payee.length <= max) return payee;
-    return payee.slice(0, max - 1) + '…';
-  }
-
-  function categoryLeadingSegment(cat: string | null): string {
-    if (!cat) return '';
-    return cat.split(':')[0] ?? '';
-  }
 
   function nounForCategory(cat: string | null, count: number): string {
     const plural = count !== 1;
