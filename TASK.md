@@ -1,5 +1,7 @@
 # Current Task
 
+**Status: COMPLETED — 2026-04-12**
+
 ## Title
 
 Transactions screen rethink — Phase 4b: Frontend unification
@@ -222,3 +224,17 @@ type TransactionFilters = {
 ## Out of Scope
 
 See "Explicitly Excluded" above. Transfer-pair collapse, legacy endpoint deletion, Phase 4c polish, and all deferred plan items are out of scope.
+
+## Delivery Notes
+
+Shipped 2026-04-12 on branch `worktree-agent-a0ee344f` (merged to master). `pnpm check` clean (0/0), page is 430 lines (target <600), zero `activityMode` references remain. QA: PASS WITH FINDINGS (Finding 1 fixed in branch before review). Code review: SHIP WITH NOTES.
+
+**Follow-up items identified during review:**
+
+- **Dead legacy helpers in `app/frontend/src/lib/transactions/helpers.ts`**: `entryHasActions`, `canDelete`, `canRecategorize`, `canUnmatch`, `groupActivityByDate` have no remaining callers and should be deleted.
+- **Dead legacy type exports in `app/frontend/src/lib/transactions/types.ts`**: `ActivityResult`, `ActivityDateGroup`, `RegisterAction`, `ActionLink` have no consumers and should be removed. (`RegisterEntry`, `AccountRegister`, `ActivityTransaction`, `ActivitySummary`, `ActivityTopTransaction` still used by `ManualResolutionDialog` and `TransactionsExplanationHeader`; keep until those migrate.)
+- **Multi-category filtering (design decision)**: the filter dialog is single-pick and `TransactionFilters.category` is scalar, even though the backend `UnifiedTransactionFilters.categories` is plural. Works for all current drill-down paths. Either widen `category → categories: string[]` or defer as a tracked Phase 4c item.
+- **QA spec divergence on stale bookmarks**: `/transactions?accounts=deleted-id` silently drops the deleted ID and falls through to the all-accounts view, rather than showing an error state as specified. Arguably better UX; needs PM confirmation.
+- **Filter history via `replaceState`**: all filter mutations use `replaceState`, so back-button does not traverse filter history. Consider `pushState` for top-level filter changes.
+- **Polish items (low-severity)**: filter-dialog status "Any" radio doubles the toggle-off behavior of individual radios (redundant); notes save reads `row` at save time, not at focus time, so clicking a different row mid-edit posts against the wrong row (pre-existing pattern); detail sheet shows account label twice in single-account scope; `transactionActions.ts` error messages include `"Error: "` prefix from `String(e)`.
+- **Pre-existing environment issue**: `uv run pytest -q` fails with `ModuleNotFoundError: No module named 'fastapi'` on master too — not caused by this branch. Backend code unchanged here.
