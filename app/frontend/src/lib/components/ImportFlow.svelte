@@ -527,9 +527,9 @@
   });
 </script>
 
-<div class="import-flow">
+<div class="grid gap-4">
   {#if mode === 'standalone'}
-    <section class="view-card hero import-hero">
+    <section class="view-card hero grid gap-1.5">
       <p class="eyebrow">Import</p>
       <h2 class="page-title">Bring in new statement activity</h2>
       <p class="subtitle">Choose a statement, confirm the preview, and only then write changes. New uploads are checked before they stay in the inbox.</p>
@@ -539,7 +539,7 @@
   {#if !initialized}
     <section class="view-card">
       <p class="eyebrow">Import</p>
-      <h3>Finish setup before importing statements</h3>
+      <h3 class="m-0">Finish setup before importing statements</h3>
       <p class="muted">Import becomes available after the workspace exists and at least one account is ready to receive statement activity.</p>
       <a class="btn btn-primary" href="/setup">Open setup</a>
     </section>
@@ -551,27 +551,27 @@
     {#if importAccounts.length === 0}
       <section class="view-card">
         <p class="eyebrow">Import</p>
-        <h3>Add an account before importing</h3>
+        <h3 class="m-0">Add an account before importing</h3>
         <p class="muted">Connect a supported account or save a custom CSV mapping first. Then statement imports can flow straight into review and overview.</p>
-        <div class="actions">
+        <div class="flex gap-2.5 flex-wrap">
           <a class="btn btn-primary" href="/accounts/configure?mode=institution">Add supported account</a>
           <a class="btn" href="/accounts/configure?mode=custom">Add custom CSV</a>
         </div>
       </section>
     {:else if mode === 'setup'}
-      <section class="view-card setup-workflow-card">
-        <div class="section-head setup-workflow-head">
-          <div>
+      <section class="view-card grid gap-4">
+        <div class="flex justify-between gap-4 items-start flex-wrap">
+          <div class="min-w-0">
             <p class="eyebrow">Prepare</p>
-            <h3>Upload and preview your first statement</h3>
-            <p class="muted">Use one vertical flow for the first import. New files go straight into preview if they match the selected account.</p>
+            <h3 class="m-0">Upload and preview your first statement</h3>
+            <p class="muted mt-1">Use one vertical flow for the first import. New files go straight into preview if they match the selected account.</p>
           </div>
           {#if candidates.length > 0}
             <span class="pill">{candidates.length} waiting</span>
           {/if}
         </div>
 
-        <div class="workflow-field-grid">
+        <div class="grid grid-cols-2 gap-3 max-tablet:grid-cols-1">
           <div class="field">
             <label for={`importAccountId-${mode}`}>Import account</label>
             <select id={`importAccountId-${mode}`} value={importAccountId} on:change={(e) => setImportAccount((e.currentTarget as HTMLSelectElement).value)}>
@@ -593,8 +593,8 @@
           </div>
         </div>
 
-        <div class="upload-row upload-row-single">
-          <div class="field upload-field">
+        <div class="grid">
+          <div class="field">
             <label for={`statementFile-${mode}`}>Statement CSV</label>
             <input
               id={`statementFile-${mode}`}
@@ -604,19 +604,19 @@
               on:change={onStatementFileChange}
             />
             {#if selectedFile}
-              <p class="muted small">Selected: {selectedFile.name}. Preview is the next step.</p>
+              <p class="muted text-xs m-0">Selected: {selectedFile.name}. Preview is the next step.</p>
             {:else}
-              <p class="muted small">Choose a new CSV or keep working from a statement that is already waiting in the inbox.</p>
+              <p class="muted text-xs m-0">Choose a new CSV or keep working from a statement that is already waiting in the inbox.</p>
             {/if}
           </div>
         </div>
 
-        <section class="setup-inbox-section">
-          <div class="section-head">
-            <div>
+        <section class="grid gap-3.5">
+          <div class="flex justify-between gap-4 items-start flex-wrap">
+            <div class="min-w-0">
               <p class="eyebrow">Inbox</p>
-              <h3>Pick a statement to continue</h3>
-              <p class="muted">Files that already passed validation wait here until you preview, apply, or remove them.</p>
+              <h3 class="m-0">Pick a statement to continue</h3>
+              <p class="muted mt-1">Files that already passed validation wait here until you preview, apply, or remove them.</p>
             </div>
             {#if candidates.length > 0}
               <span class="pill">{candidates.length} waiting</span>
@@ -625,8 +625,8 @@
 
           {#if candidates.length === 0}
             <div class="empty-panel">
-              <h4>No statements in the inbox</h4>
-              <p>Choose a CSV above to start the first import.</p>
+              <h4 class="m-0 mb-1.5">No statements in the inbox</h4>
+              <p class="m-0">Choose a CSV above to start the first import.</p>
             </div>
           {:else}
             <div class="list">
@@ -638,8 +638,8 @@
                   aria-pressed={candidate.abs_path === selectedPath}
                   on:click={() => pickCandidate(candidate)}
                 >
-                  <div class="row-main">
-                    <p class="row-title">{candidate.file_name}</p>
+                  <div class="grid gap-2 min-w-0">
+                    <p class="m-0 font-bold wrap-anywhere">{candidate.file_name}</p>
                     <div class="row-meta">
                       {#if candidate.detected_import_account_display_name}
                         <span>{candidate.detected_import_account_display_name}</span>
@@ -653,7 +653,7 @@
                     </div>
                   </div>
 
-                  <div class="row-side">
+                  <div class="grid justify-items-end gap-1.5 shrink-0">
                     {#if candidate.is_configured_import_account}
                       <span class="pill ok">Ready</span>
                     {:else}
@@ -670,17 +670,17 @@
           {/if}
         </section>
 
-        <div class="workflow-status-grid">
+        <div class="grid grid-cols-2 gap-3 max-tablet:grid-cols-1">
           <section class="status-card">
-            <p class="status-label">Selected statement</p>
-            <p class="status-value">{currentStatementLabel()}</p>
-            <p class="muted small">{statementStatusNote()}</p>
+            <p class="eyebrow mb-1">Selected statement</p>
+            <p class="m-0 font-bold wrap-anywhere">{currentStatementLabel()}</p>
+            <p class="muted text-xs m-0">{statementStatusNote()}</p>
           </section>
 
           <section class="status-card">
-            <p class="status-label">Import target</p>
-            <p class="status-value">{selectedImportAccount ? accountLabel(selectedImportAccount) : 'Choose an import account'}</p>
-            <p class="muted small">
+            <p class="eyebrow mb-1">Import target</p>
+            <p class="m-0 font-bold wrap-anywhere">{selectedImportAccount ? accountLabel(selectedImportAccount) : 'Choose an import account'}</p>
+            <p class="muted text-xs m-0">
               {#if selectedImportAccount}
                 {selectedImportAccount.institutionDisplayName} • This statement will flow into balances, transactions, and review for this account.
               {:else}
@@ -691,17 +691,17 @@
         </div>
 
         {#if selectedCandidate && !selectedCandidate.is_configured_import_account && !selectedImportAccount}
-          <p class="error-text inline-message">
+          <p class="error-text m-0">
             This inbox file is no longer linked to a saved account. Choose an account above before previewing it.
           </p>
         {/if}
 
         {#if recoveryState}
           <section class="recovery-card">
-            <div>
+            <div class="min-w-0">
               <p class="eyebrow">Recovery</p>
-              <h4>{recoveryState.fileKeptInInbox ? 'This statement needs a different account' : 'This upload was blocked before it reached the inbox'}</h4>
-              <p class="muted">{recoveryState.message}</p>
+              <h4 class="m-0">{recoveryState.fileKeptInInbox ? 'This statement needs a different account' : 'This upload was blocked before it reached the inbox'}</h4>
+              <p class="muted mt-1">{recoveryState.message}</p>
               {#if recoveryState.causeMessage}
                 <pre class="cause-detail">{recoveryState.causeMessage}</pre>
               {/if}
@@ -711,7 +711,7 @@
 
         <details class="advanced-panel">
           <summary>Advanced file selection</summary>
-          <div class="field advanced-field">
+          <div class="field mt-3">
             <label for={`csvPath-${mode}`}>Statement path</label>
             <input
               id={`csvPath-${mode}`}
@@ -721,15 +721,15 @@
           </div>
         </details>
 
-        <div class="workflow-footer">
-          <p class="muted">
+        <div class="workflow-footer max-tablet:flex-col max-tablet:items-stretch">
+          <p class="muted m-0">
             {#if selectedFile}
               Preview is the next step. The file will only stay in the inbox if the preview succeeds.
             {:else}
               Nothing is written until you apply the preview. Duplicate transactions are skipped automatically.
             {/if}
           </p>
-          <div class="actions">
+          <div class="flex gap-2.5 flex-wrap">
             {#if selectedCandidate}
               <button class="btn" type="button" disabled={loading} on:click={removeSelectedCandidate}>
                 {loadingState === 'remove' ? 'Removing...' : 'Remove from Inbox'}
@@ -743,13 +743,13 @@
       </section>
 
       {#if preview}
-        <section class="view-card setup-preview-card">
-          <div class="preview-card-shell">
-            <div class="preview-header">
-              <div>
+        <section class="view-card grid gap-4">
+          <div class="grid gap-3.5">
+            <div class="flex justify-between gap-4 items-start max-tablet:flex-col max-tablet:items-stretch">
+              <div class="min-w-0">
                 <p class="eyebrow">{preview.result ? 'Import Result' : 'Preview'}</p>
-                <h3>{preview.result ? 'Statement imported' : 'Review the import'}</h3>
-                <p class="muted">
+                <h3 class="m-0">{preview.result ? 'Statement imported' : 'Review the import'}</h3>
+                <p class="muted mt-1">
                   {preview.result
                     ? 'The selected statement was appended. Setup will move on after the first import completes.'
                     : 'Check the counts and sample output before applying changes.'}
@@ -763,18 +763,18 @@
               {/if}
             </div>
 
-            <div class="preview-status-grid">
+            <div class="grid grid-cols-2 gap-3 max-tablet:grid-cols-1">
               {#if preview.importAccountDisplayName}
                 <section class="status-card">
-                  <p class="status-label">Preview account</p>
-                  <p class="status-value">{preview.importAccountDisplayName}</p>
-                  <p class="muted small">This statement will update the selected account when you apply the preview.</p>
+                  <p class="eyebrow mb-1">Preview account</p>
+                  <p class="m-0 font-bold wrap-anywhere">{preview.importAccountDisplayName}</p>
+                  <p class="muted text-xs m-0">This statement will update the selected account when you apply the preview.</p>
                 </section>
               {/if}
             </div>
 
             {#if preview.summary}
-              <div class="summary">
+              <div class="flex gap-2 flex-wrap">
                 <span class="pill ok">New {preview.summary.newCount}</span>
                 <span class="pill">Duplicates {preview.summary.duplicateCount}</span>
                 <span class="pill warn">Conflicts {preview.summary.conflictCount}</span>
@@ -783,10 +783,10 @@
             {/if}
 
             {#if preview.result}
-              <div class="result-banner">
-                <div>
-                  <p class="result-title">Import applied</p>
-                  <p class="muted">
+              <div class="result-banner max-tablet:flex-col">
+                <div class="min-w-0">
+                  <p class="m-0 mb-0.5 font-bold">Import applied</p>
+                  <p class="muted m-0">
                     Added {preview.result.appendedTxnCount}, skipped {preview.result.skippedDuplicateCount} duplicates, conflicts
                     {preview.result.conflicts?.length ?? 0}.
                   </p>
@@ -795,31 +795,31 @@
               </div>
 
               {#if preview.result.sourceCsvWarning}
-                <p class="error-text inline-message">{preview.result.sourceCsvWarning}</p>
+                <p class="error-text m-0">{preview.result.sourceCsvWarning}</p>
               {/if}
             {/if}
 
             <details class="advanced-panel">
               <summary>Technical details</summary>
-              <div class="setup-advanced-copy">
-                <p class="muted small">Import stage: {preview.stageId}</p>
+              <div class="grid gap-3.5">
+                <p class="muted text-xs m-0">Import stage: {preview.stageId}</p>
                 {#if preview.targetJournalPath}
-                  <p class="muted small">Destination file: {preview.targetJournalPath}</p>
+                  <p class="muted text-xs m-0">Destination file: {preview.targetJournalPath}</p>
                 {/if}
                 {#if preview.result?.backupPath}
-                  <p class="muted small">Backup: {preview.result.backupPath}</p>
+                  <p class="muted text-xs m-0">Backup: {preview.result.backupPath}</p>
                 {/if}
                 {#if preview.result?.archivedCsvPath}
-                  <p class="muted small">Archived source: {preview.result.archivedCsvPath}</p>
+                  <p class="muted text-xs m-0">Archived source: {preview.result.archivedCsvPath}</p>
                 {/if}
               </div>
             </details>
 
             {#if preview.preview?.length}
-              <div class="sample-block">
-                <div class="sample-head">
-                  <h4>Sample transactions</h4>
-                  <p class="muted small">Showing the first {Math.min(preview.preview.length, 8)} items from the preview.</p>
+              <div>
+                <div class="flex justify-between gap-4 items-start max-tablet:flex-col max-tablet:items-stretch">
+                  <h4 class="m-0">Sample transactions</h4>
+                  <p class="muted text-xs mt-1">Showing the first {Math.min(preview.preview.length, 8)} items from the preview.</p>
                 </div>
                 <pre>{preview.preview.slice(0, 8).join('\n\n')}</pre>
               </div>
@@ -828,25 +828,25 @@
         </section>
       {/if}
     {:else}
-      <section class="import-layout">
-        <article class="view-card workflow-card">
-          <div class="workflow-head">
-            <div class="workflow-copy">
+      <section class="import-layout max-desktop:grid-cols-1">
+        <article class="view-card grid gap-4">
+          <div class="workflow-head max-desktop:grid-cols-1">
+            <div class="min-w-0">
               <p class="eyebrow">Current Import</p>
-              <h3>Preview the next statement before you import it</h3>
-              <p class="muted">Use one obvious action to move from a new file or inbox statement into a safe preview.</p>
+              <h3 class="m-0">Preview the next statement before you import it</h3>
+              <p class="muted mt-1">Use one obvious action to move from a new file or inbox statement into a safe preview.</p>
             </div>
 
-            <div class="workflow-steps" aria-label="Import progress">
+            <div class="grid gap-2" aria-label="Import progress">
               <div
                 class="workflow-step"
                 class:workflow-step-active={workflowStep === 'prepare'}
                 class:workflow-step-complete={Boolean(selectedPath || selectedFile || preview)}
               >
                 <span class="step-index">1</span>
-                <div class="workflow-step-copy">
+                <div class="grid gap-px min-w-0">
                   <strong>Prepare</strong>
-                  <span class="muted small">Choose the account, year, and statement.</span>
+                  <span class="muted text-xs">Choose the account, year, and statement.</span>
                 </div>
               </div>
 
@@ -856,9 +856,9 @@
                 class:workflow-step-complete={Boolean(preview)}
               >
                 <span class="step-index">2</span>
-                <div class="workflow-step-copy">
+                <div class="grid gap-px min-w-0">
                   <strong>Preview</strong>
-                  <span class="muted small">Review counts and sample transactions.</span>
+                  <span class="muted text-xs">Review counts and sample transactions.</span>
                 </div>
               </div>
 
@@ -868,15 +868,15 @@
                 class:workflow-step-complete={Boolean(preview?.result)}
               >
                 <span class="step-index">3</span>
-                <div class="workflow-step-copy">
+                <div class="grid gap-px min-w-0">
                   <strong>Apply</strong>
-                  <span class="muted small">Append new transactions and log the result.</span>
+                  <span class="muted text-xs">Append new transactions and log the result.</span>
                 </div>
               </div>
             </div>
           </div>
 
-          <div class="workflow-field-grid">
+          <div class="grid grid-cols-2 gap-3 max-tablet:grid-cols-1">
             <div class="field">
               <label for={`importAccountId-${mode}`}>Import account</label>
               <select id={`importAccountId-${mode}`} value={importAccountId} on:change={(e) => setImportAccount((e.currentTarget as HTMLSelectElement).value)}>
@@ -898,8 +898,8 @@
             </div>
           </div>
 
-          <div class="upload-row upload-row-single">
-            <div class="field upload-field">
+          <div class="grid">
+            <div class="field">
               <label for={`statementFile-${mode}`}>Statement CSV</label>
               <input
                 id={`statementFile-${mode}`}
@@ -909,24 +909,24 @@
                 on:change={onStatementFileChange}
               />
               {#if selectedFile}
-                <p class="muted small">Selected: {selectedFile.name}. Preview is the next step.</p>
+                <p class="muted text-xs m-0">Selected: {selectedFile.name}. Preview is the next step.</p>
               {:else}
-                <p class="muted small">Choose a new CSV or keep working from a statement that is already waiting in the inbox.</p>
+                <p class="muted text-xs m-0">Choose a new CSV or keep working from a statement that is already waiting in the inbox.</p>
               {/if}
             </div>
           </div>
 
-          <div class="workflow-status-grid">
+          <div class="grid grid-cols-2 gap-3 max-tablet:grid-cols-1">
             <section class="status-card">
-              <p class="status-label">Selected statement</p>
-              <p class="status-value">{currentStatementLabel()}</p>
-              <p class="muted small">{statementStatusNote()}</p>
+              <p class="eyebrow mb-1">Selected statement</p>
+              <p class="m-0 font-bold wrap-anywhere">{currentStatementLabel()}</p>
+              <p class="muted text-xs m-0">{statementStatusNote()}</p>
             </section>
 
             <section class="status-card">
-              <p class="status-label">Import target</p>
-              <p class="status-value">{selectedImportAccount ? accountLabel(selectedImportAccount) : 'Choose an import account'}</p>
-              <p class="muted small">
+              <p class="eyebrow mb-1">Import target</p>
+              <p class="m-0 font-bold wrap-anywhere">{selectedImportAccount ? accountLabel(selectedImportAccount) : 'Choose an import account'}</p>
+              <p class="muted text-xs m-0">
                 {#if selectedImportAccount}
                   {selectedImportAccount.institutionDisplayName} • This statement will flow into balances, transactions, and review for this account.
                 {:else}
@@ -937,17 +937,17 @@
           </div>
 
           {#if selectedCandidate && !selectedCandidate.is_configured_import_account && !selectedImportAccount}
-            <p class="error-text inline-message">
+            <p class="error-text m-0">
               This inbox file is no longer linked to a saved account. Choose an account above before previewing it.
             </p>
           {/if}
 
           {#if recoveryState}
-            <section class="recovery-card">
-              <div>
+            <section class="recovery-card max-tablet:flex-col">
+              <div class="min-w-0">
                 <p class="eyebrow">Recovery</p>
-                <h4>{recoveryState.fileKeptInInbox ? 'This statement needs a different account' : 'This upload was blocked before it reached the inbox'}</h4>
-                <p class="muted">{recoveryState.message}</p>
+                <h4 class="m-0">{recoveryState.fileKeptInInbox ? 'This statement needs a different account' : 'This upload was blocked before it reached the inbox'}</h4>
+                <p class="muted mt-1">{recoveryState.message}</p>
                 {#if recoveryState.causeMessage}
                   <pre class="cause-detail">{recoveryState.causeMessage}</pre>
                 {/if}
@@ -955,9 +955,9 @@
             </section>
           {/if}
 
-          <details class="advanced-panel compact-panel">
+          <details class="advanced-panel">
             <summary>Advanced file selection</summary>
-            <div class="field advanced-field">
+            <div class="field mt-3">
               <label for={`csvPath-${mode}`}>Statement path</label>
               <input
                 id={`csvPath-${mode}`}
@@ -967,15 +967,15 @@
             </div>
           </details>
 
-          <div class="workflow-footer">
-            <p class="muted">
+          <div class="workflow-footer max-tablet:flex-col max-tablet:items-stretch">
+            <p class="muted m-0">
               {#if selectedFile}
                 Preview is the next step. The file will only stay in the inbox if the preview succeeds.
               {:else}
                 Nothing is written until you apply the preview. Duplicate transactions are skipped automatically.
               {/if}
             </p>
-            <div class="actions">
+            <div class="flex gap-2.5 flex-wrap">
               {#if selectedCandidate}
                 <button class="btn" type="button" disabled={loading} on:click={removeSelectedCandidate}>
                   {loadingState === 'remove' ? 'Removing...' : 'Remove from Inbox'}
@@ -989,11 +989,11 @@
 
           {#if preview}
             <section class="preview-panel">
-              <div class="preview-header">
-                <div>
+              <div class="flex justify-between gap-4 items-start max-tablet:flex-col max-tablet:items-stretch">
+                <div class="min-w-0">
                   <p class="eyebrow">{preview.result ? 'Import Result' : 'Preview'}</p>
-                  <h4>{preview.result ? 'Statement imported' : 'Review the import'}</h4>
-                  <p class="muted">
+                  <h4 class="m-0">{preview.result ? 'Statement imported' : 'Review the import'}</h4>
+                  <p class="muted mt-1">
                     {preview.result
                       ? 'The selected statement was appended and recorded in import history.'
                       : 'Check the counts and sample output before applying changes.'}
@@ -1007,18 +1007,18 @@
                 {/if}
               </div>
 
-              <div class="preview-status-grid">
+              <div class="grid grid-cols-2 gap-3 max-tablet:grid-cols-1">
                 {#if preview.importAccountDisplayName}
                   <section class="status-card">
-                    <p class="status-label">Preview account</p>
-                    <p class="status-value">{preview.importAccountDisplayName}</p>
-                    <p class="muted small">This statement will update the selected account when you apply the preview.</p>
+                    <p class="eyebrow mb-1">Preview account</p>
+                    <p class="m-0 font-bold wrap-anywhere">{preview.importAccountDisplayName}</p>
+                    <p class="muted text-xs m-0">This statement will update the selected account when you apply the preview.</p>
                   </section>
                 {/if}
               </div>
 
               {#if preview.summary}
-                <div class="summary">
+                <div class="flex gap-2 flex-wrap">
                   <span class="pill ok">New {preview.summary.newCount}</span>
                   <span class="pill">Duplicates {preview.summary.duplicateCount}</span>
                   <span class="pill warn">Conflicts {preview.summary.conflictCount}</span>
@@ -1027,10 +1027,10 @@
               {/if}
 
               {#if preview.result}
-                <div class="result-banner">
-                  <div>
-                    <p class="result-title">Import applied</p>
-                    <p class="muted">
+                <div class="result-banner max-tablet:flex-col">
+                  <div class="min-w-0">
+                    <p class="m-0 mb-0.5 font-bold">Import applied</p>
+                    <p class="muted m-0">
                       Added {preview.result.appendedTxnCount}, skipped {preview.result.skippedDuplicateCount} duplicates, conflicts
                       {preview.result.conflicts?.length ?? 0}.
                     </p>
@@ -1039,12 +1039,12 @@
                 </div>
 
                 {#if importResultAction()}
-                  <div class="next-step-banner">
-                    <div>
-                      <p class="result-title">Next step</p>
-                      <p class="muted">{importResultAction()?.note}</p>
+                  <div class="next-step-banner max-tablet:flex-col">
+                    <div class="min-w-0">
+                      <p class="m-0 mb-0.5 font-bold">Next step</p>
+                      <p class="muted m-0">{importResultAction()?.note}</p>
                     </div>
-                    <div class="actions">
+                    <div class="flex gap-2.5 flex-wrap">
                       <a class="btn btn-primary" href={importResultAction()?.href}>{importResultAction()?.label}</a>
                       <a class="btn" href={importResultAction()?.secondary.href}>{importResultAction()?.secondary.label}</a>
                     </div>
@@ -1052,29 +1052,29 @@
                 {/if}
 
                 {#if preview.result.sourceCsvWarning}
-                  <p class="error-text inline-message">{preview.result.sourceCsvWarning}</p>
+                  <p class="error-text m-0">{preview.result.sourceCsvWarning}</p>
                 {/if}
               {/if}
 
-              <details class="advanced-panel compact-panel">
+              <details class="advanced-panel">
                 <summary>Technical details</summary>
-                <p class="muted small">Import stage: {preview.stageId}</p>
+                <p class="muted text-xs m-0">Import stage: {preview.stageId}</p>
                 {#if preview.targetJournalPath}
-                  <p class="muted small">Destination file: {preview.targetJournalPath}</p>
+                  <p class="muted text-xs m-0">Destination file: {preview.targetJournalPath}</p>
                 {/if}
                 {#if preview.result?.backupPath}
-                  <p class="muted small">Backup: {preview.result.backupPath}</p>
+                  <p class="muted text-xs m-0">Backup: {preview.result.backupPath}</p>
                 {/if}
                 {#if preview.result?.archivedCsvPath}
-                  <p class="muted small">Archived source: {preview.result.archivedCsvPath}</p>
+                  <p class="muted text-xs m-0">Archived source: {preview.result.archivedCsvPath}</p>
                 {/if}
               </details>
 
               {#if preview.preview?.length}
-                <div class="sample-block">
-                  <div class="sample-head">
-                    <h4>Sample transactions</h4>
-                    <p class="muted small">Showing the first {Math.min(preview.preview.length, 8)} items from the preview.</p>
+                <div>
+                  <div class="flex justify-between gap-4 items-start max-tablet:flex-col max-tablet:items-stretch">
+                    <h4 class="m-0">Sample transactions</h4>
+                    <p class="muted text-xs mt-1">Showing the first {Math.min(preview.preview.length, 8)} items from the preview.</p>
                   </div>
                   <pre>{preview.preview.slice(0, 8).join('\n\n')}</pre>
                 </div>
@@ -1083,13 +1083,13 @@
           {/if}
         </article>
 
-        <aside class="import-sidebar">
-          <article class="view-card inbox-card">
-            <div class="section-head">
-              <div>
+        <aside class="grid gap-4 items-start">
+          <article class="view-card grid gap-4">
+            <div class="flex justify-between gap-4 items-start flex-wrap">
+              <div class="min-w-0">
                 <p class="eyebrow">Waiting Statements</p>
-                <h3>Pick a statement to continue</h3>
-                <p class="muted">Validated statements stay here while you preview, apply, or remove them.</p>
+                <h3 class="m-0">Pick a statement to continue</h3>
+                <p class="muted mt-1">Validated statements stay here while you preview, apply, or remove them.</p>
               </div>
               {#if candidates.length > 0}
                 <span class="pill">{candidates.length} waiting</span>
@@ -1098,8 +1098,8 @@
 
             {#if candidates.length === 0}
               <div class="empty-panel">
-                <h4>No statements in the inbox</h4>
-                <p>Choose a CSV above to start a new import.</p>
+                <h4 class="m-0 mb-1.5">No statements in the inbox</h4>
+                <p class="m-0">Choose a CSV above to start a new import.</p>
               </div>
             {:else}
               <div class="list">
@@ -1111,8 +1111,8 @@
                     aria-pressed={candidate.abs_path === selectedPath}
                     on:click={() => pickCandidate(candidate)}
                   >
-                    <div class="row-main">
-                      <p class="row-title">{candidate.file_name}</p>
+                    <div class="grid gap-2 min-w-0">
+                      <p class="m-0 font-bold wrap-anywhere">{candidate.file_name}</p>
                       <div class="row-meta">
                         {#if candidate.detected_import_account_display_name}
                           <span>{candidate.detected_import_account_display_name}</span>
@@ -1126,7 +1126,7 @@
                       </div>
                     </div>
 
-                    <div class="row-side">
+                    <div class="grid justify-items-end gap-1.5 shrink-0">
                       {#if candidate.is_configured_import_account}
                         <span class="pill ok">Ready</span>
                       {:else}
@@ -1144,12 +1144,12 @@
           </article>
         </aside>
       </section>
-      <section class="view-card import-history-card">
-        <div class="section-head history-header">
-          <div>
+      <section class="view-card grid gap-4">
+        <div class="flex justify-between gap-4 items-start flex-wrap">
+          <div class="min-w-0">
             <p class="eyebrow">Import History</p>
-            <h3>Recent imports</h3>
-            <p class="muted">Undo is available for the latest applied import in each destination year.</p>
+            <h3 class="m-0">Recent imports</h3>
+            <p class="muted mt-1">Undo is available for the latest applied import in each destination year.</p>
           </div>
           {#if historyEntries.length > 0}
             <span class="pill">{historyEntries.length} recorded</span>
@@ -1157,34 +1157,34 @@
         </div>
 
         {#if historyMessage}
-          <p class="success-text">{historyMessage}</p>
+          <p class="m-0 text-ok">{historyMessage}</p>
         {/if}
 
         {#if !initialized}
           <p class="muted">Complete workspace setup to start recording import history.</p>
         {:else if historyEntries.length === 0}
           <div class="empty-panel">
-            <h4>No imports have been applied yet</h4>
-            <p>Your recent imports and undo actions will appear here.</p>
+            <h4 class="m-0 mb-1.5">No imports have been applied yet</h4>
+            <p class="m-0">Your recent imports and undo actions will appear here.</p>
           </div>
         {:else}
           <div class="history-list">
             {#each historyEntries as entry}
-              <article class="history-row">
-                <div class="history-main">
-                  <div class="history-topline">
-                    <p class="history-title">{entry.csvFileName ?? optionalPathLabel(entry.originalCsvPath)}</p>
+              <article class="history-row max-tablet:grid-cols-1">
+                <div class="min-w-0">
+                  <div class="flex justify-between gap-4 items-start max-tablet:flex-col max-tablet:items-stretch">
+                    <p class="m-0 font-bold wrap-anywhere">{entry.csvFileName ?? optionalPathLabel(entry.originalCsvPath)}</p>
                     <span class={`pill ${entry.status === 'undone' ? 'warn' : 'ok'}`}>
                       {entry.status === 'undone' ? 'Undone' : 'Applied'}
                     </span>
                   </div>
 
-                  <p class="muted small history-meta">
+                  <p class="muted text-xs m-0">
                     {formatDateTime(entry.appliedAt)} • {entry.importAccountDisplayName ?? entry.importAccountId} •
                     {optionalPathLabel(entry.targetJournalPath, 'Unknown journal')}
                   </p>
 
-                  <div class="summary">
+                  <div class="flex gap-2 flex-wrap">
                     <span class="pill ok">Added {entry.result?.appendedTxnCount ?? 0}</span>
                     <span class="pill">Duplicates {entry.result?.skippedDuplicateCount ?? 0}</span>
                     <span class="pill warn">
@@ -1193,30 +1193,30 @@
                   </div>
 
                   {#if entry.undo?.undoneAt}
-                    <p class="muted small">Undone {formatDateTime(entry.undo.undoneAt)}.</p>
+                    <p class="muted text-xs">Undone {formatDateTime(entry.undo.undoneAt)}.</p>
                   {:else if !entry.canUndo && entry.undoBlockedReason}
-                    <p class="muted small">{entry.undoBlockedReason}</p>
+                    <p class="muted text-xs">{entry.undoBlockedReason}</p>
                   {/if}
 
-                  <details class="advanced-panel history-details">
+                  <details class="advanced-panel mt-1.5">
                     <summary>Paths and recovery details</summary>
                     {#if entry.targetJournalPath}
-                      <p class="muted small">Journal: {entry.targetJournalPath}</p>
+                      <p class="muted text-xs m-0">Journal: {entry.targetJournalPath}</p>
                     {/if}
                     {#if entry.backupPath}
-                      <p class="muted small">Import backup: {entry.backupPath}</p>
+                      <p class="muted text-xs m-0">Import backup: {entry.backupPath}</p>
                     {/if}
                     {#if entry.undo?.undoBackupPath}
-                      <p class="muted small">Undo backup: {entry.undo.undoBackupPath}</p>
+                      <p class="muted text-xs m-0">Undo backup: {entry.undo.undoBackupPath}</p>
                     {/if}
                     {#if entry.originalCsvPath}
-                      <p class="muted small">Original statement: {entry.originalCsvPath}</p>
+                      <p class="muted text-xs m-0">Original statement: {entry.originalCsvPath}</p>
                     {/if}
                     {#if entry.archivedCsvPath}
-                      <p class="muted small">Archived statement: {entry.archivedCsvPath}</p>
+                      <p class="muted text-xs m-0">Archived statement: {entry.archivedCsvPath}</p>
                     {/if}
                     {#if entry.undo?.restoredInboxCsvPath}
-                      <p class="muted small">Restored to inbox: {entry.undo.restoredInboxCsvPath}</p>
+                      <p class="muted text-xs m-0">Restored to inbox: {entry.undo.restoredInboxCsvPath}</p>
                     {/if}
                     {#if entry.result?.sourceCsvWarning}
                       <p class="error-text">{entry.result.sourceCsvWarning}</p>
@@ -1227,7 +1227,7 @@
                   </details>
                 </div>
 
-                <div class="history-actions">
+                <div class="flex items-start max-tablet:justify-start">
                   <button class="btn" type="button" disabled={loading || !entry.canUndo} on:click={() => undoHistoryEntry(entry)}>
                     Undo Import
                   </button>
@@ -1242,64 +1242,13 @@
 </div>
 
 <style>
-  h3,
-  h4 {
-    margin: 0;
-  }
-
-  .import-flow {
-    display: grid;
-    gap: 1rem;
-  }
-
-  .import-hero {
-    display: grid;
-    gap: 0.35rem;
-  }
+  /* ── Asymmetric layout grids ── */
 
   .import-layout {
     display: grid;
     grid-template-columns: minmax(0, 1.45fr) minmax(19rem, 0.9fr);
     gap: 1rem;
     align-items: start;
-  }
-
-  .setup-workflow-card,
-  .setup-preview-card,
-  .workflow-card,
-  .import-sidebar,
-  .import-history-card {
-    display: grid;
-    gap: 1rem;
-  }
-
-  .section-head {
-    display: flex;
-    justify-content: space-between;
-    gap: 1rem;
-    align-items: start;
-    flex-wrap: wrap;
-  }
-
-  .section-head p {
-    margin: 0.2rem 0 0;
-  }
-
-  .section-head > div,
-  .workflow-copy,
-  .workflow-step-copy,
-  .preview-header > div,
-  .row-main,
-  .history-main,
-  .recovery-card > div {
-    min-width: 0;
-  }
-
-  .setup-inbox-section,
-  .preview-card-shell,
-  .setup-advanced-copy {
-    display: grid;
-    gap: 0.85rem;
   }
 
   .workflow-head {
@@ -1309,16 +1258,7 @@
     align-items: start;
   }
 
-  .workflow-copy p,
-  .preview-header p,
-  .sample-head p {
-    margin: 0.35rem 0 0;
-  }
-
-  .workflow-steps {
-    display: grid;
-    gap: 0.55rem;
-  }
+  /* ── Workflow step stepper (bespoke border + gradient states) ── */
 
   .workflow-step {
     display: flex;
@@ -1364,38 +1304,7 @@
     color: var(--ok);
   }
 
-  .workflow-step-copy {
-    display: grid;
-    gap: 0.08rem;
-  }
-
-  .workflow-field-grid,
-  .workflow-status-grid,
-  .preview-status-grid {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 0.8rem;
-  }
-
-  .upload-row {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
-    gap: 0.8rem;
-    align-items: end;
-  }
-
-  .upload-row-single {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .upload-field p,
-  .status-card p,
-  .workflow-footer p,
-  .history-meta,
-  .result-banner p,
-  .empty-panel p {
-    margin: 0;
-  }
+  /* ── Status card (bespoke translucent bg + border) ── */
 
   .status-card {
     border: 1px solid rgba(10, 61, 89, 0.08);
@@ -1405,20 +1314,7 @@
     min-width: 0;
   }
 
-  .status-label {
-    margin: 0 0 0.28rem;
-    font-size: 0.78rem;
-    font-weight: 700;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-    color: var(--muted-foreground);
-  }
-
-  .status-value {
-    margin: 0;
-    font-weight: 700;
-    overflow-wrap: anywhere;
-  }
+  /* ── Advanced details panel (bespoke border + bg) ── */
 
   .advanced-panel {
     margin-top: 0;
@@ -1434,9 +1330,7 @@
     color: var(--brand-strong);
   }
 
-  .advanced-field {
-    margin-top: 0.8rem;
-  }
+  /* ── Workflow footer (border-top separator) ── */
 
   .workflow-footer {
     display: flex;
@@ -1447,9 +1341,7 @@
     border-top: 1px solid rgba(10, 61, 89, 0.08);
   }
 
-  .inline-message {
-    margin: 0;
-  }
+  /* ── Recovery card (bespoke warning gradient) ── */
 
   .recovery-card {
     display: flex;
@@ -1460,10 +1352,6 @@
     border-radius: 14px;
     background: linear-gradient(145deg, rgba(255, 252, 241, 0.96), rgba(255, 246, 225, 0.94));
     padding: 0.85rem 0.9rem;
-  }
-
-  .recovery-card p {
-    margin: 0.25rem 0 0;
   }
 
   .recovery-card .cause-detail {
@@ -1478,6 +1366,8 @@
     color: rgba(0, 0, 0, 0.6);
   }
 
+  /* ── Preview panel (border-top separator) ── */
+
   .preview-panel {
     display: grid;
     gap: 0.9rem;
@@ -1485,20 +1375,7 @@
     border-top: 1px solid rgba(10, 61, 89, 0.08);
   }
 
-  .preview-header,
-  .sample-head,
-  .history-topline {
-    display: flex;
-    justify-content: space-between;
-    gap: 1rem;
-    align-items: start;
-  }
-
-  .summary {
-    display: flex;
-    gap: 0.45rem;
-    flex-wrap: wrap;
-  }
+  /* ── Result / next-step banners (bespoke border + bg) ── */
 
   .result-banner {
     display: flex;
@@ -1522,16 +1399,7 @@
     padding: 0.85rem 0.9rem;
   }
 
-  .result-title {
-    margin: 0 0 0.2rem;
-    font-weight: 700;
-  }
-
-  .actions {
-    display: flex;
-    gap: 0.6rem;
-    flex-wrap: wrap;
-  }
+  /* ── Inbox / history lists ── */
 
   .list,
   .history-list {
@@ -1548,6 +1416,8 @@
   .history-list {
     max-height: 32rem;
   }
+
+  /* ── Candidate row (bespoke transition + hover + selected state) ── */
 
   .row {
     display: flex;
@@ -1579,18 +1449,6 @@
     box-shadow: 0 14px 28px rgba(10, 61, 89, 0.08);
   }
 
-  .row-main {
-    display: grid;
-    gap: 0.45rem;
-    min-width: 0;
-  }
-
-  .row-title {
-    margin: 0;
-    font-weight: 700;
-    overflow-wrap: anywhere;
-  }
-
   .row-meta {
     display: flex;
     flex-wrap: wrap;
@@ -1609,18 +1467,13 @@
     overflow-wrap: anywhere;
   }
 
-  .row-side {
-    display: grid;
-    justify-items: end;
-    gap: 0.35rem;
-    flex: 0 0 auto;
-  }
-
   .row-selected-note {
     font-size: 0.78rem;
     font-weight: 700;
     color: var(--brand);
   }
+
+  /* ── Empty state panel (dashed border) ── */
 
   .empty-panel {
     border: 1px dashed rgba(10, 61, 89, 0.14);
@@ -1629,9 +1482,7 @@
     padding: 1rem;
   }
 
-  .empty-panel h4 {
-    margin: 0 0 0.35rem;
-  }
+  /* ── History row (bespoke card) ── */
 
   .history-row {
     display: grid;
@@ -1643,33 +1494,7 @@
     padding: 0.9rem;
   }
 
-  .history-main {
-    min-width: 0;
-  }
-
-  .history-title {
-    margin: 0;
-    font-weight: 700;
-    overflow-wrap: anywhere;
-  }
-
-  .history-actions {
-    display: flex;
-    align-items: start;
-  }
-
-  .history-details {
-    margin-top: 0.35rem;
-  }
-
-  .success-text {
-    margin: 0;
-    color: var(--ok);
-  }
-
-  .small {
-    font-size: 0.8rem;
-  }
+  /* ── Code preview block ── */
 
   pre {
     margin: 0;
@@ -1682,46 +1507,10 @@
     overflow: auto;
   }
 
-  @media (max-width: 1100px) {
-    .import-layout,
-    .workflow-head {
-      grid-template-columns: 1fr;
-    }
-  }
+  /* ── Tablet responsive: row collapses ── */
 
   @media (max-width: 720px) {
-    .workflow-field-grid,
-    .workflow-status-grid,
-    .preview-status-grid,
-    .upload-row,
-    .history-row {
-      grid-template-columns: 1fr;
-    }
-
-    .section-head,
-    .workflow-footer,
-    .preview-header,
-    .sample-head,
-    .history-topline {
-      flex-direction: column;
-      align-items: stretch;
-    }
-
     .row {
-      flex-direction: column;
-    }
-
-    .row-side {
-      justify-items: start;
-    }
-
-    .history-actions {
-      justify-content: start;
-    }
-
-    .result-banner,
-    .next-step-banner,
-    .recovery-card {
       flex-direction: column;
     }
   }
