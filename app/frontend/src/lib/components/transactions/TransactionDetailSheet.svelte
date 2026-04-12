@@ -16,6 +16,7 @@
   export let row: TransactionRow | null = null;
   export let baseCurrency: string;
   export let accounts: string[] = [];
+  export let actionError: string = '';
   export let onDelete: (row: TransactionRow) => void = () => {};
   export let onResetCategory: (row: TransactionRow) => void = () => {};
   export let onRecategorize: (row: TransactionRow, newCategory: string) => void = () => {};
@@ -218,6 +219,13 @@
             </p>
             <p class="mt-1 text-sm text-muted-foreground">{accountLabel}</p>
           </div>
+
+          <!-- Action error (shown when a sheet action fails) -->
+          {#if actionError}
+            <p class="rounded-xl border border-bad/30 bg-bad/10 px-3 py-2.5 text-sm text-bad" role="alert">
+              {actionError}
+            </p>
+          {/if}
 
           <!-- Needs review badge -->
           {#if isUnknown}

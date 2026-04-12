@@ -23,7 +23,7 @@
     }, 300);
   }
 
-  function setPeriod(period: string) {
+  function setPeriod(period: string | null) {
     onChange({ ...filters, period, month: null });
   }
 
@@ -104,7 +104,7 @@
         <button class:active={filters.period === 'this-month'} on:click={() => setPeriod('this-month')}>This month</button>
         <button class:active={filters.period === 'last-30'} on:click={() => setPeriod('last-30')}>Last 30 days</button>
         <button class:active={filters.period === 'last-3-months'} on:click={() => setPeriod('last-3-months')}>Last 3 months</button>
-        <button class:active={!filters.period} on:click={() => setPeriod('')}>All time</button>
+        <button class:active={!filters.period} on:click={() => setPeriod(null)}>All time</button>
       </div>
     {/if}
 

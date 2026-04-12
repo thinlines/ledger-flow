@@ -2,7 +2,7 @@
   import { goto } from '$app/navigation';
   import { page } from '$app/stores';
   import { onMount } from 'svelte';
-  import { apiGet, apiPost } from '$lib/api';
+  import { apiGet } from '$lib/api';
   import AddTransactionForm from '$lib/components/transactions/AddTransactionForm.svelte';
   import ManualResolutionDialog from '$lib/components/transactions/ManualResolutionDialog.svelte';
   import TransactionDayGroup from '$lib/components/transactions/TransactionDayGroup.svelte';
@@ -39,10 +39,17 @@
   let dataLoading = false;
   let requestSeq = 0;
   let selectedRow: TxRow | null = null;
+  let lastSelectedRowId: string | null = null;
   let confirmDeleteRow: TxRow | null = null;
   let confirmUnmatchRow: TxRow | null = null;
   let actionError = '';
   let actionBusy = false;
+
+  // Clear stale action error whenever the selected row changes (open/close/swap).
+  $: if ((selectedRow?.id ?? null) !== lastSelectedRowId) {
+    lastSelectedRowId = selectedRow?.id ?? null;
+    actionError = '';
+  }
   let manualResolutionEntry: import('$lib/transactions/types').RegisterEntry | null = null;
   let manualResolutionSuccess = '';
   let showAddForm = false;
@@ -186,7 +193,7 @@
   }
 
   function handleSheetDelete(row: TxRow) { selectedRow = null; confirmDeleteRow = row; }
-  function handleSheetResetCat(row: TxRow) { selectedRow = null; void doResetCat(row); }
+  function handleSheetResetCat(row: TxRow) { void doResetCat(row); }
   function handleSheetRecat(row: TxRow, cat: string) { void doRecat(row, cat); }
   function handleSheetUnmatch(row: TxRow) { selectedRow = null; confirmUnmatchRow = row; }
   function handleFilterApply(next: TransactionFilters) { filterDialogOpen = false; changeFilters(next); }
@@ -356,7 +363,7 @@
   </section>
 {/if}
 
-<TransactionDetailSheet row={selectedRow} {baseCurrency} accounts={allAccounts} onDelete={handleSheetDelete} onResetCategory={handleSheetResetCat} onRecategorize={handleSheetRecat} onUnmatch={handleSheetUnmatch} onClose={() => (selectedRow = null)} />
+<TransactionDetailSheet row={selectedRow} {baseCurrency} accounts={allAccounts} {actionError} onDelete={handleSheetDelete} onResetCategory={handleSheetResetCat} onRecategorize={handleSheetRecat} onUnmatch={handleSheetUnmatch} onClose={() => (selectedRow = null)} />
 <ManualResolutionDialog bind:entry={manualResolutionEntry} bind:baseCurrency onResolved={handleResolved} />
 <TransactionsFilterDialog bind:open={filterDialogOpen} {filters} {trackedAccounts} {allAccounts} onApply={handleFilterApply} onClose={() => (filterDialogOpen = false)} />
 
