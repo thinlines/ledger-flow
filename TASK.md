@@ -2,13 +2,13 @@
 
 ## Title
 
-Transactions screen rethink — Phase 4a: Unified backend endpoint
+Transactions screen rethink — Phase 4b: Frontend unification
 
 ## Objective
 
-Build a single `GET /api/transactions` endpoint that replaces both `/api/transactions/register` (single-account) and `/api/transactions/activity` (cross-account). The endpoint returns a unified `TransactionRow[]` shape implementing the N-1 posting rule, computes running balance server-side, and supports filter params for account scope, date range, category, status, and search. Transfer-pair collapse is deferred to Phase 4b.
+Replace the dual-mode transactions page (register view + activity view toggled by `activityMode`) with a single filter-driven screen backed by `GET /api/transactions`. Account scope becomes a filter chip, not a mode toggle. Single-account features (running balance, clearing toggle, add transaction, manual resolution, pending transfers) auto-activate when exactly one account is selected. The page drops from ~1400 lines to ~500.
 
-This is the backend foundation that Phase 4b (frontend unification) and Phase 4c (polish) build on. The two legacy endpoints remain untouched — they are retired in Phase 4b when the frontend switches to the new endpoint.
+After this task: one screen, Monarch-shaped, running balance visible in single-account scope, filter bar with chips, day-grouped rows, detail sheet, all existing actions preserved. Two-mode toggle gone.
 
 See [`plans/transactions-rethink.md`](plans/transactions-rethink.md) for the full design.
 
@@ -16,200 +16,209 @@ See [`plans/transactions-rethink.md`](plans/transactions-rethink.md) for the ful
 
 ### Included
 
-- **New service file** `app/backend/services/unified_transactions_service.py` containing `build_unified_transactions(config, filters, *, today=None) -> dict`.
-- **New shared helpers module** `app/backend/services/transaction_helpers.py` — extract the helpers needed by both the register service and the unified service (currently private in `account_register_service.py`). Promote to public functions. Update `account_register_service.py` imports so the existing register endpoint continues to work unchanged.
-- **New route** `GET /api/transactions` in `main.py` with query param parsing.
-- **N-1 posting rule** implemented server-side: a ledger transaction with N postings displays as 1 row, suppressing the tracked-account leg. The remaining N-1 postings populate `categories[]`.
-- **Running balance** computed across the visible filtered row set in date order. Single-account scope = that account's balance. Multi-account same-currency scope = sum of tracked-account balances (net-worth proxy). Multi-currency scope = running balance omitted (`null`).
-- **Summary block** reusing `_build_summary()` from the activity service when a date filter is active.
-- **Account metadata** (`accountMeta`) returned when exactly one account is scoped — same data as the current register response top-level fields (currentBalance, hasOpeningBalance, etc.).
-- **Filter params**: `accounts`, `categories`, `period`, `from_date`, `to_date`, `month`, `status`, `search`.
-- **Synthetic peer rows** for pending and direct transfers in single-account scope (same behavior as current register service).
-- **Tests** in `app/backend/tests/test_unified_transactions_service.py` following the existing `_make_config` + `tmp_path` fixture pattern.
+**New files:**
+- `app/frontend/src/lib/transactions/transactionFilters.ts` — `TransactionFilters` type, `EMPTY_FILTERS` constant, `filtersFromUrl(url)` (with migration from old `?view=activity&...` and `?accountId=...` params), `filtersToUrl(filters)`, `filtersToApiParams(filters)`, `activeFilterCount(filters)`.
+- `app/frontend/src/lib/transactions/loadTransactions.ts` — `loadTransactions(filters): Promise<TransactionsResponse>` using `apiGet` with params from `filtersToApiParams()`.
+- `app/frontend/src/lib/components/transactions/TransactionsFilterBar.svelte` — horizontal bar with search input (debounced 300ms), period segmented control, active filter chips (accounts, category, status) with ✕ clear, "+ Filters" button.
+- `app/frontend/src/lib/components/transactions/TransactionsFilterDialog.svelte` — bits-ui Dialog with Accounts tab (checkbox list of tracked accounts), Categories tab (grouped checkbox list from `/api/accounts`), Status tab (radio: cleared / pending / unmarked / any). Works on a draft copy; Apply commits.
+
+**Modified files:**
+- `app/frontend/src/lib/transactions/types.ts` — add `TransactionRow`, `TransactionsResponse`, `TransactionFilters` types. Keep old types during transition.
+- `app/frontend/src/lib/transactions/helpers.ts` — add `groupByDate(rows: TransactionRow[])` returning `{header, rows, dailySum}[]`. Add `canDeleteRow(row)`, `canRecategorizeRow(row)`, `canUnmatchRow(row)`.
+- `app/frontend/src/lib/components/transactions/TransactionRow.svelte` — remove `mode` prop and dual `{#if}` branches. Single layout: `[clearing-dot] [category-pills] [payee + secondary line] [amount] [running-balance?] [chevron]`. Accept `row: TransactionRow`.
+- `app/frontend/src/lib/components/transactions/TransactionDetailSheet.svelte` — replace dual `entry`/`transaction` props with single `row: TransactionRow | null`. Adapt category combobox and notes to work with unified type.
+- `app/frontend/src/lib/components/transactions/TransactionDayGroup.svelte` — add `dailySum: number | null` and `baseCurrency: string` props. Render daily sum right-aligned.
+- `app/frontend/src/routes/transactions/+page.svelte` — full rewrite (~500 lines). Single data flow: `filters → loadTransactions → result`. Remove `activityMode` toggle, duplicate hero, legacy loaders.
+- `app/frontend/src/routes/+page.svelte` — update dashboard drill-down links to new URL format.
+- `app/frontend/src/routes/accounts/+page.svelte` — update "Transactions" link to new URL format.
 
 ### Explicitly Excluded
 
-- **Transfer-pair collapse** — deferred to Phase 4b. Two tracked-to-tracked transfer transactions appear as separate rows for now. The collapse logic has unresolved edge cases (clearing-status conflicts, manual-resolution tokens, mismatched dates) that need specification before implementation.
-- **Frontend changes** — no component or page modifications. The frontend continues using the legacy endpoints.
-- **Deleting legacy endpoints** — `/api/transactions/register` and `/api/transactions/activity` remain unchanged.
-- **Search formula syntax** (`>50`, `<-20`) — deferred to Phase 4c (polish).
-- **Any new UI copy or user-visible changes** — this is a backend-only task.
+- **Transfer-pair collapse** — deferred. Both sides of a tracked-to-tracked transfer still appear as separate rows. The plan file specifies collapse rules but the edge cases (clearing-status conflicts, mismatched dates, manual-resolution tokens across collapsed pairs) need a dedicated task with trust-level specification.
+- **Deleting legacy backend endpoints** — `/api/transactions/register` and `/api/transactions/activity` remain. Removal is a separate cleanup task after the frontend is stable.
+- **Phase 4c polish items** — live totals strip, search formula syntax, mobile bottom sheet, keyboard shortcuts. Each is an independent follow-up.
+- **Notes and tags** — the detail sheet already has a notes textarea from Phase 3. No new notes/tags work.
+- **Split editing, merchant management, transaction editing** — per plan exclusions.
 
 ## System Behavior
 
 ### Inputs
 
-- `GET /api/transactions` with optional query params:
-  - `accounts` — comma-separated tracked-account IDs (empty = all tracked accounts)
-  - `categories` — comma-separated category account prefixes (prefix match: `Expenses:Food` matches `Expenses:Food:Groceries`)
-  - `period` — `this-month` | `last-30` | `last-3-months` | `last-6-months` | `this-year`
-  - `from_date`, `to_date` — ISO date strings for custom range
-  - `month` — `YYYY-MM` shorthand (overrides `period`)
-  - `status` — comma-separated: `cleared`, `pending`, `unmarked`
-  - `search` — case-insensitive payee substring match
+- User navigates to `/transactions` → unified screen loads with default filters (all accounts, last 3 months).
+- User navigates to `/transactions?accounts=checking` → single-account scope activates.
+- User navigates with old params (`?view=activity&category=X`, `?accountId=X`) → URL migrated silently via `filtersFromUrl()`.
+- User clicks a filter chip ✕ → that filter removed, data reloads.
+- User changes period preset → period filter updates, data reloads.
+- User types in search → debounced 300ms, data reloads.
+- User opens "+ Filters" → dialog opens with draft filter state.
+- User applies filters in dialog → filters update, data reloads, URL updates.
+- User clicks row chevron → detail sheet opens for that row.
+- User clicks clearing dot (single-account only) → clearing status toggles via existing `POST /api/transactions/toggle-status`.
+- User clicks "Add transaction" (single-account only) → `AddTransactionForm` opens.
+- User opens manual resolution (single-account, pending transfer) �� `ManualResolutionDialog` opens.
 
 ### Logic
 
-**Pipeline** (in order):
-1. Load all parsed transactions via `load_transactions(config)`.
-2. Determine scope accounts: if `accounts` param is set, restrict to those IDs; otherwise use all tracked accounts from config.
-3. Compute grouped-settlement and bilateral-match orders (reuse existing helpers).
-4. Build `UnifiedRow` list — for each transaction:
-   - Identify owning tracked account via `_source_tracked_account_details()`.
-   - If the tracked-account ledger posting exists and the account is in scope:
-     - Extract amount and commodity from the tracked-account posting.
-     - Build `categories[]` from remaining postings (N-1 rule): all postings except the tracked-account posting and transfer-account postings. Each entry: `{ account, label, amount }`.
-     - Detect `isTransfer` via transfer metadata, `isUnknown` from `Expenses:Unknown` prefix, `isManual` from `:manual:` tag, `isOpeningBalance` via `is_generated_opening_balance_transaction()`.
-     - Build detail_lines, transfer state, manual resolution token/note, notes.
-   - If the transaction doesn't touch the scoped account directly, check for synthetic peer rows (pending/direct transfers) — only in single-account scope.
-5. Apply filters in order: date/period → category → status → search.
-6. Sort by `(date, order)`.
-7. Compute running balance as cumulative sum of each row's amount. For multi-commodity scope, set `runningBalance = null` on all rows instead of raising an error.
-8. Build summary via `_build_summary()` when a date filter is active.
-9. Build `accountMeta` when exactly one account is scoped.
-10. Serialize: rows reversed (newest first), fields as specified in response shape.
+**Page data flow:**
+1. `onMount` → read URL via `filtersFromUrl($page.url)`. If old params detected, rewrite URL with `replaceState`. Load app state, tracked accounts, all accounts (for category combobox). Call `loadData()`.
+2. `loadData()` → call `loadTransactions(filters)` → set `result: TransactionsResponse`. Derive `isSingleAccount`, `selectedAccount`, `dayGroups`, `postedRows`, `pendingRows`.
+3. `handleFiltersChange(next)` → set `filters = next`, update URL via `goto()` with `replaceState`, call `loadData()`.
 
-**N-1 rule detail:**
-- 2-posting transaction (normal): 1 tracked-account posting (suppressed → `account` + `amount`), 1 other posting (→ `categories[0]`).
-- 3-posting transaction (split): 1 tracked-account posting (suppressed), 2 others (→ `categories[0..1]`).
-- Transaction with transfer-account posting: transfer-account postings excluded from `categories[]`. Transfer peer derived from transfer metadata.
+**Single-account auto-activation (`filters.accounts.length === 1`):**
+- `showRunningBalance = true` on `TransactionRow`
+- Clearing dot becomes clickable (`onToggleClearing` callback provided)
+- "Add transaction" button appears in hero
+- Pending transfers section appears if `pendingRows.length > 0`
+- Summary cards appear (balance, balance with pending, latest activity) from `result.accountMeta`
+- `TransactionsExplanationHeader` hidden (summary is account-level, not category-level)
 
-**Running balance rules:**
-- Single-account scope: each row's `amount` accumulates into the running balance. Opening balance rows anchor the starting point. Synthetic pending-transfer peer rows have `affects_balance = false`.
-- Multi-account same-currency scope: same accumulation, but across all tracked accounts. Running balance represents net-worth proxy.
-- Multi-currency: if any two rows in the filtered set have different commodities, set `runningBalance = null` on all rows. Do not raise `CommodityMismatchError` — fail soft with null so the frontend can hide the column.
+**Multi-account mode (`filters.accounts.length !== 1`):**
+- `showRunningBalance = false` (hidden unless same-currency, which is `runningBalance !== null`)
+- Clearing dot is a static indicator (no toggle callback)
+- "Add transaction" button hidden
+- Pending transfers section hidden
+- Summary cards hidden
+- `TransactionsExplanationHeader` shown when `result.summary` is non-null
+
+**Filter state type:**
+```typescript
+type TransactionFilters = {
+  accounts: string[];
+  period: string | null;     // 'this-month' | 'last-30' | 'last-3-months' | null (= no period, show all)
+  month: string | null;      // 'YYYY-MM'
+  category: string | null;   // full ledger account path
+  search: string;
+  status: string | null;     // 'cleared' | 'pending' | 'unmarked'
+};
+```
+
+**URL param mapping:**
+- `accounts` → `?accounts=checking,savings` (omit when empty)
+- `period` → `?period=last-3-months` (omit when null — null means no date filter, show all time)
+- `month` → `?month=2026-03` (overrides period)
+- `category` → `?category=Expenses:Food`
+- `search` → `?q=trader`
+- `status` → `?status=cleared`
+
+**URL migration (`filtersFromUrl`):**
+- `?view=activity&period=X` → `{ accounts: [], period: X }`
+- `?view=activity&month=M` → `{ accounts: [], month: M }`
+- `?view=activity&category=C` → `{ accounts: [], category: C }`
+- `?accountId=X` → `{ accounts: [X], period: null }`
+- Any combination of above → mapped field by field
 
 ### Outputs
 
-**Response shape:**
-
-```json
-{
-  "baseCurrency": "USD",
-  "filters": {
-    "accounts": ["checking"],
-    "categories": [],
-    "period": "last-3-months",
-    "month": null,
-    "status": null,
-    "search": null
-  },
-  "rows": [
-    {
-      "id": "checking-2026-03-24-0",
-      "date": "2026-03-24",
-      "payee": "Trader Joe's",
-      "amount": -42.10,
-      "runningBalance": 1210.50,
-      "account": { "id": "checking", "label": "Wells Fargo Checking" },
-      "transferPeer": null,
-      "categories": [
-        { "account": "Expenses:Food:Groceries", "label": "Food / Groceries", "amount": 42.10 }
-      ],
-      "status": "cleared",
-      "isTransfer": false,
-      "isUnknown": false,
-      "isManual": false,
-      "isOpeningBalance": false,
-      "legs": [{ "journalPath": "workspace/journals/2026.journal", "headerLine": "2026-03-24 * Trader Joe's" }],
-      "matchId": null,
-      "transferState": null,
-      "manualResolutionToken": null,
-      "manualResolutionNote": null,
-      "detailLines": [{ "label": "Food / Groceries", "account": "Expenses:Food:Groceries", "kind": "expense" }],
-      "notes": null
-    }
-  ],
-  "summary": { "..." : "same shape as existing ActivitySummary" },
-  "totalCount": 1,
-  "accountMeta": {
-    "accountId": "checking",
-    "currentBalance": 1210.50,
-    "entryCount": 42,
-    "transactionCount": 40,
-    "hasOpeningBalance": true,
-    "hasTransactionActivity": true,
-    "hasBalanceSource": true,
-    "latestTransactionDate": "2026-03-24",
-    "latestActivityDate": "2026-03-24"
-  }
-}
-```
-
-When `accounts` is empty or contains multiple accounts, `accountMeta` is `null`.
+- One unified transactions screen for all scopes.
+- Filter bar above the list with active filters as removable chips.
+- Day-grouped transaction rows with daily sum in group headers.
+- Detail sheet opens from chevron, shows all row data, category combobox works, notes work.
+- Single-account features auto-activate.
+- Old URLs from dashboard and accounts page continue to work.
 
 ## System Invariants
 
-- The N-1 rule must produce exactly one row per ledger transaction. Rows must never double-count the tracked-account leg.
-- `runningBalance` on each row, when non-null, must equal the cumulative sum of all prior rows' `amount` fields (in date/order sequence). A user summing the `amount` column down the page must arrive at the final `runningBalance`.
-- The `amount` field always represents the tracked-account leg's signed value. Negative = money left the tracked account. Positive = money entered.
-- Opening-balance rows anchor the running balance. They are included in the cumulative sum.
-- Synthetic peer rows for pending transfers must have `affects_balance = false` — they do not change the running balance.
-- `categories[]` must never contain the tracked-account posting or a transfer-clearing-account posting.
-- The existing `/api/transactions/register` and `/api/transactions/activity` endpoints must continue working unchanged after this task.
-- `summary` is `null` when no date filter is active (matches current activity service behavior — summary requires a time-bounded comparison).
+- The `amount` displayed on each row matches `row.amount` from the backend. The frontend never recomputes amounts.
+- Running balance, when shown, matches `row.runningBalance` from the backend. The frontend never recomputes it.
+- Filter state in the URL is the single source of truth. Refreshing the page with the same URL produces the same view.
+- All existing transaction actions (delete, recategorize, reset category, unmatch, toggle clearing, add transaction, manual resolution) must continue to work. They call the same POST endpoints and reload data via `loadData()` after mutation.
+- Dashboard drill-down links and accounts page links must land on the correct filtered view.
 
 ## States
 
-- **Success**: response with `rows[]`, `summary`, optional `accountMeta`.
-- **Empty result**: response with `rows: []`, `totalCount: 0`, `summary: null`. Filters echoed back.
-- **Error — invalid account**: 404 if an explicit `accounts` param references a non-existent tracked account ID.
-- **Error — commodity mismatch within single account**: 400 with `CommodityMismatchError` detail (existing behavior preserved from register service). Only raised when a single account has mixed commodities within its own postings, not cross-account.
+- **Default**: all accounts, no date filter, no category/search/status filter. Shows all transactions newest first.
+- **Loading**: page skeleton or spinner while `loadTransactions()` is in flight.
+- **Success**: filter bar + day-grouped rows + optional summary/cards.
+- **Error**: error message card. Retry by changing filters.
+- **Empty — no accounts**: hero with "Add first account" CTA (existing pattern).
+- **Empty — no results for filters**: empty panel with "No transactions match these filters" + clear-filters button.
+- **Empty — not initialized**: hero with "Create a workspace first" CTA (existing pattern).
 
 ## Edge Cases
 
-- **Transaction touching no tracked account**: skipped — does not appear in any response.
-- **Transaction touching multiple tracked accounts without transfer metadata**: attributed to the "source" account (via `_source_tracked_account_details`). Other tracked-account postings appear in `categories[]`.
-- **Multi-currency cross-account scope**: `runningBalance` set to `null` on all rows. No error raised.
-- **Opening balance in cross-account mode**: each tracked account's opening balance appears as a separate row. They collectively anchor the running balance.
-- **Split transaction (3+ postings)**: N-1 rule produces 2+ entries in `categories[]`. The row is normal, not a transfer.
-- **Search on empty string**: treated as no search filter.
-- **`period` and `month` both set**: `month` takes precedence (existing activity service behavior).
-- **Filters producing zero results**: `summary` is `null`, `rows` is `[]`.
+- **Stale account bookmark**: `/transactions?accounts=deleted-id` → backend returns 404, frontend shows error state. User clears filter or navigates away.
+- **Dashboard link with old URL format**: `?view=activity&category=Expenses:Food` → silently migrates to `?category=Expenses:Food`. No visible redirect.
+- **Rapid filter changes**: debounced search (300ms). Period/account/category changes fire immediately but cancel in-flight requests (use a request sequence counter or abort controller).
+- **Detail sheet open during filter change**: close the sheet, clear `selectedRow`.
+- **Single account with zero transactions**: show empty state + summary cards (balance, etc.) from `accountMeta`.
+- **All accounts with zero transactions in range**: show empty state with filter-clear CTA. `summary` is null.
 
 ## Failure Behavior
 
-- If `load_transactions()` fails (journal parse error), propagate as 500. Do not return partial results.
-- If a tracked account referenced in `accounts` param doesn't exist, return 404 with a clear message. Do not silently ignore.
-- Multi-currency in cross-account mode fails soft: `runningBalance = null` on all rows. The frontend hides the column.
-- Single-account multi-commodity (within one account's postings): raise `CommodityMismatchError` as 400, matching existing register behavior.
+- API error from `loadTransactions()`: show error text in an error card. Do not show stale data from a previous successful load.
+- Action error (delete, recategorize, etc.): show error message inline. Do not close the detail sheet on failure.
+- If `filtersFromUrl()` encounters unrecognized params: ignore them, use defaults for missing fields.
 
 ## Regression Risks
 
-- **Register endpoint behavior change**: the shared helpers extraction (Step 1) must not alter `build_account_register()` output. Run existing `test_account_register_service.py` before and after.
-- **Activity endpoint behavior change**: no code changes to `activity_service.py`, but verify `test_activity_service.py` still passes (if tests exist).
-- **Import identity metadata**: the unified service reads `import_account_id`, `match-id`, `notes`, and transfer metadata from transaction comments. These are read-only — no writes.
-- **Transfer detection**: reusing grouped-settlement and bilateral-match detection from the register service. These must produce identical results to the current register.
+- **Dashboard drill-down breaks**: links in `+page.svelte` (dashboard) use `?view=activity&category=...` and `?view=activity&month=...`. These must land on the correct filtered view after migration. Test by clicking category trend rows and cash flow month rows.
+- **Accounts page link breaks**: `?accountId=checking` must land on single-account view with running balance and clearing toggles.
+- **Clearing toggle regression**: must still persist via `POST /api/transactions/toggle-status` and optimistically update the row.
+- **Category combobox regression**: the detail sheet's category combobox was just shipped in Phase 3. Must still work with the new `TransactionRow` type.
+- **Notes regression**: the detail sheet's notes textarea was just shipped in Phase 3. Must still work with the new type.
+- **Manual resolution regression**: the dialog must still open from pending transfer rows in single-account scope.
+- **Add transaction regression**: the form must still work in single-account scope, bound to the selected account.
+- **Old `activityMode` state leakage**: ensure no code path references `activityMode` after the rewrite.
 
 ## Acceptance Criteria
 
-- `GET /api/transactions` with no params returns all tracked-account transactions from last 3 months, newest first, with `runningBalance` and `summary`.
-- `GET /api/transactions?accounts=checking` returns single-account results with `accountMeta`, running balance, clearing status, transfer state, manual resolution tokens, and notes — matching the data from the current register endpoint for the same account.
-- `GET /api/transactions?accounts=checking&period=this-month` returns filtered results with `summary` block.
-- `GET /api/transactions?categories=Expenses:Food` returns only transactions with a posting to `Expenses:Food` or any sub-account.
-- `GET /api/transactions?status=cleared` returns only cleared transactions.
-- `GET /api/transactions?search=trader` returns only transactions with "trader" in the payee (case-insensitive).
-- N-1 rule: a 2-posting expense produces 1 category. A 3-posting split produces 2 categories. No row duplicates the tracked-account leg.
-- Running balance is cumulative and coherent when summing amounts down the page.
-- Multi-currency cross-account: `runningBalance` is `null` on all rows (no error).
-- Existing tests in `test_account_register_service.py` pass unchanged.
-- `uv run pytest -q` passes.
+- `/transactions` with no params shows all accounts, day-grouped, newest first. No `activityMode` toggle visible.
+- `/transactions?accounts=checking` shows single-account view: running balance column, clickable clearing dots, "Add transaction" button, pending transfers section (if any), summary cards.
+- `/transactions?category=Expenses:Food` shows only transactions with that category. Explanation header appears with summary stats.
+- `/transactions?period=this-month` shows current month transactions with summary.
+- Filter bar shows active filters as chips with ✕ to remove.
+- "+ Filters" button opens a dialog where the user can select accounts, categories, and status. Apply updates the view.
+- Search input filters by payee substring (debounced).
+- Old URL `?view=activity&category=Expenses:Food` auto-migrates and shows the correct filtered view.
+- Old URL `?accountId=checking` auto-migrates to single-account view.
+- Dashboard category-trend click lands on correct category-filtered view.
+- Dashboard cash-flow month click lands on correct month-filtered view.
+- Accounts page "Transactions" link lands on single-account view.
+- Clicking a row chevron opens the detail sheet with correct data.
+- Detail sheet category combobox recategorizes and reloads.
+- Detail sheet notes textarea saves on blur.
+- Detail sheet delete/unmatch actions work and reload.
+- Clearing dot toggle works in single-account mode.
+- "Add transaction" form works in single-account mode.
+- Day group headers show daily sum right-aligned.
+- `pnpm check` passes.
+- `uv run pytest -q` passes (backend unchanged, verify no breaks).
+- Page line count is under 600.
 
 ## Proposed Sequence
 
-1. **Extract shared helpers** into `app/backend/services/transaction_helpers.py`. Move `_account_amount`, `_source_tracked_account_details`, `_tracked_account_display`, `_tracked_account_by_ledger_account`, `_transfer_peer_details`, `_detail_lines`, `_manual_resolution_token`, `_manual_resolution_note`, `_opening_balance_detail_line`, `_grouped_settled_pending_transfer_orders`, `_bilateral_matched_pending_transfer_orders`, `_pending_transfer_event_for_peer_account`, `_direct_transfer_event_for_peer_account`, `_transaction_summary`, `RegisterEvent`, `PendingTransferCandidate`, and the grouped-settlement helpers. Update imports in `account_register_service.py`. Run existing tests.
-2. **Build `unified_transactions_service.py`** with `UnifiedTransactionFilters` dataclass, the pipeline functions, and `build_unified_transactions()`.
-3. **Add the route** in `main.py` with query param parsing and error handling.
-4. **Write tests** covering: single-account parity with register, cross-account parity with activity, N-1 rule (2-leg and 3-leg), running balance coherence, all filter types, summary block, accountMeta, edge cases (no tracked account, multi-currency, empty results).
+1. **Types + filter state** — add `TransactionRow`, `TransactionsResponse` to `types.ts`. Create `transactionFilters.ts` with filter type, URL serialization, and migration. Create `loadTransactions.ts`.
+2. **Updated helpers** — add `groupByDate`, `canDeleteRow`, `canRecategorizeRow`, `canUnmatchRow` to `helpers.ts`.
+3. **TransactionRow.svelte rewrite** — remove `mode` prop, single unified layout accepting `TransactionRow`.
+4. **TransactionDayGroup.svelte update** — add `dailySum` + `baseCurrency` props.
+5. **TransactionDetailSheet.svelte update** — accept `TransactionRow | null` instead of dual props. Adapt combobox and notes.
+6. **TransactionsFilterBar.svelte** — new component with search, period presets, filter chips.
+7. **TransactionsFilterDialog.svelte** — new component with tabbed filter selection.
+8. **+page.svelte rewrite** — single data flow, filter-driven. Remove `activityMode`, duplicate hero, legacy loaders. Wire all components.
+9. **Update external links** — dashboard `+page.svelte` and accounts `+page.svelte` links to new URL format.
+10. **Verify** — `pnpm check`, manual testing of all acceptance criteria, regression checks.
 
 ## Definition of Done
 
-- The unified endpoint returns correct data for both single-account and cross-account queries.
-- N-1 posting rule is verified by tests.
-- Running balance is mathematically coherent (cumulative sum check in tests).
-- All existing tests pass — no regressions in register or activity behavior.
+- One transactions screen with no mode toggle.
+- All acceptance criteria met.
+- All regression risks verified (dashboard links, accounts links, clearing, combobox, notes, manual resolution, add transaction).
+- `pnpm check` passes.
 - `uv run pytest -q` passes.
+- Page is under 600 lines.
+- No references to `activityMode` remain in the codebase.
+
+## UX Notes
+
+- **Filter bar** sits between the hero and the transaction list. It's always visible when initialized. Uses the existing `.view-card` pattern with tight padding.
+- **Period presets** render as a segmented control (existing `.activity-presets` pattern). When a month filter is active from a drill-down, show it as a removable chip instead of the presets.
+- **Account chips** show the tracked account's `displayName`. Multiple can be active.
+- **Category chip** shows the leaf segment of the category path (e.g., "Food / Groceries" for `Expenses:Food:Groceries`).
+- **Day group headers**: date on the left (e.g., "Mar 24 · Wednesday"), daily sum on the right in muted text.
+- **Row layout**: `[clearing-dot] [category-pills] [payee + date/account secondary line] [amount] [running-balance?] [chevron]`. Running balance column hidden when multi-account or null.
+- **Hero**: single hero for all scopes. Shows account name + balance trust when single-account. Shows "Transactions" + subtitle when multi-account.
+- **Empty state**: centered message with "No transactions match these filters" and a "Clear all filters" button.
 
 ## Out of Scope
 
-See "Explicitly Excluded" above. Everything from Phase 4b (frontend), Phase 4c (polish), and transfer-pair collapse is out of scope.
+See "Explicitly Excluded" above. Transfer-pair collapse, legacy endpoint deletion, Phase 4c polish, and all deferred plan items are out of scope.
