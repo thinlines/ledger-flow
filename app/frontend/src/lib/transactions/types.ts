@@ -134,3 +134,65 @@ export type ManualResolutionApplyResult = {
   destinationAccountId: string;
   destinationAccountName: string;
 };
+
+// --- Unified transactions types (Phase 4b) ---
+
+export type TransactionRow = {
+  id: string;
+  date: string;
+  payee: string;
+  amount: number;
+  runningBalance: number | null;
+  account: { id: string; label: string };
+  transferPeer?: { id: string; label: string } | null;
+  categories: Array<{ account: string; label: string; amount: number }>;
+  status: 'cleared' | 'pending' | 'unmarked';
+  isTransfer: boolean;
+  isUnknown: boolean;
+  isManual: boolean;
+  isOpeningBalance: boolean;
+  legs: Array<{ journalPath: string; headerLine: string }>;
+  matchId?: string | null;
+  transferState?: string | null;
+  manualResolutionToken?: string | null;
+  manualResolutionNote?: string | null;
+  detailLines: Array<{ label: string; account: string; kind: string }>;
+  notes?: string | null;
+};
+
+export type AccountMeta = {
+  accountId: string;
+  currentBalance: number | null;
+  entryCount: number;
+  transactionCount: number;
+  hasOpeningBalance: boolean;
+  hasTransactionActivity: boolean;
+  hasBalanceSource: boolean;
+  latestTransactionDate: string | null;
+  latestActivityDate: string | null;
+};
+
+export type TransactionsResponse = {
+  baseCurrency: string;
+  filters: {
+    accounts: string[];
+    categories: string[];
+    period: string | null;
+    month: string | null;
+    status: string[] | null;
+    search: string | null;
+  };
+  rows: TransactionRow[];
+  totalCount: number;
+  summary: ActivitySummary | null;
+  accountMeta: AccountMeta | null;
+};
+
+export type TransactionFilters = {
+  accounts: string[];
+  period: string | null;
+  month: string | null;
+  category: string | null;
+  search: string;
+  status: string | null;
+};
