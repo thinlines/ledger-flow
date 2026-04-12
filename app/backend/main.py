@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+from datetime import date
 import logging
 from pathlib import Path
 import re
@@ -31,6 +32,7 @@ from models import (
     UnknownScanRequest,
     UnknownStageRequest,
     UnmatchTransactionRequest,
+    UpdateNotesRequest,
     WorkspaceImportAccountUpsertRequest,
     WorkspaceBootstrapRequest,
     WorkspaceSelectRequest,
@@ -53,6 +55,10 @@ from services.commodity_service import CommodityMismatchError
 from services.custom_csv_service import inspect_csv_bytes
 from services.activity_service import build_activity_view
 from services.dashboard_service import build_dashboard_overview
+from services.unified_transactions_service import (
+    UnifiedTransactionFilters,
+    build_unified_transactions,
+)
 from services.import_history_service import list_import_history, record_applied_import, undo_import
 from services.import_index import ImportIndex
 from services.import_service import (
@@ -447,6 +453,36 @@ def transactions_register(accountId: str) -> dict:
         raise HTTPException(status_code=404, detail=str(e)) from e
 
 
+@app.get("/api/transactions")
+def transactions_unified(
+    accounts: str | None = None,
+    categories: str | None = None,
+    period: str | None = None,
+    from_date: str | None = None,
+    to_date: str | None = None,
+    month: str | None = None,
+    status: str | None = None,
+    search: str | None = None,
+) -> dict:
+    config = _require_workspace_config()
+    filters = UnifiedTransactionFilters(
+        accounts=[a.strip() for a in accounts.split(",") if a.strip()] if accounts else [],
+        categories=[c.strip() for c in categories.split(",") if c.strip()] if categories else [],
+        period=period,
+        from_date=date.fromisoformat(from_date) if from_date else None,
+        to_date=date.fromisoformat(to_date) if to_date else None,
+        month=month,
+        status=[s.strip() for s in status.split(",") if s.strip()] if status else None,
+        search=search,
+    )
+    try:
+        return build_unified_transactions(config, filters)
+    except CommodityMismatchError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+
+
 @app.post("/api/transactions/create")
 def transactions_create(req: ManualTransactionRequest) -> dict:
     config = _require_workspace_config()
@@ -730,7 +766,7 @@ def transactions_recategorize(req: RecategorizeTransactionRequest) -> dict:
             account = m.group(2).strip()
             if account in tracked_ledger_accounts:
                 continue  # Source (tracked) account — skip.
-            if account == "Expenses:Unknown":
+            if account == "Expenses:Unknown" and not (req.newCategory and req.newCategory.strip()):
                 raise HTTPException(status_code=422, detail="Transaction is already uncategorized")
             if destination_idx is not None:
                 # Multiple non-source postings — split transaction, not supported.
@@ -741,7 +777,12 @@ def transactions_recategorize(req: RecategorizeTransactionRequest) -> dict:
     if destination_idx is None:
         raise HTTPException(status_code=422, detail="Cannot re-categorize a transfer")
 
-    new_line, changed = rewrite_posting_account(lines[destination_idx], "Expenses:Unknown")
+    target_account = req.newCategory.strip() if req.newCategory and req.newCategory.strip() else "Expenses:Unknown"
+
+    if previous_account == target_account:
+        raise HTTPException(status_code=422, detail="Transaction already has this category")
+
+    new_line, changed = rewrite_posting_account(lines[destination_idx], target_account)
     if not changed:
         raise HTTPException(status_code=500, detail="Failed to rewrite posting account")
     lines[destination_idx] = new_line
@@ -758,12 +799,12 @@ def transactions_recategorize(req: RecategorizeTransactionRequest) -> dict:
         event_id = emit_event(
             config.root_dir,
             event_type="transaction.recategorized.v1",
-            summary=f"Reset category: {payee} on {date_str} ({previous_account} → Expenses:Unknown)",
+            summary=f"Recategorized: {payee} on {date_str} ({previous_account} → {target_account})",
             payload={
                 "journal_path": rel_path(journal_path, config.root_dir),
                 "header_line": req.headerLine,
                 "previous_account": previous_account,
-                "new_account": "Expenses:Unknown",
+                "new_account": target_account,
             },
             journal_refs=[{
                 "path": rel_path(journal_path, config.root_dir),
@@ -774,7 +815,78 @@ def transactions_recategorize(req: RecategorizeTransactionRequest) -> dict:
     except Exception:
         _log.error("Event emission failed for recategorize", exc_info=True)
 
-    return {"success": True, "previousAccount": previous_account, "eventId": event_id}
+    return {"success": True, "previousAccount": previous_account, "newAccount": target_account, "eventId": event_id}
+
+
+# ---------------------------------------------------------------------------
+# Notes
+# ---------------------------------------------------------------------------
+
+_NOTES_RE = re.compile(r"^(\s*;\s*)notes:\s*(.*)$")
+
+
+@app.post("/api/transactions/notes")
+def transactions_notes(req: UpdateNotesRequest) -> dict:
+    config = _require_workspace_config()
+    journal_path = Path(req.journalPath)
+    if not journal_path.is_file():
+        raise HTTPException(status_code=404, detail="Journal file not found")
+
+    hash_before = check_drift(config.root_dir, journal_path)
+    backup_file(journal_path, "notes")
+
+    text = journal_path.read_text(encoding="utf-8")
+    lines = text.splitlines()
+    header_idx = _locate_header(lines, req.headerLine)
+    block_start, block_end = find_transaction_block(lines, header_idx)
+
+    # Find existing notes line within the block.
+    notes_idx: int | None = None
+    for i in range(block_start + 1, block_end):
+        if _NOTES_RE.match(lines[i]):
+            notes_idx = i
+            break
+
+    if req.notes:
+        new_notes_line = f"    ; notes: {req.notes}"
+        if notes_idx is not None:
+            lines[notes_idx] = new_notes_line
+        else:
+            # Insert after the header line.
+            lines.insert(block_start + 1, new_notes_line)
+    else:
+        # Empty notes — remove the line if it exists.
+        if notes_idx is not None:
+            del lines[notes_idx]
+
+    journal_path.write_text("\n".join(lines) + ("\n" if text.endswith("\n") else ""), encoding="utf-8")
+
+    parsed = parse_header(req.headerLine)
+    payee = parsed.payee if parsed else req.headerLine[:60]
+    date_str = parsed.date if parsed else ""
+
+    event_id = None
+    try:
+        hash_after = hash_file(journal_path)
+        event_id = emit_event(
+            config.root_dir,
+            event_type="transaction.notes_updated.v1",
+            summary=f"Notes updated: {payee} on {date_str}",
+            payload={
+                "journal_path": rel_path(journal_path, config.root_dir),
+                "header_line": req.headerLine,
+                "notes": req.notes,
+            },
+            journal_refs=[{
+                "path": rel_path(journal_path, config.root_dir),
+                "hash_before": hash_before,
+                "hash_after": hash_after,
+            }],
+        )
+    except Exception:
+        _log.error("Event emission failed for notes update", exc_info=True)
+
+    return {"success": True, "eventId": event_id}
 
 
 @app.post("/api/transactions/unmatch")

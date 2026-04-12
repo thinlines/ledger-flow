@@ -4,9 +4,9 @@ from dataclasses import dataclass
 from decimal import Decimal
 from pathlib import Path
 
-from .account_register_service import (
-    _bilateral_matched_pending_transfer_orders,
-    _grouped_settled_pending_transfer_orders,
+from .transaction_helpers import (
+    bilateral_matched_pending_transfer_orders as _bilateral_matched_pending_transfer_orders,
+    grouped_settled_pending_transfer_orders as _grouped_settled_pending_transfer_orders,
 )
 from .backup_service import backup_file
 from .config_service import AppConfig

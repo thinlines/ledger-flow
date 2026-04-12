@@ -88,6 +88,10 @@
     selectedTransaction = null;
   }
 
+  function handleSheetRecategorize(entry: RegisterEntry, newCategory: string) {
+    void executeRecategorize(entry, newCategory);
+  }
+
   async function executeDelete(entry: RegisterEntry) {
     if (!entry.headerLine || !entry.journalPath) return;
     actionBusy = true;
@@ -109,7 +113,7 @@
     }
   }
 
-  async function executeRecategorize(entry: RegisterEntry) {
+  async function executeResetCategory(entry: RegisterEntry) {
     if (!entry.headerLine || !entry.journalPath) return;
     actionBusy = true;
     actionError = '';
@@ -121,6 +125,27 @@
       closeSheet();
       const reloadRegister = () => loadRegister(selectedAccountId);
       if (res.eventId) showUndoToast(res.eventId, `Reset category on ${entry.payee}`, reloadRegister);
+      await reloadRegister();
+    } catch (e) {
+      actionError = String(e);
+    } finally {
+      actionBusy = false;
+    }
+  }
+
+  async function executeRecategorize(entry: RegisterEntry, newCategory: string) {
+    if (!entry.headerLine || !entry.journalPath) return;
+    actionBusy = true;
+    actionError = '';
+    try {
+      const res = await apiPost<{ success: boolean; eventId: string | null }>('/api/transactions/recategorize', {
+        journalPath: entry.journalPath,
+        headerLine: entry.headerLine,
+        newCategory,
+      });
+      closeSheet();
+      const reloadRegister = () => loadRegister(selectedAccountId);
+      if (res.eventId) showUndoToast(res.eventId, `Recategorized ${entry.payee}`, reloadRegister);
       await reloadRegister();
     } catch (e) {
       actionError = String(e);
@@ -946,8 +971,10 @@
   entry={selectedEntry}
   transaction={selectedTransaction}
   {baseCurrency}
+  accounts={allAccounts}
   onDelete={(e) => { closeSheet(); confirmDeleteEntry = e; }}
-  onRecategorize={(e) => { closeSheet(); void executeRecategorize(e); }}
+  onResetCategory={(e) => { closeSheet(); void executeResetCategory(e); }}
+  onRecategorize={handleSheetRecategorize}
   onUnmatch={(e) => { closeSheet(); confirmUnmatchEntry = e; }}
   onClose={closeSheet}
 />
