@@ -6,6 +6,8 @@
   import { showUndoToast } from '$lib/undo-toast';
   import AddTransactionForm from '$lib/components/transactions/AddTransactionForm.svelte';
   import ManualResolutionDialog from '$lib/components/transactions/ManualResolutionDialog.svelte';
+  import TransactionDayGroup from '$lib/components/transactions/TransactionDayGroup.svelte';
+  import TransactionRow from '$lib/components/transactions/TransactionRow.svelte';
   import TransactionsExplanationHeader from '$lib/components/transactions/TransactionsExplanationHeader.svelte';
   import { describeBalanceTrust } from '$lib/account-trust';
   import type {
@@ -19,13 +21,7 @@
   } from '$lib/transactions/types';
   import { formatCurrency, formatStoredAmount, shortDate, countLabel } from '$lib/format';
   import {
-    truncatePayee,
-    activityShortDate,
     categoryLeadingSegment,
-    entryHasActions,
-    canDelete,
-    canRecategorize,
-    canUnmatch,
     CLEARING_TOOLTIPS,
     groupActivityByDate
   } from '$lib/transactions/helpers';
@@ -655,32 +651,16 @@
 
       <div class="grid">
         {#each activityGroups as group, gi}
-          <div class="date-group" class:date-group-first={gi === 0}>
-            <h4 class="date-header">{group.header}</h4>
+          <TransactionDayGroup header={group.header} isFirst={gi === 0}>
             {#each group.transactions as tx}
-              <div class="activity-row">
-                <div class="grid gap-0.5 min-w-0">
-                  <div class="flex items-center gap-2 min-w-0 max-tablet:flex-wrap">
-                    {#if !activityCategory}
-                      <span class="activity-category-pill">{tx.category}</span>
-                    {/if}
-                    <span class="font-bold truncate min-w-0" title={tx.payee}>{truncatePayee(tx.payee)}</span>
-                  </div>
-                  <p class="text-muted-foreground text-sm">
-                    {activityShortDate(tx.date)} · {tx.accountLabel}
-                  </p>
-                </div>
-                <div class="grid gap-0.5 justify-items-end shrink-0 max-tablet:justify-items-start">
-                  <p class:positive={tx.amount > 0} class:negative={tx.amount < 0} class="font-bold whitespace-nowrap">
-                    {formatCurrency(tx.amount, baseCurrency, { signed: true })}
-                  </p>
-                  {#if tx.isUnknown}
-                    <a class="pill warn no-underline" href="/unknowns">Needs review</a>
-                  {/if}
-                </div>
-              </div>
+              <TransactionRow
+                mode="activity"
+                transaction={tx}
+                showCategory={!activityCategory}
+                {baseCurrency}
+              />
             {/each}
-          </div>
+          </TransactionDayGroup>
         {/each}
       </div>
     </section>
@@ -943,102 +923,17 @@
 
       <div class="grid">
         {#each postedEntries as entry}
-          <details class:opening-row={entry.isOpeningBalance} class="register-row">
-            <summary class="register-summary">
-              <button
-                class="clearing-indicator clearing-{entry.clearingStatus ?? 'unmarked'}"
-                title={CLEARING_TOOLTIPS[entry.clearingStatus ?? 'unmarked']}
-                on:click={(e) => toggleClearingStatus(entry, e)}
-                type="button"
-              ></button>
-              <div class="register-cell register-date">{shortDate(entry.date)}</div>
-
-              <div class="register-cell min-w-0">
-                <p class="font-bold">{entry.payee}</p>
-                <div class="flex flex-wrap gap-2 mt-1 text-muted-foreground text-sm">
-                  <span>{entry.summary}</span>
-                  {#if entry.isUnknown}
-                    <span class="pill warn">Needs review</span>
-                  {/if}
-                  {#if entry.isOpeningBalance}
-                    <span class="pill">Starting balance</span>
-                  {/if}
-                  {#if entry.transferState === 'settled_grouped'}
-                    <span class="pill">Grouped transfer</span>
-                  {/if}
-                </div>
-              </div>
-
-              <div class="register-cell register-money text-right">
-                <p class:positive={entry.amount > 0} class:negative={entry.amount < 0} class="font-bold">
-                  {formatCurrency(entry.amount, baseCurrency, { signed: true })}
-                </p>
-              </div>
-
-              <div class="register-cell register-money text-right">
-                <p class:positive={entry.runningBalance > 0} class:negative={entry.runningBalance < 0} class="font-bold">
-                  {formatCurrency(entry.runningBalance, baseCurrency)}
-                </p>
-              </div>
-
-              {#if entryHasActions(entry)}
-                <div class="register-cell relative">
-                  <button
-                    class="action-menu-btn"
-                    title="Actions"
-                    type="button"
-                    on:click={(e) => openActionMenu(entry, e)}
-                  >⋮</button>
-                  {#if actionMenuEntry === entry}
-                    <div class="action-menu-popover">
-                      {#if canDelete(entry)}
-                        <button class="action-menu-item danger" type="button" on:click={(e) => { e.stopPropagation(); closeActionMenu(); confirmDeleteEntry = entry; }}>
-                          Remove transaction
-                        </button>
-                      {/if}
-                      {#if canRecategorize(entry)}
-                        <button class="action-menu-item" type="button" on:click={(e) => { e.stopPropagation(); closeActionMenu(); void executeRecategorize(entry); }}>
-                          Reset category
-                        </button>
-                      {/if}
-                      {#if canUnmatch(entry)}
-                        <button class="action-menu-item" type="button" on:click={(e) => { e.stopPropagation(); closeActionMenu(); confirmUnmatchEntry = entry; }}>
-                          Undo match
-                        </button>
-                      {/if}
-                    </div>
-                  {/if}
-                </div>
-              {:else}
-                <span></span>
-              {/if}
-            </summary>
-
-            <div class="px-4 pb-4 grid gap-3">
-              {#if entry.isOpeningBalance}
-                <p class="text-muted-foreground text-sm">This entry anchors running balances for the account until more history is backfilled.</p>
-              {/if}
-
-              {#if entry.transferState === 'settled_grouped'}
-                <p class="text-muted-foreground text-sm">This imported row settled as part of a grouped transfer, so it no longer counts as pending.</p>
-              {/if}
-
-              {#if entry.manualResolutionNote}
-                <p class="text-sm manual-resolution-note">{entry.manualResolutionNote}</p>
-              {/if}
-
-              {#if entry.detailLines.length > 0}
-                <div class="grid gap-2.5 grid-cols-[repeat(auto-fit,minmax(14rem,1fr))]">
-                  {#each entry.detailLines as line}
-                    <div class="detail-line">
-                      <p>{line.label}</p>
-                      <p class="muted text-sm">{line.account}</p>
-                    </div>
-                  {/each}
-                </div>
-              {/if}
-            </div>
-          </details>
+          <TransactionRow
+            mode="register"
+            {entry}
+            {baseCurrency}
+            activeMenuEntry={actionMenuEntry}
+            onToggleClearing={toggleClearingStatus}
+            onOpenActionMenu={openActionMenu}
+            onConfirmDelete={(e) => { closeActionMenu(); confirmDeleteEntry = e; }}
+            onRecategorize={(e) => { closeActionMenu(); void executeRecategorize(e); }}
+            onConfirmUnmatch={(e) => { closeActionMenu(); confirmUnmatchEntry = e; }}
+          />
         {/each}
       </div>
     {/if}
@@ -1168,7 +1063,6 @@
 
   /* --- Register / Pending grid layout --- */
   .register-header,
-  .register-summary,
   .pending-header,
   .pending-summary {
     display: grid;
@@ -1188,23 +1082,6 @@
     color: var(--muted-foreground);
   }
 
-  .register-row {
-    border-bottom: 1px solid rgba(10, 61, 89, 0.08);
-    background: rgba(255, 255, 255, 0.35);
-  }
-
-  .register-row:last-child {
-    border-bottom: none;
-  }
-
-  .register-row[open] {
-    background: rgba(244, 249, 255, 0.72);
-  }
-
-  .opening-row {
-    background: rgba(247, 249, 245, 0.78);
-  }
-
   .pending-row {
     border: 1px solid rgba(10, 61, 89, 0.08);
     border-radius: 1rem;
@@ -1212,19 +1089,17 @@
     overflow: hidden;
   }
 
-  .register-summary,
   .pending-summary {
     padding: 0.95rem 1rem;
     cursor: pointer;
     list-style: none;
   }
 
-  .register-summary::-webkit-details-marker,
   .pending-summary::-webkit-details-marker {
     display: none;
   }
 
-  /* --- Clearing status indicator --- */
+  /* --- Clearing status indicator (pending rows) --- */
   .clearing-indicator {
     width: 0.7rem;
     height: 0.7rem;
@@ -1264,11 +1139,7 @@
     color: #7d5200;
   }
 
-  .manual-resolution-note {
-    color: var(--brand-strong);
-  }
-
-  /* --- Detail line card --- */
+  /* --- Detail line card (pending row details) --- */
   .detail-line {
     border: 1px solid rgba(10, 61, 89, 0.08);
     border-radius: 0.9rem;
@@ -1286,72 +1157,6 @@
 
   .pending-secondary-action {
     background: rgba(255, 255, 255, 0.85);
-  }
-
-  /* --- Transaction Actions Menu --- */
-  .action-menu-btn {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 1.6rem;
-    height: 1.6rem;
-    padding: 0;
-    border: none;
-    border-radius: 0.4rem;
-    background: transparent;
-    color: var(--muted-foreground);
-    font-size: 1.1rem;
-    font-weight: 700;
-    line-height: 1;
-    cursor: pointer;
-    transition: background 0.12s, color 0.12s;
-  }
-
-  .action-menu-btn:hover {
-    background: rgba(10, 61, 89, 0.08);
-    color: var(--foreground);
-  }
-
-  .action-menu-popover {
-    position: absolute;
-    right: 0;
-    top: 100%;
-    z-index: 20;
-    min-width: 11rem;
-    background: #fff;
-    border: 1px solid rgba(10, 61, 89, 0.12);
-    border-radius: 0.7rem;
-    box-shadow: 0 4px 16px rgba(10, 20, 30, 0.12);
-    padding: 0.3rem;
-    display: grid;
-    gap: 0.1rem;
-  }
-
-  .action-menu-item {
-    display: block;
-    width: 100%;
-    padding: 0.55rem 0.75rem;
-    border: none;
-    border-radius: 0.45rem;
-    background: transparent;
-    color: var(--foreground);
-    font-size: 0.88rem;
-    font-weight: 600;
-    text-align: left;
-    cursor: pointer;
-    transition: background 0.12s;
-  }
-
-  .action-menu-item:hover {
-    background: rgba(10, 61, 89, 0.06);
-  }
-
-  .action-menu-item.danger {
-    color: var(--error, #c53030);
-  }
-
-  .action-menu-item.danger:hover {
-    background: rgba(197, 48, 48, 0.08);
   }
 
   /* --- Confirmation dialogs --- */
@@ -1509,47 +1314,6 @@
     background: rgba(15, 95, 136, 0.22);
   }
 
-  /* --- Activity category pill --- */
-  .activity-category-pill {
-    flex-shrink: 0;
-    font-size: 0.76rem;
-    font-weight: 600;
-    padding: 0.18rem 0.55rem;
-    border-radius: 999px;
-    background: rgba(15, 95, 136, 0.08);
-    color: var(--brand-strong);
-    white-space: nowrap;
-  }
-
-  /* --- Activity date group separator --- */
-  .date-group + .date-group {
-    margin-top: 0.65rem;
-    padding-top: 0.65rem;
-    border-top: 1px solid rgba(10, 61, 89, 0.08);
-  }
-
-  .date-header {
-    font-size: 0.75rem;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-    color: var(--muted-foreground);
-    font-weight: 700;
-  }
-
-  /* --- Activity row border separator --- */
-  .activity-row {
-    display: flex;
-    justify-content: space-between;
-    align-items: flex-start;
-    gap: 1rem;
-    padding: 0.65rem 0;
-    border-bottom: 1px solid rgba(10, 61, 89, 0.05);
-  }
-
-  .activity-row:last-child {
-    border-bottom: none;
-  }
-
   /* --- Responsive breakpoints --- */
   @media (max-width: 980px) {
     .transactions-hero,
@@ -1569,7 +1333,6 @@
       display: none;
     }
 
-    .register-summary,
     .pending-summary {
       grid-template-columns: 1.5rem 1fr 2rem;
       gap: 0.45rem;
@@ -1586,13 +1349,6 @@
 
     .register-money {
       text-align: left;
-    }
-  }
-
-  @media (max-width: 720px) {
-    .activity-row {
-      flex-direction: column;
-      gap: 0.3rem;
     }
   }
 </style>
