@@ -860,12 +860,12 @@
     <p class="eyebrow">Accounts</p>
     <h2 class="page-title">Create a workspace first</h2>
     <p class="subtitle">Accounts live inside a workspace. Finish setup before adding manual or import-enabled accounts.</p>
-    <div class="actions">
+    <div class="flex flex-wrap gap-3">
       <a class="btn btn-primary" href="/setup">Open setup</a>
     </div>
   </section>
 {:else}
-  <section class="view-card hero accounts-hero">
+  <section class="view-card hero flex items-end justify-between gap-4 max-shell:flex-col max-shell:items-stretch">
     <div>
       <p class="eyebrow">Account Setup</p>
       <h2 class="page-title">{workspaceName || 'Workspace'} configuration workspace</h2>
@@ -875,28 +875,28 @@
       </p>
     </div>
 
-    <div class="hero-stats">
+    <div class="hero-stats grid grid-cols-3 gap-3.5 min-w-[min(420px,100%)] max-shell:grid-cols-1">
       <div>
-        <span class="stat-kicker">Tracked</span>
-        <strong>{trackedAccounts.length}</strong>
+        <span class="block text-xs font-bold uppercase tracking-wide text-muted-foreground mb-1">Tracked</span>
+        <strong class="block font-display text-2xl">{trackedAccounts.length}</strong>
       </div>
       <div>
-        <span class="stat-kicker">Import-enabled</span>
-        <strong>{trackedAccounts.filter((account) => account.importConfigured).length}</strong>
+        <span class="block text-xs font-bold uppercase tracking-wide text-muted-foreground mb-1">Import-enabled</span>
+        <strong class="block font-display text-2xl">{trackedAccounts.filter((account) => account.importConfigured).length}</strong>
       </div>
       <div>
-        <span class="stat-kicker">Needs setup</span>
-        <strong>{needsSetupCount}</strong>
+        <span class="block text-xs font-bold uppercase tracking-wide text-muted-foreground mb-1">Needs setup</span>
+        <strong class="block font-display text-2xl">{needsSetupCount}</strong>
       </div>
     </div>
   </section>
 
-  <section class="grid-2 accounts-layout">
-    <article class="view-card editor-card">
-      <div class="section-head editor-head">
+  <section class="accounts-layout grid gap-4 items-start">
+    <article class="view-card editor-card grid gap-4">
+      <div class="flex items-start justify-between gap-4">
         <div>
           <p class="eyebrow">{editingAccountId ? 'Edit tracked account' : 'Create tracked account'}</p>
-          <h3>{editorTitle}</h3>
+          <h3 class="m-0">{editorTitle}</h3>
           <p class="muted">
             {#if editorMode === 'institution'}
               Choose the statement source, then say whether this is something you own or something you owe.
@@ -918,18 +918,18 @@
         <button class:active={editorMode === 'custom'} type="button" on:click={startCustomAccount}>Custom CSV</button>
       </div>
 
-      <section class="kind-panel">
+      <section class="grid gap-3">
         <p class="selection-label">What are you tracking?</p>
-        <div class="kind-choice-grid">
+        <div class="grid grid-cols-2 gap-3.5 max-shell:grid-cols-1">
           {#each BALANCE_SHEET_KIND_OPTIONS as kindOption}
             <button
               class:active={draft.kind === kindOption.value}
-              class="kind-choice"
+              class="kind-choice grid gap-1 rounded-2xl border border-card-edge bg-white/82 p-4 text-left cursor-pointer"
               type="button"
               on:click={() => setDraftKind(kindOption.value)}
             >
-              <span class="kind-choice-label">{kindOption.label}</span>
-              <span class="kind-choice-note">{accountKindHelp(kindOption.value)}</span>
+              <span class="font-display text-brand-strong">{kindOption.label}</span>
+              <span class="text-sm leading-normal text-muted-foreground">{accountKindHelp(kindOption.value)}</span>
             </button>
           {/each}
         </div>
@@ -944,11 +944,11 @@
               <option value={template.id}>{template.displayName}</option>
             {/each}
           </select>
-          <p class="muted small">The institution controls the parser. Asset vs liability is set above.</p>
+          <p class="muted text-sm">The institution controls the parser. Asset vs liability is set above.</p>
         </div>
       {/if}
 
-      <div class="field grid-2 compact">
+      <div class="field grid-2 gap-3.5">
         <div class="field">
           <label for="displayName">Account name</label>
           <input
@@ -977,10 +977,10 @@
             <option value={option.value}>{option.label}</option>
           {/each}
         </select>
-        <p class="muted small">{subtypeHelperText()}</p>
+        <p class="muted text-sm">{subtypeHelperText()}</p>
       </div>
 
-      <div class="field grid-2 compact">
+      <div class="field grid-2 gap-3.5">
         <div class="field">
           <label for="openingBalance">Opening balance</label>
           <input
@@ -1001,7 +1001,7 @@
         </div>
       </div>
 
-      <p class="secondary-note">{openingBalanceHint(draft.kind)}</p>
+      <p class="m-0 text-muted-foreground">{openingBalanceHint(draft.kind)}</p>
 
       <div class="field">
         <label for="openingBalanceOffset">{openingBalanceOffsetLabel()}</label>
@@ -1015,7 +1015,7 @@
             <option value={account.id}>{openingBalanceOffsetOptionLabel(account)}</option>
           {/each}
         </select>
-        <p class="muted small">{openingBalanceOffsetHint()}</p>
+        <p class="muted text-sm">{openingBalanceOffsetHint()}</p>
       </div>
 
       <details class="advanced-panel" bind:open={showAdvancedSettings}>
@@ -1031,7 +1031,7 @@
           />
         </div>
 
-        <div class="selection-summary compact-summary">
+        <div class="selection-summary mt-3.5 px-3.5 py-3">
           <p class="selection-label">Accounting name in use</p>
           <p class="selection-value">{effectiveLedgerAccount(draft) || 'Choose an account name first'}</p>
           <p class="muted">Leave this blank if the suggested name is good enough. You only need it when you want a custom internal account path.</p>
@@ -1039,15 +1039,15 @@
       </details>
 
       {#if editorMode === 'custom'}
-        <section class="custom-profile-panel">
-          <div class="section-head compact-head">
+        <section class="custom-profile-panel grid gap-3.5 rounded-2xl border border-card-edge p-4">
+          <div class="flex items-start justify-between gap-4 mb-0">
             <div>
               <p class="eyebrow">CSV setup</p>
-              <h4>Inspect a sample file</h4>
+              <h4 class="m-0">Inspect a sample file</h4>
             </div>
           </div>
 
-          <div class="field grid-2 compact">
+          <div class="field grid-2 gap-3.5">
             <div class="field">
               <label for="sampleFile">Sample CSV</label>
               <input
@@ -1067,7 +1067,7 @@
             </div>
           </div>
 
-          <div class="field grid-4 compact">
+          <div class="field grid grid-cols-4 gap-3.5 max-shell:grid-cols-1">
             <div class="field">
               <label for="encoding">Encoding</label>
               <select id="encoding" value={draft.customProfile.encoding} on:change={(e) => updateCustomProfile({ encoding: (e.currentTarget as HTMLSelectElement).value })}>
@@ -1106,7 +1106,7 @@
             </div>
           </div>
 
-          <div class="actions">
+          <div class="flex flex-wrap gap-3">
             <button class="btn" disabled={inspecting || !selectedSampleFile} type="button" on:click={inspectSample}>
               {inspecting ? 'Inspecting...' : 'Inspect sample'}
             </button>
@@ -1130,7 +1130,7 @@
             {/if}
           </datalist>
 
-          <div class="mapping-grid">
+          <div class="grid grid-cols-2 gap-3.5 max-shell:grid-cols-1">
             <div class="field">
               <label for="dateColumn">Date column</label>
               <input
@@ -1237,7 +1237,7 @@
             </div>
           </div>
 
-          <label class="checkbox-row">
+          <label class="flex items-center gap-2.5 text-muted-foreground">
             <input
               type="checkbox"
               checked={draft.customProfile.reverseOrder}
@@ -1247,8 +1247,8 @@
           </label>
 
           {#if inspection?.sampleRows.length}
-            <div class="sample-table-wrap">
-              <table class="sample-table">
+            <div class="sample-table-wrap overflow-auto rounded-2xl border border-card-edge">
+              <table class="sample-table w-full border-collapse min-w-[34rem]">
                 <thead>
                   <tr>
                     {#each inspection.headers as header}
@@ -1290,7 +1290,7 @@
         </p>
       </div>
 
-      <div class="actions">
+      <div class="flex flex-wrap gap-3">
         <button class="btn btn-primary" disabled={saving || draftInvalid} type="button" on:click={saveAccount}>
           {saving ? 'Saving...' : editingAccountId ? 'Save changes' : 'Add account'}
         </button>
@@ -1306,16 +1306,16 @@
       </div>
     </article>
 
-    <article class="view-card inventory-card">
-      <div class="section-head">
+    <article class="view-card grid gap-4">
+      <div class="flex items-start justify-between gap-4 mb-4">
         <div>
           <p class="eyebrow">Inventory</p>
-          <h3>Tracked accounts</h3>
+          <h3 class="m-0">Tracked accounts</h3>
           <p class="muted">Edit something you already track, or use the shortcuts below to start a new asset or liability.</p>
         </div>
       </div>
 
-      <div class="quick-actions">
+      <div class="flex flex-wrap gap-2.5 mb-4">
         <button class="btn btn-primary" type="button" on:click={startManualAccount}>Add manual account</button>
         <button class="btn" type="button" on:click={() => startInstitutionAccount()}>Add supported account</button>
         <button class="btn" type="button" on:click={startCustomAccount}>Add custom CSV</button>
@@ -1323,22 +1323,22 @@
 
       {#if trackedAccounts.length === 0}
         <div class="empty-panel">
-          <h4>No accounts yet</h4>
+          <h4 class="m-0">No accounts yet</h4>
           <p>Start with something you own or owe, then add a starting balance or import setup so totals are grounded.</p>
         </div>
       {:else}
-        <div class="account-list">
+        <div class="grid gap-3.5">
           {#each trackedAccounts as account}
-            <article class="account-card">
-              <div class="account-card-head">
+            <article class="account-card rounded-2xl border border-card-edge p-3.5">
+              <div class="flex items-start justify-between gap-4">
                 <div>
-                  <h4>{account.displayName}</h4>
+                  <h4 class="m-0">{account.displayName}</h4>
                   <p class="muted">{account.institutionDisplayName || 'Tracked manually'}</p>
                 </div>
                 <button class="inline-link" type="button" on:click={() => editAccount(account)}>Edit</button>
               </div>
 
-              <div class="pill-row">
+              <div class="flex flex-wrap gap-2 my-3">
                 <span class={`pill ${balanceTrust(account).tone === 'warn' ? 'warn' : balanceTrust(account).tone === 'ok' ? 'ok' : ''}`}>
                   {balanceTrust(account).shortLabel}
                 </span>
@@ -1349,24 +1349,24 @@
                 {/if}
               </div>
 
-              <div class="account-metrics">
+              <div class="grid grid-cols-2 gap-3.5 mb-3 max-shell:grid-cols-1">
                 <div>
-                  <p class="metric-label">Current balance</p>
-                  <p class="metric-value">{formatCurrency(currentBalance(account.id))}</p>
+                  <p class="m-0 mb-0.5 text-xs text-muted-foreground uppercase tracking-wide">Current balance</p>
+                  <p class="m-0 font-bold">{formatCurrency(currentBalance(account.id))}</p>
                 </div>
                 <div>
-                  <p class="metric-label">Balance coverage</p>
-                  <p class="metric-value">{balanceTrust(account).label}</p>
+                  <p class="m-0 mb-0.5 text-xs text-muted-foreground uppercase tracking-wide">Balance coverage</p>
+                  <p class="m-0 font-bold">{balanceTrust(account).label}</p>
                 </div>
               </div>
 
-              <p class="muted small account-card-note">{balanceTrust(account).note}</p>
+              <p class="muted m-0 leading-normal text-sm">{balanceTrust(account).note}</p>
               {#if describeAccountSubtype(account).source === 'suggested'}
-                <p class="muted small account-card-note">
+                <p class="muted m-0 leading-normal text-sm">
                   Subtype is only suggested right now. Save the account if you want that subtype stored explicitly.
                 </p>
               {/if}
-              <p class="muted small account-card-note">
+              <p class="muted m-0 leading-normal text-sm">
                 Starting balance:
                 {#if account.openingBalance}
                   {formatStoredAmount(account.openingBalance)}
@@ -1378,14 +1378,14 @@
                 {/if}
               </p>
 
-              <details class="advanced-panel">
+              <details class="advanced-panel mt-3">
                 <summary>Accounting details</summary>
-                <p class="muted small">Ledger account: {account.ledgerAccount}</p>
+                <p class="muted text-sm">Ledger account: {account.ledgerAccount}</p>
                 {#if account.importAccountId}
-                  <p class="muted small">Import configuration: {account.importAccountId}</p>
+                  <p class="muted text-sm">Import configuration: {account.importAccountId}</p>
                 {/if}
                 {#if account.importMode === 'custom' && account.importProfile}
-                  <p class="muted small">
+                  <p class="muted text-sm">
                     Custom CSV: {account.importProfile.displayName || 'Custom profile'} · {account.importProfile.currency || baseCurrency}
                   </p>
                 {/if}
@@ -1399,25 +1399,12 @@
 {/if}
 
 <style>
-  h3,
-  h4 {
-    margin: 0;
+  /* Asymmetric two-column layout for editor + inventory */
+  .accounts-layout {
+    grid-template-columns: minmax(0, 1.2fr) minmax(22rem, 0.88fr);
   }
 
-  .accounts-hero {
-    display: flex;
-    align-items: flex-end;
-    justify-content: space-between;
-    gap: 1rem;
-  }
-
-  .hero-stats {
-    display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 0.8rem;
-    min-width: min(420px, 100%);
-  }
-
+  /* Hero stat cards — bespoke rgba border + bg */
   .hero-stats div {
     border: 1px solid rgba(10, 61, 89, 0.08);
     border-radius: 1rem;
@@ -1425,162 +1412,16 @@
     background: rgba(255, 255, 255, 0.68);
   }
 
-  .hero-stats strong {
-    display: block;
-    font-family: 'Space Grotesk', sans-serif;
-    font-size: 1.45rem;
-  }
-
-  .stat-kicker {
-    display: block;
-    font-size: 0.78rem;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-    color: var(--muted-foreground);
-    margin-bottom: 0.25rem;
-  }
-
-  .accounts-layout {
-    display: grid;
-    grid-template-columns: minmax(0, 1.2fr) minmax(22rem, 0.88fr);
-    align-items: start;
-  }
-
-  .section-head {
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 1rem;
-    margin-bottom: 1rem;
-  }
-
-  .compact-head {
-    margin-bottom: 0.8rem;
-  }
-
-  .editor-head {
-    margin-bottom: 0;
-  }
-
-  .quick-actions {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.6rem;
-    margin-bottom: 1rem;
-  }
-
-  .text-link {
-    color: var(--brand-strong);
-    text-decoration: none;
-    font-weight: 700;
-  }
-
-  .text-link:hover {
-    text-decoration: underline;
-  }
-
-  .account-list {
-    display: grid;
-    gap: 0.8rem;
-  }
-
-  .account-card {
-    border: 1px solid rgba(10, 61, 89, 0.08);
-    border-radius: 1rem;
-    background: rgba(255, 255, 255, 0.64);
-    padding: 0.9rem;
-  }
-
-  .account-card-head {
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 1rem;
-  }
-
-  .inline-link {
-    display: inline-flex;
-    align-items: center;
-    padding: 0.48rem 0.8rem;
-    border-radius: 999px;
-    border: 1px solid rgba(10, 61, 89, 0.12);
-    background: rgba(255, 255, 255, 0.94);
-    color: var(--brand-strong);
-    font-weight: 700;
-    cursor: pointer;
-  }
-
-  .pill-row {
-    display: flex;
-    gap: 0.45rem;
-    flex-wrap: wrap;
-    margin: 0.8rem 0;
-  }
-
-  .pill.ok {
-    background: rgba(13, 127, 88, 0.12);
-    color: var(--ok);
-  }
-
-  .account-metrics {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 0.8rem;
-    margin-bottom: 0.75rem;
-  }
-
-  .metric-label {
-    margin: 0 0 0.2rem;
-    font-size: 0.8rem;
-    color: var(--muted-foreground);
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-  }
-
-  .metric-value {
-    margin: 0;
-    font-weight: 700;
-  }
-
-  .account-card-note {
-    margin: 0;
-    line-height: 1.5;
-  }
-
+  /* Editor card gradient background */
   .editor-card {
-    display: grid;
-    gap: 1rem;
     background:
       radial-gradient(circle at top right, rgba(189, 231, 217, 0.28), transparent 34%),
       linear-gradient(180deg, rgba(255, 255, 255, 0.94), rgba(247, 252, 249, 0.9));
   }
 
-  .inventory-card {
-    display: grid;
-    gap: 0.95rem;
-  }
-
-  .kind-panel {
-    display: grid;
-    gap: 0.7rem;
-  }
-
-  .kind-choice-grid {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 0.8rem;
-  }
-
+  /* Kind-choice card — bespoke transition + active state */
   .kind-choice {
-    display: grid;
-    gap: 0.28rem;
-    padding: 0.95rem 1rem;
-    border-radius: 1rem;
-    border: 1px solid rgba(10, 61, 89, 0.12);
-    background: rgba(255, 255, 255, 0.82);
     color: inherit;
-    text-align: left;
-    cursor: pointer;
     transition:
       border-color 120ms ease,
       box-shadow 120ms ease,
@@ -1593,18 +1434,7 @@
     transform: translateY(-1px);
   }
 
-  .kind-choice-label {
-    font-family: 'Space Grotesk', sans-serif;
-    font-size: 1rem;
-    color: var(--brand-strong);
-  }
-
-  .kind-choice-note {
-    color: var(--muted-foreground);
-    font-size: 0.92rem;
-    line-height: 1.5;
-  }
-
+  /* Segmented mode switch — bespoke pill control */
   .mode-switch {
     display: inline-flex;
     gap: 0.35rem;
@@ -1631,6 +1461,20 @@
     box-shadow: 0 8px 20px rgba(17, 35, 52, 0.08);
   }
 
+  /* Inline edit button — bespoke rounded pill button */
+  .inline-link {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.48rem 0.8rem;
+    border-radius: 999px;
+    border: 1px solid rgba(10, 61, 89, 0.12);
+    background: rgba(255, 255, 255, 0.94);
+    color: var(--brand-strong);
+    font-weight: 700;
+    cursor: pointer;
+  }
+
+  /* Advanced details panel — bespoke border + translucent bg */
   .advanced-panel {
     border: 1px solid rgba(10, 61, 89, 0.1);
     border-radius: 1rem;
@@ -1644,30 +1488,12 @@
     color: var(--brand-strong);
   }
 
-  .compact {
-    gap: 0.8rem;
-  }
-
-  .grid-4 {
-    display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-  }
-
-  .mapping-grid {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 0.8rem;
-  }
-
+  /* Custom profile panel — bespoke translucent bg */
   .custom-profile-panel {
-    border: 1px solid rgba(10, 61, 89, 0.1);
-    border-radius: 1rem;
     background: rgba(255, 255, 255, 0.56);
-    padding: 1rem;
-    display: grid;
-    gap: 0.9rem;
   }
 
+  /* Selection summary — bespoke translucent card */
   .selection-summary {
     border: 1px solid rgba(10, 61, 89, 0.08);
     border-radius: 1rem;
@@ -1675,11 +1501,7 @@
     padding: 0.9rem 1rem;
   }
 
-  .compact-summary {
-    margin-top: 0.8rem;
-    padding: 0.8rem 0.9rem;
-  }
-
+  /* Selection label — eyebrow-like kicker */
   .selection-label {
     margin: 0 0 0.2rem;
     font-size: 0.78rem;
@@ -1689,6 +1511,7 @@
     font-weight: 700;
   }
 
+  /* Selection value — display font highlight */
   .selection-value {
     margin: 0 0 0.25rem;
     font-family: 'Space Grotesk', sans-serif;
@@ -1696,17 +1519,14 @@
     color: var(--brand-strong);
   }
 
-  .sample-table-wrap {
-    overflow: auto;
-    border: 1px solid rgba(10, 61, 89, 0.08);
-    border-radius: 0.9rem;
-    background: rgba(255, 255, 255, 0.82);
+  /* Account card — bespoke translucent bg */
+  .account-card {
+    background: rgba(255, 255, 255, 0.64);
   }
 
-  .sample-table {
-    width: 100%;
-    border-collapse: collapse;
-    min-width: 34rem;
+  /* Sample table — bespoke table styling */
+  .sample-table-wrap {
+    background: rgba(255, 255, 255, 0.82);
   }
 
   .sample-table th,
@@ -1726,13 +1546,7 @@
     color: var(--muted-foreground);
   }
 
-  .checkbox-row {
-    display: flex;
-    align-items: center;
-    gap: 0.6rem;
-    color: var(--muted-foreground);
-  }
-
+  /* Empty state panel — dashed border */
   .empty-panel {
     border: 1px dashed rgba(10, 61, 89, 0.18);
     border-radius: 1rem;
@@ -1740,25 +1554,13 @@
     background: rgba(255, 255, 255, 0.52);
   }
 
-  .secondary-note {
-    margin: 0;
-    color: var(--muted-foreground);
+  /* Pill.ok override */
+  .pill.ok {
+    background: rgba(13, 127, 88, 0.12);
+    color: var(--ok);
   }
 
-  .actions {
-    display: flex;
-    gap: 0.7rem;
-    flex-wrap: wrap;
-  }
-
-  .muted {
-    color: var(--muted-foreground);
-  }
-
-  .small {
-    font-size: 0.84rem;
-  }
-
+  /* Subtype pill variants — bespoke rgba colors */
   .subtype-pill.asset {
     background: rgba(15, 95, 136, 0.08);
     color: var(--brand-strong);
@@ -1783,24 +1585,9 @@
     border-color: rgba(10, 61, 89, 0.1);
   }
 
-  @media (max-width: 1200px) {
-    .grid-4 {
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-    }
-  }
-
+  /* Responsive: layout collapses at shell breakpoint */
   @media (max-width: 980px) {
-    .accounts-hero {
-      flex-direction: column;
-      align-items: stretch;
-    }
-
-    .accounts-layout,
-    .kind-choice-grid,
-    .hero-stats,
-    .account-metrics,
-    .mapping-grid,
-    .grid-4 {
+    .accounts-layout {
       grid-template-columns: 1fr;
     }
   }
