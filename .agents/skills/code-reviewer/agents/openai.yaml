@@ -1,0 +1,4 @@
+interface:
+  display_name: "Code Reviewer"
+  short_description: "Review implementation for correctness, conventions, and merge safety"
+  default_prompt: "Use $code-reviewer to review the current branch diff for correctness, maintainability, project convention adherence, and merge safety."
