@@ -610,7 +610,7 @@
     <p class="eyebrow">Transactions</p>
     <h2 class="page-title">Create a workspace first</h2>
     <p class="subtitle">Transaction registers live inside a workspace. Finish setup before reviewing account activity.</p>
-    <div class="actions">
+    <div class="mt-3 flex flex-wrap gap-3">
       <a class="btn btn-primary" href="/setup">Open setup</a>
     </div>
   </section>
@@ -619,14 +619,14 @@
     <p class="eyebrow">Transactions</p>
     <h2 class="page-title">{workspaceName || 'Workspace'} does not have any accounts yet</h2>
     <p class="subtitle">Add at least one tracked account before reviewing its transaction register.</p>
-    <div class="actions">
+    <div class="mt-3 flex flex-wrap gap-3">
       <a class="btn btn-primary" href="/accounts/configure?mode=manual">Add first account</a>
       <a class="text-link" href="/accounts">Open accounts</a>
     </div>
   </section>
 {:else if activityMode}
   <section class="view-card transactions-hero activity-hero">
-    <div class="hero-copy">
+    <div class="grid gap-3">
       <p class="eyebrow">{activityHero.eyebrow}</p>
       <h2 class="page-title">{activityHero.title}</h2>
       <p class="subtitle">{activityHero.subtitle}</p>
@@ -641,9 +641,9 @@
   </section>
 
   <section class="view-card activity-filters-card">
-    <div class="activity-filter-bar">
+    <div class="flex gap-4 items-center flex-wrap max-shell:flex-col max-shell:items-start">
       {#if activityMonth}
-        <div class="filter-chip-group">
+        <div class="flex items-center gap-1.5">
           <span class="filter-label">Month</span>
           <span class="filter-chip">
             {monthTitle(activityMonth)}
@@ -659,7 +659,7 @@
       {/if}
 
       {#if activityCategory}
-        <div class="filter-chip-group">
+        <div class="flex items-center gap-1.5">
           <span class="filter-label">Category</span>
           <span class="filter-chip">
             {activityResult?.transactions[0]?.category || activityCategory.split(':').slice(1).join(' / ')}
@@ -677,16 +677,16 @@
   {:else if activityLoading}
     <section class="view-card">
       <div class="empty-panel">
-        <h4>Loading transactions</h4>
-        <p>Fetching cross-account activity.</p>
+        <h4 class="m-0">Loading transactions</h4>
+        <p class="m-0 mt-1 text-muted-foreground">Fetching cross-account activity.</p>
       </div>
     </section>
   {:else if !activityResult || activityResult.transactions.length === 0}
     <section class="view-card">
       <div class="empty-panel">
-        <h4>No transactions match these filters</h4>
-        <p>Try a different time range or clear the category filter to see more.</p>
-        <div class="actions" style="margin-top: 0.75rem;">
+        <h4 class="m-0">No transactions match these filters</h4>
+        <p class="m-0 mt-1 text-muted-foreground">Try a different time range or clear the category filter to see more.</p>
+        <div class="mt-3 flex flex-wrap gap-3">
           {#if activityCategory || activityMonth}
             <button class="btn" type="button" on:click={() => { activityCategory = null; activityMonth = null; activityPeriod = 'last-3-months'; updateActivityUrl(true); void loadActivity(); }}>Clear all filters</button>
           {/if}
@@ -703,37 +703,37 @@
     />
 
 
-    <section class="view-card activity-list-card">
-      <div class="section-head">
+    <section class="view-card overflow-hidden">
+      <div class="flex items-start justify-between gap-4 mb-4">
         <div>
           <p class="eyebrow">Results</p>
-          <h3>{activityResult.totalCount} {activityResult.totalCount === 1 ? 'transaction' : 'transactions'}</h3>
+          <h3 class="m-0 font-display text-xl">{activityResult.totalCount} {activityResult.totalCount === 1 ? 'transaction' : 'transactions'}</h3>
         </div>
       </div>
 
-      <div class="activity-list">
+      <div class="grid">
         {#each activityGroups as group, gi}
           <div class="date-group" class:date-group-first={gi === 0}>
             <h4 class="date-header">{group.header}</h4>
             {#each group.transactions as tx}
               <div class="activity-row">
-                <div class="activity-main">
-                  <div class="activity-headline">
+                <div class="grid gap-0.5 min-w-0">
+                  <div class="flex items-center gap-2 min-w-0 max-tablet:flex-wrap">
                     {#if !activityCategory}
                       <span class="activity-category-pill">{tx.category}</span>
                     {/if}
-                    <span class="activity-payee" title={tx.payee}>{truncatePayee(tx.payee)}</span>
+                    <span class="font-bold truncate min-w-0" title={tx.payee}>{truncatePayee(tx.payee)}</span>
                   </div>
-                  <p class="activity-meta">
+                  <p class="text-muted-foreground text-sm">
                     {activityShortDate(tx.date)} · {tx.accountLabel}
                   </p>
                 </div>
-                <div class="activity-side">
-                  <p class:positive={tx.amount > 0} class:negative={tx.amount < 0} class="activity-amount">
+                <div class="grid gap-0.5 justify-items-end shrink-0 max-tablet:justify-items-start">
+                  <p class:positive={tx.amount > 0} class:negative={tx.amount < 0} class="font-bold whitespace-nowrap">
                     {formatCurrency(tx.amount, baseCurrency, { signed: true })}
                   </p>
                   {#if tx.isUnknown}
-                    <a class="pill warn" href="/unknowns">Needs review</a>
+                    <a class="pill warn no-underline" href="/unknowns">Needs review</a>
                   {/if}
                 </div>
               </div>
@@ -745,12 +745,12 @@
   {/if}
 {:else}
   <section class="view-card transactions-hero">
-    <div class="hero-copy">
+    <div class="grid gap-3">
       <p class="eyebrow">Transactions</p>
       <h2 class="page-title">{selectedAccount?.displayName || 'Account register'}</h2>
       <p class="subtitle">{selectedAccountTrust()?.note || 'Review recent activity and running balances for this account.'}</p>
       {#if selectedAccount?.openingBalance}
-        <p class="supporting-note">
+        <p class="text-muted-foreground text-sm">
           Starting balance {formatStoredAmount(selectedAccount.openingBalance, baseCurrency)}
           {#if selectedAccount.openingBalanceDate}
             on {shortDate(selectedAccount.openingBalanceDate)}
@@ -774,7 +774,7 @@
         </select>
       </div>
 
-      <div class="hero-actions">
+      <div class="flex flex-wrap gap-3">
         <button class="btn" type="button" on:click={openAddForm}>Add transaction</button>
         {#if primaryAction}
           <a class="btn btn-primary" href={primaryAction.href}>{primaryAction.label}</a>
@@ -785,24 +785,24 @@
       </div>
 
       {#if primaryAction}
-        <p class="supporting-note">{primaryAction.note}</p>
+        <p class="text-muted-foreground text-sm">{primaryAction.note}</p>
       {/if}
     </div>
   </section>
 
   {#if manualResolutionSuccess}
-    <section class="view-card result-card">
+    <section class="view-card result-card grid gap-2">
       <p class="eyebrow">Resolved</p>
-      <h3>Transfer resolved manually</h3>
-      <p class="section-note">{manualResolutionSuccess} The missing side was added because no imported counterpart was expected.</p>
+      <h3 class="m-0 font-display text-xl">Transfer resolved manually</h3>
+      <p class="m-0 text-muted-foreground text-sm">{manualResolutionSuccess} The missing side was added because no imported counterpart was expected.</p>
     </section>
   {/if}
 
   {#if addSuccess}
-    <section class="view-card result-card">
+    <section class="view-card result-card grid gap-2">
       <p class="eyebrow">Transaction Added</p>
-      <h3>Manual entry created</h3>
-      <p class="section-note">{addSuccess}</p>
+      <h3 class="m-0 font-display text-xl">Manual entry created</h3>
+      <p class="m-0 text-muted-foreground text-sm">{addSuccess}</p>
     </section>
   {/if}
 
@@ -815,29 +815,29 @@
     />
   {/if}
 
-  <section class="summary-grid">
-    <article class="view-card summary-card">
-      <p class="stat-label">Balance coverage</p>
-      <p class="stat-value">{selectedAccountTrust()?.label || 'No balance yet'}</p>
-      <p class="stat-note">{selectedAccountTrust()?.note || 'Add activity or a starting balance to build this register.'}</p>
+  <section class="grid gap-4 grid-cols-[repeat(auto-fit,minmax(15rem,1fr))] max-shell:grid-cols-1">
+    <article class="view-card grid gap-1.5">
+      <p class="eyebrow">Balance coverage</p>
+      <p class="font-display text-2xl leading-none">{selectedAccountTrust()?.label || 'No balance yet'}</p>
+      <p class="text-muted-foreground text-sm">{selectedAccountTrust()?.note || 'Add activity or a starting balance to build this register.'}</p>
     </article>
 
-    <article class="view-card summary-card summary-balance-card">
-      <p class="stat-label">Current balance</p>
-      <p class:positive={(register?.currentBalance ?? 0) > 0} class:negative={(register?.currentBalance ?? 0) < 0} class="stat-value">
+    <article class="view-card summary-balance-card grid gap-1.5">
+      <p class="eyebrow">Current balance</p>
+      <p class:positive={(register?.currentBalance ?? 0) > 0} class:negative={(register?.currentBalance ?? 0) < 0} class="font-display text-2xl leading-none">
         {formatCurrency(register?.currentBalance ?? null, baseCurrency)}
       </p>
-      <p class="stat-note">
+      <p class="text-muted-foreground text-sm">
         {selectedAccount?.institutionDisplayName || 'Tracked account'}{#if selectedAccount?.last4} •••• {selectedAccount.last4}{/if}
       </p>
     </article>
 
-    <article class="view-card summary-card summary-balance-card summary-balance-pending">
-      <p class="stat-label">Balance with pending</p>
-      <p class:positive={(balanceWithPending ?? 0) > 0} class:negative={(balanceWithPending ?? 0) < 0} class="stat-value">
+    <article class="view-card summary-balance-pending grid gap-1.5">
+      <p class="eyebrow">Balance with pending</p>
+      <p class:positive={(balanceWithPending ?? 0) > 0} class:negative={(balanceWithPending ?? 0) < 0} class="font-display text-2xl leading-none">
         {formatCurrency(balanceWithPending, baseCurrency)}
       </p>
-      <p class="stat-note">
+      <p class="text-muted-foreground text-sm">
         {#if pendingTransferCount > 0}
           {countLabel(pendingTransferCount, 'pending transfer')} worth {formatCurrency(pendingTransferTotal, baseCurrency, { signed: true })} still waiting to settle.
         {:else}
@@ -846,10 +846,10 @@
       </p>
     </article>
 
-    <article class="view-card summary-card">
-      <p class="stat-label">Latest activity</p>
-      <p class="stat-value">{latestPostedActivityDate ? shortDate(latestPostedActivityDate) : 'No activity yet'}</p>
-      <p class="stat-note">
+    <article class="view-card grid gap-1.5">
+      <p class="eyebrow">Latest activity</p>
+      <p class="font-display text-2xl leading-none">{latestPostedActivityDate ? shortDate(latestPostedActivityDate) : 'No activity yet'}</p>
+      <p class="text-muted-foreground text-sm">
         {#if latestPostedActivityDate}
           Posted to this {selectedAccount?.kind || 'account'} register.
         {:else if pendingTransferCount > 0}
@@ -863,12 +863,12 @@
 
   {#if pendingTransferCount > 0}
     <section class="view-card pending-card">
-      <div class="section-head">
+      <div class="flex items-start justify-between gap-4 mb-4 max-shell:flex-col">
         <div>
           <p class="eyebrow">Pending</p>
-          <h3>Pending transfers</h3>
+          <h3 class="m-0 font-display text-xl">Pending transfers</h3>
         </div>
-        <p class="section-note">
+        <p class="m-0 text-muted-foreground text-sm">
           These affect <strong>Balance with pending</strong> above, but they do not change imported running balances
           until the matching transactions are imported.
         </p>
@@ -876,12 +876,12 @@
 
       <div class="pending-balance-banner">
         <div>
-          <p class="pending-banner-label">Balance with pending</p>
-          <p class:positive={(balanceWithPending ?? 0) > 0} class:negative={(balanceWithPending ?? 0) < 0} class="pending-banner-value">
+          <p class="eyebrow">Balance with pending</p>
+          <p class:positive={(balanceWithPending ?? 0) > 0} class:negative={(balanceWithPending ?? 0) < 0} class="font-display text-2xl leading-tight mt-0.5">
             {formatCurrency(balanceWithPending, baseCurrency)}
           </p>
         </div>
-        <p class="pending-banner-note">
+        <p class="max-w-md text-muted-foreground text-sm">
           Current balance remains {formatCurrency(register?.currentBalance ?? null, baseCurrency)} until the missing side is imported or resolved.
         </p>
       </div>
@@ -890,12 +890,12 @@
         <span></span>
         <span>Date</span>
         <span>Description</span>
-        <span class="align-right">Amount</span>
+        <span class="text-right">Amount</span>
         <span>Status</span>
         <span></span>
       </div>
 
-      <div class="pending-list">
+      <div class="grid gap-3">
         {#each pendingEntries as entry}
           <details class="pending-row">
             <summary class="pending-summary">
@@ -907,9 +907,9 @@
               ></button>
               <div class="register-cell register-date">{shortDate(entry.date)}</div>
 
-              <div class="register-cell register-description">
-                <p class="register-payee">{entry.payee}</p>
-                <div class="register-meta">
+              <div class="register-cell min-w-0">
+                <p class="font-bold">{entry.payee}</p>
+                <div class="flex flex-wrap gap-2 mt-1 text-muted-foreground text-sm">
                   <span>{entry.summary}</span>
                   {#if entry.isUnknown}
                     <span class="pill warn">Needs review</span>
@@ -918,20 +918,20 @@
                 </div>
               </div>
 
-              <div class="register-cell register-money align-right">
-                <p class:positive={entry.amount > 0} class:negative={entry.amount < 0} class="money-value">
+              <div class="register-cell register-money text-right">
+                <p class:positive={entry.amount > 0} class:negative={entry.amount < 0} class="font-bold">
                   {formatCurrency(entry.amount, baseCurrency, { signed: true })}
                 </p>
               </div>
 
-              <div class="register-cell pending-status">
-                <p class="pending-status-title">Included in balance with pending</p>
-                <p class="muted small">Waiting for import</p>
+              <div class="register-cell grid gap-0.5">
+                <p class="text-sm font-bold text-brand-strong">Included in balance with pending</p>
+                <p class="muted text-sm">Waiting for import</p>
               </div>
             </summary>
 
-            <div class="register-details">
-              <p class="details-note pending-details-note">
+            <div class="px-4 pb-4 grid gap-3">
+              <p class="text-muted-foreground text-sm pending-details-note">
                 {#if entry.manualResolutionToken}
                   This transfer stays pending until the matching import arrives. Resolve it manually only when no imported counterpart is expected.
                 {:else}
@@ -940,18 +940,18 @@
               </p>
 
               {#if entry.detailLines.length > 0}
-                <div class="detail-lines">
+                <div class="grid gap-2.5 grid-cols-[repeat(auto-fit,minmax(14rem,1fr))]">
                   {#each entry.detailLines as line}
                     <div class="detail-line">
                       <p>{line.label}</p>
-                      <p class="muted small">{line.account}</p>
+                      <p class="muted text-sm">{line.account}</p>
                     </div>
                   {/each}
                 </div>
               {/if}
 
               {#if entry.manualResolutionToken}
-                <div class="pending-actions">
+                <div class="flex flex-wrap gap-3">
                   <button class="btn pending-secondary-action" type="button" on:click={() => void openManualResolution(entry)}>
                     Resolve manually
                   </button>
@@ -964,24 +964,24 @@
     </section>
   {/if}
 
-  <section class="view-card register-card">
-    <div class="section-head">
+  <section class="view-card overflow-hidden">
+    <div class="flex items-start justify-between gap-4 mb-4 max-shell:flex-col">
       <div>
         <p class="eyebrow">Posted</p>
-        <h3>Posted register</h3>
+        <h3 class="m-0 font-display text-xl">Posted register</h3>
       </div>
-      <p class="section-note">Imported activity, manual transfer resolutions, and opening balances change this running balance.</p>
+      <p class="m-0 text-muted-foreground text-sm">Imported activity, manual transfer resolutions, and opening balances change this running balance.</p>
     </div>
 
     {#if registerLoading}
       <div class="empty-panel">
-        <h4>Loading transactions</h4>
-        <p>Refreshing this account’s register.</p>
+        <h4 class="m-0">Loading transactions</h4>
+        <p class="m-0 mt-1 text-muted-foreground">Refreshing this account’s register.</p>
       </div>
     {:else if !register || postedEntries.length === 0}
       <div class="empty-panel">
-        <h4>No posted activity yet</h4>
-        <p>
+        <h4 class="m-0">No posted activity yet</h4>
+        <p class="m-0 mt-1 text-muted-foreground">
           {#if pendingTransferCount > 0}
             Pending transfers are listed above. Posted transactions and opening-balance history will appear here after import or manual resolution.
           {:else}
@@ -994,12 +994,12 @@
         <span></span>
         <span>Date</span>
         <span>Description</span>
-        <span class="align-right">Amount</span>
-        <span class="align-right">Balance</span>
+        <span class="text-right">Amount</span>
+        <span class="text-right">Balance</span>
         <span></span>
       </div>
 
-      <div class="register-list">
+      <div class="grid">
         {#each postedEntries as entry}
           <details class:opening-row={entry.isOpeningBalance} class="register-row">
             <summary class="register-summary">
@@ -1011,9 +1011,9 @@
               ></button>
               <div class="register-cell register-date">{shortDate(entry.date)}</div>
 
-              <div class="register-cell register-description">
-                <p class="register-payee">{entry.payee}</p>
-                <div class="register-meta">
+              <div class="register-cell min-w-0">
+                <p class="font-bold">{entry.payee}</p>
+                <div class="flex flex-wrap gap-2 mt-1 text-muted-foreground text-sm">
                   <span>{entry.summary}</span>
                   {#if entry.isUnknown}
                     <span class="pill warn">Needs review</span>
@@ -1027,20 +1027,20 @@
                 </div>
               </div>
 
-              <div class="register-cell register-money align-right">
-                <p class:positive={entry.amount > 0} class:negative={entry.amount < 0} class="money-value">
+              <div class="register-cell register-money text-right">
+                <p class:positive={entry.amount > 0} class:negative={entry.amount < 0} class="font-bold">
                   {formatCurrency(entry.amount, baseCurrency, { signed: true })}
                 </p>
               </div>
 
-              <div class="register-cell register-money align-right">
-                <p class:positive={entry.runningBalance > 0} class:negative={entry.runningBalance < 0} class="money-value">
+              <div class="register-cell register-money text-right">
+                <p class:positive={entry.runningBalance > 0} class:negative={entry.runningBalance < 0} class="font-bold">
                   {formatCurrency(entry.runningBalance, baseCurrency)}
                 </p>
               </div>
 
               {#if entryHasActions(entry)}
-                <div class="register-cell register-actions">
+                <div class="register-cell relative">
                   <button
                     class="action-menu-btn"
                     title="Actions"
@@ -1072,25 +1072,25 @@
               {/if}
             </summary>
 
-            <div class="register-details">
+            <div class="px-4 pb-4 grid gap-3">
               {#if entry.isOpeningBalance}
-                <p class="details-note">This entry anchors running balances for the account until more history is backfilled.</p>
+                <p class="text-muted-foreground text-sm">This entry anchors running balances for the account until more history is backfilled.</p>
               {/if}
 
               {#if entry.transferState === 'settled_grouped'}
-                <p class="details-note">This imported row settled as part of a grouped transfer, so it no longer counts as pending.</p>
+                <p class="text-muted-foreground text-sm">This imported row settled as part of a grouped transfer, so it no longer counts as pending.</p>
               {/if}
 
               {#if entry.manualResolutionNote}
-                <p class="details-note manual-resolution-note">{entry.manualResolutionNote}</p>
+                <p class="text-sm manual-resolution-note">{entry.manualResolutionNote}</p>
               {/if}
 
               {#if entry.detailLines.length > 0}
-                <div class="detail-lines">
+                <div class="grid gap-2.5 grid-cols-[repeat(auto-fit,minmax(14rem,1fr))]">
                   {#each entry.detailLines as line}
                     <div class="detail-line">
                       <p>{line.label}</p>
-                      <p class="muted small">{line.account}</p>
+                      <p class="muted text-sm">{line.account}</p>
                     </div>
                   {/each}
                 </div>
@@ -1113,13 +1113,13 @@
 {#if confirmDeleteEntry}
   <div class="confirm-backdrop" on:click={() => { confirmDeleteEntry = null; actionError = ''; }} role="presentation">
     <div class="confirm-modal" on:click|stopPropagation on:keydown={(e) => { if (e.key === 'Escape') { confirmDeleteEntry = null; actionError = ''; } }} role="dialog" tabindex="-1" aria-labelledby="confirm-delete-title">
-      <h3 id="confirm-delete-title">Remove transaction</h3>
+      <h3 id="confirm-delete-title" class="m-0">Remove transaction</h3>
       <p>Remove <strong>{confirmDeleteEntry.payee}</strong> on {confirmDeleteEntry.date}?</p>
-      <p class="muted small">This removes the transaction from your records. You'll be able to undo this soon.</p>
+      <p class="muted text-sm">This removes the transaction from your records. You'll be able to undo this soon.</p>
       {#if actionError}
         <p class="action-error">{actionError}</p>
       {/if}
-      <div class="modal-actions">
+      <div class="flex flex-wrap gap-3">
         <button class="btn" type="button" on:click={() => { confirmDeleteEntry = null; actionError = ''; }}>Cancel</button>
         <button class="btn btn-danger" type="button" disabled={actionBusy} on:click={() => confirmDeleteEntry && void executeDelete(confirmDeleteEntry)}>
           {actionBusy ? 'Removing…' : 'Remove'}
@@ -1133,13 +1133,13 @@
 {#if confirmUnmatchEntry}
   <div class="confirm-backdrop" on:click={() => { confirmUnmatchEntry = null; actionError = ''; }} role="presentation">
     <div class="confirm-modal" on:click|stopPropagation on:keydown={(e) => { if (e.key === 'Escape') { confirmUnmatchEntry = null; actionError = ''; } }} role="dialog" tabindex="-1" aria-labelledby="confirm-unmatch-title">
-      <h3 id="confirm-unmatch-title">Undo match</h3>
+      <h3 id="confirm-unmatch-title" class="m-0">Undo match</h3>
       <p>Undo the match for <strong>{confirmUnmatchEntry.payee}</strong> on {confirmUnmatchEntry.date}?</p>
-      <p class="muted small">This will restore the original manual entry and move the imported transaction back to the review queue.</p>
+      <p class="muted text-sm">This will restore the original manual entry and move the imported transaction back to the review queue.</p>
       {#if actionError}
         <p class="action-error">{actionError}</p>
       {/if}
-      <div class="modal-actions">
+      <div class="flex flex-wrap gap-3">
         <button class="btn" type="button" on:click={() => { confirmUnmatchEntry = null; actionError = ''; }}>Cancel</button>
         <button class="btn btn-danger" type="button" disabled={actionBusy} on:click={() => confirmUnmatchEntry && void executeUnmatch(confirmUnmatchEntry)}>
           {actionBusy ? 'Undoing…' : 'Undo match'}
@@ -1150,12 +1150,7 @@
 {/if}
 
 <style>
-  h3,
-  h4,
-  p {
-    margin: 0;
-  }
-
+  /* --- Hero gradient backgrounds --- */
   .transactions-hero {
     display: grid;
     grid-template-columns: minmax(0, 1.5fr) minmax(18rem, 0.9fr);
@@ -1166,14 +1161,10 @@
       linear-gradient(155deg, #fbfdf8 0%, #f6fbff 60%, #eef6f3 100%);
   }
 
-  .hero-copy {
-    display: grid;
-    gap: 0.7rem;
-  }
-
-  .supporting-note {
-    color: var(--muted-foreground);
-    font-size: 0.92rem;
+  .activity-hero {
+    background:
+      radial-gradient(circle at top left, rgba(214, 235, 220, 0.86), transparent 34%),
+      linear-gradient(155deg, #fbfdf8 0%, #f6fbff 60%, #eef6f3 100%);
   }
 
   .hero-side {
@@ -1185,34 +1176,7 @@
     border: 1px solid rgba(10, 61, 89, 0.08);
   }
 
-  .hero-actions,
-  .actions {
-    display: flex;
-    gap: 0.7rem;
-    flex-wrap: wrap;
-  }
-
-  .text-link {
-    color: var(--brand-strong);
-    text-decoration: none;
-    font-weight: 700;
-  }
-
-  .text-link:hover {
-    text-decoration: underline;
-  }
-
-  .summary-grid {
-    display: grid;
-    gap: 1rem;
-    grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
-  }
-
-  .summary-card {
-    display: grid;
-    gap: 0.35rem;
-  }
-
+  /* --- Summary card gradient backgrounds --- */
   .summary-balance-card {
     background:
       linear-gradient(160deg, rgba(250, 252, 255, 0.95), rgba(243, 248, 252, 0.9)),
@@ -1226,40 +1190,10 @@
       linear-gradient(155deg, rgba(250, 253, 248, 0.98), rgba(241, 247, 255, 0.96));
   }
 
-  .stat-label {
-    font-size: 0.78rem;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-    color: var(--muted-foreground);
-    font-weight: 700;
-  }
-
-  .stat-value {
-    font-family: 'Space Grotesk', sans-serif;
-    font-size: 1.55rem;
-    line-height: 1;
-  }
-
-  .stat-note,
-  .section-note {
-    color: var(--muted-foreground);
-    font-size: 0.9rem;
-  }
-
-  .positive {
-    color: var(--ok);
-  }
-
-  .negative {
-    color: var(--bad);
-  }
-
-  .section-head {
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 1rem;
-    margin-bottom: 1rem;
+  .result-card {
+    background:
+      radial-gradient(circle at top right, rgba(214, 235, 220, 0.62), transparent 44%),
+      linear-gradient(155deg, rgba(248, 252, 246, 0.98), rgba(242, 248, 255, 0.96));
   }
 
   .pending-card {
@@ -1268,6 +1202,16 @@
       linear-gradient(155deg, rgba(252, 252, 247, 0.98), rgba(247, 250, 255, 0.96));
   }
 
+  /* --- State color classes (used with class:directive) --- */
+  .positive {
+    color: var(--ok);
+  }
+
+  .negative {
+    color: var(--bad);
+  }
+
+  /* --- Pending balance banner --- */
   .pending-balance-banner {
     display: flex;
     align-items: center;
@@ -1280,31 +1224,7 @@
     background: rgba(255, 255, 255, 0.72);
   }
 
-  .pending-banner-label {
-    font-size: 0.78rem;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-    color: var(--muted-foreground);
-    font-weight: 700;
-  }
-
-  .pending-banner-value {
-    font-family: 'Space Grotesk', sans-serif;
-    font-size: 1.5rem;
-    line-height: 1.05;
-    margin-top: 0.2rem;
-  }
-
-  .pending-banner-note {
-    max-width: 26rem;
-    color: var(--muted-foreground);
-    font-size: 0.9rem;
-  }
-
-  .register-card {
-    overflow: hidden;
-  }
-
+  /* --- Register / Pending grid layout --- */
   .register-header,
   .register-summary,
   .pending-header,
@@ -1326,25 +1246,9 @@
     color: var(--muted-foreground);
   }
 
-  .register-list {
-    display: grid;
-  }
-
-  .pending-list {
-    display: grid;
-    gap: 0.8rem;
-  }
-
   .register-row {
     border-bottom: 1px solid rgba(10, 61, 89, 0.08);
     background: rgba(255, 255, 255, 0.35);
-  }
-
-  .pending-row {
-    border: 1px solid rgba(10, 61, 89, 0.08);
-    border-radius: 1rem;
-    background: rgba(255, 255, 255, 0.62);
-    overflow: hidden;
   }
 
   .register-row:last-child {
@@ -1359,6 +1263,13 @@
     background: rgba(247, 249, 245, 0.78);
   }
 
+  .pending-row {
+    border: 1px solid rgba(10, 61, 89, 0.08);
+    border-radius: 1rem;
+    background: rgba(255, 255, 255, 0.62);
+    overflow: hidden;
+  }
+
   .register-summary,
   .pending-summary {
     padding: 0.95rem 1rem;
@@ -1366,6 +1277,12 @@
     list-style: none;
   }
 
+  .register-summary::-webkit-details-marker,
+  .pending-summary::-webkit-details-marker {
+    display: none;
+  }
+
+  /* --- Clearing status indicator --- */
   .clearing-indicator {
     width: 0.7rem;
     height: 0.7rem;
@@ -1393,64 +1310,14 @@
     box-shadow: none;
   }
 
-  .register-summary::-webkit-details-marker,
-  .pending-summary::-webkit-details-marker {
-    display: none;
-  }
-
-  .register-description {
-    min-width: 0;
-  }
-
-  .register-payee {
-    font-weight: 700;
-  }
-
-  .register-meta {
-    display: flex;
-    gap: 0.5rem;
-    flex-wrap: wrap;
-    margin-top: 0.3rem;
-    color: var(--muted-foreground);
-    font-size: 0.92rem;
-  }
-
+  /* --- Pending pill (warn variant) --- */
   .pending-pill {
     color: var(--warn);
     border-color: #f3cf96;
     background: #fff7ea;
   }
 
-  .money-value {
-    font-weight: 700;
-  }
-
-  .align-right {
-    text-align: right;
-  }
-
-  .pending-status {
-    display: grid;
-    gap: 0.15rem;
-  }
-
-  .pending-status-title {
-    font-size: 0.84rem;
-    font-weight: 700;
-    color: var(--brand-strong);
-  }
-
-  .register-details {
-    padding: 0 1rem 1rem;
-    display: grid;
-    gap: 0.75rem;
-  }
-
-  .details-note {
-    color: var(--muted-foreground);
-    font-size: 0.92rem;
-  }
-
+  /* --- Detail note colors --- */
   .pending-details-note {
     color: #7d5200;
   }
@@ -1459,12 +1326,7 @@
     color: var(--brand-strong);
   }
 
-  .detail-lines {
-    display: grid;
-    gap: 0.6rem;
-    grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
-  }
-
+  /* --- Detail line card --- */
   .detail-line {
     border: 1px solid rgba(10, 61, 89, 0.08);
     border-radius: 0.9rem;
@@ -1472,10 +1334,7 @@
     background: rgba(255, 255, 255, 0.62);
   }
 
-  .small {
-    font-size: 0.84rem;
-  }
-
+  /* --- Empty panel --- */
   .empty-panel {
     border: 1px dashed rgba(10, 61, 89, 0.18);
     border-radius: 1rem;
@@ -1483,32 +1342,11 @@
     background: rgba(255, 255, 255, 0.52);
   }
 
-  .result-card {
-    display: grid;
-    gap: 0.45rem;
-    background:
-      radial-gradient(circle at top right, rgba(214, 235, 220, 0.62), transparent 44%),
-      linear-gradient(155deg, rgba(248, 252, 246, 0.98), rgba(242, 248, 255, 0.96));
-  }
-
-  .pending-actions,
-  .modal-actions {
-    display: flex;
-    gap: 0.7rem;
-    flex-wrap: wrap;
-  }
-
   .pending-secondary-action {
     background: rgba(255, 255, 255, 0.85);
   }
 
-
   /* --- Transaction Actions Menu --- */
-
-  .register-actions {
-    position: relative;
-  }
-
   .action-menu-btn {
     display: flex;
     align-items: center;
@@ -1575,7 +1413,6 @@
   }
 
   /* --- Confirmation dialogs --- */
-
   .confirm-backdrop {
     position: fixed;
     inset: 0;
@@ -1621,57 +1458,7 @@
     cursor: not-allowed;
   }
 
-  @media (max-width: 980px) {
-    .transactions-hero,
-    .summary-grid {
-      grid-template-columns: 1fr;
-    }
-
-    .section-head {
-      flex-direction: column;
-    }
-
-    .pending-balance-banner {
-      flex-direction: column;
-      align-items: flex-start;
-    }
-  }
-
-  @media (max-width: 820px) {
-    .register-header,
-    .pending-header {
-      display: none;
-    }
-
-    .register-summary,
-    .pending-summary {
-      grid-template-columns: 1.5rem 1fr 2rem;
-      gap: 0.45rem;
-    }
-
-    .clearing-indicator {
-      grid-row: 1;
-    }
-
-    .register-date {
-      font-size: 0.88rem;
-      color: var(--muted-foreground);
-    }
-
-    .register-money {
-      text-align: left;
-    }
-
-    .pending-status {
-      text-align: left;
-    }
-
-    .align-right {
-      text-align: left;
-    }
-  }
-
-  /* --- View Toggle --- */
+  /* --- View Toggle (segmented control) --- */
   .view-toggle {
     display: inline-flex;
     gap: 0.15rem;
@@ -1702,24 +1489,7 @@
     color: var(--foreground);
   }
 
-  /* --- Activity View --- */
-  .activity-hero {
-    background:
-      radial-gradient(circle at top left, rgba(214, 235, 220, 0.86), transparent 34%),
-      linear-gradient(155deg, #fbfdf8 0%, #f6fbff 60%, #eef6f3 100%);
-  }
-
-  .activity-filters-card {
-    padding: 1rem 1.5rem;
-  }
-
-  .activity-filter-bar {
-    display: flex;
-    gap: 1rem;
-    align-items: center;
-    flex-wrap: wrap;
-  }
-
+  /* --- Activity period presets (segmented control) --- */
   .activity-presets {
     display: inline-flex;
     gap: 0.15rem;
@@ -1750,10 +1520,9 @@
     color: var(--foreground);
   }
 
-  .filter-chip-group {
-    display: flex;
-    align-items: center;
-    gap: 0.4rem;
+  /* --- Activity filters card --- */
+  .activity-filters-card {
+    padding: 1rem 1.5rem;
   }
 
   .filter-label {
@@ -1798,14 +1567,19 @@
     background: rgba(15, 95, 136, 0.22);
   }
 
-  .activity-list-card {
-    overflow: hidden;
+  /* --- Activity category pill --- */
+  .activity-category-pill {
+    flex-shrink: 0;
+    font-size: 0.76rem;
+    font-weight: 600;
+    padding: 0.18rem 0.55rem;
+    border-radius: 999px;
+    background: rgba(15, 95, 136, 0.08);
+    color: var(--brand-strong);
+    white-space: nowrap;
   }
 
-  .activity-list {
-    display: grid;
-  }
-
+  /* --- Activity date group separator --- */
   .date-group + .date-group {
     margin-top: 0.65rem;
     padding-top: 0.65rem;
@@ -1813,7 +1587,6 @@
   }
 
   .date-header {
-    margin: 0;
     font-size: 0.75rem;
     text-transform: uppercase;
     letter-spacing: 0.08em;
@@ -1821,6 +1594,7 @@
     font-weight: 700;
   }
 
+  /* --- Activity row border separator --- */
   .activity-row {
     display: flex;
     justify-content: space-between;
@@ -1834,67 +1608,42 @@
     border-bottom: none;
   }
 
-  .activity-main {
-    display: grid;
-    gap: 0.2rem;
-    min-width: 0;
-  }
-
-  .activity-headline {
-    display: flex;
-    align-items: center;
-    gap: 0.55rem;
-    min-width: 0;
-  }
-
-  .activity-category-pill {
-    flex-shrink: 0;
-    font-size: 0.76rem;
-    font-weight: 600;
-    padding: 0.18rem 0.55rem;
-    border-radius: 999px;
-    background: rgba(15, 95, 136, 0.08);
-    color: var(--brand-strong);
-    white-space: nowrap;
-  }
-
-  .activity-payee {
-    font-weight: 700;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    min-width: 0;
-  }
-
-  .activity-meta {
-    color: var(--muted-foreground);
-    font-size: 0.88rem;
-  }
-
-  .activity-side {
-    display: grid;
-    gap: 0.2rem;
-    justify-items: end;
-    flex-shrink: 0;
-  }
-
-  .activity-amount {
-    font-weight: 700;
-    white-space: nowrap;
-  }
-
-  a.pill.warn {
-    text-decoration: none;
-  }
-
+  /* --- Responsive breakpoints --- */
   @media (max-width: 980px) {
+    .transactions-hero,
     .activity-hero {
       grid-template-columns: 1fr;
     }
 
-    .activity-filter-bar {
+    .pending-balance-banner {
       flex-direction: column;
       align-items: flex-start;
+    }
+  }
+
+  @media (max-width: 820px) {
+    .register-header,
+    .pending-header {
+      display: none;
+    }
+
+    .register-summary,
+    .pending-summary {
+      grid-template-columns: 1.5rem 1fr 2rem;
+      gap: 0.45rem;
+    }
+
+    .clearing-indicator {
+      grid-row: 1;
+    }
+
+    .register-date {
+      font-size: 0.88rem;
+      color: var(--muted-foreground);
+    }
+
+    .register-money {
+      text-align: left;
     }
   }
 
@@ -1902,14 +1651,6 @@
     .activity-row {
       flex-direction: column;
       gap: 0.3rem;
-    }
-
-    .activity-side {
-      justify-items: start;
-    }
-
-    .activity-headline {
-      flex-wrap: wrap;
     }
   }
 </style>
