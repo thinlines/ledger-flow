@@ -321,3 +321,9 @@ input[type='radio'] {
     grid-template-columns: 1fr;
   }
 }
+
+/* Sheet slide-in (portaled, so must be global) */
+@keyframes sheet-slide-in {
+  from { transform: translateX(100%); }
+  to { transform: translateX(0); }
+}

@@ -8,11 +8,13 @@
   import ManualResolutionDialog from '$lib/components/transactions/ManualResolutionDialog.svelte';
   import TransactionDayGroup from '$lib/components/transactions/TransactionDayGroup.svelte';
   import TransactionRow from '$lib/components/transactions/TransactionRow.svelte';
+  import TransactionDetailSheet from '$lib/components/transactions/TransactionDetailSheet.svelte';
   import TransactionsExplanationHeader from '$lib/components/transactions/TransactionsExplanationHeader.svelte';
   import { describeBalanceTrust } from '$lib/account-trust';
   import type {
     TrackedAccount,
     RegisterEntry,
+    ActivityTransaction,
     AccountRegister,
     ActivityResult,
     ActionLink,
@@ -61,25 +63,29 @@
   let manualResolutionEntry: RegisterEntry | null = null;
   let manualResolutionSuccess = '';
 
-  // Transaction actions menu state
-  let actionMenuEntry: RegisterEntry | null = null;
+  // Detail sheet state
+  let selectedEntry: RegisterEntry | null = null;
+  let selectedTransaction: ActivityTransaction | null = null;
+
+  // Transaction action state
   let confirmDeleteEntry: RegisterEntry | null = null;
   let confirmUnmatchEntry: RegisterEntry | null = null;
   let actionError = '';
   let actionBusy = false;
 
-  function openActionMenu(entry: RegisterEntry, event: MouseEvent) {
-    event.preventDefault();
-    event.stopPropagation();
-    if (actionMenuEntry === entry) {
-      actionMenuEntry = null;
-    } else {
-      actionMenuEntry = entry;
-    }
+  function openSheet(entry: RegisterEntry) {
+    selectedTransaction = null;
+    selectedEntry = entry;
   }
 
-  function closeActionMenu() {
-    actionMenuEntry = null;
+  function openSheetActivity(tx: ActivityTransaction) {
+    selectedEntry = null;
+    selectedTransaction = tx;
+  }
+
+  function closeSheet() {
+    selectedEntry = null;
+    selectedTransaction = null;
   }
 
   async function executeDelete(entry: RegisterEntry) {
@@ -92,7 +98,7 @@
         headerLine: entry.headerLine,
       });
       confirmDeleteEntry = null;
-      closeActionMenu();
+      closeSheet();
       const reloadRegister = () => loadRegister(selectedAccountId);
       if (res.eventId) showUndoToast(res.eventId, `Removed ${entry.payee} on ${entry.date}`, reloadRegister);
       await reloadRegister();
@@ -112,7 +118,7 @@
         journalPath: entry.journalPath,
         headerLine: entry.headerLine,
       });
-      closeActionMenu();
+      closeSheet();
       const reloadRegister = () => loadRegister(selectedAccountId);
       if (res.eventId) showUndoToast(res.eventId, `Reset category on ${entry.payee}`, reloadRegister);
       await reloadRegister();
@@ -134,7 +140,7 @@
         matchId: entry.matchId,
       });
       confirmUnmatchEntry = null;
-      closeActionMenu();
+      closeSheet();
       const reloadRegister = () => loadRegister(selectedAccountId);
       if (res.eventId) showUndoToast(res.eventId, `Undid match for ${entry.payee}`, reloadRegister);
       await reloadRegister();
@@ -535,7 +541,6 @@
   </section>
 {/if}
 
-<svelte:window on:click={() => { if (actionMenuEntry) actionMenuEntry = null; }} />
 
 {#if loading}
   <section class="view-card transactions-hero">
@@ -658,6 +663,7 @@
                 transaction={tx}
                 showCategory={!activityCategory}
                 {baseCurrency}
+                onRowClick={() => openSheetActivity(tx)}
               />
             {/each}
           </TransactionDayGroup>
@@ -927,18 +933,24 @@
             mode="register"
             {entry}
             {baseCurrency}
-            activeMenuEntry={actionMenuEntry}
             onToggleClearing={toggleClearingStatus}
-            onOpenActionMenu={openActionMenu}
-            onConfirmDelete={(e) => { closeActionMenu(); confirmDeleteEntry = e; }}
-            onRecategorize={(e) => { closeActionMenu(); void executeRecategorize(e); }}
-            onConfirmUnmatch={(e) => { closeActionMenu(); confirmUnmatchEntry = e; }}
+            onRowClick={() => openSheet(entry)}
           />
         {/each}
       </div>
     {/if}
   </section>
 {/if}
+
+<TransactionDetailSheet
+  entry={selectedEntry}
+  transaction={selectedTransaction}
+  {baseCurrency}
+  onDelete={(e) => { closeSheet(); confirmDeleteEntry = e; }}
+  onRecategorize={(e) => { closeSheet(); void executeRecategorize(e); }}
+  onUnmatch={(e) => { closeSheet(); confirmUnmatchEntry = e; }}
+  onClose={closeSheet}
+/>
 
 <ManualResolutionDialog
   bind:entry={manualResolutionEntry}

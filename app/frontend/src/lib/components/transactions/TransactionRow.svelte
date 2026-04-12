@@ -1,15 +1,7 @@
 <script lang="ts">
   import type { RegisterEntry, ActivityTransaction } from '$lib/transactions/types';
   import { formatCurrency, shortDate } from '$lib/format';
-  import {
-    truncatePayee,
-    activityShortDate,
-    entryHasActions,
-    canDelete,
-    canRecategorize,
-    canUnmatch,
-    CLEARING_TOOLTIPS
-  } from '$lib/transactions/helpers';
+  import { truncatePayee, activityShortDate, CLEARING_TOOLTIPS } from '$lib/transactions/helpers';
 
   export let mode: 'activity' | 'register';
 
@@ -19,26 +11,21 @@
 
   // Register mode props
   export let entry: RegisterEntry | null = null;
-  export let activeMenuEntry: RegisterEntry | null = null;
   export let onToggleClearing: (entry: RegisterEntry, event: MouseEvent) => void = () => {};
-  export let onOpenActionMenu: (entry: RegisterEntry, event: MouseEvent) => void = () => {};
-  export let onConfirmDelete: (entry: RegisterEntry) => void = () => {};
-  export let onRecategorize: (entry: RegisterEntry) => void = () => {};
-  export let onConfirmUnmatch: (entry: RegisterEntry) => void = () => {};
 
   // Shared
   export let baseCurrency: string;
+  export let onRowClick: (() => void) | null = null;
 </script>
 
 {#if mode === 'activity' && transaction}
-  <div class="activity-row">
+  <button class="activity-row" type="button" on:click={() => onRowClick?.()}>
     <div class="grid gap-0.5 min-w-0">
       <div class="flex items-center gap-2 min-w-0 max-tablet:flex-wrap">
-        <button
+        <span
           class="clearing-indicator clearing-unmarked"
           title="Unmarked"
-          type="button"
-        ></button>
+        ></span>
         {#if showCategory}
           <span class="activity-category-pill">{transaction.category}</span>
         {/if}
@@ -53,17 +40,17 @@
         {formatCurrency(transaction.amount, baseCurrency, { signed: true })}
       </p>
       {#if transaction.isUnknown}
-        <a class="pill warn no-underline" href="/unknowns">Needs review</a>
+        <a class="pill warn no-underline" href="/unknowns" on:click|stopPropagation>Needs review</a>
       {/if}
     </div>
-  </div>
+  </button>
 {:else if mode === 'register' && entry}
-  <details class:opening-row={entry.isOpeningBalance} class="register-row">
-    <summary class="register-summary">
+  <div class:opening-row={entry.isOpeningBalance} class="register-row" role="button" tabindex="0" on:click={() => onRowClick?.()} on:keydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onRowClick?.(); } }}>
+    <div class="register-summary">
       <button
         class="clearing-indicator clearing-{entry.clearingStatus ?? 'unmarked'}"
         title={CLEARING_TOOLTIPS[entry.clearingStatus ?? 'unmarked']}
-        on:click={(e) => onToggleClearing(entry, e)}
+        on:click|stopPropagation={(e) => onToggleClearing(entry, e)}
         type="button"
       ></button>
       <div class="register-cell register-date">{shortDate(entry.date)}</div>
@@ -96,79 +83,34 @@
         </p>
       </div>
 
-      {#if entryHasActions(entry)}
-        <div class="register-cell relative">
-          <button
-            class="action-menu-btn"
-            title="Actions"
-            type="button"
-            on:click={(e) => onOpenActionMenu(entry, e)}
-          >⋮</button>
-          {#if activeMenuEntry === entry}
-            <div class="action-menu-popover">
-              {#if canDelete(entry)}
-                <button class="action-menu-item danger" type="button" on:click={(e) => { e.stopPropagation(); onConfirmDelete(entry); }}>
-                  Remove transaction
-                </button>
-              {/if}
-              {#if canRecategorize(entry)}
-                <button class="action-menu-item" type="button" on:click={(e) => { e.stopPropagation(); onRecategorize(entry); }}>
-                  Reset category
-                </button>
-              {/if}
-              {#if canUnmatch(entry)}
-                <button class="action-menu-item" type="button" on:click={(e) => { e.stopPropagation(); onConfirmUnmatch(entry); }}>
-                  Undo match
-                </button>
-              {/if}
-            </div>
-          {/if}
-        </div>
-      {:else}
-        <span></span>
-      {/if}
-    </summary>
-
-    <div class="px-4 pb-4 grid gap-3">
-      {#if entry.isOpeningBalance}
-        <p class="text-muted-foreground text-sm">This entry anchors running balances for the account until more history is backfilled.</p>
-      {/if}
-
-      {#if entry.transferState === 'settled_grouped'}
-        <p class="text-muted-foreground text-sm">This imported row settled as part of a grouped transfer, so it no longer counts as pending.</p>
-      {/if}
-
-      {#if entry.manualResolutionNote}
-        <p class="text-sm manual-resolution-note">{entry.manualResolutionNote}</p>
-      {/if}
-
-      {#if entry.detailLines.length > 0}
-        <div class="grid gap-2.5 grid-cols-[repeat(auto-fit,minmax(14rem,1fr))]">
-          {#each entry.detailLines as line}
-            <div class="detail-line">
-              <p>{line.label}</p>
-              <p class="muted text-sm">{line.account}</p>
-            </div>
-          {/each}
-        </div>
-      {/if}
+      <span></span>
     </div>
-  </details>
+  </div>
 {/if}
 
 <style>
-  /* --- Activity row separator --- */
+  /* --- Activity row --- */
   .activity-row {
     display: flex;
     justify-content: space-between;
     align-items: flex-start;
     gap: 1rem;
     padding: 0.65rem 0;
+    border: none;
     border-bottom: 1px solid rgba(10, 61, 89, 0.05);
+    background: transparent;
+    width: 100%;
+    text-align: left;
+    cursor: pointer;
+    transition: background 0.12s;
   }
 
   .activity-row:last-child {
     border-bottom: none;
+  }
+
+  .activity-row:hover {
+    background: rgba(10, 61, 89, 0.03);
   }
 
   @media (max-width: 720px) {
@@ -194,13 +136,15 @@
   .register-row {
     border-bottom: 1px solid rgba(10, 61, 89, 0.08);
     background: rgba(255, 255, 255, 0.35);
+    cursor: pointer;
+    transition: background 0.12s;
   }
 
   .register-row:last-child {
     border-bottom: none;
   }
 
-  .register-row[open] {
+  .register-row:hover {
     background: rgba(244, 249, 255, 0.72);
   }
 
@@ -215,12 +159,6 @@
     gap: 1rem;
     align-items: center;
     padding: 0.95rem 1rem;
-    cursor: pointer;
-    list-style: none;
-  }
-
-  .register-summary::-webkit-details-marker {
-    display: none;
   }
 
   /* --- State color classes --- */
@@ -258,85 +196,6 @@
   .clearing-unmarked {
     background: rgba(10, 61, 89, 0.12);
     box-shadow: none;
-  }
-
-  /* --- Detail note colors --- */
-  .manual-resolution-note {
-    color: var(--brand-strong);
-  }
-
-  /* --- Detail line card --- */
-  .detail-line {
-    border: 1px solid rgba(10, 61, 89, 0.08);
-    border-radius: 0.9rem;
-    padding: 0.7rem 0.8rem;
-    background: rgba(255, 255, 255, 0.62);
-  }
-
-  /* --- Action menu --- */
-  .action-menu-btn {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 1.6rem;
-    height: 1.6rem;
-    padding: 0;
-    border: none;
-    border-radius: 0.4rem;
-    background: transparent;
-    color: var(--muted-foreground);
-    font-size: 1.1rem;
-    font-weight: 700;
-    line-height: 1;
-    cursor: pointer;
-    transition: background 0.12s, color 0.12s;
-  }
-
-  .action-menu-btn:hover {
-    background: rgba(10, 61, 89, 0.08);
-    color: var(--foreground);
-  }
-
-  .action-menu-popover {
-    position: absolute;
-    right: 0;
-    top: 100%;
-    z-index: 20;
-    min-width: 11rem;
-    background: #fff;
-    border: 1px solid rgba(10, 61, 89, 0.12);
-    border-radius: 0.7rem;
-    box-shadow: 0 4px 16px rgba(10, 20, 30, 0.12);
-    padding: 0.3rem;
-    display: grid;
-    gap: 0.1rem;
-  }
-
-  .action-menu-item {
-    display: block;
-    width: 100%;
-    padding: 0.55rem 0.75rem;
-    border: none;
-    border-radius: 0.45rem;
-    background: transparent;
-    color: var(--foreground);
-    font-size: 0.88rem;
-    font-weight: 600;
-    text-align: left;
-    cursor: pointer;
-    transition: background 0.12s;
-  }
-
-  .action-menu-item:hover {
-    background: rgba(10, 61, 89, 0.06);
-  }
-
-  .action-menu-item.danger {
-    color: var(--error, #c53030);
-  }
-
-  .action-menu-item.danger:hover {
-    background: rgba(197, 48, 48, 0.08);
   }
 
   /* --- Responsive --- */
