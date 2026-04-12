@@ -1425,7 +1425,7 @@
   }
 </script>
 
-<section class="view-card hero">
+<section class="view-card hero grid gap-3.5">
   <p class="eyebrow">Review</p>
   <h2 class="page-title">{historyStage ? 'Review historical rule matches' : 'Review recent transactions'}</h2>
   <p class="subtitle">
@@ -1438,48 +1438,48 @@
 </section>
 
 {#if !initialized}
-  <section class="view-card">
+  <section class="view-card grid gap-3.5">
     <p class="error-text">Workspace not initialized yet.</p>
     <a class="btn btn-primary" href="/setup">Go to Setup</a>
   </section>
 {:else}
   {#if error}
-    <section class="view-card"><p class="error-text">{error}</p></section>
+    <section class="view-card grid gap-3.5"><p class="error-text">{error}</p></section>
   {/if}
 
   {#if historyStage}
-    <section class="view-card review-summary-card">
-      <div class="review-summary-head">
+    <section class="view-card grid gap-3.5">
+      <div class="flex flex-wrap items-start justify-between gap-4 max-[680px]:flex-col">
         <div>
           <p class="eyebrow">Review Queue</p>
-          <h3>{(historyStage.candidates?.length ?? 0) === 0 ? 'Nothing needs rewriting' : 'Review historical matches'}</h3>
+          <h3 class="m-0 mt-0.5 mb-3">{(historyStage.candidates?.length ?? 0) === 0 ? 'Nothing needs rewriting' : 'Review historical matches'}</h3>
           <p class="muted">
             {(historyStage.candidates?.length ?? 0) === 0
               ? `No imported transactions need updates in ${pathLabel(historyStage.journalPath)}.`
               : `${historyStage.candidates.length} imported transactions in ${pathLabel(historyStage.journalPath)} are ready for review.`}
           </p>
         </div>
-        <div class="review-summary-pills">
+        <div class="flex flex-wrap gap-2">
           <span class="pill ok">{historyStage.summary?.candidateCount ?? historyStage.candidates.length} ready</span>
           <span class="pill">{historyStage.summary?.upToDateCount ?? 0} already current</span>
           <span class="pill warn">{historyStage.summary?.skippedCount ?? 0} skipped</span>
         </div>
       </div>
 
-      <div class="review-toolbar">
-        <div class="filters">
+      <div class="flex flex-wrap justify-between gap-4 border-t border-card-edge pt-4 max-[920px]:flex-col">
+        <div class="flex flex-wrap gap-2">
           <button class="btn" type="button" on:click={cancelHistoryReview}>
             {historyStage.result ? 'Back to Rules' : 'Cancel'}
           </button>
         </div>
 
         {#if !historyStage.result}
-          <div class="review-actions">
-            <p class="muted review-hint">
+          <div class="grid gap-2 justify-items-end max-[920px]:justify-items-start">
+            <p class="muted m-0 max-w-lg text-right max-[920px]:text-left">
               Applying rewrites {historySelectedCount} selected
               {historySelectedCount === 1 ? ' transaction' : ' transactions'} to {historyStage.targetAccount}.
             </p>
-            <div class="actions">
+            <div class="flex flex-wrap gap-2.5">
               <button class="btn btn-primary" type="button" disabled={loading || historySelectedCount === 0} on:click={applyHistoryStage}>
                 Apply selected changes
               </button>
@@ -1490,15 +1490,15 @@
     </section>
 
     {#if historyStage.result}
-      <section class="view-card result-card">
+      <section class="view-card grid gap-3.5">
         <p class="eyebrow">Result</p>
-        <h3>Changes applied</h3>
+        <h3 class="m-0 mt-0.5 mb-3">Changes applied</h3>
         <p class="muted">
           Updated transactions: {historyStage.result.updatedTxnCount}. Backup: {pathLabel(historyStage.result.backupPath)}.
         </p>
         {#if historyStage.result.warnings?.length}
           <h4>Warnings</h4>
-          <ul class="warning-list">
+          <ul class="grid gap-2 m-0 pl-5">
             {#each historyStage.result.warnings as warning}
               <li>{warning.warning}</li>
             {/each}
@@ -1508,8 +1508,8 @@
     {/if}
 
     {#if historyStage.candidates.length > 0}
-      <section class="view-card history-select-card">
-        <label class="history-select-toggle">
+      <section class="view-card history-select-card grid gap-3.5 items-center justify-between max-[920px]:justify-start">
+        <label class="inline-flex items-center gap-2 font-semibold">
           <input
             type="checkbox"
             checked={historySelectedCandidateIds.length === historyStage.candidates.length}
@@ -1520,7 +1520,7 @@
         <p class="muted">{historySelectedCount} selected for rewrite</p>
       </section>
 
-      <section class="review-list">
+      <section class="grid gap-2 mt-4">
         <div class="review-list-header history-review-list-header" aria-hidden="true">
           <span>Select</span>
           <span>Activity</span>
@@ -1528,9 +1528,10 @@
           <span>Category Change</span>
         </div>
         {#each historyStage.candidates as candidate (candidate.id)}
-          <article class="view-card review-row row-ready history-review-row">
-            <div class="history-review-select">
+          <article class="view-card review-row row-ready history-review-row grid gap-3 min-[921px]:items-start">
+            <div class="min-w-0 grid content-center">
               <input
+                class="justify-self-start"
                 type="checkbox"
                 checked={historySelectedCandidateIds.includes(candidate.id)}
                 aria-label={`Select ${candidate.payee} on ${formatShortDate(candidate.date)}`}
@@ -1538,20 +1539,20 @@
               />
             </div>
 
-            <div class="review-row-activity">
-              <div class="group-title-row">
-                <h4>{candidate.payee}</h4>
+            <div class="min-w-0">
+              <div class="flex items-center">
+                <h4 class="m-0 text-base">{candidate.payee}</h4>
               </div>
-              <p class="group-meta">{formatShortDate(candidate.date)}</p>
-              <p class="assignment-value">{candidate.sourceAccountLabel}</p>
+              <p class="m-0 mt-0.5 text-sm text-muted-foreground">{formatShortDate(candidate.date)}</p>
+              <p class="m-0 mt-1 text-sm font-semibold text-brand-strong">{candidate.sourceAccountLabel}</p>
             </div>
 
-            <div class="review-row-amount">
-              <p class="amount-value">{candidate.amount || '-'}</p>
+            <div class="min-w-0 grid content-start gap-0.5 min-[921px]:justify-items-end min-[921px]:text-right">
+              <p class="m-0 text-sm font-extrabold text-brand-strong">{candidate.amount || '-'}</p>
             </div>
 
-            <div class="history-review-category">
-              <p class="history-account-shift">
+            <div class="min-w-0 grid content-center">
+              <p class="m-0 flex flex-wrap items-center gap-2 font-mono text-sm wrap-anywhere">
                 <span>{candidate.currentAccount}</span>
                 <span aria-hidden="true">→</span>
                 <span>{candidate.targetAccount}</span>
@@ -1563,9 +1564,9 @@
     {/if}
 
     {#if historyStage.warnings?.length}
-      <section class="view-card result-card">
+      <section class="view-card grid gap-3.5">
         <p class="eyebrow">Skipped Matches</p>
-        <ul class="warning-list">
+        <ul class="grid gap-2 m-0 pl-5">
           {#each historyStage.warnings as warning}
             <li>{formatShortDate(warning.date)} · {warning.payee}: {warning.reason}</li>
           {/each}
@@ -1574,18 +1575,18 @@
     {/if}
   {:else}
     {#if stage}
-      <section class="view-card review-summary-card">
-        <div class="review-summary-head">
+      <section class="view-card grid gap-3.5">
+        <div class="flex flex-wrap items-start justify-between gap-4 max-[680px]:flex-col">
           <div>
             <p class="eyebrow">Review Queue</p>
-            <h3>{(stage.groups?.length ?? 0) === 0 ? "You're all caught up" : 'Review uncategorized transactions'}</h3>
+            <h3 class="m-0 mt-0.5 mb-3">{(stage.groups?.length ?? 0) === 0 ? "You're all caught up" : 'Review uncategorized transactions'}</h3>
             <p class="muted">
               {(stage.groups?.length ?? 0) === 0
                 ? 'No uncategorized activity needs attention right now.'
                 : `${totalReviewTransactions} transactions from ${pathLabel(journalPath)} are in the review queue.`}
             </p>
           </div>
-          <div class="review-summary-pills">
+          <div class="flex flex-wrap gap-2">
             {#if (stage.groups?.length ?? 0) === 0}
               <span class="pill ok">All caught up</span>
             {:else}
@@ -1597,8 +1598,8 @@
         </div>
 
         {#if (stage.groups?.length ?? 0) > 0}
-          <div class="review-toolbar">
-            <div class="filters">
+          <div class="flex flex-wrap justify-between gap-4 border-t border-card-edge pt-4 max-[920px]:flex-col">
+            <div class="flex flex-wrap gap-2">
               <button
                 class="btn"
                 type="button"
@@ -1621,13 +1622,13 @@
             </div>
 
             {#if !stage.result}
-              <div class="review-actions">
-              <p class="muted review-hint">
-                Assignments preview automatically. Applying writes {readyReviewTransactions} reviewed
-                {readyReviewTransactions === 1 ? ' transaction' : ' transactions'} from {selectedGroupCount}
-                {selectedGroupCount === 1 ? ' review group' : ' review groups'} into the selected year.
-              </p>
-              <div class="actions">
+              <div class="grid gap-2 justify-items-end max-[920px]:justify-items-start">
+                <p class="muted m-0 max-w-lg text-right max-[920px]:text-left">
+                  Assignments preview automatically. Applying writes {readyReviewTransactions} reviewed
+                  {readyReviewTransactions === 1 ? ' transaction' : ' transactions'} from {selectedGroupCount}
+                  {selectedGroupCount === 1 ? ' review group' : ' review groups'} into the selected year.
+                </p>
+                <div class="flex flex-wrap gap-2.5">
                   <button class="btn btn-primary" type="button" disabled={loading || readyReviewTransactions === 0} on:click={applyMappings}>
                     Apply reviewed changes
                   </button>
@@ -1636,12 +1637,12 @@
             {/if}
           </div>
         {:else}
-          <div class="caught-up-state">
-            <p class="muted caught-up-copy">
+          <div class="caught-up-state grid gap-3 border-t border-card-edge pt-4">
+            <p class="muted m-0">
               Recent activity is categorized and ready. Head back to Overview to see the latest picture, or import more
               activity when you want to extend it.
             </p>
-            <div class="actions">
+            <div class="flex flex-wrap gap-2.5">
               <a class="btn btn-primary" href="/">See Overview</a>
               <a class="btn" href="/import">Import More Activity</a>
             </div>
@@ -1649,18 +1650,18 @@
         {/if}
       </section>
     {:else if loading}
-      <section class="view-card review-summary-card">
+      <section class="view-card grid gap-3.5">
         <p class="eyebrow">Review Queue</p>
-        <h3>Opening your review queue</h3>
+        <h3 class="m-0 mt-0.5 mb-3">Opening your review queue</h3>
         <p class="muted">Checking recent activity for transactions that still need attention.</p>
       </section>
     {:else if journals.length === 0 && !journalPath}
-      <section class="view-card review-summary-card">
+      <section class="view-card grid gap-3.5">
         <p class="eyebrow">Review Queue</p>
-        <h3>No imported activity yet</h3>
+        <h3 class="m-0 mt-0.5 mb-3">No imported activity yet</h3>
         <p class="muted">Import transactions first, then return here to review anything that still needs a category.</p>
-        <div class="caught-up-state">
-          <div class="actions">
+        <div class="grid gap-3 border-t border-card-edge pt-4">
+          <div class="flex flex-wrap gap-2.5">
             <a class="btn btn-primary" href="/import">Import Activity</a>
             <a class="btn" href="/">See Overview</a>
           </div>
@@ -1669,11 +1670,11 @@
     {/if}
 
     {#if journals.length > 0 || journalPath}
-      <section class="view-card review-scope-card">
-        <div class="review-scope-head">
+      <section class="view-card grid gap-3.5">
+        <div class="flex flex-wrap items-end justify-between gap-4 max-[920px]:flex-col max-[920px]:items-stretch">
           <div>
             <p class="eyebrow">Review Scope</p>
-            <h3>Latest activity opens automatically</h3>
+            <h3 class="m-0 mt-0.5 mb-3">Latest activity opens automatically</h3>
             <p class="muted">Switch years or refresh the queue if you need a different slice of imported activity.</p>
           </div>
 
@@ -1687,7 +1688,7 @@
               </select>
             </div>
 
-            <div class="actions">
+            <div class="flex flex-wrap gap-2.5">
               <button class="btn" type="button" disabled={loading || !journalPath} on:click={openSelectedJournalReview}>
                 {loading ? 'Refreshing...' : 'Refresh'}
               </button>
@@ -1696,7 +1697,7 @@
         </div>
 
         {#if journalPath}
-          <p class="muted review-scope-current">Showing {pathLabel(journalPath)}</p>
+          <p class="muted m-0">Showing {pathLabel(journalPath)}</p>
         {/if}
 
         <details class="advanced-panel">
@@ -1705,7 +1706,7 @@
             <label for="journalPath">Custom Journal Path</label>
             <input id="journalPath" bind:value={journalPath} placeholder="/abs/path/to/journal" />
           </div>
-          <div class="actions">
+          <div class="flex flex-wrap gap-2.5">
             <button class="btn" type="button" disabled={loading || !journalPath} on:click={openSelectedJournalReview}>
               Open Review
             </button>
@@ -1715,13 +1716,13 @@
     {/if}
 
     {#if lastApplyResult}
-      <section class="view-card result-card">
+      <section class="view-card grid gap-3.5">
         <p class="eyebrow">Result</p>
-        <h3>Changes applied</h3>
+        <h3 class="m-0 mt-0.5 mb-3">Changes applied</h3>
         <p class="muted">Updated transactions: {lastApplyResult.updatedTxnCount}</p>
         {#if lastApplyResult.warnings?.length}
           <h4>Warnings</h4>
-          <ul class="warning-list">
+          <ul class="grid gap-2 m-0 pl-5">
             {#each lastApplyResult.warnings as w}
               <li>{warningGroupLabel(w.groupKey)}: {w.warning}</li>
             {/each}
@@ -1732,11 +1733,11 @@
 
     {#if stage && (stage.groups?.length ?? 0) > 0}
       {#if filteredReviewRows.length === 0}
-        <section class="view-card">
+        <section class="view-card grid gap-3.5">
           <p class="muted">No review groups match the current filter.</p>
         </section>
       {:else}
-        <section class="review-list">
+        <section class="grid gap-2 mt-4">
           <div class="review-list-header" aria-hidden="true">
             <span>Status</span>
             <span>Activity</span>
@@ -1745,33 +1746,33 @@
             <span>Automation</span>
           </div>
           {#each filteredReviewRows as row (row.rowId)}
-            <article class="view-card review-row" class:row-ready={row.status === 'ready'} class:row-needs={row.status === 'needs'}>
-              <div class="review-row-status">
-                <p class="status-copy">
+            <article class="view-card review-row grid gap-3 min-[921px]:items-start" class:row-ready={row.status === 'ready'} class:row-needs={row.status === 'needs'}>
+              <div class="min-w-0">
+                <p class="flex items-center gap-2 m-0 text-brand-strong text-sm font-extrabold">
                   <span class="status-dot" aria-hidden="true"></span>
                   <span>{row.statusLabel}</span>
                 </p>
                 {#if row.selectionType === 'transfer' && row.txn.transferSuggestion}
-                  <p class="row-note">Transfer suggestion</p>
+                  <p class="m-0 text-xs text-muted-foreground">Transfer suggestion</p>
                 {:else if row.matchedRuleId}
-                  <p class="row-note">Rule suggestion</p>
+                  <p class="m-0 text-xs text-muted-foreground">Rule suggestion</p>
                 {/if}
               </div>
 
-              <div class="review-row-activity">
-                <div class="group-title-row">
-                  <h4>{row.group.payeeDisplay}</h4>
+              <div class="min-w-0">
+                <div class="flex items-center">
+                  <h4 class="m-0 text-base">{row.group.payeeDisplay}</h4>
                 </div>
-                <p class="group-meta">{formatShortDate(row.txn.date)}</p>
-                <p class="assignment-value">{sourceAccountPrimary(row.group)}</p>
+                <p class="m-0 mt-0.5 text-sm text-muted-foreground">{formatShortDate(row.txn.date)}</p>
+                <p class="m-0 mt-1 text-sm font-semibold text-brand-strong">{sourceAccountPrimary(row.group)}</p>
               </div>
 
-              <div class="review-row-amount">
-                <p class="amount-value">{row.txn.amount || '-'}</p>
+              <div class="min-w-0 grid content-start gap-0.5 min-[921px]:justify-items-end min-[921px]:text-right">
+                <p class="m-0 text-sm font-extrabold text-brand-strong">{row.txn.amount || '-'}</p>
               </div>
 
-              <div class="review-row-category">
-                <div class="assignment-mode-toggle" role="tablist" aria-label={`Assignment mode for ${row.group.payeeDisplay}`}>
+              <div class="min-w-0 grid gap-2 justify-items-start content-center">
+                <div class="inline-flex flex-wrap gap-2" role="tablist" aria-label={`Assignment mode for ${row.group.payeeDisplay}`}>
                   <button
                     class="btn btn-small"
                     type="button"
@@ -1801,7 +1802,7 @@
                 </div>
 
                 {#if row.selectionType === 'match'}
-                  <div class="match-fields">
+                  <div class="grid gap-2 w-full">
                     <div class="field">
                       <label for={`match-${row.rowId}`}>Manual entry</label>
                       <select
@@ -1820,7 +1821,7 @@
                     </div>
 
                     {#if row.matchAmountDelta}
-                      <p class="muted match-delta-hint">
+                      <p class="muted match-delta-hint text-sm">
                         Manual entry: {row.matchAmountDelta.manual} · Import: {row.matchAmountDelta.imported} · Difference: {row.matchAmountDelta.diff}
                       </p>
                     {/if}
@@ -1828,14 +1829,14 @@
                     {#if row.selectedMatchId}
                       {@const selected = row.matchCandidates.find((c) => c.manualTxnId === row.selectedMatchId)}
                       {#if selected}
-                        <p class="muted match-dest-hint">
+                        <p class="muted text-sm">
                           Will categorize as: {selected.destinationAccount}
                         </p>
                       {/if}
                     {/if}
                   </div>
                 {:else if row.selectionType === 'transfer'}
-                  <div class="transfer-fields">
+                  <div class="grid gap-2 w-full">
                     <div class="field">
                       <label for={`transfer-${row.rowId}`}>Destination account</label>
                       <select
@@ -1852,13 +1853,13 @@
                     </div>
 
                     {#if row.transferHelper}
-                      <p class:warning-text={row.transferHelper.tone === 'warn'} class="muted transfer-hint">
+                      <p class:warning-text={row.transferHelper.tone === 'warn'} class="muted m-0 text-xs">
                         {row.transferHelper.text}
                       </p>
                     {/if}
 
                     {#if row.txn.transferSuggestion}
-                      <p class="muted transfer-hint">Suggested peer: {transferPeerLabel(row.txn)}</p>
+                      <p class="muted m-0 text-xs">Suggested peer: {transferPeerLabel(row.txn)}</p>
                     {/if}
                   </div>
                 {:else}
@@ -1872,15 +1873,15 @@
                 {/if}
               </div>
 
-              <div class="review-row-actions">
+              <div class="min-w-0 grid gap-2 justify-items-start content-center">
                 {#if row.selectionType === 'category'}
                   <button class="btn" type="button" on:click={() => openRuleModal(row.group.groupKey)}>
                     {row.matchedRuleId ? 'Edit rule' : 'Save rule'}
                   </button>
                 {:else if row.selectionType === 'match'}
-                  <p class="muted row-note transfer-rule-note">Matching replaces the manual entry with the import.</p>
+                  <p class="muted m-0 text-xs">Matching replaces the manual entry with the import.</p>
                 {:else}
-                  <p class="muted row-note transfer-rule-note">Transfers are reviewed once and do not create rules.</p>
+                  <p class="muted m-0 text-xs">Transfers are reviewed once and do not create rules.</p>
                 {/if}
               </div>
             </article>
@@ -1893,15 +1894,15 @@
 
 <DialogPrimitive.Root bind:open={showRuleModal}>
   <DialogPrimitive.Portal>
-    <DialogPrimitive.Overlay class="unknowns-modal-backdrop" />
+    <DialogPrimitive.Overlay class="fixed inset-0 z-30 bg-black/35" />
 
     <DialogPrimitive.Content
-      class="unknowns-modal unknowns-rule-modal"
+      class="fixed top-1/2 left-1/2 z-31 -translate-x-1/2 -translate-y-1/2 w-[min(1040px,calc(100vw-2rem))] max-h-[calc(100vh-2rem)] overflow-auto grid gap-3.5 rounded-[14px] border border-line bg-white p-4 shadow-card"
       aria-labelledby="rule-modal-title"
       aria-describedby="rule-modal-description"
       onOpenAutoFocus={handleRuleModalOpenAutoFocus}
     >
-      <h3 id="rule-modal-title">{ruleMode === 'edit' ? 'Edit Rule' : 'Create Rule'}</h3>
+      <h3 id="rule-modal-title" class="m-0 mt-0.5 mb-3">{ruleMode === 'edit' ? 'Edit Rule' : 'Create Rule'}</h3>
       <p id="rule-modal-description" class="muted">
         {ruleMode === 'edit'
           ? 'Update the reusable rule that matched this transaction group.'
@@ -1910,18 +1911,18 @@
       <div class="rule-context-grid">
         <section class="rule-context-card">
           <p class="eyebrow">Transaction Payee</p>
-          <p class="rule-context-payee" title={ruleSourcePayee}>{ruleSourcePayee}</p>
-          <p class="rule-context-support">
+          <p class="m-0 mt-0.5 text-base font-extrabold text-brand-strong wrap-anywhere" title={ruleSourcePayee}>{ruleSourcePayee}</p>
+          <p class="m-0 mt-1.5 text-sm text-muted-foreground">
             {ruleSourceTxnCount} {ruleSourceTxnCount === 1 ? 'transaction' : 'transactions'} from {ruleSourceAccount}
           </p>
         </section>
 
         <section class="rule-context-card rule-context-card-secondary">
           <p class="eyebrow">Selected Category</p>
-          <p class="rule-context-account">{extractSetAccount(ruleActions) || 'Choose a category below'}</p>
+          <p class="m-0 mt-0.5 text-sm font-extrabold text-brand-strong wrap-anywhere">{extractSetAccount(ruleActions) || 'Choose a category below'}</p>
         </section>
       </div>
-      <div class="field rule-name-field">
+      <div class="field max-w-lg">
         <label for="ruleName">Rule Name</label>
         <input
           id="ruleName"
@@ -1932,9 +1933,9 @@
       </div>
       {#if existingRuleCandidates.length}
         <section class="existing-rule-callout" role="status" aria-live="polite">
-          <div class="existing-rule-copy">
+          <div>
             <p class="eyebrow">Possible Duplicate</p>
-            <p class="existing-rule-title">
+            <p class="m-0 mt-0.5 text-base font-extrabold text-brand-strong">
               {#if existingRuleCandidates.length === 1}
                 A saved rule already maps to {selectedRuleAccount}.
               {:else}
@@ -1946,12 +1947,12 @@
             </p>
           </div>
 
-          <div class="existing-rule-list">
+          <div class="grid gap-2.5">
             {#each existingRuleCandidates.slice(0, 3) as candidate (candidate.rule.id)}
               <div class="existing-rule-item">
-                <div class="existing-rule-item-copy">
-                  <p class="existing-rule-summary">{candidate.summary}</p>
-                  <p class="existing-rule-meta">
+                <div class="min-w-0">
+                  <p class="m-0 font-bold text-brand-strong wrap-anywhere">{candidate.summary}</p>
+                  <p class="m-0 text-sm text-muted-foreground">
                     {candidate.rule.name}{candidate.rule.enabled ? '' : ' · Disabled'}
                   </p>
                 </div>
@@ -1962,7 +1963,7 @@
             {/each}
 
             {#if existingRuleCandidates.length > 3}
-              <p class="existing-rule-more">
+              <p class="m-0 text-sm text-muted-foreground">
                 Showing 3 of {existingRuleCandidates.length} rules that already map to {selectedRuleAccount}.
               </p>
             {/if}
@@ -1977,7 +1978,7 @@
         onAccountCreate={(seed) => void openCreateAccountForRule(seed)}
       />
       {#if ruleError}<p class="error-text">{ruleError}</p>{/if}
-      <div class="actions">
+      <div class="flex flex-wrap gap-2.5">
         <button class="btn" type="button" on:click={() => (showRuleModal = false)}>Cancel</button>
         <button
           class="btn btn-primary"
@@ -2011,10 +2012,6 @@
 />
 
 <style>
-  h3 {
-    margin: 0.1rem 0 0.8rem;
-  }
-
   .advanced-panel {
     margin: 0 0 0.9rem;
     border: 1px solid rgba(15, 95, 136, 0.12);
@@ -2029,32 +2026,9 @@
     color: var(--brand-strong);
   }
 
-  .filters {
-    display: flex;
-    gap: 0.5rem;
-    flex-wrap: wrap;
-  }
-
   .active-filter {
     background: #d8efff;
     border-color: #9ecfe9;
-  }
-
-  .review-summary-card,
-  .review-scope-card,
-  .history-select-card,
-  .result-card,
-  .review-row {
-    display: grid;
-    gap: 0.85rem;
-  }
-
-  .review-scope-head {
-    display: flex;
-    justify-content: space-between;
-    gap: 1rem;
-    align-items: end;
-    flex-wrap: wrap;
   }
 
   .review-scope-controls {
@@ -2064,78 +2038,7 @@
     align-items: end;
   }
 
-  .review-scope-current,
-  .caught-up-copy {
-    margin: 0;
-  }
-
-  .caught-up-state {
-    display: grid;
-    gap: 0.8rem;
-    padding-top: 1rem;
-    border-top: 1px solid rgba(10, 61, 89, 0.08);
-  }
-
-  .review-summary-head {
-    display: flex;
-    justify-content: space-between;
-    gap: 1rem;
-    align-items: flex-start;
-    flex-wrap: wrap;
-  }
-
-  .review-summary-pills {
-    display: flex;
-    gap: 0.45rem;
-    flex-wrap: wrap;
-  }
-
-  .review-toolbar {
-    display: flex;
-    justify-content: space-between;
-    gap: 1rem;
-    flex-wrap: wrap;
-    padding-top: 1rem;
-    border-top: 1px solid rgba(10, 61, 89, 0.08);
-  }
-
-  .review-actions {
-    display: grid;
-    gap: 0.55rem;
-    justify-items: end;
-  }
-
-  .review-hint,
-  .group-meta,
-  .row-note,
-  .amount-value {
-    margin: 0;
-  }
-
-  .review-hint {
-    max-width: 34rem;
-    text-align: right;
-  }
-
-  .actions {
-    display: flex;
-    gap: 0.6rem;
-    flex-wrap: wrap;
-  }
-
-  .review-list {
-    display: grid;
-    gap: 0.55rem;
-    margin-top: 1rem;
-  }
-
-  .review-list-header {
-    display: none;
-  }
-
   .review-row {
-    display: grid;
-    gap: 0.75rem;
     border-color: rgba(10, 61, 89, 0.12);
   }
 
@@ -2147,24 +2050,6 @@
   .row-needs {
     border-color: rgba(218, 169, 79, 0.28);
     background: linear-gradient(90deg, rgba(255, 247, 234, 0.95), rgba(255, 255, 255, 0.86) 22%);
-  }
-
-  .review-row-status,
-  .review-row-activity,
-  .review-row-amount,
-  .review-row-category,
-  .review-row-actions {
-    min-width: 0;
-  }
-
-  .status-copy {
-    display: flex;
-    align-items: center;
-    gap: 0.45rem;
-    margin: 0;
-    color: var(--brand-strong);
-    font-size: 0.88rem;
-    font-weight: 800;
   }
 
   .status-dot {
@@ -2181,75 +2066,9 @@
     box-shadow: 0 0 0 3px rgba(12, 123, 89, 0.14);
   }
 
-  .group-title-row {
-    display: flex;
-    align-items: center;
-  }
-
-  .group-title-row h4 {
-    margin: 0;
-    font-size: 0.98rem;
-  }
-
-  .group-meta {
-    color: var(--muted-foreground);
-    margin-top: 0.1rem;
-    font-size: 0.84rem;
-  }
-
-  .assignment-value {
-    margin: 0.3rem 0 0;
-    font-weight: 600;
-    color: var(--brand-strong);
-    font-size: 0.9rem;
-  }
-
-  .review-row-amount {
-    display: grid;
-    align-content: start;
-    gap: 0.18rem;
-  }
-
-  .amount-value {
-    color: var(--brand-strong);
-    font-weight: 800;
-    font-size: 0.94rem;
-  }
-
-  .row-note {
-    color: var(--muted-foreground);
-    font-size: 0.79rem;
-  }
-
-  .review-row-category,
-  .review-row-actions {
-    display: grid;
-    gap: 0.45rem;
-    justify-items: start;
-    align-content: center;
-  }
-
   .btn-small {
     padding: 0.4rem 0.7rem;
     font-size: 0.78rem;
-  }
-
-  .assignment-mode-toggle {
-    display: inline-flex;
-    gap: 0.45rem;
-    flex-wrap: wrap;
-  }
-
-  .transfer-fields {
-    display: grid;
-    gap: 0.5rem;
-    width: 100%;
-  }
-
-  .transfer-hint,
-  .transfer-rule-note {
-    margin: 0;
-    font-size: 0.8rem;
   }
 
   .warning-text {
@@ -2257,84 +2076,13 @@
   }
 
   .history-select-card {
-    align-items: center;
     grid-template-columns: repeat(auto-fit, minmax(14rem, max-content));
-    justify-content: space-between;
-  }
-
-  .history-select-toggle {
-    display: inline-flex;
-    gap: 0.55rem;
-    align-items: center;
-    font-weight: 600;
-  }
-
-  .history-review-select,
-  .history-review-category {
-    min-width: 0;
-    display: grid;
-    align-content: center;
-  }
-
-  .history-review-select input {
-    justify-self: start;
-  }
-
-  .history-account-shift {
-    margin: 0;
-    display: flex;
-    gap: 0.45rem;
-    flex-wrap: wrap;
-    align-items: center;
-    font-family: var(--font-mono, monospace);
-    font-size: 0.9rem;
-    overflow-wrap: anywhere;
-  }
-
-  .warning-list {
-    display: grid;
-    gap: 0.45rem;
-    margin: 0;
-    padding-left: 1.2rem;
-  }
-
-  :global(.unknowns-modal-backdrop) {
-    position: fixed;
-    inset: 0;
-    background: rgba(10, 20, 30, 0.35);
-    z-index: 30;
-  }
-
-  :global(.unknowns-modal) {
-    width: min(620px, calc(100vw - 2rem));
-    background: #fff;
-    border: 1px solid var(--line);
-    border-radius: 14px;
-    box-shadow: var(--shadow);
-    padding: 1rem;
-    max-height: calc(100vh - 2rem);
-    position: fixed;
-    top: 50%;
-    left: 50%;
-    transform: translate(-50%, -50%);
-    overflow: auto;
-    z-index: 31;
-  }
-
-  :global(.unknowns-rule-modal) {
-    width: min(1040px, calc(100vw - 2rem));
-    display: grid;
-    gap: 0.9rem;
   }
 
   .rule-context-grid {
     display: grid;
     grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);
     gap: 0.75rem;
-  }
-
-  .rule-name-field {
-    max-width: 32rem;
   }
 
   .rule-context-card {
@@ -2350,35 +2098,6 @@
     border-color: rgba(218, 169, 79, 0.2);
   }
 
-  .rule-context-payee,
-  .rule-context-account,
-  .rule-context-support {
-    margin: 0;
-  }
-
-  .rule-context-payee,
-  .rule-context-account {
-    color: var(--brand-strong);
-    font-weight: 800;
-    overflow-wrap: anywhere;
-  }
-
-  .rule-context-payee {
-    font-size: 1rem;
-    margin-top: 0.15rem;
-  }
-
-  .rule-context-account {
-    font-size: 0.95rem;
-    margin-top: 0.15rem;
-  }
-
-  .rule-context-support {
-    color: var(--muted-foreground);
-    font-size: 0.86rem;
-    margin-top: 0.35rem;
-  }
-
   .existing-rule-callout {
     display: grid;
     gap: 0.8rem;
@@ -2386,26 +2105,6 @@
     border-radius: 12px;
     background: rgba(255, 247, 234, 0.92);
     padding: 0.9rem 0.95rem;
-  }
-
-  .existing-rule-copy,
-  .existing-rule-title,
-  .existing-rule-summary,
-  .existing-rule-meta,
-  .existing-rule-more {
-    margin: 0;
-  }
-
-  .existing-rule-title {
-    color: var(--brand-strong);
-    font-size: 0.96rem;
-    font-weight: 800;
-    margin-top: 0.15rem;
-  }
-
-  .existing-rule-list {
-    display: grid;
-    gap: 0.65rem;
   }
 
   .existing-rule-item {
@@ -2422,20 +2121,14 @@
     padding-top: 0;
   }
 
-  .existing-rule-item-copy {
-    min-width: 0;
+  .match-delta-hint {
+    padding: 0.4rem 0.6rem;
+    background: rgba(220, 160, 40, 0.08);
+    border-radius: 0.5rem;
   }
 
-  .existing-rule-summary {
-    color: var(--brand-strong);
-    font-weight: 700;
-    overflow-wrap: anywhere;
-  }
-
-  .existing-rule-meta,
-  .existing-rule-more {
-    color: var(--muted-foreground);
-    font-size: 0.84rem;
+  .review-list-header {
+    display: none;
   }
 
   @media (min-width: 921px) {
@@ -2453,13 +2146,7 @@
 
     .review-row {
       grid-template-columns: 9rem minmax(15rem, 1.7fr) 7rem minmax(16rem, 1.35fr) 10rem;
-      align-items: start;
       padding: 0.7rem 0.9rem;
-    }
-
-    .review-row-amount {
-      justify-items: end;
-      text-align: right;
     }
 
     .history-review-list-header {
@@ -2472,30 +2159,12 @@
   }
 
   @media (max-width: 920px) {
-    .review-toolbar {
-      flex-direction: column;
-    }
-
-    .review-actions {
-      justify-items: start;
-    }
-
-    .review-hint {
-      text-align: left;
-    }
-
     .review-row {
       padding: 0.85rem 0.9rem;
     }
 
     .history-select-card {
       grid-template-columns: 1fr;
-      justify-content: start;
-    }
-
-    .review-scope-head {
-      flex-direction: column;
-      align-items: stretch;
     }
 
     .review-scope-controls {
@@ -2504,10 +2173,6 @@
   }
 
   @media (max-width: 680px) {
-    .review-summary-head {
-      flex-direction: column;
-    }
-
     .rule-context-grid {
       grid-template-columns: 1fr;
     }
@@ -2515,21 +2180,5 @@
     .existing-rule-item {
       grid-template-columns: 1fr;
     }
-  }
-
-  .match-fields {
-    display: grid;
-    gap: 0.55rem;
-  }
-
-  .match-delta-hint {
-    padding: 0.4rem 0.6rem;
-    background: rgba(220, 160, 40, 0.08);
-    border-radius: 0.5rem;
-    font-size: 0.85rem;
-  }
-
-  .match-dest-hint {
-    font-size: 0.85rem;
   }
 </style>
