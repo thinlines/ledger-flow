@@ -575,24 +575,24 @@
   $: dirtyRuleCount = rules.filter((rule) => isRuleDirty(rule)).length;
 </script>
 
-<section class="view-card hero">
+<section class="hero view-card grid gap-3.5">
   <p class="eyebrow">Automation</p>
   <h2 class="page-title">Reusable categorization rules</h2>
   <p class="subtitle">Save repeat decisions once and let future imports arrive with less cleanup.</p>
 </section>
 
 {#if !initialized}
-  <section class="view-card">
+  <section class="view-card grid gap-3.5">
     <p class="error-text">Workspace not initialized yet.</p>
     <a class="btn btn-primary" href="/setup">Go to Setup</a>
   </section>
 {:else}
   {#if error}
-    <section class="view-card">
+    <section class="view-card grid gap-3.5">
       <p class="eyebrow">Rules</p>
-      <h3>Could not load automation rules</h3>
+      <h3 class="m-0 font-display text-xl">Could not load automation rules</h3>
       <p class="error-text">{error}</p>
-      <div class="actions">
+      <div class="flex flex-wrap gap-2.5">
         <button class="btn btn-primary" type="button" on:click={reloadRules}>Reload rules</button>
         <a class="btn" href="/unknowns">Open review</a>
       </div>
@@ -600,10 +600,10 @@
   {/if}
 
   {#if historyApplyNotice}
-    <section class="view-card history-apply-notice" aria-live="polite">
-      <div class="history-apply-copy">
+    <section class="history-apply-notice view-card grid gap-3.5" aria-live="polite">
+      <div class="grid gap-1">
         <p class="eyebrow">History Updated</p>
-        <h3>
+        <h3 class="m-0 font-display text-xl">
           {historyApplyNotice.ruleName
             ? `"${historyApplyNotice.ruleName}" updated past transactions`
             : 'Historical transaction updates applied'}
@@ -621,13 +621,13 @@
           </p>
         {/if}
       </div>
-      <div class="history-apply-actions">
+      <div class="flex items-start justify-end max-[760px]:justify-start">
         <button class="btn" type="button" on:click={dismissHistoryApplyNotice}>Dismiss</button>
       </div>
     </section>
   {/if}
 
-  <section class="view-card">
+  <section class="view-card grid gap-3.5">
     <p class="eyebrow">New Rule</p>
     <div class="field">
       <label for="newRuleName">Rule Name</label>
@@ -642,7 +642,7 @@
       allowAccountCreate={true}
       onAccountCreate={(seed) => void openCreateAccountForNewRule(seed)}
     />
-    <div class="create-actions">
+    <div class="flex flex-wrap items-end gap-2.5">
       <button
         class="btn btn-primary"
         disabled={loading || !sanitizedConditions(newConditions).length || !sanitizedActions(newActions).length}
@@ -653,14 +653,14 @@
     </div>
   </section>
 
-  <section class="view-card saved-rules-card">
-    <div class="section-head">
-      <div class="section-copy">
+  <section class="view-card grid gap-3.5">
+    <div class="flex flex-wrap items-start justify-between gap-4 border-b border-card-edge pb-1">
+      <div class="grid gap-1">
         <p class="eyebrow">Saved Rules</p>
-        <h3>Evaluation order</h3>
-        <p class="muted">Use the handle to reorder priority. Expand a rule to edit it.</p>
+        <h3 class="m-0 font-display text-xl leading-tight">Evaluation order</h3>
+        <p class="muted max-w-160">Use the handle to reorder priority. Expand a rule to edit it.</p>
       </div>
-      <div class="section-actions">
+      <div class="flex flex-wrap items-center justify-end gap-2.5 max-[760px]:justify-start">
         <span class="rule-count">{rules.length} {rules.length === 1 ? 'rule' : 'rules'}</span>
         {#if dirtyRuleCount > 0}
           <span class="rule-count unsaved-count">{dirtyRuleCount} unsaved {dirtyRuleCount === 1 ? 'edit' : 'edits'}</span>
@@ -672,11 +672,11 @@
 
     {#if rules.length === 0}
       <div class="empty-state">
-        <p class="empty-title">No saved rules yet.</p>
+        <p class="m-0 mb-1 font-bold">No saved rules yet.</p>
         <p class="muted">Create a rule above, or save one directly from Review after you categorize a repeating transaction.</p>
       </div>
     {:else}
-      <div class="rule-list">
+      <div class="grid gap-3">
         {#each rules as rule, i (rule.id)}
           <SavedRuleAccordionItem
             ruleId={rule.id}
@@ -710,22 +710,22 @@
 
 <DialogPrimitive.Root bind:open={showRuleHistoryModal}>
   <DialogPrimitive.Portal>
-    <DialogPrimitive.Overlay class="rules-modal-backdrop" />
+    <DialogPrimitive.Overlay class="fixed inset-0 z-30 bg-black/35" />
 
     <DialogPrimitive.Content
-      class="rules-modal rules-rule-history-modal"
+      class="fixed top-1/2 left-1/2 z-40 grid w-2xl max-w-[92vw] max-h-[calc(100vh-2rem)] gap-3.5 -translate-x-1/2 -translate-y-1/2 overflow-auto rounded-2xl border border-line bg-white p-4 shadow-card"
       aria-labelledby="rule-history-title"
       aria-describedby="rule-history-description"
       onOpenAutoFocus={handleRuleHistoryOpenAutoFocus}
     >
-      <h3 id="rule-history-title">Apply Rule to Past Transactions</h3>
+      <h3 id="rule-history-title" class="m-0 font-display text-xl">Apply Rule to Past Transactions</h3>
       <p id="rule-history-description" class="muted">
         Open the review queue for imported transactions that currently match {historyRule ? `"${ruleLabel(historyRule)}"` : 'this rule'}.
         Review and apply the historical changes on the Categorization page.
       </p>
 
-      <div class="rule-history-scope">
-        <div class="field">
+      <div class="flex flex-wrap items-end gap-3">
+        <div class="field flex-1 basis-72 min-w-[min(24rem,100%)]">
           <label for="historyJournalSelect">Journal</label>
           <select id="historyJournalSelect" bind:this={historyJournalSelectEl} bind:value={historyJournalPath}>
             <option value="">Select...</option>
@@ -748,7 +748,7 @@
         <p class="muted">Selected file: {pathLabel(historyJournalPath)}</p>
       {/if}
 
-      <section class="history-note-card">
+      <section class="rounded-2xl border border-card-edge bg-white/82 px-4 py-3.5">
         <p class="eyebrow">Scope</p>
         <p class="muted">
           Historical apply rewrites only the matched category account. Tags, key/value actions, and appended comments are not backfilled.
@@ -760,7 +760,7 @@
         <p class="error-text">{historyError}</p>
       {/if}
 
-      <div class="actions">
+      <div class="flex flex-wrap gap-2.5">
         <button class="btn" type="button" on:click={closeRuleHistoryModal}>Close</button>
       </div>
     </DialogPrimitive.Content>
@@ -786,11 +786,6 @@
 />
 
 <style>
-  section.view-card {
-    display: grid;
-    gap: 0.95rem;
-  }
-
   .history-apply-notice {
     grid-template-columns: minmax(0, 1fr) auto;
     align-items: start;
@@ -798,78 +793,6 @@
     background:
       radial-gradient(circle at top right, rgba(191, 237, 221, 0.45), transparent 36%),
       linear-gradient(180deg, rgba(247, 255, 250, 0.96), rgba(237, 248, 242, 0.9));
-  }
-
-  .history-apply-copy {
-    display: grid;
-    gap: 0.28rem;
-  }
-
-  .history-apply-copy h3,
-  .history-apply-copy p {
-    margin: 0;
-  }
-
-  .history-apply-actions {
-    display: flex;
-    justify-content: flex-end;
-    align-items: start;
-  }
-
-  .create-actions {
-    display: flex;
-    gap: 0.6rem;
-    align-items: end;
-    flex-wrap: wrap;
-  }
-
-  .actions {
-    display: flex;
-    gap: 0.6rem;
-    flex-wrap: wrap;
-  }
-
-  .saved-rules-card {
-    display: grid;
-    gap: 0.95rem;
-  }
-
-  .section-head {
-    display: flex;
-    justify-content: space-between;
-    gap: 1rem;
-    align-items: start;
-    flex-wrap: wrap;
-    padding-bottom: 0.1rem;
-    border-bottom: 1px solid rgba(10, 61, 89, 0.08);
-  }
-
-  .section-copy {
-    display: grid;
-    gap: 0.28rem;
-  }
-
-  .section-copy h3,
-  .section-copy p {
-    margin: 0;
-  }
-
-  .section-copy h3 {
-    font-size: 1.22rem;
-    line-height: 1.2;
-  }
-
-  .section-copy .muted {
-    max-width: 40rem;
-    font-size: 0.96rem;
-  }
-
-  .section-actions {
-    display: flex;
-    gap: 0.6rem;
-    align-items: center;
-    flex-wrap: wrap;
-    justify-content: flex-end;
   }
 
   .rule-count {
@@ -888,11 +811,6 @@
     color: #8b5b12;
   }
 
-  .rule-list {
-    display: grid;
-    gap: 0.75rem;
-  }
-
   .empty-state {
     border: 1px dashed rgba(10, 61, 89, 0.14);
     border-radius: 14px;
@@ -900,82 +818,9 @@
     background: linear-gradient(180deg, rgba(255, 255, 255, 0.72), rgba(247, 251, 255, 0.56));
   }
 
-  .empty-state p {
-    margin: 0;
-  }
-
-  .empty-title {
-    font-weight: 700;
-    margin-bottom: 0.25rem;
-  }
-
-  :global(.rules-modal-backdrop) {
-    position: fixed;
-    inset: 0;
-    background: rgba(10, 20, 30, 0.35);
-    z-index: 30;
-  }
-
-  :global(.rules-modal) {
-    width: min(620px, calc(100vw - 2rem));
-    background: #fff;
-    border: 1px solid var(--line);
-    border-radius: 14px;
-    box-shadow: var(--shadow);
-    padding: 1rem;
-    max-height: calc(100vh - 2rem);
-    position: fixed;
-    top: 50%;
-    left: 50%;
-    transform: translate(-50%, -50%);
-    overflow: auto;
-    z-index: 31;
-  }
-
-  :global(.rules-rule-history-modal) {
-    width: min(42rem, 92vw);
-    display: grid;
-    gap: 0.95rem;
-  }
-
-  :global(.rules-rule-history-modal) h3 {
-    margin: 0;
-  }
-
-  .rule-history-scope {
-    display: flex;
-    gap: 0.8rem;
-    align-items: end;
-    flex-wrap: wrap;
-  }
-
-  .rule-history-scope .field {
-    min-width: min(24rem, 100%);
-    flex: 1 1 18rem;
-  }
-
-  .history-note-card {
-    border: 1px solid rgba(10, 61, 89, 0.08);
-    border-radius: 14px;
-    background: rgba(255, 255, 255, 0.82);
-    padding: 0.9rem 1rem;
-  }
-
-  .history-note-card p {
-    margin: 0;
-  }
-
   @media (max-width: 760px) {
     .history-apply-notice {
       grid-template-columns: minmax(0, 1fr);
-    }
-
-    .history-apply-actions {
-      justify-content: flex-start;
-    }
-
-    .section-actions {
-      justify-content: flex-start;
     }
   }
 </style>
