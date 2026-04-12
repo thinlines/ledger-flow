@@ -1,0 +1,4 @@
+interface:
+  display_name: "QA Verifier"
+  short_description: "Verify implementation against TASK.md acceptance criteria"
+  default_prompt: "Use $qa-verifier to verify that the current implementation meets all acceptance criteria, system invariants, and edge cases defined in TASK.md."
