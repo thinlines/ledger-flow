@@ -1,240 +1,204 @@
 # Current Task
 
-**Status: COMPLETED — 2026-04-12**
-
 ## Title
 
-Transactions screen rethink — Phase 4b: Frontend unification
+Transactions screen rethink — Phase 4b follow-up: UI polish and dead code cleanup
 
 ## Objective
 
-Replace the dual-mode transactions page (register view + activity view toggled by `activityMode`) with a single filter-driven screen backed by `GET /api/transactions`. Account scope becomes a filter chip, not a mode toggle. Single-account features (running balance, clearing toggle, add transaction, manual resolution, pending transfers) auto-activate when exactly one account is selected. The page drops from ~1400 lines to ~500.
-
-After this task: one screen, Monarch-shaped, running balance visible in single-account scope, filter bar with chips, day-grouped rows, detail sheet, all existing actions preserved. Two-mode toggle gone.
-
-See [`plans/transactions-rethink.md`](plans/transactions-rethink.md) for the full design.
+Close the three UX gaps reported against the shipped Phase 4b screen — redundant row dates, scroll context loss on long day groups, and jarring list flash on filter change — and delete the Phase 4b cleanup debt identified in code review. After this task the transactions screen reads cleanly, scrolls with stable context, updates in place, and leaves no orphaned legacy types/helpers behind.
 
 ## Scope
 
 ### Included
 
-**New files:**
-- `app/frontend/src/lib/transactions/transactionFilters.ts` — `TransactionFilters` type, `EMPTY_FILTERS` constant, `filtersFromUrl(url)` (with migration from old `?view=activity&...` and `?accountId=...` params), `filtersToUrl(filters)`, `filtersToApiParams(filters)`, `activeFilterCount(filters)`.
-- `app/frontend/src/lib/transactions/loadTransactions.ts` — `loadTransactions(filters): Promise<TransactionsResponse>` using `apiGet` with params from `filtersToApiParams()`.
-- `app/frontend/src/lib/components/transactions/TransactionsFilterBar.svelte` — horizontal bar with search input (debounced 300ms), period segmented control, active filter chips (accounts, category, status) with ✕ clear, "+ Filters" button.
-- `app/frontend/src/lib/components/transactions/TransactionsFilterDialog.svelte` — bits-ui Dialog with Accounts tab (checkbox list of tracked accounts), Categories tab (grouped checkbox list from `/api/accounts`), Status tab (radio: cleared / pending / unmarked / any). Works on a draft copy; Apply commits.
-
 **Modified files:**
-- `app/frontend/src/lib/transactions/types.ts` — add `TransactionRow`, `TransactionsResponse`, `TransactionFilters` types. Keep old types during transition.
-- `app/frontend/src/lib/transactions/helpers.ts` — add `groupByDate(rows: TransactionRow[])` returning `{header, rows, dailySum}[]`. Add `canDeleteRow(row)`, `canRecategorizeRow(row)`, `canUnmatchRow(row)`.
-- `app/frontend/src/lib/components/transactions/TransactionRow.svelte` — remove `mode` prop and dual `{#if}` branches. Single layout: `[clearing-dot] [category-pills] [payee + secondary line] [amount] [running-balance?] [chevron]`. Accept `row: TransactionRow`.
-- `app/frontend/src/lib/components/transactions/TransactionDetailSheet.svelte` — replace dual `entry`/`transaction` props with single `row: TransactionRow | null`. Adapt category combobox and notes to work with unified type.
-- `app/frontend/src/lib/components/transactions/TransactionDayGroup.svelte` — add `dailySum: number | null` and `baseCurrency: string` props. Render daily sum right-aligned.
-- `app/frontend/src/routes/transactions/+page.svelte` — full rewrite (~500 lines). Single data flow: `filters → loadTransactions → result`. Remove `activityMode` toggle, duplicate hero, legacy loaders.
-- `app/frontend/src/routes/+page.svelte` — update dashboard drill-down links to new URL format.
-- `app/frontend/src/routes/accounts/+page.svelte` — update "Transactions" link to new URL format.
+
+- `app/frontend/src/lib/components/transactions/TransactionRow.svelte` — drop the date from the secondary line; secondary line becomes `account.label` when multi-account, empty otherwise (pills still render).
+- `app/frontend/src/lib/components/transactions/TransactionDayGroup.svelte` — make the day header `position: sticky`, offset by the filter bar's measured height, with a solid background so underlying rows don't bleed through.
+- `app/frontend/src/lib/components/transactions/TransactionsFilterBar.svelte` — remove per-chip labels ("Category", "Status", "Month"), make the bar a single flex-wrap row of `[search] [period-presets | month-chip] [account chips...] [category chip] [status chip] [+ Filters]`, capitalize the status chip label to "Cleared"/"Pending"/"Unmarked".
+- `app/frontend/src/routes/transactions/+page.svelte` — make the filter bar section `position: sticky` at the top of the page scroll, expose a `--filter-bar-height` CSS var via `ResizeObserver` for day headers to consume; rework the transactions list render so an in-flight reload keeps the previous `result` mounted and shows a subtle inline loading indicator instead of swapping to the empty-panel skeleton; on error during a reload, keep the previous list and surface an inline error banner rather than clearing to an empty panel.
+- `app/frontend/src/lib/transactions/helpers.ts` — delete the five orphaned legacy helpers (`entryHasActions`, `canDelete`, `canRecategorize`, `canUnmatch`, `groupActivityByDate`) and the now-unused `RegisterEntry` and `ActivityTransaction` imports.
+- `app/frontend/src/lib/transactions/types.ts` — delete the five orphaned legacy types (`ActivityResult`, `ActivityDateGroup`, `RegisterAction`, `ActionLink`, `AccountRegister`). Keep `RegisterEntry`, `ActivityTransaction`, `ActivitySummary`, `ActivityTopTransaction` — still used by `ManualResolutionDialog`, `TransactionsExplanationHeader`, and the `TxRow → RegisterEntry`/`toExplTx` bridges.
 
 ### Explicitly Excluded
 
-- **Transfer-pair collapse** — deferred. Both sides of a tracked-to-tracked transfer still appear as separate rows. The plan file specifies collapse rules but the edge cases (clearing-status conflicts, mismatched dates, manual-resolution tokens across collapsed pairs) need a dedicated task with trust-level specification.
-- **Deleting legacy backend endpoints** — `/api/transactions/register` and `/api/transactions/activity` remain. Removal is a separate cleanup task after the frontend is stable.
-- **Phase 4c polish items** — live totals strip, search formula syntax, mobile bottom sheet, keyboard shortcuts. Each is an independent follow-up.
-- **Notes and tags** — the detail sheet already has a notes textarea from Phase 3. No new notes/tags work.
-- **Split editing, merchant management, transaction editing** — per plan exclusions.
+- **Multi-category filtering** — QA/review medium finding M3. `TransactionFilters.category` stays scalar; the filter dialog stays single-pick. Widening to `categories: string[]` is a separate task that needs a type migration + backend filter-param plumbing + URL-serialization update.
+- **Stale-bookmark behavior change** — the current silent-drop of deleted account IDs stays as-is pending PM confirmation. Not touched here.
+- **`replaceState` → `pushState` for filter history** — UX choice deferred; not touched.
+- **Transfer-pair collapse** — still deferred, tracked separately.
+- **Migrating `ManualResolutionDialog` or `TransactionsExplanationHeader`** off the legacy `RegisterEntry` / `ActivityTransaction` types. The bridge in `+page.svelte` stays; only orphaned types are deleted.
+- **Any new filter or polish feature** from 7d-4c (live totals strip, search formula syntax, mobile bottom sheet, keyboard shortcuts).
 
 ## System Behavior
 
 ### Inputs
 
-- User navigates to `/transactions` → unified screen loads with default filters (all accounts, last 3 months).
-- User navigates to `/transactions?accounts=checking` → single-account scope activates.
-- User navigates with old params (`?view=activity&category=X`, `?accountId=X`) → URL migrated silently via `filtersFromUrl()`.
-- User clicks a filter chip ✕ → that filter removed, data reloads.
-- User changes period preset → period filter updates, data reloads.
-- User types in search → debounced 300ms, data reloads.
-- User opens "+ Filters" → dialog opens with draft filter state.
-- User applies filters in dialog → filters update, data reloads, URL updates.
-- User clicks row chevron → detail sheet opens for that row.
-- User clicks clearing dot (single-account only) → clearing status toggles via existing `POST /api/transactions/toggle-status`.
-- User clicks "Add transaction" (single-account only) → `AddTransactionForm` opens.
-- User opens manual resolution (single-account, pending transfer) �� `ManualResolutionDialog` opens.
+- User scrolls the transactions page with a long day group visible.
+- User changes any filter (account, period, category, status, search, month) or clears all filters.
+- User loads `/transactions` while a backend reload is in flight.
+- User triggers an action (delete, recategorize, reset category, unmatch, toggle clearing, add transaction) that causes `loadData()` to refetch.
 
 ### Logic
 
-**Page data flow:**
-1. `onMount` → read URL via `filtersFromUrl($page.url)`. If old params detected, rewrite URL with `replaceState`. Load app state, tracked accounts, all accounts (for category combobox). Call `loadData()`.
-2. `loadData()` → call `loadTransactions(filters)` → set `result: TransactionsResponse`. Derive `isSingleAccount`, `selectedAccount`, `dayGroups`, `postedRows`, `pendingRows`.
-3. `handleFiltersChange(next)` → set `filters = next`, update URL via `goto()` with `replaceState`, call `loadData()`.
+**Row secondary line (`TransactionRow.svelte`):**
 
-**Single-account auto-activation (`filters.accounts.length === 1`):**
-- `showRunningBalance = true` on `TransactionRow`
-- Clearing dot becomes clickable (`onToggleClearing` callback provided)
-- "Add transaction" button appears in hero
-- Pending transfers section appears if `pendingRows.length > 0`
-- Summary cards appear (balance, balance with pending, latest activity) from `result.accountMeta`
-- `TransactionsExplanationHeader` hidden (summary is account-level, not category-level)
+- Compute `secondaryText` as:
+  - `row.account.label` when `!isSingleAccount && showAccountLabel`
+  - empty string otherwise
+- The date (`activityShortDate(row.date)`) is no longer included anywhere in the row — the day group header owns that information.
+- The secondary-line `<p>` always renders so the pill slot (Needs review, Starting balance, Grouped transfer) is available. When `secondaryText` is empty and no pills apply, the `<p>` collapses to empty but keeps its top margin so row height stays stable.
 
-**Multi-account mode (`filters.accounts.length !== 1`):**
-- `showRunningBalance = false` (hidden unless same-currency, which is `runningBalance !== null`)
-- Clearing dot is a static indicator (no toggle callback)
-- "Add transaction" button hidden
-- Pending transfers section hidden
-- Summary cards hidden
-- `TransactionsExplanationHeader` shown when `result.summary` is non-null
+**Sticky filter bar + day headers (`+page.svelte`, `TransactionsFilterBar.svelte`, `TransactionDayGroup.svelte`):**
 
-**Filter state type:**
-```typescript
-type TransactionFilters = {
-  accounts: string[];
-  period: string | null;     // 'this-month' | 'last-30' | 'last-3-months' | null (= no period, show all)
-  month: string | null;      // 'YYYY-MM'
-  category: string | null;   // full ledger account path
-  search: string;
-  status: string | null;     // 'cleared' | 'pending' | 'unmarked'
-};
-```
+- The filter bar section gets `position: sticky; top: 0; z-index: 10;` with a solid background (`view-card` already has one) and a bottom shadow or border that appears only when it is pinned (use `backdrop-filter` or a `box-shadow` on the sticky state — simplest path: always-on subtle shadow when sticky).
+- On mount, attach a `ResizeObserver` to the filter bar's root `<section>` element. On every resize entry, write `document.documentElement.style.setProperty('--filter-bar-height', \`${entry.contentRect.height}px\`)`. Disconnect the observer on page unmount.
+- `TransactionDayGroup` header uses `position: sticky; top: var(--filter-bar-height, 0px); z-index: 5;` with a solid background (opaque white or the card's background color — not transparent) so the rows scrolling past don't bleed through.
+- The day header must sit **below** the filter bar in z-order when they overlap.
+- When the filter bar wraps (multiple rows), `--filter-bar-height` updates automatically and day headers pin under the new height on the next layout pass.
 
-**URL param mapping:**
-- `accounts` → `?accounts=checking,savings` (omit when empty)
-- `period` → `?period=last-3-months` (omit when null — null means no date filter, show all time)
-- `month` → `?month=2026-03` (overrides period)
-- `category` → `?category=Expenses:Food`
-- `search` → `?q=trader`
-- `status` → `?status=cleared`
+**Filter bar layout (`TransactionsFilterBar.svelte`):**
 
-**URL migration (`filtersFromUrl`):**
-- `?view=activity&period=X` → `{ accounts: [], period: X }`
-- `?view=activity&month=M` → `{ accounts: [], month: M }`
-- `?view=activity&category=C` → `{ accounts: [], category: C }`
-- `?accountId=X` → `{ accounts: [X], period: null }`
-- Any combination of above → mapped field by field
+- Single flex row: `flex flex-wrap items-center gap-2`.
+- Order of elements: search input, period presets (or month chip when `filters.month` is set), account chips (one per `filters.accounts[]`), category chip (if `filters.category`), status chip (if `filters.status`), "+ Filters" button as the last element.
+- Remove all per-chip label wrappers (the `<div class="flex items-center gap-1.5"><span class="filter-label">Category</span>...</div>` structure). All chips become direct siblings in the same flex row.
+- Status chip text: display the value title-cased — `'cleared' → 'Cleared'`, `'pending' → 'Pending'`, `'unmarked' → 'Unmarked'`. No prefix label.
+- Month chip: keep the existing `monthTitle()` formatted value. No "Month" label prefix.
+- Category chip: keep the existing `categoryDisplayName()` (leaf-segment path). No "Category" label prefix.
+
+**In-place list updates on reload (`+page.svelte`):**
+
+- Split the current list render into two states based on `result` and `dataLoading`:
+  - **First load** (`result === null && dataLoading`): show the existing "Loading transactions" empty panel. Unchanged.
+  - **Reload with existing data** (`result !== null && dataLoading`): render the day groups from the stale `result` exactly as on success. Overlay a subtle loading indicator — a 2px indeterminate progress bar at the top of the `.view-card` transactions section, or a dim of the list content via `opacity: 0.6`. Prefer the progress bar; it preserves legibility of the content while it updates.
+  - **Success** (`result !== null && !dataLoading`): current render.
+  - **Empty** (`result !== null && !dataLoading && postedRows.length === 0`): current "No transactions match these filters" empty panel.
+  - **Error during reload** (`result !== null && error !== ''`): render the stale list plus an inline error banner at the top of the section (using the existing `.error-text` or a new `.reload-error` style). Do **not** null `result` on reload errors.
+  - **Error on first load** (`result === null && error !== ''`): current "Error loading transactions" empty panel.
+- Do not clear `selectedRow` at the start of `loadData()` when the reload is triggered by an action handler. When triggered by `changeFilters()`, clearing is still correct (user navigated away). Implement this by removing the `selectedRow = null` assignment from `loadData()` and instead nulling `selectedRow` inside `changeFilters()` before it calls `loadData()`. Action handlers already null `selectedRow` themselves on success, so their path is unaffected.
+- The request-sequence counter (`requestSeq`) stays as-is. The only change is that stale `result` is preserved across the await, and `result = null` is no longer set on reload errors.
+
+**Dead code cleanup:**
+
+- Delete the following exports from `helpers.ts`: `entryHasActions`, `canDelete`, `canRecategorize`, `canUnmatch`, `groupActivityByDate`.
+- Remove `RegisterEntry` and `ActivityTransaction` from the `helpers.ts` import at the top of the file — they become unused after the helper deletions.
+- Delete the following type exports from `types.ts`: `ActivityResult`, `ActivityDateGroup`, `RegisterAction`, `ActionLink`, `AccountRegister`.
+- Verify via grep that no other file in `app/frontend/src/` imports any of the deleted symbols. (Local `ActionLink` definitions in `routes/+page.svelte` and `routes/accounts/+page.svelte` are unrelated — they declare their own local type aliases and must remain untouched.)
 
 ### Outputs
 
-- One unified transactions screen for all scopes.
-- Filter bar above the list with active filters as removable chips.
-- Day-grouped transaction rows with daily sum in group headers.
-- Detail sheet opens from chevron, shows all row data, category combobox works, notes work.
-- Single-account features auto-activate.
-- Old URLs from dashboard and accounts page continue to work.
+- Transaction rows no longer show the date in their secondary line; multi-account rows show the account label; single-account rows show a blank secondary line or pills only.
+- Day group headers remain pinned at the top of the scroll area (tucked under the sticky filter bar) while their rows scroll underneath, then are pushed up by the next day group's header.
+- Filter bar chips wrap as a single flat flex row. "+ Filters" sits at the end of whichever row has space.
+- Filter bar pins to the top of the viewport while the page body scrolls.
+- Changing filters updates the list in place: the old rows stay visible, a progress bar appears briefly, then the new rows replace them without an empty-panel flash.
+- A reload error surfaces inline without clearing the existing data.
 
 ## System Invariants
 
-- The `amount` displayed on each row matches `row.amount` from the backend. The frontend never recomputes amounts.
-- Running balance, when shown, matches `row.runningBalance` from the backend. The frontend never recomputes it.
-- Filter state in the URL is the single source of truth. Refreshing the page with the same URL produces the same view.
-- All existing transaction actions (delete, recategorize, reset category, unmatch, toggle clearing, add transaction, manual resolution) must continue to work. They call the same POST endpoints and reload data via `loadData()` after mutation.
-- Dashboard drill-down links and accounts page links must land on the correct filtered view.
+- `row.amount` and `row.runningBalance` continue to come from the backend — nothing in this task recomputes them.
+- Filter state in the URL remains the single source of truth. Sticky positioning, in-place updates, and the layout change do not introduce any new client-only state that survives navigation.
+- All existing transaction actions (delete, recategorize, reset category, unmatch, toggle clearing, add transaction, notes save, manual resolution) continue to work through their existing POST endpoints and reload via `loadData()`. None of their handlers changes in behavior.
+- `actionError` continues to render inline in the detail sheet and in the delete/unmatch confirm modals. Its lifecycle (clear on row change, clear on success) is unchanged.
+- Dashboard drill-down links, accounts page links, and old-URL migration (`?view=activity&...`, `?accountId=...`) are untouched.
+- The orphaned legacy exports (`entryHasActions`, `canDelete`, `canRecategorize`, `canUnmatch`, `groupActivityByDate`, `ActivityResult`, `ActivityDateGroup`, `RegisterAction`, `ActionLink`, `AccountRegister`) are genuinely orphaned. Their deletion must not break the live bridges `toExplTx()` in `+page.svelte` or `manualResolutionEntry` construction.
 
 ## States
 
-- **Default**: all accounts, no date filter, no category/search/status filter. Shows all transactions newest first.
-- **Loading**: page skeleton or spinner while `loadTransactions()` is in flight.
-- **Success**: filter bar + day-grouped rows + optional summary/cards.
-- **Error**: error message card. Retry by changing filters.
-- **Empty — no accounts**: hero with "Add first account" CTA (existing pattern).
-- **Empty — no results for filters**: empty panel with "No transactions match these filters" + clear-filters button.
-- **Empty — not initialized**: hero with "Create a workspace first" CTA (existing pattern).
+- **Default**: filter bar visible and pinned, list below, day headers present. No filters active → last-3-months preset selected as before.
+- **Reloading with stale data**: existing list stays visible, thin progress bar at the top of the transactions section, filter bar responsive to user input.
+- **Reloading with no prior data** (first load): hero skeleton + "Loading transactions" empty panel. Unchanged.
+- **Success**: list rendered from latest `result`, no loading indicator, no error banner.
+- **Empty for current filters**: "No transactions match these filters" panel with clear-all button. Unchanged.
+- **Reload error**: stale list still visible with an inline error banner above it. User can retry by changing filters.
+- **First-load error**: "Error loading transactions" empty panel. Unchanged.
 
 ## Edge Cases
 
-- **Stale account bookmark**: `/transactions?accounts=deleted-id` → backend returns 404, frontend shows error state. User clears filter or navigates away.
-- **Dashboard link with old URL format**: `?view=activity&category=Expenses:Food` → silently migrates to `?category=Expenses:Food`. No visible redirect.
-- **Rapid filter changes**: debounced search (300ms). Period/account/category changes fire immediately but cancel in-flight requests (use a request sequence counter or abort controller).
-- **Detail sheet open during filter change**: close the sheet, clear `selectedRow`.
-- **Single account with zero transactions**: show empty state + summary cards (balance, etc.) from `accountMeta`.
-- **All accounts with zero transactions in range**: show empty state with filter-clear CTA. `summary` is null.
+- **Filter bar wraps to multiple rows on narrow viewports**: `ResizeObserver` updates `--filter-bar-height` after each wrap, day headers reposition on the next layout. No manual measurement.
+- **User scrolls a day group that contains more rows than the viewport**: day header stays pinned under the filter bar for the entire length of the group, then is pushed out by the next group's header.
+- **Rapid filter changes**: request-sequence counter still prevents stale responses from winning. The in-place update preserves the most-recently-successful `result` across rapid typing, so the screen never blanks.
+- **Reload error after success**: inline banner appears, prior rows remain; another successful reload replaces the rows and clears the banner.
+- **Single-account mode with a starting balance row**: the "Starting balance" pill still renders in the row's secondary slot even though `secondaryText` is empty.
+- **Detail sheet open when an action triggers a reload**: sheet already closes on action success (existing behavior). The `selectedRow = null` removed from `loadData()` does not affect this.
+- **Detail sheet open when the user changes a filter**: `changeFilters()` nulls `selectedRow` before calling `loadData()`, so the sheet closes on filter change.
+- **Transitioning from first-load error to success on retry**: when the user changes a filter after a first-load error, `result === null && error !== ''` → `result !== null && error === ''`. The reload error banner path is not taken (there's no stale list to preserve). Behavior matches the current flow.
+- **Very short day groups** (one row): sticky header still engages and releases normally.
+- **Single-row multi-account list** with `showAccountLabel=false`: secondary line is empty, pills only. No layout regression.
 
 ## Failure Behavior
 
-- API error from `loadTransactions()`: show error text in an error card. Do not show stale data from a previous successful load.
-- Action error (delete, recategorize, etc.): show error message inline. Do not close the detail sheet on failure.
-- If `filtersFromUrl()` encounters unrecognized params: ignore them, use defaults for missing fields.
+- `loadTransactions()` error during reload: inline banner above the list, stale data preserved, `dataLoading = false`, no modal, no toast.
+- `loadTransactions()` error on first load: unchanged — "Error loading transactions" empty panel.
+- `ResizeObserver` not available (old browser): fall back to a static `--filter-bar-height: 0px` and accept that the day headers pin to `top: 0` under the filter bar that scrolls with the page (no sticky filter bar). The page must still render and scroll. Do not throw.
+- Sticky positioning disabled by a parent `overflow` setting: headers revert to normal block flow. No crash.
+- Deleted legacy helpers/types still referenced anywhere: `pnpm check` fails and the task is not done. Grep verification in the proposed sequence catches this before commit.
 
 ## Regression Risks
 
-- **Dashboard drill-down breaks**: links in `+page.svelte` (dashboard) use `?view=activity&category=...` and `?view=activity&month=...`. These must land on the correct filtered view after migration. Test by clicking category trend rows and cash flow month rows.
-- **Accounts page link breaks**: `?accountId=checking` must land on single-account view with running balance and clearing toggles.
-- **Clearing toggle regression**: must still persist via `POST /api/transactions/toggle-status` and optimistically update the row.
-- **Category combobox regression**: the detail sheet's category combobox was just shipped in Phase 3. Must still work with the new `TransactionRow` type.
-- **Notes regression**: the detail sheet's notes textarea was just shipped in Phase 3. Must still work with the new type.
-- **Manual resolution regression**: the dialog must still open from pending transfer rows in single-account scope.
-- **Add transaction regression**: the form must still work in single-account scope, bound to the selected account.
-- **Old `activityMode` state leakage**: ensure no code path references `activityMode` after the rewrite.
+- **Row layout regression**: removing the date from the secondary line can change row height or pill alignment. Verify both single-account and multi-account rows, and rows with/without pills.
+- **Sticky stacking context bugs**: `position: sticky` requires no ancestor with `overflow: hidden`, `overflow: auto`, or `transform`. The `.view-card` ancestor and any shell wrapper must be checked. If a wrapper blocks sticky, the fix is to move the sticky element out — not to introduce a new scroll container.
+- **Filter bar z-index collisions**: the sticky filter bar (`z-index: 10`) must not overlap the detail sheet (higher) or confirm modals (`z-index: 30/31`). Verify visually.
+- **Filter bar background bleed**: day headers scrolling under a transparent filter bar produces a visual double-render. Ensure the filter bar has a solid background.
+- **In-place update leaking a wrong-filter row momentarily**: during reload, the stale list is shown. If the user scrolls and clicks a row whose filter no longer applies, the detail sheet still opens correctly (the row data is valid) but the list below changes underneath them. This is acceptable — the alternative (locking interactions) is worse.
+- **Dead-code deletion breaking a hidden consumer**: verify with grep across `app/frontend/src/` before deletion. `RegisterEntry` is still used by `ManualResolutionDialog` and `+page.svelte:53`; `ActivityTransaction` still used by `TransactionsExplanationHeader`. Do not delete those.
+- **`AccountRegister` is already dead**: the reviewer flagged four legacy types but missed this one. Confirm by grep; delete if dead.
+- **Action reload clearing `selectedRow`**: removing the `selectedRow = null` from `loadData()` could leave the sheet open after a manual resolution or add-transaction flow if those paths don't close the sheet themselves. Audit each caller: `changeFilters`, `doDelete`, `doResetCat`, `doRecat`, `doUnmatch`, `handleResolved`, `handleAddSuccess`, `handleToggleClearing`. Close the sheet explicitly in `changeFilters` and leave the action handlers as-is (they already null on success).
+- **Filter bar labels removal affecting screen readers**: chips relied on visible `<span class="filter-label">` text for context. After removal, the chip button aria labels must still be descriptive. Status chip especially — "Cleared" alone may be ambiguous to a screen reader, but combined with the "Remove status filter" aria label on its clear button it stays accessible.
 
 ## Acceptance Criteria
 
-- `/transactions` with no params shows all accounts, day-grouped, newest first. No `activityMode` toggle visible.
-- `/transactions?accounts=checking` shows single-account view: running balance column, clickable clearing dots, "Add transaction" button, pending transfers section (if any), summary cards.
-- `/transactions?category=Expenses:Food` shows only transactions with that category. Explanation header appears with summary stats.
-- `/transactions?period=this-month` shows current month transactions with summary.
-- Filter bar shows active filters as chips with ✕ to remove.
-- "+ Filters" button opens a dialog where the user can select accounts, categories, and status. Apply updates the view.
-- Search input filters by payee substring (debounced).
-- Old URL `?view=activity&category=Expenses:Food` auto-migrates and shows the correct filtered view.
-- Old URL `?accountId=checking` auto-migrates to single-account view.
-- Dashboard category-trend click lands on correct category-filtered view.
-- Dashboard cash-flow month click lands on correct month-filtered view.
-- Accounts page "Transactions" link lands on single-account view.
-- Clicking a row chevron opens the detail sheet with correct data.
-- Detail sheet category combobox recategorizes and reloads.
-- Detail sheet notes textarea saves on blur.
-- Detail sheet delete/unmatch actions work and reload.
-- Clearing dot toggle works in single-account mode.
-- "Add transaction" form works in single-account mode.
-- Day group headers show daily sum right-aligned.
-- `pnpm check` passes.
-- `uv run pytest -q` passes (backend unchanged, verify no breaks).
-- Page line count is under 600.
+- Transaction rows show no date in their body. In multi-account scope the secondary line shows the account label; in single-account scope the secondary line is empty unless a pill applies.
+- Scrolling a day group longer than one screen keeps that group's header pinned directly under the filter bar for the whole duration of the group.
+- The filter bar stays pinned at the top of the viewport while the page body scrolls.
+- With no filters active, the filter bar renders as a single line (search + presets + "+ Filters") with no second row.
+- With one account chip + one category chip active, the filter bar renders as a single line (search + presets + account chip + category chip + "+ Filters"). At standard desktop widths there is no wrap.
+- At narrow widths where wrapping is unavoidable, chips wrap as peers in a flat row; there is no per-group label creating an awkward sub-row.
+- Status chip reads "Cleared", "Pending", or "Unmarked" — not lowercase, not prefixed with "Status".
+- Changing a filter does not empty the list before the new results arrive. A thin progress indicator appears, old rows stay, new rows replace them when ready.
+- Changing a filter while the reload fails keeps the previous rows visible and shows an inline error banner; it does not swap the list for an empty-panel error state.
+- The four existing actions that auto-reload (delete, recategorize, unmatch, toggle clearing) still work and still close their sheet/modal on success.
+- `grep -r "entryHasActions\|canDelete\b\|canRecategorize\b\|canUnmatch\b\|groupActivityByDate" app/frontend/src/` returns no matches.
+- `grep -rE "\b(ActivityResult|ActivityDateGroup|RegisterAction|AccountRegister)\b" app/frontend/src/` returns no matches. (`ActionLink` still appears in `routes/+page.svelte` and `routes/accounts/+page.svelte` as local type definitions — those are unrelated and must stay.)
+- `pnpm check` passes with 0 errors and 0 warnings.
+- `uv run pytest -q` is not expected to pass — the pre-existing `ModuleNotFoundError: fastapi` environment issue on master blocks it. This task does not fix that. Verify only that the error is the same pre-existing one and not a new failure caused by this branch.
+- `wc -l app/frontend/src/routes/transactions/+page.svelte` stays under 600.
 
 ## Proposed Sequence
 
-1. **Types + filter state** — add `TransactionRow`, `TransactionsResponse` to `types.ts`. Create `transactionFilters.ts` with filter type, URL serialization, and migration. Create `loadTransactions.ts`.
-2. **Updated helpers** — add `groupByDate`, `canDeleteRow`, `canRecategorizeRow`, `canUnmatchRow` to `helpers.ts`.
-3. **TransactionRow.svelte rewrite** — remove `mode` prop, single unified layout accepting `TransactionRow`.
-4. **TransactionDayGroup.svelte update** — add `dailySum` + `baseCurrency` props.
-5. **TransactionDetailSheet.svelte update** — accept `TransactionRow | null` instead of dual props. Adapt combobox and notes.
-6. **TransactionsFilterBar.svelte** — new component with search, period presets, filter chips.
-7. **TransactionsFilterDialog.svelte** — new component with tabbed filter selection.
-8. **+page.svelte rewrite** — single data flow, filter-driven. Remove `activityMode`, duplicate hero, legacy loaders. Wire all components.
-9. **Update external links** — dashboard `+page.svelte` and accounts `+page.svelte` links to new URL format.
-10. **Verify** — `pnpm check`, manual testing of all acceptance criteria, regression checks.
+1. **Dead code cleanup** — delete the five helper functions in `helpers.ts` plus unused imports; delete the five legacy type exports in `types.ts`. Run `pnpm check` to confirm nothing else was consuming them. This is the smallest independently-verifiable step and frees the mental model for the polish work.
+2. **Row secondary line** — update `TransactionRow.svelte` to drop the date from `secondaryLine` and collapse to account-label-only (multi-account) or empty (single-account). Verify pills still render. Visual check in the dev server.
+3. **Filter bar layout cleanup** — rewrite `TransactionsFilterBar.svelte`'s markup to a single flat flex-wrap row, drop per-chip labels, title-case the status chip value. Verify chip ordering and wrap behavior at desktop and narrow viewports.
+4. **Sticky filter bar + measured height** — in `+page.svelte`, wrap the `<TransactionsFilterBar>` render in a sticky container (or set sticky styles on the filter bar itself), attach a `ResizeObserver` in `onMount` to expose `--filter-bar-height` on `document.documentElement`, disconnect on `onDestroy`.
+5. **Sticky day headers** — update `TransactionDayGroup.svelte`'s `.date-header-row` to `position: sticky; top: var(--filter-bar-height, 0px);` with a solid background and the correct z-order below the filter bar. Visual check by scrolling a long day group.
+6. **In-place list reload** — in `+page.svelte`, move `selectedRow = null` out of `loadData()` and into `changeFilters()`. Update the transactions section markup: the "Loading transactions" empty panel is only shown when `result === null`. When `result !== null && dataLoading`, render the list with a loading indicator on top (thin indeterminate progress bar via CSS animation). On error during reload, render the list plus an inline error banner; do not clear `result`.
+7. **Verify** — `pnpm check`, grep for deleted symbols, line count, and a full manual pass of the acceptance criteria in the dev server.
 
 ## Definition of Done
 
-- One transactions screen with no mode toggle.
 - All acceptance criteria met.
-- All regression risks verified (dashboard links, accounts links, clearing, combobox, notes, manual resolution, add transaction).
-- `pnpm check` passes.
-- `uv run pytest -q` passes.
-- Page is under 600 lines.
-- No references to `activityMode` remain in the codebase.
+- All regression risks above verified manually or by code inspection.
+- `pnpm check` passes with 0 errors and 0 warnings.
+- No `grep` hit for any deleted symbol.
+- Page stays under 600 lines.
+- No new dead code introduced — every new helper, prop, or state has a live caller.
+- The sticky filter bar and sticky day headers behave correctly across at least one "long day group scroll" manual test and one filter-change test in the dev server.
 
 ## UX Notes
 
-- **Filter bar** sits between the hero and the transaction list. It's always visible when initialized. Uses the existing `.view-card` pattern with tight padding.
-- **Period presets** render as a segmented control (existing `.activity-presets` pattern). When a month filter is active from a drill-down, show it as a removable chip instead of the presets.
-- **Account chips** show the tracked account's `displayName`. Multiple can be active.
-- **Category chip** shows the leaf segment of the category path (e.g., "Food / Groceries" for `Expenses:Food:Groceries`).
-- **Day group headers**: date on the left (e.g., "Mar 24 · Wednesday"), daily sum on the right in muted text.
-- **Row layout**: `[clearing-dot] [category-pills] [payee + date/account secondary line] [amount] [running-balance?] [chevron]`. Running balance column hidden when multi-account or null.
-- **Hero**: single hero for all scopes. Shows account name + balance trust when single-account. Shows "Transactions" + subtitle when multi-account.
-- **Empty state**: centered message with "No transactions match these filters" and a "Clear all filters" button.
+- **Row secondary line when empty**: always render the `<p>` with `min-height: 1.1em` (or equivalent) so row heights stay consistent between multi-account rows and single-account rows that have no secondary text or pills. Do not conditionally omit the element.
+- **Loading indicator style**: a 2px indeterminate progress bar (`animation: shimmer 1.2s linear infinite`) pinned to the top of the `.view-card` transactions section is preferred. Reserve background dimming for cases where the content is actually unreadable during load.
+- **Error banner during reload**: use the same `.error-text` style from the current first-load error path, placed inside a small inline card at the top of the transactions section. Do not use a modal or toast — the list needs to stay focal.
+- **Filter bar visual separation when pinned**: once scrolled, the sticky filter bar should look deliberately attached to the top of the viewport. A subtle bottom `box-shadow` when pinned is enough. Do not add a heavy border.
+- **Day header background**: must be opaque. If the app background is a gradient, use a solid color that matches the card background (`rgba(255, 255, 255, 0.96)` or the `.view-card` surface color). Rows bleeding through the header is the highest-severity visual bug for this feature.
+- **Accessibility**: day headers are still `<h4>` elements inside the group — no change to heading semantics. The filter bar's chip clear buttons keep their `aria-label`s. If the status chip changes from "Status: Cleared" markup to just "Cleared", make sure the chip container or its clear button has an aria-label that includes the word "status".
 
 ## Out of Scope
 
-See "Explicitly Excluded" above. Transfer-pair collapse, legacy endpoint deletion, Phase 4c polish, and all deferred plan items are out of scope.
-
-## Delivery Notes
-
-Shipped 2026-04-12 on branch `worktree-agent-a0ee344f` (merged to master). `pnpm check` clean (0/0), page is 430 lines (target <600), zero `activityMode` references remain. QA: PASS WITH FINDINGS (Finding 1 fixed in branch before review). Code review: SHIP WITH NOTES.
-
-**Follow-up items identified during review:**
-
-- **Dead legacy helpers in `app/frontend/src/lib/transactions/helpers.ts`**: `entryHasActions`, `canDelete`, `canRecategorize`, `canUnmatch`, `groupActivityByDate` have no remaining callers and should be deleted.
-- **Dead legacy type exports in `app/frontend/src/lib/transactions/types.ts`**: `ActivityResult`, `ActivityDateGroup`, `RegisterAction`, `ActionLink` have no consumers and should be removed. (`RegisterEntry`, `AccountRegister`, `ActivityTransaction`, `ActivitySummary`, `ActivityTopTransaction` still used by `ManualResolutionDialog` and `TransactionsExplanationHeader`; keep until those migrate.)
-- **Multi-category filtering (design decision)**: the filter dialog is single-pick and `TransactionFilters.category` is scalar, even though the backend `UnifiedTransactionFilters.categories` is plural. Works for all current drill-down paths. Either widen `category → categories: string[]` or defer as a tracked Phase 4c item.
-- **QA spec divergence on stale bookmarks**: `/transactions?accounts=deleted-id` silently drops the deleted ID and falls through to the all-accounts view, rather than showing an error state as specified. Arguably better UX; needs PM confirmation.
-- **Filter history via `replaceState`**: all filter mutations use `replaceState`, so back-button does not traverse filter history. Consider `pushState` for top-level filter changes.
-- **Polish items (low-severity)**: filter-dialog status "Any" radio doubles the toggle-off behavior of individual radios (redundant); notes save reads `row` at save time, not at focus time, so clicking a different row mid-edit posts against the wrong row (pre-existing pattern); detail sheet shows account label twice in single-account scope; `transactionActions.ts` error messages include `"Error: "` prefix from `String(e)`.
-- **Pre-existing environment issue**: `uv run pytest -q` fails with `ModuleNotFoundError: No module named 'fastapi'` on master too — not caused by this branch. Backend code unchanged here.
+- Multi-category filtering (type widen, dialog multi-select, URL serialization).
+- Stale-bookmark behavior change.
+- `pushState` vs `replaceState` for filter history.
+- Any Phase 4c polish items (live totals strip, search formula, mobile bottom sheet, keyboard shortcuts).
+- Migrating `ManualResolutionDialog` or `TransactionsExplanationHeader` off their legacy types.
+- Transfer-pair collapse.
+- Fixing the pre-existing `fastapi` pytest environment issue.
