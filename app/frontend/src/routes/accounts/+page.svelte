@@ -608,7 +608,7 @@
                           <p class="mt-1.5 mb-0 font-semibold text-muted-foreground">{accountIdentity(account)}</p>
                         </div>
                         <div class="flex flex-wrap justify-end gap-2 max-shell:justify-start">
-                          <a class="inline-link" href={`/transactions?accountId=${account.id}`}>Transactions</a>
+                          <a class="inline-link" href={`/transactions?accounts=${account.id}`}>Transactions</a>
                           <a class="inline-link" href={`/accounts/configure?accountId=${account.id}`}>Edit</a>
                         </div>
                       </div>

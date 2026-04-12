@@ -7,20 +7,20 @@
   import ChevronsUpDownIcon from '@lucide/svelte/icons/chevrons-up-down';
   import * as Popover from '$lib/components/ui/popover/index.js';
   import * as Command from '$lib/components/ui/command/index.js';
-  import type { RegisterEntry, ActivityTransaction } from '$lib/transactions/types';
+  import type { TransactionRow } from '$lib/transactions/types';
   import { formatCurrency, shortDate } from '$lib/format';
-  import { activityShortDate, canDelete, canRecategorize, canUnmatch } from '$lib/transactions/helpers';
+  import { canDeleteRow, canRecategorizeRow, canUnmatchRow } from '$lib/transactions/helpers';
   import { apiPost } from '$lib/api';
   import { cn } from '$lib/utils.js';
 
-  export let entry: RegisterEntry | null = null;
-  export let transaction: ActivityTransaction | null = null;
+  export let row: TransactionRow | null = null;
   export let baseCurrency: string;
   export let accounts: string[] = [];
-  export let onDelete: (entry: RegisterEntry) => void = () => {};
-  export let onResetCategory: (entry: RegisterEntry) => void = () => {};
-  export let onRecategorize: (entry: RegisterEntry, newCategory: string) => void = () => {};
-  export let onUnmatch: (entry: RegisterEntry) => void = () => {};
+  export let actionError: string = '';
+  export let onDelete: (row: TransactionRow) => void = () => {};
+  export let onResetCategory: (row: TransactionRow) => void = () => {};
+  export let onRecategorize: (row: TransactionRow, newCategory: string) => void = () => {};
+  export let onUnmatch: (row: TransactionRow) => void = () => {};
   export let onClose: () => void = () => {};
 
   let menuOpen = false;
@@ -31,28 +31,36 @@
   let notesSaveState: 'idle' | 'saving' | 'saved' | 'error' = 'idle';
   let notesSaveTimer: ReturnType<typeof setTimeout> | null = null;
   let notesErrorMsg = '';
-  let lastNotesEntryId = '';
+  let lastNotesRowId = '';
 
-  $: open = entry !== null || transaction !== null;
-  $: mode = entry ? 'register' : 'activity';
-  $: payee = entry?.payee ?? transaction?.payee ?? '';
-  $: amount = entry?.amount ?? transaction?.amount ?? 0;
-  $: accountLabel = entry?.summary ?? transaction?.accountLabel ?? '';
-  $: isUnknown = entry?.isUnknown ?? transaction?.isUnknown ?? false;
-  $: hasActions = entry ? !entry.isOpeningBalance : false;
-  $: showDelete = entry ? canDelete(entry) : false;
-  $: showResetCategory = entry ? canRecategorize(entry) : false;
-  $: showUnmatch = entry ? canUnmatch(entry) : false;
+  $: open = row !== null;
+  $: payee = row?.payee ?? '';
+  $: amount = row?.amount ?? 0;
+  $: accountLabel = row ? row.account.label : '';
+  $: isUnknown = row?.isUnknown ?? false;
+  $: hasActions = row ? !row.isOpeningBalance : false;
+  $: showDelete = row ? canDeleteRow(row) : false;
+  $: showResetCategory = row ? canRecategorizeRow(row) : false;
+  $: showUnmatch = row ? canUnmatchRow(row) : false;
+  $: categoryDisplay = row
+    ? row.categories.length > 0
+      ? row.categories.map((c) => c.label).join(' \u00B7 ')
+      : row.isTransfer ? 'Transfer' : 'Uncategorized'
+    : '';
 
-  // Category combobox: show for non-opening-balance, non-transfer, non-split entries in register mode
-  $: showCategoryCombobox = entry
-    ? !entry.isOpeningBalance && !entry.transferState && entry.detailLines.filter((l) => l.kind !== 'source').length <= 1
+  // Category combobox: show for non-opening-balance, non-transfer, non-split rows
+  $: showCategoryCombobox = row
+    ? !row.isOpeningBalance && !row.isTransfer && row.categories.length <= 1
     : false;
 
-  // Sync notes value when entry changes
-  $: if (entry && entry.id !== lastNotesEntryId) {
-    notesValue = entry.notes ?? '';
-    lastNotesEntryId = entry.id;
+  // Journal path from first leg (for notes, actions)
+  $: leg = row?.legs?.[0] ?? null;
+  $: hasJournal = leg?.journalPath && leg?.headerLine;
+
+  // Sync notes value when row changes
+  $: if (row && row.id !== lastNotesRowId) {
+    notesValue = row.notes ?? '';
+    lastNotesRowId = row.id;
     notesSaveState = 'idle';
     notesErrorMsg = '';
   }
@@ -77,21 +85,21 @@
   }
 
   function handleDelete() {
-    if (!entry) return;
+    if (!row) return;
     menuOpen = false;
-    onDelete(entry);
+    onDelete(row);
   }
 
   function handleResetCategory() {
-    if (!entry) return;
+    if (!row) return;
     menuOpen = false;
-    onResetCategory(entry);
+    onResetCategory(row);
   }
 
   function handleUnmatch() {
-    if (!entry) return;
+    if (!row) return;
     menuOpen = false;
-    onUnmatch(entry);
+    onUnmatch(row);
   }
 
   async function closeCategoryAndFocus() {
@@ -101,8 +109,8 @@
   }
 
   async function selectCategory(account: string) {
-    if (!entry) return;
-    onRecategorize(entry, account);
+    if (!row) return;
+    onRecategorize(row, account);
     categoryQuery = '';
     await closeCategoryAndFocus();
   }
@@ -118,9 +126,9 @@
   }
 
   async function saveNotes() {
-    if (!entry || !entry.journalPath || !entry.headerLine) return;
+    if (!row || !hasJournal || !leg) return;
     const trimmed = notesValue.trim();
-    const original = (entry.notes ?? '').trim();
+    const original = (row.notes ?? '').trim();
     if (trimmed === original) return;
 
     notesSaveState = 'saving';
@@ -129,8 +137,8 @@
 
     try {
       await apiPost<{ success: boolean }>('/api/transactions/notes', {
-        journalPath: entry.journalPath,
-        headerLine: entry.headerLine,
+        journalPath: leg.journalPath,
+        headerLine: leg.headerLine,
         notes: trimmed
       });
       notesSaveState = 'saved';
@@ -212,18 +220,25 @@
             <p class="mt-1 text-sm text-muted-foreground">{accountLabel}</p>
           </div>
 
+          <!-- Action error (shown when a sheet action fails) -->
+          {#if actionError}
+            <p class="rounded-xl border border-bad/30 bg-bad/10 px-3 py-2.5 text-sm text-bad" role="alert">
+              {actionError}
+            </p>
+          {/if}
+
           <!-- Needs review badge -->
           {#if isUnknown}
             <a class="pill warn no-underline inline-block w-fit" href="/unknowns">Needs review</a>
           {/if}
 
           <!-- Fields section -->
-          <div class="grid gap-4">
-            {#if mode === 'register' && entry}
+          {#if row}
+            <div class="grid gap-4">
               <!-- Date -->
               <div>
                 <p class="eyebrow">Date</p>
-                <p class="mt-0.5 text-sm">{shortDate(entry.date)}</p>
+                <p class="mt-0.5 text-sm">{shortDate(row.date)}</p>
               </div>
 
               <!-- Category — combobox or read-only -->
@@ -239,7 +254,7 @@
                       role="combobox"
                       aria-expanded={categoryOpen}
                     >
-                      <span class="truncate">{entry.summary}</span>
+                      <span class="truncate">{categoryDisplay}</span>
                       <ChevronsUpDownIcon class="size-4 shrink-0 opacity-50" />
                     </Popover.Trigger>
 
@@ -255,7 +270,7 @@
                             <Command.Group value="categories">
                               {#each filteredAccounts as account (account)}
                                 <Command.Item value={account} onSelect={() => void selectCategory(account)}>
-                                  <CheckIcon class={cn('size-4', entry.summary !== account && 'text-transparent')} />
+                                  <CheckIcon class={cn('size-4', categoryDisplay !== account && 'text-transparent')} />
                                   <span class="truncate">{account}</span>
                                 </Command.Item>
                               {/each}
@@ -266,95 +281,83 @@
                     </Popover.Content>
                   </Popover.Root>
                 {:else}
-                  <p class="mt-0.5 text-sm">{entry.summary}</p>
+                  <p class="mt-0.5 text-sm">{categoryDisplay}</p>
                 {/if}
               </div>
 
-              <!-- Running balance -->
-              <div>
-                <p class="eyebrow">Running balance</p>
-                <p class:sheet-positive={entry.runningBalance > 0} class:sheet-negative={entry.runningBalance < 0} class="mt-0.5 text-sm font-bold">
-                  {formatCurrency(entry.runningBalance, baseCurrency)}
-                </p>
-              </div>
-            {:else if mode === 'activity' && transaction}
-              <!-- Date -->
-              <div>
-                <p class="eyebrow">Date</p>
-                <p class="mt-0.5 text-sm">{activityShortDate(transaction.date)}</p>
-              </div>
+              <!-- Running balance (if present) -->
+              {#if row.runningBalance !== null}
+                <div>
+                  <p class="eyebrow">Running balance</p>
+                  <p class:sheet-positive={row.runningBalance > 0} class:sheet-negative={row.runningBalance < 0} class="mt-0.5 text-sm font-bold">
+                    {formatCurrency(row.runningBalance, baseCurrency)}
+                  </p>
+                </div>
+              {/if}
 
-              <!-- Category — read-only in activity mode -->
-              <div>
-                <p class="eyebrow">Category</p>
-                <p class="mt-0.5 text-sm">{transaction.category}</p>
-              </div>
-
-              <!-- Account — activity mode only -->
+              <!-- Account (multi-account context) -->
               <div>
                 <p class="eyebrow">Account</p>
-                <p class="mt-0.5 text-sm">{transaction.accountLabel}</p>
+                <p class="mt-0.5 text-sm">{row.account.label}</p>
+              </div>
+            </div>
+
+            <!-- Notes field -->
+            {#if hasJournal}
+              <div>
+                <div class="flex items-center gap-2">
+                  <p class="eyebrow">Notes</p>
+                  {#if notesSaveState === 'saved'}
+                    <span class="text-xs text-ok">Saved</span>
+                  {:else if notesSaveState === 'saving'}
+                    <span class="text-xs text-muted-foreground">Saving...</span>
+                  {:else if notesSaveState === 'error'}
+                    <span class="text-xs text-bad">{notesErrorMsg}</span>
+                  {/if}
+                </div>
+                <textarea
+                  class="mt-1 w-full resize-none rounded-md border border-input bg-background px-3 py-2 text-sm shadow-xs outline-hidden placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring"
+                  rows="3"
+                  placeholder="Add a note..."
+                  bind:value={notesValue}
+                  on:blur={saveNotes}
+                ></textarea>
               </div>
             {/if}
-          </div>
 
-          <!-- Notes field (register mode only) -->
-          {#if mode === 'register' && entry}
-            <div>
-              <div class="flex items-center gap-2">
-                <p class="eyebrow">Notes</p>
-                {#if notesSaveState === 'saved'}
-                  <span class="text-xs text-ok">Saved</span>
-                {:else if notesSaveState === 'saving'}
-                  <span class="text-xs text-muted-foreground">Saving...</span>
-                {:else if notesSaveState === 'error'}
-                  <span class="text-xs text-bad">{notesErrorMsg}</span>
-                {/if}
-              </div>
-              <textarea
-                class="mt-1 w-full resize-none rounded-md border border-input bg-background px-3 py-2 text-sm shadow-xs outline-hidden placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring"
-                rows="3"
-                placeholder="Add a note..."
-                bind:value={notesValue}
-                on:blur={saveNotes}
-              ></textarea>
-            </div>
-          {/if}
-
-          <!-- Info cards -->
-          {#if mode === 'register' && entry}
-            {#if entry.isOpeningBalance}
+            <!-- Info cards -->
+            {#if row.isOpeningBalance}
               <p class="rounded-xl border border-line/60 bg-white/60 px-3 py-2.5 text-sm text-muted-foreground">
                 This entry anchors running balances for the account until more history is backfilled.
               </p>
             {/if}
 
-            {#if entry.transferState === 'settled_grouped'}
+            {#if row.transferState === 'settled_grouped'}
               <p class="rounded-xl border border-line/60 bg-white/60 px-3 py-2.5 text-sm text-muted-foreground">
                 This imported row settled as part of a grouped transfer, so it no longer counts as pending.
               </p>
             {/if}
 
-            {#if entry.manualResolutionNote}
+            {#if row.manualResolutionNote}
               <p class="rounded-xl border border-brand/15 bg-brand/4 px-3 py-2.5 text-sm text-brand-strong">
-                {entry.manualResolutionNote}
+                {row.manualResolutionNote}
               </p>
             {/if}
-          {/if}
 
-          <!-- Detail lines (register mode only) -->
-          {#if mode === 'register' && entry && entry.detailLines.length > 0}
-            <div>
-              <p class="eyebrow">Detail lines</p>
-              <div class="mt-2 grid gap-2">
-                {#each entry.detailLines as line}
-                  <div class="rounded-xl border border-line/60 bg-white/60 px-3 py-2.5">
-                    <p class="text-sm font-semibold">{line.label}</p>
-                    <p class="mt-0.5 text-sm text-muted-foreground">{line.account}</p>
-                  </div>
-                {/each}
+            <!-- Detail lines -->
+            {#if row.detailLines && row.detailLines.length > 0}
+              <div>
+                <p class="eyebrow">Detail lines</p>
+                <div class="mt-2 grid gap-2">
+                  {#each row.detailLines as line}
+                    <div class="rounded-xl border border-line/60 bg-white/60 px-3 py-2.5">
+                      <p class="text-sm font-semibold">{line.label}</p>
+                      <p class="mt-0.5 text-sm text-muted-foreground">{line.account}</p>
+                    </div>
+                  {/each}
+                </div>
               </div>
-            </div>
+            {/if}
           {/if}
         </div>
       </div>

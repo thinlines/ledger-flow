@@ -718,7 +718,7 @@
           {#each dashboard.categoryTrends as row}
             <a
               class="category-row drilldown-link grid gap-1.5 -mx-2 -my-1.5 rounded-xl px-2 py-1.5 text-inherit no-underline transition-colors"
-              href={`/transactions?view=activity&category=${encodeURIComponent(row.account)}`}
+              href={`/transactions?category=${encodeURIComponent(row.account)}`}
             >
               <div class="flex items-center justify-between gap-3 max-tablet:grid max-tablet:grid-cols-1">
                 <p class="m-0 font-bold">{row.category}</p>
@@ -767,7 +767,7 @@
       {#each visibleCashFlow as row}
         <a
           class="cashflow-row drilldown-link grid gap-1.5 -mx-2 -my-1.5 rounded-xl px-2 py-1.5 text-inherit no-underline transition-colors"
-          href={`/transactions?view=activity&month=${row.month}`}
+          href={`/transactions?month=${row.month}`}
         >
           <div class="flex items-center justify-between gap-3 max-tablet:grid max-tablet:grid-cols-1">
             <p class="m-0 font-bold">{row.label}</p>
