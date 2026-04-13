@@ -1,5 +1,7 @@
 # Current Task
 
+**Status: COMPLETED — 2026-04-12**
+
 ## Title
 
 Transactions screen rethink — Phase 4b follow-up: UI polish and dead code cleanup
@@ -202,3 +204,18 @@ Close the three UX gaps reported against the shipped Phase 4b screen — redunda
 - Migrating `ManualResolutionDialog` or `TransactionsExplanationHeader` off their legacy types.
 - Transfer-pair collapse.
 - Fixing the pre-existing `fastapi` pytest environment issue.
+
+## Delivery Notes
+
+Shipped on branch `worktree-phase-4b-polish` over two commits: implementation (`0537e15`) and review fixes (`c5f45be`). `pnpm check` green (0 errors / 0 warnings, 667 files). All acceptance-criteria greps return zero matches. `+page.svelte` sits at 463 lines.
+
+One fix cycle was needed. Code review caught:
+
+- **Blocker — sticky-ancestor trap**: the transactions section had inherited `overflow-hidden` which would have broken `position: sticky` day headers (TASK.md Regression Risks called this out by name). Fixed by removing the class from the outer section and insetting the `.reload-progress` shimmer horizontally by `var(--radius-card)` so it stays clear of the card's rounded corners without needing parent clipping.
+- **Convention slip on utility-first CSS**: three simple scoped selectors (`.filter-bar-sticky` positioning, `.transactions-section { position: relative }`, `.reload-error`) were moved to Tailwind utilities. The remaining scoped CSS is justified (piercing `:global(.filter-bar)` box-shadow, `.reload-progress` keyframe+gradient). Raw rgba values on the error banner swapped for `bg-bad/10 border-bad/20` theme tokens.
+- **Status chip a11y**: `aria-label` on a non-interactive `<span>` is ignored by screen readers; replaced with a visually-hidden `"Status: "` prefix inside the chip so SRs read "Status: Cleared" instead of the ambiguous "Cleared".
+- Two low-severity tidy-ups (dropped the redundant `typeof document` SSR guard in `onDestroy` since Svelte lifecycles don't run on the server; kept the `typeof ResizeObserver` feature-detect since the task explicitly requires an old-browser fallback; replaced `.tx-secondary { min-height }` with a `min-h-[1.1em]` utility).
+
+QA verdict: **PASS** (both cycles). Review verdict: **REQUEST CHANGES** → **SHIP** after fix cycle 1.
+
+Visual verification was code-level only — no browser screenshot pass. The dev server booted clean and `/transactions` returned 200, but the sticky-scroll behavior, filter-bar wrap responsiveness, and shimmer timing should be exercised manually before merge.

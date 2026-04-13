@@ -66,17 +66,13 @@
     return new Intl.DateTimeFormat(undefined, { month: 'long', year: 'numeric' }).format(parsed);
   }
 
-  function periodLabel(period: string): string {
-    if (period === 'this-month') return 'This month';
-    if (period === 'last-30') return 'Last 30 days';
-    if (period === 'last-3-months') return 'Last 3 months';
-    return period;
+  function statusTitle(status: string): string {
+    return status.charAt(0).toUpperCase() + status.slice(1);
   }
 </script>
 
 <section class="view-card filter-bar">
-  <div class="flex gap-3 items-center flex-wrap">
-    <!-- Search input -->
+  <div class="flex flex-wrap items-center gap-2">
     <div class="filter-search">
       <input
         type="search"
@@ -90,15 +86,11 @@
       {/if}
     </div>
 
-    <!-- Period presets or month chip -->
     {#if filters.month}
-      <div class="flex items-center gap-1.5">
-        <span class="filter-label">Month</span>
-        <span class="filter-chip">
-          {monthTitle(filters.month)}
-          <button class="filter-clear" type="button" on:click={clearMonth} aria-label="Clear month filter">&times;</button>
-        </span>
-      </div>
+      <span class="filter-chip">
+        {monthTitle(filters.month)}
+        <button class="filter-clear" type="button" on:click={clearMonth} aria-label="Clear month filter">&times;</button>
+      </span>
     {:else}
       <div class="activity-presets">
         <button class:active={filters.period === 'this-month'} on:click={() => setPeriod('this-month')}>This month</button>
@@ -108,7 +100,6 @@
       </div>
     {/if}
 
-    <!-- Account chips -->
     {#each filters.accounts as accountId}
       <span class="filter-chip">
         {accountDisplayName(accountId)}
@@ -116,29 +107,21 @@
       </span>
     {/each}
 
-    <!-- Category chip -->
     {#if filters.category}
-      <div class="flex items-center gap-1.5">
-        <span class="filter-label">Category</span>
-        <span class="filter-chip">
-          {categoryDisplayName(filters.category)}
-          <button class="filter-clear" type="button" on:click={clearCategory} aria-label="Clear category filter">&times;</button>
-        </span>
-      </div>
+      <span class="filter-chip">
+        {categoryDisplayName(filters.category)}
+        <button class="filter-clear" type="button" on:click={clearCategory} aria-label="Clear category filter">&times;</button>
+      </span>
     {/if}
 
-    <!-- Status chip -->
     {#if filters.status}
-      <div class="flex items-center gap-1.5">
-        <span class="filter-label">Status</span>
-        <span class="filter-chip">
-          {filters.status}
-          <button class="filter-clear" type="button" on:click={clearStatus} aria-label="Clear status filter">&times;</button>
-        </span>
-      </div>
+      <span class="filter-chip">
+        <span class="sr-only">Status: </span>
+        {statusTitle(filters.status)}
+        <button class="filter-clear" type="button" on:click={clearStatus} aria-label="Clear status filter">&times;</button>
+      </span>
     {/if}
 
-    <!-- + Filters button -->
     <button class="btn filter-more-btn" type="button" on:click={onOpenFilterDialog}>+ Filters</button>
   </div>
 </section>
@@ -168,14 +151,6 @@
 
   .filter-search-input:focus {
     border-color: var(--brand, rgba(15, 95, 136, 0.4));
-  }
-
-  .filter-label {
-    font-size: 0.78rem;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-    color: var(--muted-foreground);
   }
 
   .filter-chip {

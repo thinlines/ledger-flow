@@ -1,7 +1,7 @@
 <script lang="ts">
   import type { TransactionRow } from '$lib/transactions/types';
   import { formatCurrency } from '$lib/format';
-  import { truncatePayee, activityShortDate, CLEARING_TOOLTIPS } from '$lib/transactions/helpers';
+  import { truncatePayee, CLEARING_TOOLTIPS } from '$lib/transactions/helpers';
   import ChevronRightIcon from '@lucide/svelte/icons/chevron-right';
 
   export let row: TransactionRow;
@@ -18,9 +18,7 @@
   $: categoryLabel = row.categories.length > 0
     ? row.categories.map((c) => c.label).join(' \u00B7 ')
     : row.isTransfer ? 'Transfer' : '';
-  $: secondaryLine = showAccountLabel && !isSingleAccount
-    ? `${activityShortDate(row.date)} \u00B7 ${row.account.label}`
-    : activityShortDate(row.date);
+  $: secondaryText = showAccountLabel && !isSingleAccount ? row.account.label : '';
 </script>
 
 <div class="tx-row" class:opening-row={row.isOpeningBalance}>
@@ -46,8 +44,8 @@
         {/if}
         <span class="font-bold truncate min-w-0" title={row.payee}>{truncatePayee(row.payee)}</span>
       </div>
-      <p class="text-muted-foreground text-sm mt-0.5">
-        {secondaryLine}
+      <p class="text-muted-foreground text-sm mt-0.5 min-h-[1.1em]">
+        {secondaryText}
         {#if row.isUnknown}
           <a class="pill warn no-underline ml-1" href="/unknowns" on:click|stopPropagation>Needs review</a>
         {/if}
