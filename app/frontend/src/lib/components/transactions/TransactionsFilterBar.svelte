@@ -115,7 +115,8 @@
     {/if}
 
     {#if filters.status}
-      <span class="filter-chip" aria-label="Status filter">
+      <span class="filter-chip">
+        <span class="sr-only">Status: </span>
         {statusTitle(filters.status)}
         <button class="filter-clear" type="button" on:click={clearStatus} aria-label="Clear status filter">&times;</button>
       </span>

@@ -44,7 +44,7 @@
         {/if}
         <span class="font-bold truncate min-w-0" title={row.payee}>{truncatePayee(row.payee)}</span>
       </div>
-      <p class="tx-secondary text-muted-foreground text-sm mt-0.5">
+      <p class="text-muted-foreground text-sm mt-0.5 min-h-[1.1em]">
         {secondaryText}
         {#if row.isUnknown}
           <a class="pill warn no-underline ml-1" href="/unknowns" on:click|stopPropagation>Needs review</a>
@@ -110,10 +110,6 @@
 
   .tx-balance {
     min-width: 6rem;
-  }
-
-  .tx-secondary {
-    min-height: 1.1em;
   }
 
   .tx-category-pill {

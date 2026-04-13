@@ -149,9 +149,7 @@
       filterBarObserver.disconnect();
       filterBarObserver = null;
     }
-    if (typeof document !== 'undefined') {
-      document.documentElement.style.removeProperty('--filter-bar-height');
-    }
+    document.documentElement.style.removeProperty('--filter-bar-height');
   });
 
   async function doDelete(row: TxRow) {
@@ -274,7 +272,7 @@
     {/if}
   </section>
 
-  <div class="filter-bar-sticky" bind:this={filterBarWrap}>
+  <div class="filter-bar-sticky sticky top-0 z-10" bind:this={filterBarWrap}>
     <TransactionsFilterBar {filters} {trackedAccounts} onChange={changeFilters} onOpenFilterDialog={() => (filterDialogOpen = true)} />
   </div>
 
@@ -359,7 +357,7 @@
     </section>
   {/if}
 
-  <section class="view-card transactions-section overflow-hidden">
+  <section class="view-card relative">
     {#if result !== null && dataLoading}
       <div class="reload-progress" aria-hidden="true"></div>
     {/if}
@@ -367,7 +365,7 @@
       <div><p class="eyebrow">Transactions</p><h3 class="m-0 font-display text-xl">{result?.totalCount ?? 0} {(result?.totalCount ?? 0) === 1 ? 'transaction' : 'transactions'}</h3></div>
     </div>
     {#if result !== null && error}
-      <div class="reload-error" role="alert">
+      <div class="mb-3 px-3.5 py-2.5 rounded-xl bg-bad/10 border border-bad/20" role="alert">
         <p class="error-text m-0"><strong>Couldn't refresh transactions.</strong> {error}</p>
       </div>
     {/if}
@@ -452,12 +450,9 @@
   .clearing-pending { background: transparent; box-shadow: inset 0 0 0 2px var(--warn, #ad6a00); }
   .clearing-unmarked { background: rgba(10,61,89,0.12); }
   .empty-panel { border: 1px dashed rgba(10,61,89,0.18); border-radius: 1rem; padding: 1rem; background: rgba(255,255,255,0.52); }
-  .filter-bar-sticky { position: sticky; top: 0; z-index: 10; }
   .filter-bar-sticky :global(.filter-bar) { box-shadow: 0 6px 18px -12px rgba(10, 61, 89, 0.35); }
-  .transactions-section { position: relative; }
-  .reload-progress { position: absolute; inset: 0 0 auto 0; height: 2px; background: linear-gradient(90deg, transparent 0%, rgba(15,95,136,0.55) 40%, rgba(15,95,136,0.75) 50%, rgba(15,95,136,0.55) 60%, transparent 100%); background-size: 200% 100%; animation: reload-shimmer 1.2s linear infinite; border-top-left-radius: 1rem; border-top-right-radius: 1rem; pointer-events: none; z-index: 2; }
+  .reload-progress { position: absolute; top: 0; left: var(--radius-card); right: var(--radius-card); height: 2px; background: linear-gradient(90deg, transparent 0%, rgba(15,95,136,0.55) 40%, rgba(15,95,136,0.75) 50%, rgba(15,95,136,0.55) 60%, transparent 100%); background-size: 200% 100%; animation: reload-shimmer 1.2s linear infinite; pointer-events: none; z-index: 2; }
   @keyframes reload-shimmer { 0% { background-position: 100% 0; } 100% { background-position: -100% 0; } }
-  .reload-error { margin-bottom: 0.75rem; padding: 0.65rem 0.85rem; border-radius: 0.75rem; background: rgba(197, 48, 48, 0.08); border: 1px solid rgba(197, 48, 48, 0.24); }
   .confirm-backdrop { position: fixed; inset: 0; background: rgba(10,20,30,0.35); z-index: 30; }
   .confirm-modal { width: min(480px, calc(100vw - 2rem)); max-height: calc(100vh - 2rem); background: #fff; border: 1px solid var(--line); border-radius: 14px; box-shadow: var(--shadow); padding: 1.25rem; position: fixed; top: 50%; left: 50%; transform: translate(-50%,-50%); overflow: auto; z-index: 31; display: grid; gap: 0.75rem; }
   .action-error { color: var(--error, #c53030); font-size: 0.88rem; }
