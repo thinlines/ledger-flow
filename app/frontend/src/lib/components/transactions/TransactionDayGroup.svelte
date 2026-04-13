@@ -27,11 +27,17 @@
   }
 
   .date-header-row {
+    position: sticky;
+    top: var(--filter-bar-height, 0px);
+    z-index: 5;
     display: flex;
     align-items: baseline;
     justify-content: space-between;
     gap: 1rem;
-    margin-bottom: 0.25rem;
+    padding: 0.35rem 0.5rem;
+    margin: 0 -0.5rem 0.25rem;
+    background: rgba(255, 255, 255, 0.97);
+    backdrop-filter: saturate(1.2);
   }
 
   .date-header {

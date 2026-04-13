@@ -35,20 +35,6 @@ export type RegisterEntry = {
   notes?: string | null;
 };
 
-export type AccountRegister = {
-  baseCurrency: string;
-  accountId: string;
-  currentBalance: number;
-  entryCount: number;
-  transactionCount: number;
-  latestTransactionDate: string | null;
-  latestActivityDate: string | null;
-  hasOpeningBalance: boolean;
-  hasTransactionActivity: boolean;
-  hasBalanceSource: boolean;
-  entries: RegisterEntry[];
-};
-
 export type ActivityTransaction = {
   date: string;
   payee: string;
@@ -79,30 +65,6 @@ export type ActivitySummary = {
   rollingMonthlyAverage: number | null;
   rollingMonths: number;
   topTransaction: ActivityTopTransaction | null;
-};
-
-export type ActivityResult = {
-  baseCurrency: string;
-  period: string | null;
-  category: string | null;
-  month: string | null;
-  transactions: ActivityTransaction[];
-  totalCount: number;
-  summary?: ActivitySummary | null;
-};
-
-export type ActivityDateGroup = {
-  header: string;
-  transactions: ActivityTransaction[];
-};
-
-export type ActionLink = {
-  href: string;
-  label: string;
-};
-
-export type RegisterAction = ActionLink & {
-  note: string;
 };
 
 export type ManualResolutionPreview = {

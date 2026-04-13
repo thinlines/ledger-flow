@@ -1,7 +1,7 @@
 <script lang="ts">
   import { goto } from '$app/navigation';
   import { page } from '$app/stores';
-  import { onMount } from 'svelte';
+  import { onDestroy, onMount } from 'svelte';
   import { apiGet } from '$lib/api';
   import AddTransactionForm from '$lib/components/transactions/AddTransactionForm.svelte';
   import ManualResolutionDialog from '$lib/components/transactions/ManualResolutionDialog.svelte';
@@ -55,6 +55,8 @@
   let showAddForm = false;
   let addSuccess = '';
   let filterDialogOpen = false;
+  let filterBarWrap: HTMLElement | null = null;
+  let filterBarObserver: ResizeObserver | null = null;
 
   $: isSingleAccount = filters.accounts.length === 1;
   $: selectedAccount = isSingleAccount ? trackedAccounts.find((a) => a.id === filters.accounts[0]) ?? null : null;
@@ -91,19 +93,20 @@
 
   async function loadData() {
     const seq = ++requestSeq;
-    dataLoading = true; error = ''; selectedRow = null;
+    dataLoading = true; error = '';
     try {
       const res = await loadTransactions(filters);
       if (seq !== requestSeq) return;
       result = res; baseCurrency = res.baseCurrency;
     } catch (e) {
       if (seq !== requestSeq) return;
-      error = String(e); result = null;
+      error = String(e);
     } finally { if (seq === requestSeq) dataLoading = false; }
   }
 
   function changeFilters(next: TransactionFilters) {
     filters = next;
+    selectedRow = null;
     void goto(`/transactions${filtersToUrl(filters)}`, { replaceState: true, noScroll: true, keepFocus: true });
     void loadData();
   }
@@ -130,6 +133,25 @@
   onMount(async () => {
     loading = true; error = '';
     try { await load(); } catch (e) { error = String(e); } finally { loading = false; }
+    if (filterBarWrap && typeof ResizeObserver !== 'undefined') {
+      filterBarObserver = new ResizeObserver((entries) => {
+        for (const entry of entries) {
+          const h = entry.contentRect.height;
+          document.documentElement.style.setProperty('--filter-bar-height', `${h}px`);
+        }
+      });
+      filterBarObserver.observe(filterBarWrap);
+    }
+  });
+
+  onDestroy(() => {
+    if (filterBarObserver) {
+      filterBarObserver.disconnect();
+      filterBarObserver = null;
+    }
+    if (typeof document !== 'undefined') {
+      document.documentElement.style.removeProperty('--filter-bar-height');
+    }
   });
 
   async function doDelete(row: TxRow) {
@@ -252,7 +274,9 @@
     {/if}
   </section>
 
-  <TransactionsFilterBar {filters} {trackedAccounts} onChange={changeFilters} onOpenFilterDialog={() => (filterDialogOpen = true)} />
+  <div class="filter-bar-sticky" bind:this={filterBarWrap}>
+    <TransactionsFilterBar {filters} {trackedAccounts} onChange={changeFilters} onOpenFilterDialog={() => (filterDialogOpen = true)} />
+  </div>
 
   {#if isSingleAccount && meta}
     <section class="grid gap-4 grid-cols-[repeat(auto-fit,minmax(15rem,1fr))] max-shell:grid-cols-1">
@@ -335,21 +359,29 @@
     </section>
   {/if}
 
-  <section class="view-card overflow-hidden">
+  <section class="view-card transactions-section overflow-hidden">
+    {#if result !== null && dataLoading}
+      <div class="reload-progress" aria-hidden="true"></div>
+    {/if}
     <div class="flex items-start justify-between gap-4 mb-4">
       <div><p class="eyebrow">Transactions</p><h3 class="m-0 font-display text-xl">{result?.totalCount ?? 0} {(result?.totalCount ?? 0) === 1 ? 'transaction' : 'transactions'}</h3></div>
     </div>
-    {#if dataLoading}
+    {#if result !== null && error}
+      <div class="reload-error" role="alert">
+        <p class="error-text m-0"><strong>Couldn't refresh transactions.</strong> {error}</p>
+      </div>
+    {/if}
+    {#if result === null && dataLoading}
       <div class="empty-panel"><h4 class="m-0">Loading transactions</h4><p class="m-0 mt-1 text-muted-foreground">Fetching transaction data.</p></div>
-    {:else if error}
+    {:else if result === null && error}
       <div class="empty-panel"><h4 class="m-0">Error loading transactions</h4><p class="m-0 mt-1 text-muted-foreground">{error}</p></div>
-    {:else if postedRows.length === 0}
+    {:else if result !== null && !dataLoading && !error && postedRows.length === 0}
       <div class="empty-panel">
         <h4 class="m-0">No transactions match these filters</h4>
         <p class="m-0 mt-1 text-muted-foreground">Try a different time range or clear filters to see more.</p>
         <div class="mt-3"><button class="btn" type="button" on:click={clearAll}>Clear all filters</button></div>
       </div>
-    {:else}
+    {:else if result !== null}
       <div class="grid">
         {#each dayGroups as group, gi}
           <TransactionDayGroup header={group.header} isFirst={gi === 0} dailySum={group.dailySum} {baseCurrency}>
@@ -420,6 +452,12 @@
   .clearing-pending { background: transparent; box-shadow: inset 0 0 0 2px var(--warn, #ad6a00); }
   .clearing-unmarked { background: rgba(10,61,89,0.12); }
   .empty-panel { border: 1px dashed rgba(10,61,89,0.18); border-radius: 1rem; padding: 1rem; background: rgba(255,255,255,0.52); }
+  .filter-bar-sticky { position: sticky; top: 0; z-index: 10; }
+  .filter-bar-sticky :global(.filter-bar) { box-shadow: 0 6px 18px -12px rgba(10, 61, 89, 0.35); }
+  .transactions-section { position: relative; }
+  .reload-progress { position: absolute; inset: 0 0 auto 0; height: 2px; background: linear-gradient(90deg, transparent 0%, rgba(15,95,136,0.55) 40%, rgba(15,95,136,0.75) 50%, rgba(15,95,136,0.55) 60%, transparent 100%); background-size: 200% 100%; animation: reload-shimmer 1.2s linear infinite; border-top-left-radius: 1rem; border-top-right-radius: 1rem; pointer-events: none; z-index: 2; }
+  @keyframes reload-shimmer { 0% { background-position: 100% 0; } 100% { background-position: -100% 0; } }
+  .reload-error { margin-bottom: 0.75rem; padding: 0.65rem 0.85rem; border-radius: 0.75rem; background: rgba(197, 48, 48, 0.08); border: 1px solid rgba(197, 48, 48, 0.24); }
   .confirm-backdrop { position: fixed; inset: 0; background: rgba(10,20,30,0.35); z-index: 30; }
   .confirm-modal { width: min(480px, calc(100vw - 2rem)); max-height: calc(100vh - 2rem); background: #fff; border: 1px solid var(--line); border-radius: 14px; box-shadow: var(--shadow); padding: 1.25rem; position: fixed; top: 50%; left: 50%; transform: translate(-50%,-50%); overflow: auto; z-index: 31; display: grid; gap: 0.75rem; }
   .action-error { color: var(--error, #c53030); font-size: 0.88rem; }
