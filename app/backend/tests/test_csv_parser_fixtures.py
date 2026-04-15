@@ -81,9 +81,10 @@ def test_fixture_reproduces_expected_intermediate(institution: str, tmp_path: Pa
     }
 
     actual = normalize_csv_to_intermediate(config, input_path, account_cfg)
-    expected = expected_path.read_bytes().decode("utf-8")
+    actual_bytes = actual.encode("utf-8")
+    expected_bytes = expected_path.read_bytes()
 
-    assert actual == expected, (
+    assert actual_bytes == expected_bytes, (
         f"intermediate output drifted for {institution}; "
         "fix the fixture (sanitization, encoding, line endings) — "
         "never the parser"
