@@ -88,3 +88,30 @@ def test_fixture_reproduces_expected_intermediate(institution: str, tmp_path: Pa
         "fix the fixture (sanitization, encoding, line endings) — "
         "never the parser"
     )
+
+
+def test_autodetect_adapter_returns_unique_match() -> None:
+    """Smoke-test the parser registry's autodetect path so the dead code
+    Tasks 2+ will eventually rely on does not silently rot in the meantime.
+    """
+    from services.parsers import registry
+
+    class _FakeAdapter:
+        name = "fake.test"
+        institution = "fake"
+        formats = ("csv",)
+
+        def parse(self, text):
+            return iter([])
+
+        def matches(self, text, filename):
+            return filename == "fake.csv"
+
+    try:
+        registry.register_adapter(_FakeAdapter)
+        match = registry.autodetect_adapter("", "fake.csv")
+        assert match is not None
+        assert match.name == "fake.test"
+        assert registry.autodetect_adapter("", "other.csv") is None
+    finally:
+        registry._ADAPTERS.pop("fake.test", None)
