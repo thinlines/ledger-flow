@@ -1,6 +1,6 @@
 # Current Task
 
-**Status: READY — drafted 2026-04-13**
+**Status: COMPLETED — 2026-04-14**
 
 ## Title
 
@@ -377,4 +377,50 @@ Commit granularity: one commit for the package skeleton (step 1), one commit per
 
 ## Delivery Notes
 
-*To be filled in at task completion.*
+**Status: COMPLETE — landed 2026-04-14**
+
+### Commits (in order)
+
+1. `4c2e9b5` — `feat(parsers): scaffold services/parsers package skeleton`
+2. `9b05815` — `test(parsers): add Wells Fargo golden fixture for CSV import refactor`
+3. `20187fd` — `test(parsers): add Alipay golden fixture (GB18030 + 13/1 slicing)`
+4. `a8a0066` — `test(parsers): add ICBC golden fixture (USD+CNY mixed currency)`
+5. `4dc4daf` — `test(parsers): add autodetect_adapter smoke test`
+6. (this commit) — `docs: record Task 0 delivery notes`
+
+### Fixtures shipped vs deferred
+
+- **Wells Fargo** — shipped. Sourced from `workspace/imports/processed/2026/wells_fargo_checking_4770/2026__wells_fargo_checking_4770__Checking1-1-036de688-74786d4a218f.csv` (the file with the broadest pattern coverage). Exercises regular debits, regular credits, multiple `REF #` rows, and three `CHECK #` rows where the bank populates the note column. **Gap:** the `CHECK # in description with empty note` branch of `WellsFargoCSV.code()` is not exercised — the source data never produces that shape (every CHECK row in the real export populates the note column with the check number, so branch 1 always fires before branch 3). I chose not to synthesize a row to cover that branch because synthetic rows in a regression-oracle fixture are worse than a documented gap. Tasks 2 and beyond should add a unit test for that branch directly against the new Wells Fargo adapter once it lands.
+- **Alipay** — shipped. Sourced from `workspace/imports/2024-alipay.csv`. Encoded as GB18030, LF line endings, 13-row preamble, 1-row footer. Body trimmed from 233 source rows to 12 representative rows (3 income / 9 expense), enough to exercise the income/expense split-column branches without inflating the fixture file.
+- **ICBC** — shipped. Sourced from `workspace/imports/2025-icbc.csv`. Encoded as UTF-8 with BOM, CRLF line endings, 7-row preamble, 2-row footer. The source file is CNY-only, so a single synthetic USD row was added at the top of the body to exercise the `美元 -> USD` branch in `IcbcCSV.currency()` and the USD path in `IcbcCSV.amount()`. Without it the regression oracle would not catch a refactor that broke the USD mapping. Body has 6 rows total: 1 USD expense, 4 CNY expense (different shapes), 1 CNY income (退款) row.
+- **Bank of Beijing** — **deferred**. Reason: no BJB sample on this machine. The fixture will land with Task 6 (BJB adapter) so the sanitization, generation, and characterization can happen against a real source file when one becomes available. The senior-developer brief explicitly authorized this deferral.
+
+### Verification outcomes
+
+All Acceptance Criteria checks pass. Literal stdout is reproduced in the agent report.
+
+- `uv run python -c "from app.backend.services.parsers import types, registry; registry.discover(); print('ok')"` → `ok`
+- `uv run pytest app/backend/tests/test_csv_parser_fixtures.py -q` → `4 passed in 0.02s` (3 fixture parametrizations + 1 autodetect smoke test)
+- `grep -rE "from .parsers|from app.backend.services.parsers|import parsers" app/backend/services/ --include='*.py' | grep -v 'services/parsers/'` → empty (no integration into pre-existing services)
+- `git diff --stat 08e64a4..HEAD` → only new files under `app/backend/services/parsers/`, `app/backend/tests/fixtures/csv_snapshots/`, and `app/backend/tests/test_csv_parser_fixtures.py`, plus this Delivery Notes block. Zero pre-existing backend service files modified, zero `Scripts/` changes.
+- Spot-grep for real-world identifiers in committed fixtures (merchant names, account fragments, holder name) → empty. Sanitization is clean.
+
+### Pre-existing environment issue
+
+Confirmed: running `uv run pytest app/backend/tests/ -q` aborts collection because `test_unknown_stage_resume.py` and `test_workspace_bootstrap.py` import `main`, which imports `fastapi`, which is not installed in this environment. This is the same pre-existing issue Phase 4b documented; it is unrelated to this branch. With those two test modules excluded (`--ignore=app/backend/tests/test_unknown_stage_resume.py --ignore=app/backend/tests/test_workspace_bootstrap.py`), the full backend suite passes (282 tests). The new fixture test file runs cleanly in isolation and does not introduce any new failure.
+
+### Ambiguity resolved
+
+- **Test import path.** The smoke acceptance criterion uses `from app.backend.services.parsers import ...` (run from worktree root, namespace-package style). Inside the test file, however, the `conftest.py` at `app/backend/tests/conftest.py` puts `app/backend` on `sys.path`, so other tests use `from services.X` directly. The new test file follows the in-test convention (`from services.csv_normalizer import ...`, `from services.parsers import registry`) to match the rest of the suite. Both paths resolve to the same module and both are exercised by the verification commands.
+- **ICBC USD coverage.** See "Fixtures shipped" above. One synthetic row was added; the alternative (defer the entire ICBC fixture or ship it without USD coverage) was worse than a clearly-documented synthetic addition.
+- **Wells Fargo CHECK branch 3.** See "Fixtures shipped" above. Not synthesized; documented gap instead.
+
+### Post-review fix cycle
+
+Code review flagged two findings worth fixing before merging to master. Both were landed as separate commits on top of the initial six so the history stays bisect-friendly.
+
+1. `4782bfe` — `test(parsers): sanitize Alipay 流水号 to deterministic placeholders`. Reviewer caught that the Alipay `input.csv` still carried real-looking 流水号 (transaction IDs), with an 11-digit middle segment (`22001412391`) repeating across 10 of 12 body rows — structurally consistent with an account-side partition and therefore a persistent correlatable identifier we do not want in public git history. Fix: replaced each 流水号 with a deterministic `ORD_000001..ORD_000012` placeholder, preserving GB18030 encoding, LF line endings, no BOM, and the trailing TAB on each cell. `expected_intermediate.csv` was regenerated from the sanitized input by running today's `normalize_csv_to_intermediate()` via `/tmp/task0_helpers/gen_expected.py` — not hand-edited.
+2. `4bc729f` — `test(parsers): tighten golden comparison to literal bytes`. Reviewer noted the oracle is described as byte-exact in TASK.md and ARCHITECTURE.md, but the test compared strings after decoding the expected file as UTF-8 — semantically equivalent for the three shipped fixtures, but silently absorbs a BOM drift if a future fixture ships with one. Fix: encode the actual output to UTF-8 and compare against `read_bytes()` directly, so the assertion is bytes-vs-bytes.
+3. `<this commit>` — `docs: record Task 0 post-review fix cycle in delivery notes`. This subsection.
+
+After all three commits, `uv run pytest app/backend/tests/test_csv_parser_fixtures.py -v` still reports `4 passed` (3 fixture parametrizations + 1 autodetect smoke test), and the branch-diff spot-checks (`grep "22001412391"`, `grep "ORD_0000"`) confirm no real 流水号 remain and all 12 placeholders are present in both `input.csv` and `expected_intermediate.csv`.
