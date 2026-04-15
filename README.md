@@ -1,40 +1,59 @@
 # Ledger Flow
 
-Ledger Flow is a GUI-first bookkeeping app for people who want a polished personal finance workspace without learning plaintext accounting. It stores financial data in open, human-readable files for durability and portability, but the product should feel like a finance app first.
+A GUI-first bookkeeping app for people who want a polished personal finance workspace without learning plaintext accounting. Data lives in open, human-readable [Ledger](https://www.ledger-cli.org/) files for durability and portability, but the product feels like a finance app first.
 
-## Product Purpose
+> **Status:** Work in progress, mostly AI-generated. Built as an experiment in collaborating with coding agents on a real consumer-grade app. Expect rough edges, breaking changes, and incomplete features. Not yet recommended for managing your actual finances.
 
-Ledger Flow helps users answer three questions every time they open the app:
+## What it's for
+
+Ledger Flow tries to answer three questions every time you open it:
 
 - Where do I stand right now?
 - What changed recently?
 - What needs attention next?
 
-The product should make setup, importing, review, account management, and daily visibility feel like one continuous finance workflow rather than a collection of accounting tools.
+It leads with money, accounts, balances, and activity — not journals and postings. The plain-text foundation stays real and durable, but behind the curtain in normal workflows.
 
-## Audience
+## Requirements
 
-- People managing personal finances who may be nontechnical and not accounting specialists.
-- Contributors building a consumer-grade finance workspace, not a tooling-first plaintext ledger interface.
+- [Ledger](https://www.ledger-cli.org/) CLI (the canonical accounting engine — Ledger Flow reads and writes its journal files)
+- [Python 3.11+](https://www.python.org/) and [uv](https://docs.astral.sh/uv/) for the backend
+- [Node.js 20+](https://nodejs.org/) and [pnpm](https://pnpm.io/) for the frontend
+- [just](https://github.com/casey/just) (optional, for the dev shortcuts below)
 
-## Product Posture
+## Install
 
-- Use money, accounts, balances, spending, activity, and next steps as the main product language.
-- Treat the GUI as the default way to manage data; CLI tooling is optional developer infrastructure.
-- Keep the plain-text foundation real and durable, but behind the curtain in normal workflows.
-- Make common tasks obvious, safe, and fast; move advanced details into explicit reveals or secondary screens.
-- Support zero-file bootstrapping, idempotent import, and incremental backfill over time.
-- Keep accounting truth in workspace files and use operational state only to speed up UX and remember workflow state.
+```sh
+git clone https://github.com/thinlines/ledger-flow.git
+cd ledger-flow
 
-## Experience North Star
+# Backend (FastAPI + uvicorn, managed by uv)
+cd app/backend && uv sync && cd ../..
 
-Ledger Flow should feel like a polished, consumer-grade personal finance application, not a frontend for plaintext accounting. The default interface should lead with financial outcomes and guidance, keep one dominant next action per screen, and hide implementation details such as paths, journals, and ledger-account mappings unless the user explicitly needs them.
+# Frontend (SvelteKit + Vite + Tailwind v4)
+cd app/frontend && pnpm install && cd ../..
+```
 
-## Context Map
+## Run
 
-- [README.md](README.md): product purpose and posture
-- [ARCHITECTURE.md](ARCHITECTURE.md): current system shape, boundaries, and invariants
-- [AGENT_RULES.md](AGENT_RULES.md): implementation, copy, and change-safety rules
-- [TASK.md](TASK.md): the active task only
-- [DECISIONS.md](DECISIONS.md): durable tradeoffs and rationale
-- [ROADMAP.md](ROADMAP.md): product direction and milestones
+In two terminals:
+
+```sh
+just app-backend     # http://127.0.0.1:8000
+just app-frontend    # http://127.0.0.1:5173
+```
+
+Without `just`:
+
+```sh
+cd app/backend  && uv run uvicorn main:app --reload --host 127.0.0.1 --port 8000
+cd app/frontend && pnpm dev
+```
+
+Then open the frontend URL in your browser.
+
+## Project docs
+
+- [ARCHITECTURE.md](ARCHITECTURE.md) — system shape, boundaries, invariants
+- [ROADMAP.md](ROADMAP.md) — product direction and milestones
+- [DECISIONS.md](DECISIONS.md) — durable tradeoffs and rationale
