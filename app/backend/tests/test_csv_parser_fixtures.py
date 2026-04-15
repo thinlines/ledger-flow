@@ -43,7 +43,7 @@ INSTITUTION_TEMPLATES = {
     },
 }
 
-INSTITUTIONS = ["wells_fargo", "alipay"]
+INSTITUTIONS = ["wells_fargo", "alipay", "icbc"]
 
 
 def _make_config(tmp_path: Path, institution: str):
