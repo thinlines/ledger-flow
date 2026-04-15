@@ -1,221 +1,380 @@
 # Current Task
 
-**Status: COMPLETED — 2026-04-12**
+**Status: READY — drafted 2026-04-13**
 
 ## Title
 
-Transactions screen rethink — Phase 4b follow-up: UI polish and dead code cleanup
+Adapter/translator scaffolding and golden-fixture baselines for the CSV import refactor
 
 ## Objective
 
-Close the three UX gaps reported against the shipped Phase 4b screen — redundant row dates, scroll context loss on long day groups, and jarring list flash on filter change — and delete the Phase 4b cleanup debt identified in code review. After this task the transactions screen reads cleanly, scrolls with stable context, updates in place, and leaves no orphaned legacy types/helpers behind.
+Establish the internal contract for the `services/parsers/` refactor (dataclasses, protocols, registry, discovery) and check in golden-fixture baselines of the current intermediate CSV output for every bank the app currently imports. After this task the repo contains a fully-wired but unused parser package, and every subsequent refactor task has a byte-exact regression oracle to test against.
+
+This task ships no user-visible change. Its value is that Tasks 1–7 become safe to write because they have something to verify against.
+
+## Context
+
+This is Task 0 of an 8-task backend refactor that splits `Scripts/BankCSV.py` into a two-layer adapter/translator architecture under `app/backend/services/parsers/`. The full task sequence, decisions, and rationale are captured in memory (`project_csv_parser_refactor.md`). In one-line form:
+
+- **Adapters** parse per-institution CSV text → stream of `Record` dataclasses.
+- **Translators** turn `Record`s into `LedgerTransaction`/`Posting` structures that an intermediate writer (Task 1) serializes to the same intermediate CSV format today's pipeline produces.
+
+The load-bearing constraint is **import identity hash stability** (ARCHITECTURE.md §"Import Pipeline and Identity Model"): `source_identity` and `source_payload_hash` are SHA-256 over the normalized intermediate, so any drift in the intermediate's byte-exact output makes previously imported transactions reappear as "new" on reimport. Task 0 establishes the golden fixtures that prove Tasks 1–7 didn't drift.
 
 ## Scope
 
 ### Included
 
-**Modified files:**
+**New files under `app/backend/services/parsers/`:**
 
-- `app/frontend/src/lib/components/transactions/TransactionRow.svelte` — drop the date from the secondary line; secondary line becomes `account.label` when multi-account, empty otherwise (pills still render).
-- `app/frontend/src/lib/components/transactions/TransactionDayGroup.svelte` — make the day header `position: sticky`, offset by the filter bar's measured height, with a solid background so underlying rows don't bleed through.
-- `app/frontend/src/lib/components/transactions/TransactionsFilterBar.svelte` — remove per-chip labels ("Category", "Status", "Month"), make the bar a single flex-wrap row of `[search] [period-presets | month-chip] [account chips...] [category chip] [status chip] [+ Filters]`, capitalize the status chip label to "Cleared"/"Pending"/"Unmarked".
-- `app/frontend/src/routes/transactions/+page.svelte` — make the filter bar section `position: sticky` at the top of the page scroll, expose a `--filter-bar-height` CSS var via `ResizeObserver` for day headers to consume; rework the transactions list render so an in-flight reload keeps the previous `result` mounted and shows a subtle inline loading indicator instead of swapping to the empty-panel skeleton; on error during a reload, keep the previous list and surface an inline error banner rather than clearing to an empty panel.
-- `app/frontend/src/lib/transactions/helpers.ts` — delete the five orphaned legacy helpers (`entryHasActions`, `canDelete`, `canRecategorize`, `canUnmatch`, `groupActivityByDate`) and the now-unused `RegisterEntry` and `ActivityTransaction` imports.
-- `app/frontend/src/lib/transactions/types.ts` — delete the five orphaned legacy types (`ActivityResult`, `ActivityDateGroup`, `RegisterAction`, `ActionLink`, `AccountRegister`). Keep `RegisterEntry`, `ActivityTransaction`, `ActivitySummary`, `ActivityTopTransaction` — still used by `ManualResolutionDialog`, `TransactionsExplanationHeader`, and the `TxRow → RegisterEntry`/`toExplTx` bridges.
+- `__init__.py` — empty, marks the package
+- `types.py` — `Record`, `Posting`, `LedgerTransaction` dataclasses and `Adapter`, `Translator` protocols
+- `registry.py` — `_ADAPTERS` and `_TRANSLATORS` registries, `@register_adapter` / `@register_translator` decorators, `get_adapter`, `get_translator`, `list_adapters`, `list_translators`, `autodetect_adapter`, `discover`
+- `implementations/__init__.py` — empty, marks the subpackage Tasks 2+ will populate
 
-### Explicitly Excluded
+**New golden fixtures under `app/backend/tests/fixtures/csv_snapshots/`:**
 
-- **Multi-category filtering** — QA/review medium finding M3. `TransactionFilters.category` stays scalar; the filter dialog stays single-pick. Widening to `categories: string[]` is a separate task that needs a type migration + backend filter-param plumbing + URL-serialization update.
-- **Stale-bookmark behavior change** — the current silent-drop of deleted account IDs stays as-is pending PM confirmation. Not touched here.
-- **`replaceState` → `pushState` for filter history** — UX choice deferred; not touched.
-- **Transfer-pair collapse** — still deferred, tracked separately.
-- **Migrating `ManualResolutionDialog` or `TransactionsExplanationHeader`** off the legacy `RegisterEntry` / `ActivityTransaction` types. The bridge in `+page.svelte` stays; only orphaned types are deleted.
-- **Any new filter or polish feature** from 7d-4c (live totals strip, search formula syntax, mobile bottom sheet, keyboard shortcuts).
+- `wells_fargo/input.csv` — sanitized real Wells Fargo CSV. Must exercise regular debits, regular credits, a `CHECK #` entry, a `REF #` entry, and the headerless shape.
+- `wells_fargo/expected_intermediate.csv` — byte-exact output of today's `normalize_csv_to_intermediate()` applied to `input.csv`.
+- `alipay/input.csv` — sanitized Alipay sample. Must exercise income (收入) rows, expense (支出) rows, the 13-row preamble, the 1-row footer, GB18030 encoding, and non-Latin column/payee text.
+- `alipay/expected_intermediate.csv` — byte-exact output.
+- `icbc/input.csv` — sanitized ICBC sample. Must exercise USD and CNY amounts in the same file, the 美元 currency indicator mapping to USD, the 7-row preamble, the 2-row footer, and the debit/credit split columns.
+- `icbc/expected_intermediate.csv` — byte-exact output.
+- `bank_of_beijing/input.csv` — sanitized BJB sample. Must exercise the 1-row preamble, sign-prefix amounts (`+123.45` / `-67.89`), and the counterparty-name column (对方户名).
+- `bank_of_beijing/expected_intermediate.csv` — byte-exact output.
+
+**New test file under `app/backend/tests/`:**
+
+- `test_csv_parser_fixtures.py` — one parameterized test `test_fixture_reproduces_expected_intermediate(institution)` that runs the current `normalize_csv_to_intermediate()` against each fixture's `input.csv` and asserts byte-exact equality with `expected_intermediate.csv`. Plus one small unit test for `autodetect_adapter()` using a local throwaway adapter class.
+
+### Explicitly excluded
+
+- **No modification to `csv_normalizer.py`, `institution_registry.py`, `custom_csv_service.py`, `import_service.py`, or `Scripts/BankCSV.py`.** The new `services/parsers/` package exists alongside them with zero integration.
+- **No adapter or translator implementations.** `implementations/` is empty in this task. Tasks 2+ populate it.
+- **No intermediate writer.** That's Task 1.
+- **No changes to import identity, import service, import profile, import history, or any route handler.**
+- **No removal of any legacy code.** Everything `Scripts/BankCSV.py` does today keeps working unchanged.
+- **No securities/brokerage fields on `Record`** (`action`, `symbol`, `quantity`, `price`, `fees`). Deferred until brokerage support is a real feature.
+- **No aggregator adapter** (Plaid/SimpleFIN/GoCardless). `Record` reserves fields for future aggregators but no aggregator code exists in this task.
+- **No frontend changes whatsoever.**
+- **No call to `discover()` from app startup.** The function exists so Tasks 2+ can call it from `csv_normalizer.py`; until then nothing invokes it.
 
 ## System Behavior
 
 ### Inputs
 
-- User scrolls the transactions page with a long day group visible.
-- User changes any filter (account, period, category, status, search, month) or clears all filters.
-- User loads `/transactions` while a backend reload is in flight.
-- User triggers an action (delete, recategorize, reset category, unmatch, toggle clearing, add transaction) that causes `loadData()` to refetch.
+- Developer runs `uv run pytest app/backend/tests/test_csv_parser_fixtures.py -q`
+- Developer imports `app.backend.services.parsers` from a REPL or another test
+- No user-facing input; this task has no runtime surface
 
 ### Logic
 
-**Row secondary line (`TransactionRow.svelte`):**
+**`services/parsers/types.py`:**
 
-- Compute `secondaryText` as:
-  - `row.account.label` when `!isSingleAccount && showAccountLabel`
-  - empty string otherwise
-- The date (`activityShortDate(row.date)`) is no longer included anywhere in the row — the day group header owns that information.
-- The secondary-line `<p>` always renders so the pill slot (Needs review, Starting balance, Grouped transfer) is available. When `secondaryText` is empty and no pills apply, the `<p>` collapses to empty but keeps its top margin so row height stays stable.
+```python
+from __future__ import annotations
+from dataclasses import dataclass, field
+from datetime import date
+from decimal import Decimal
+from typing import Any, Iterator, Protocol, runtime_checkable
 
-**Sticky filter bar + day headers (`+page.svelte`, `TransactionsFilterBar.svelte`, `TransactionDayGroup.svelte`):**
 
-- The filter bar section gets `position: sticky; top: 0; z-index: 10;` with a solid background (`view-card` already has one) and a bottom shadow or border that appears only when it is pinned (use `backdrop-filter` or a `box-shadow` on the sticky state — simplest path: always-on subtle shadow when sticky).
-- On mount, attach a `ResizeObserver` to the filter bar's root `<section>` element. On every resize entry, write `document.documentElement.style.setProperty('--filter-bar-height', \`${entry.contentRect.height}px\`)`. Disconnect the observer on page unmount.
-- `TransactionDayGroup` header uses `position: sticky; top: var(--filter-bar-height, 0px); z-index: 5;` with a solid background (opaque white or the card's background color — not transparent) so the rows scrolling past don't bleed through.
-- The day header must sit **below** the filter bar in z-order when they overlap.
-- When the filter bar wraps (multiple rows), `--filter-bar-height` updates automatically and day headers pin under the new height on the next layout pass.
+@dataclass
+class Record:
+    """Normalized output from an Adapter, input to a Translator.
 
-**Filter bar layout (`TransactionsFilterBar.svelte`):**
+    Cash fields are signed from the account holder's perspective:
+    positive = money in, negative = money out.
+    """
+    date: date
+    description: str
 
-- Single flex row: `flex flex-wrap items-center gap-2`.
-- Order of elements: search input, period presets (or month chip when `filters.month` is set), account chips (one per `filters.accounts[]`), category chip (if `filters.category`), status chip (if `filters.status`), "+ Filters" button as the last element.
-- Remove all per-chip label wrappers (the `<div class="flex items-center gap-1.5"><span class="filter-label">Category</span>...</div>` structure). All chips become direct siblings in the same flex row.
-- Status chip text: display the value title-cased — `'cleared' → 'Cleared'`, `'pending' → 'Pending'`, `'unmarked' → 'Unmarked'`. No prefix label.
-- Month chip: keep the existing `monthTitle()` formatted value. No "Month" label prefix.
-- Category chip: keep the existing `categoryDisplayName()` (leaf-segment path). No "Category" label prefix.
+    amount: Decimal | None = None
+    currency: str = "USD"
+    counterparty: str | None = None
+    code: str | None = None
+    effective_date: date | None = None
 
-**In-place list updates on reload (`+page.svelte`):**
+    # Reserved for future aggregator adapters (Plaid, SimpleFIN, GoCardless).
+    # CSV adapters leave these as defaults.
+    provider_id: str | None = None
+    pending: bool = False
+    suggested_category: str | None = None
+    provider_payee: str | None = None
 
-- Split the current list render into two states based on `result` and `dataLoading`:
-  - **First load** (`result === null && dataLoading`): show the existing "Loading transactions" empty panel. Unchanged.
-  - **Reload with existing data** (`result !== null && dataLoading`): render the day groups from the stale `result` exactly as on success. Overlay a subtle loading indicator — a 2px indeterminate progress bar at the top of the `.view-card` transactions section, or a dim of the list content via `opacity: 0.6`. Prefer the progress bar; it preserves legibility of the content while it updates.
-  - **Success** (`result !== null && !dataLoading`): current render.
-  - **Empty** (`result !== null && !dataLoading && postedRows.length === 0`): current "No transactions match these filters" empty panel.
-  - **Error during reload** (`result !== null && error !== ''`): render the stale list plus an inline error banner at the top of the section (using the existing `.error-text` or a new `.reload-error` style). Do **not** null `result` on reload errors.
-  - **Error on first load** (`result === null && error !== ''`): current "Error loading transactions" empty panel.
-- Do not clear `selectedRow` at the start of `loadData()` when the reload is triggered by an action handler. When triggered by `changeFilters()`, clearing is still correct (user navigated away). Implement this by removing the `selectedRow = null` assignment from `loadData()` and instead nulling `selectedRow` inside `changeFilters()` before it calls `loadData()`. Action handlers already null `selectedRow` themselves on success, so their path is unaffected.
-- The request-sequence counter (`requestSeq`) stays as-is. The only change is that stale `result` is preserved across the await, and `result = null` is no longer set on reload errors.
+    raw: dict[str, Any] = field(default_factory=dict)
 
-**Dead code cleanup:**
 
-- Delete the following exports from `helpers.ts`: `entryHasActions`, `canDelete`, `canRecategorize`, `canUnmatch`, `groupActivityByDate`.
-- Remove `RegisterEntry` and `ActivityTransaction` from the `helpers.ts` import at the top of the file — they become unused after the helper deletions.
-- Delete the following type exports from `types.ts`: `ActivityResult`, `ActivityDateGroup`, `RegisterAction`, `ActionLink`, `AccountRegister`.
-- Verify via grep that no other file in `app/frontend/src/` imports any of the deleted symbols. (Local `ActionLink` definitions in `routes/+page.svelte` and `routes/accounts/+page.svelte` are unrelated — they declare their own local type aliases and must remain untouched.)
+@dataclass
+class Posting:
+    account: str
+    amount: Decimal | None = None
+    commodity: str | None = None
+    price: Decimal | None = None
+
+
+@dataclass
+class LedgerTransaction:
+    date: date
+    payee: str
+    postings: list[Posting]
+    effective_date: date | None = None
+    code: str | None = None
+    note: str | None = None
+
+
+@runtime_checkable
+class Adapter(Protocol):
+    name: str
+    institution: str
+    formats: tuple[str, ...]
+
+    def parse(self, text: str) -> Iterator[Record]: ...
+    # matches(text, filename) -> bool is optional; adapters may omit it.
+    # Account binding is the routing mechanism; autodetect is a future feature.
+
+
+@runtime_checkable
+class Translator(Protocol):
+    name: str
+
+    def translate(self, record: Record, account: str) -> LedgerTransaction: ...
+```
+
+Notes:
+- `parse()` takes `text: str`, not `bytes` — `csv_normalizer.py` continues to own encoding and head/tail slicing (Option B).
+- No securities fields on `Record`. Aggregator fields (`provider_id`, `pending`, `suggested_category`, `provider_payee`) default to None/False so CSV adapters can ignore them entirely.
+- `matches()` is documented as optional in a comment, not in the protocol — Python's `Protocol` doesn't express optional methods cleanly. `autodetect_adapter()` uses `getattr(adapter, "matches", None)` to handle its absence.
+
+**`services/parsers/registry.py`:**
+
+```python
+from __future__ import annotations
+import importlib
+import pkgutil
+from typing import Optional
+
+from .types import Adapter, Translator
+
+_ADAPTERS: dict[str, Adapter] = {}
+_TRANSLATORS: dict[str, Translator] = {}
+
+
+def register_adapter(cls):
+    """Class decorator: instantiate and register an Adapter."""
+    instance = cls()
+    if instance.name in _ADAPTERS:
+        raise RuntimeError(f"Duplicate adapter name: {instance.name!r}")
+    _ADAPTERS[instance.name] = instance
+    return cls
+
+
+def register_translator(cls):
+    """Class decorator: instantiate and register a Translator."""
+    instance = cls()
+    if instance.name in _TRANSLATORS:
+        raise RuntimeError(f"Duplicate translator name: {instance.name!r}")
+    _TRANSLATORS[instance.name] = instance
+    return cls
+
+
+def get_adapter(name: str) -> Adapter:
+    return _ADAPTERS[name]
+
+
+def get_translator(name: str) -> Translator:
+    return _TRANSLATORS[name]
+
+
+def list_adapters() -> list[Adapter]:
+    return list(_ADAPTERS.values())
+
+
+def list_translators() -> list[Translator]:
+    return list(_TRANSLATORS.values())
+
+
+def autodetect_adapter(text: str, filename: str) -> Optional[Adapter]:
+    """Reserved for future autodetect-on-upload. Walks adapters that define
+    a matches() method and returns the unique match, or None if 0 or >1 match.
+    """
+    hits = []
+    for adapter in _ADAPTERS.values():
+        matcher = getattr(adapter, "matches", None)
+        if matcher is not None and matcher(text, filename):
+            hits.append(adapter)
+    return hits[0] if len(hits) == 1 else None
+
+
+def discover() -> None:
+    """Import every parsers/implementations/<name> subpackage so that
+    @register_adapter and @register_translator decorators execute."""
+    from . import implementations
+    for _, name, is_pkg in pkgutil.iter_modules(implementations.__path__):
+        if is_pkg:
+            importlib.import_module(f"{implementations.__name__}.{name}")
+```
+
+`registry.py` imports only from `.types` and the standard library. No reverse dependency from `registry.py` to any implementation — `discover()` imports `implementations` lazily inside the function body.
+
+**Golden-fixture generation (one-shot, not committed code):**
+
+For each bank, the author:
+1. Copies a real CSV from the workspace to a working directory.
+2. Sanitizes the input: replace payee text with deterministic placeholders (`PAYEE_001`, `PAYEE_002`, ...), strip account numbers, preserve code-extraction patterns (`REF #XXXXX`, `CHECK #NNN`) literally, preserve the BOM and line endings exactly as the real file has them, preserve the original encoding (GB18030 for Alipay — write back as GB18030, not UTF-8).
+3. Runs today's `normalize_csv_to_intermediate(config, sanitized_path, account_cfg)` with a minimal `AppConfig` and `account_cfg` that point at the sanitized input.
+4. Captures the returned string to `expected_intermediate.csv`.
+5. Commits both files under `tests/fixtures/csv_snapshots/<institution>/`.
+
+Sanitization happens on the *input* first; the expected output is then regenerated from the sanitized input, never hand-edited.
+
+**`test_csv_parser_fixtures.py`:**
+
+```python
+import pytest
+from pathlib import Path
+
+FIXTURES_DIR = Path(__file__).parent / "fixtures" / "csv_snapshots"
+INSTITUTIONS = ["wells_fargo", "alipay", "icbc", "bank_of_beijing"]
+
+
+@pytest.mark.parametrize("institution", INSTITUTIONS)
+def test_fixture_reproduces_expected_intermediate(institution):
+    from app.backend.services.csv_normalizer import normalize_csv_to_intermediate
+    # Load fixture, construct minimal AppConfig and account_cfg pointing at
+    # the fixture input, invoke normalize_csv_to_intermediate, and assert
+    # byte-exact equality with the fixture's expected_intermediate.csv.
+    ...
+
+
+def test_autodetect_adapter_returns_unique_match():
+    from app.backend.services.parsers import registry
+    from app.backend.services.parsers.types import Record
+
+    class _FakeAdapter:
+        name = "fake.test"
+        institution = "fake"
+        formats = ("csv",)
+        def parse(self, text): return iter([])
+        def matches(self, text, filename): return filename == "fake.csv"
+
+    try:
+        registry.register_adapter(_FakeAdapter)
+        assert registry.autodetect_adapter("", "fake.csv").name == "fake.test"
+        assert registry.autodetect_adapter("", "other.csv") is None
+    finally:
+        registry._ADAPTERS.pop("fake.test", None)
+```
+
+The exact `AppConfig` + `account_cfg` shape is whatever `csv_normalizer.py` expects today — the test is a characterization test against the current pipeline, not a unit test of the new parser package.
 
 ### Outputs
 
-- Transaction rows no longer show the date in their secondary line; multi-account rows show the account label; single-account rows show a blank secondary line or pills only.
-- Day group headers remain pinned at the top of the scroll area (tucked under the sticky filter bar) while their rows scroll underneath, then are pushed up by the next day group's header.
-- Filter bar chips wrap as a single flat flex row. "+ Filters" sits at the end of whichever row has space.
-- Filter bar pins to the top of the viewport while the page body scrolls.
-- Changing filters updates the list in place: the old rows stay visible, a progress bar appears briefly, then the new rows replace them without an empty-panel flash.
-- A reload error surfaces inline without clearing the existing data.
+- New Python package at `app/backend/services/parsers/` with `types.py`, `registry.py`, and two empty `__init__.py` files. Importable but unused by the running backend.
+- Four golden-fixture directories under `app/backend/tests/fixtures/csv_snapshots/` with sanitized `input.csv` and `expected_intermediate.csv` for each of Wells Fargo, Alipay, ICBC, Bank of Beijing.
+- One new test file that runs the current pipeline against each fixture and asserts byte-exact output, plus a smoke test for `autodetect_adapter`.
+- **Zero changes to any pre-existing file.** `git diff` on anything outside `services/parsers/` and `tests/fixtures/csv_snapshots/` and `tests/test_csv_parser_fixtures.py` is empty.
 
 ## System Invariants
 
-- `row.amount` and `row.runningBalance` continue to come from the backend — nothing in this task recomputes them.
-- Filter state in the URL remains the single source of truth. Sticky positioning, in-place updates, and the layout change do not introduce any new client-only state that survives navigation.
-- All existing transaction actions (delete, recategorize, reset category, unmatch, toggle clearing, add transaction, notes save, manual resolution) continue to work through their existing POST endpoints and reload via `loadData()`. None of their handlers changes in behavior.
-- `actionError` continues to render inline in the detail sheet and in the delete/unmatch confirm modals. Its lifecycle (clear on row change, clear on success) is unchanged.
-- Dashboard drill-down links, accounts page links, and old-URL migration (`?view=activity&...`, `?accountId=...`) are untouched.
-- The orphaned legacy exports (`entryHasActions`, `canDelete`, `canRecategorize`, `canUnmatch`, `groupActivityByDate`, `ActivityResult`, `ActivityDateGroup`, `RegisterAction`, `ActionLink`, `AccountRegister`) are genuinely orphaned. Their deletion must not break the live bridges `toExplTx()` in `+page.svelte` or `manualResolutionEntry` construction.
+- `services/csv_normalizer.py`, `services/institution_registry.py`, `services/custom_csv_service.py`, `Scripts/BankCSV.py`, and every import-pipeline consumer remain byte-identical after this task.
+- Import identity (`source_identity`, `source_payload_hash`) is untouched. This task ships no code path that produces intermediate CSV output — it only records what the existing code path produces.
+- The new `services/parsers/` package is not imported from anywhere in the running backend. It's only reachable through `pytest` or a deliberate REPL import. No API routes, no startup hooks, no implicit discovery.
+- `discover()` is not called anywhere in the app's startup path in this task. It exists for Tasks 2+ to invoke from `csv_normalizer.py` once adapters exist to discover.
+- The golden fixtures are sanitized. No real payee names, no real account numbers, no recognizable real-world merchants in the committed files. Real amounts and dates are acceptable only if they're not personally identifying in combination with the sanitized payees.
+- `Record` reserves aggregator-friendly fields (`provider_id`, `pending`, `suggested_category`, `provider_payee`) with safe defaults. Tasks 2–7 must not remove these fields.
 
 ## States
 
-- **Default**: filter bar visible and pinned, list below, day headers present. No filters active → last-3-months preset selected as before.
-- **Reloading with stale data**: existing list stays visible, thin progress bar at the top of the transactions section, filter bar responsive to user input.
-- **Reloading with no prior data** (first load): hero skeleton + "Loading transactions" empty panel. Unchanged.
-- **Success**: list rendered from latest `result`, no loading indicator, no error banner.
-- **Empty for current filters**: "No transactions match these filters" panel with clear-all button. Unchanged.
-- **Reload error**: stale list still visible with an inline error banner above it. User can retry by changing filters.
-- **First-load error**: "Error loading transactions" empty panel. Unchanged.
+Not applicable. This task ships no UI, no user-visible state, no runtime behavior, no failure modes that a user would perceive.
 
 ## Edge Cases
 
-- **Filter bar wraps to multiple rows on narrow viewports**: `ResizeObserver` updates `--filter-bar-height` after each wrap, day headers reposition on the next layout. No manual measurement.
-- **User scrolls a day group that contains more rows than the viewport**: day header stays pinned under the filter bar for the entire length of the group, then is pushed out by the next group's header.
-- **Rapid filter changes**: request-sequence counter still prevents stale responses from winning. The in-place update preserves the most-recently-successful `result` across rapid typing, so the screen never blanks.
-- **Reload error after success**: inline banner appears, prior rows remain; another successful reload replaces the rows and clears the banner.
-- **Single-account mode with a starting balance row**: the "Starting balance" pill still renders in the row's secondary slot even though `secondaryText` is empty.
-- **Detail sheet open when an action triggers a reload**: sheet already closes on action success (existing behavior). The `selectedRow = null` removed from `loadData()` does not affect this.
-- **Detail sheet open when the user changes a filter**: `changeFilters()` nulls `selectedRow` before calling `loadData()`, so the sheet closes on filter change.
-- **Transitioning from first-load error to success on retry**: when the user changes a filter after a first-load error, `result === null && error !== ''` → `result !== null && error === ''`. The reload error banner path is not taken (there's no stale list to preserve). Behavior matches the current flow.
-- **Very short day groups** (one row): sticky header still engages and releases normally.
-- **Single-row multi-account list** with `showAccountLabel=false`: secondary line is empty, pills only. No layout regression.
+- **Real CSV unavailable for a bank.** If the author doesn't have a real sample on hand for a given bank, that fixture is blocked on obtaining one. Deferring one bank is acceptable if the deferred bank is noted in Delivery Notes, but the task does not ship without fixtures for at least **Wells Fargo + one Chinese bank** (ICBC or Alipay). Those two cover the two hardest existing code paths: headerless CSV and GB18030-encoded preamble-heavy CSV.
+- **Sanitization breaks code-extraction patterns.** Replacing payee text with placeholders may accidentally remove the `REF #XXXXX` or `CHECK #NNN` patterns that `WellsFargoCSV.code()` depends on. Verify post-sanitization that each code-extraction branch (REF, CHECK, fallback-to-note, fallback-to-empty) is exercised by at least one row.
+- **BOM handling.** Alipay files often begin with a UTF-8 or GB18030 BOM. The sanitized fixture must preserve the BOM exactly as the real file has it — stripping it silently makes today's parser produce different output on the fixture than on real files, and the baseline becomes worthless.
+- **Trailing newline and line endings.** Some banks end their CSV with `\n`, some with `\r\n`, some with neither. The fixture must preserve whatever the real file has. Do not let an editor "tidy up" line endings during sanitization.
+- **Encoding round-trip.** When saving a sanitized Alipay input back to disk, it must be written in GB18030, not UTF-8. Writing it as UTF-8 and then pointing the parser at it silently produces different output because the non-Latin column names decode wrong.
+- **Deterministic placeholder collisions.** If sanitization replaces two distinct real payees with the same placeholder (e.g., both become `PAYEE_001`), the intermediate output still reproduces deterministically — but the fixture loses coverage of a duplicate-payee case. If the original file had rows that depended on unique payee text, use distinct placeholders.
 
 ## Failure Behavior
 
-- `loadTransactions()` error during reload: inline banner above the list, stale data preserved, `dataLoading = false`, no modal, no toast.
-- `loadTransactions()` error on first load: unchanged — "Error loading transactions" empty panel.
-- `ResizeObserver` not available (old browser): fall back to a static `--filter-bar-height: 0px` and accept that the day headers pin to `top: 0` under the filter bar that scrolls with the page (no sticky filter bar). The page must still render and scroll. Do not throw.
-- Sticky positioning disabled by a parent `overflow` setting: headers revert to normal block flow. No crash.
-- Deleted legacy helpers/types still referenced anywhere: `pnpm check` fails and the task is not done. Grep verification in the proposed sequence catches this before commit.
+- **Golden test fails on first run.** The fixture was generated incorrectly — sanitization broke something, encoding mismatched, BOM missing, line endings changed. Fix the fixture, never touch the parser. The test's purpose is to catch author errors before Tasks 1+ rely on the baseline.
+- **Import of `services.parsers` fails at module load.** `types.py` or `registry.py` has a syntax error or a circular import. Fix before landing.
+- **`discover()` raises on empty `implementations/`.** `pkgutil.iter_modules` must return an empty iterator on an empty directory, not raise. Verify in a REPL before landing.
+- **Sanitization leaks real data into the repo.** Hard failure — revert the commit, regenerate the fixture, re-verify. Treat fixture files with the same care as logs or backups: once committed, assume they're discoverable.
+- **Pre-existing pytest environment issue.** Phase 4b's TASK.md noted that `uv run pytest -q` currently fails on `ModuleNotFoundError: fastapi` in some environments. If the author hits this, the test file still lands; acceptance degrades to "pytest collects and runs the new test file, and the only failures are the same pre-existing environment issue, not new ones caused by this branch." Document it in Delivery Notes if it happens.
 
 ## Regression Risks
 
-- **Row layout regression**: removing the date from the secondary line can change row height or pill alignment. Verify both single-account and multi-account rows, and rows with/without pills.
-- **Sticky stacking context bugs**: `position: sticky` requires no ancestor with `overflow: hidden`, `overflow: auto`, or `transform`. The `.view-card` ancestor and any shell wrapper must be checked. If a wrapper blocks sticky, the fix is to move the sticky element out — not to introduce a new scroll container.
-- **Filter bar z-index collisions**: the sticky filter bar (`z-index: 10`) must not overlap the detail sheet (higher) or confirm modals (`z-index: 30/31`). Verify visually.
-- **Filter bar background bleed**: day headers scrolling under a transparent filter bar produces a visual double-render. Ensure the filter bar has a solid background.
-- **In-place update leaking a wrong-filter row momentarily**: during reload, the stale list is shown. If the user scrolls and clicks a row whose filter no longer applies, the detail sheet still opens correctly (the row data is valid) but the list below changes underneath them. This is acceptable — the alternative (locking interactions) is worse.
-- **Dead-code deletion breaking a hidden consumer**: verify with grep across `app/frontend/src/` before deletion. `RegisterEntry` is still used by `ManualResolutionDialog` and `+page.svelte:53`; `ActivityTransaction` still used by `TransactionsExplanationHeader`. Do not delete those.
-- **`AccountRegister` is already dead**: the reviewer flagged four legacy types but missed this one. Confirm by grep; delete if dead.
-- **Action reload clearing `selectedRow`**: removing the `selectedRow = null` from `loadData()` could leave the sheet open after a manual resolution or add-transaction flow if those paths don't close the sheet themselves. Audit each caller: `changeFilters`, `doDelete`, `doResetCat`, `doRecat`, `doUnmatch`, `handleResolved`, `handleAddSuccess`, `handleToggleClearing`. Close the sheet explicitly in `changeFilters` and leave the action handlers as-is (they already null on success).
-- **Filter bar labels removal affecting screen readers**: chips relied on visible `<span class="filter-label">` text for context. After removal, the chip button aria labels must still be descriptive. Status chip especially — "Cleared" alone may be ambiguous to a screen reader, but combined with the "Remove status filter" aria label on its clear button it stays accessible.
+- **Accidental integration.** Importing `services.parsers` from `csv_normalizer.py` or any other existing service at any point in this task would break its "zero-integration scaffolding" posture. Verification: `grep -rE "from .parsers|from app.backend.services.parsers|import parsers" app/backend/services/ --include='*.py'` returns matches only inside `services/parsers/` itself.
+- **Circular import when `implementations/` grows later.** `registry.py` must only import from `.types` and the standard library. `discover()` must import `implementations` lazily inside its function body, not at module top-level. If `registry.py` ever imports an implementation module eagerly, Tasks 2+ will hit circular-import errors.
+- **Golden fixtures drift between now and Task 7.** The committed baseline assumes `Scripts/BankCSV.py` is frozen. If someone patches `BankCSV.py` between this task and Task 7, Tasks 2+ will fail against a stale fixture even though they're correct. Mitigation: the `Scripts/BankCSV.py` file should be treated as frozen for the duration of the refactor; if a bug fix is needed there, regenerate the affected fixture in the same commit.
+- **`autodetect_adapter` is dead code in this task.** It's included because Tasks 2+ will eventually need it and it's cheap to write now. A bug would hide until autodetect becomes a real feature. Mitigation: the `test_autodetect_adapter_returns_unique_match` smoke test above exercises the register/detect/cleanup path.
+- **Fixture pollution from the smoke test.** If `_FakeAdapter` isn't cleaned up after `test_autodetect_adapter_returns_unique_match`, subsequent tests might see it in the registry. Mitigation: the test wraps registration in `try/finally` and pops the fake from `_ADAPTERS` after the assertions.
+- **Schwab fixture missing by design.** The current `Scripts/BankCSV.py` supports Schwab, but Task 0 does not generate a Schwab fixture because Schwab is out of scope for the full refactor. If a reviewer expects fixtures for every bank in `institution_registry._REGISTRY`, remind them that Schwab gets deleted in Task 7 and fixtures for deleted paths are wasted work.
 
 ## Acceptance Criteria
 
-- Transaction rows show no date in their body. In multi-account scope the secondary line shows the account label; in single-account scope the secondary line is empty unless a pill applies.
-- Scrolling a day group longer than one screen keeps that group's header pinned directly under the filter bar for the whole duration of the group.
-- The filter bar stays pinned at the top of the viewport while the page body scrolls.
-- With no filters active, the filter bar renders as a single line (search + presets + "+ Filters") with no second row.
-- With one account chip + one category chip active, the filter bar renders as a single line (search + presets + account chip + category chip + "+ Filters"). At standard desktop widths there is no wrap.
-- At narrow widths where wrapping is unavoidable, chips wrap as peers in a flat row; there is no per-group label creating an awkward sub-row.
-- Status chip reads "Cleared", "Pending", or "Unmarked" — not lowercase, not prefixed with "Status".
-- Changing a filter does not empty the list before the new results arrive. A thin progress indicator appears, old rows stay, new rows replace them when ready.
-- Changing a filter while the reload fails keeps the previous rows visible and shows an inline error banner; it does not swap the list for an empty-panel error state.
-- The four existing actions that auto-reload (delete, recategorize, unmatch, toggle clearing) still work and still close their sheet/modal on success.
-- `grep -r "entryHasActions\|canDelete\b\|canRecategorize\b\|canUnmatch\b\|groupActivityByDate" app/frontend/src/` returns no matches.
-- `grep -rE "\b(ActivityResult|ActivityDateGroup|RegisterAction|AccountRegister)\b" app/frontend/src/` returns no matches. (`ActionLink` still appears in `routes/+page.svelte` and `routes/accounts/+page.svelte` as local type definitions — those are unrelated and must stay.)
-- `pnpm check` passes with 0 errors and 0 warnings.
-- `uv run pytest -q` is not expected to pass — the pre-existing `ModuleNotFoundError: fastapi` environment issue on master blocks it. This task does not fix that. Verify only that the error is the same pre-existing one and not a new failure caused by this branch.
-- `wc -l app/frontend/src/routes/transactions/+page.svelte` stays under 600.
+- `app/backend/services/parsers/__init__.py`, `types.py`, `registry.py`, and `implementations/__init__.py` exist.
+- `uv run python -c "from app.backend.services.parsers import types, registry; registry.discover(); print('ok')"` prints `ok` from the repo root.
+- `Record`, `Posting`, `LedgerTransaction`, `Adapter`, `Translator` are all importable from `app.backend.services.parsers.types`.
+- `Record` has all fields listed in the Logic section, including the aggregator-friendly fields `provider_id`, `pending`, `suggested_category`, `provider_payee` with their documented defaults.
+- `register_adapter`, `register_translator`, `get_adapter`, `get_translator`, `list_adapters`, `list_translators`, `autodetect_adapter`, `discover` are all importable from `app.backend.services.parsers.registry`.
+- Golden fixtures exist under `app/backend/tests/fixtures/csv_snapshots/` for `wells_fargo`, `alipay`, `icbc`, and `bank_of_beijing` (or at least Wells Fargo + one Chinese bank, with the deferred fixtures documented in Delivery Notes). Each directory contains both `input.csv` and `expected_intermediate.csv`.
+- `test_csv_parser_fixtures.py` runs. Every shipped fixture is green. The only acceptable failure is the pre-existing `fastapi` environment issue from Phase 4b, documented in Delivery Notes.
+- `grep -rE "from .parsers|from app.backend.services.parsers|import parsers" app/backend/services/ --include='*.py' | grep -v 'services/parsers/'` returns no matches.
+- `git diff --stat HEAD~N -- 'app/backend/services/' ':!app/backend/services/parsers/'` shows zero pre-existing backend service files modified (for appropriate N covering this task's commits).
+- `git diff --stat HEAD~N -- Scripts/` shows zero changes.
+- Spot-check: grep a committed fixture for any name, merchant, or account number the author recognizes from real usage. No hits.
 
 ## Proposed Sequence
 
-1. **Dead code cleanup** — delete the five helper functions in `helpers.ts` plus unused imports; delete the five legacy type exports in `types.ts`. Run `pnpm check` to confirm nothing else was consuming them. This is the smallest independently-verifiable step and frees the mental model for the polish work.
-2. **Row secondary line** — update `TransactionRow.svelte` to drop the date from `secondaryLine` and collapse to account-label-only (multi-account) or empty (single-account). Verify pills still render. Visual check in the dev server.
-3. **Filter bar layout cleanup** — rewrite `TransactionsFilterBar.svelte`'s markup to a single flat flex-wrap row, drop per-chip labels, title-case the status chip value. Verify chip ordering and wrap behavior at desktop and narrow viewports.
-4. **Sticky filter bar + measured height** — in `+page.svelte`, wrap the `<TransactionsFilterBar>` render in a sticky container (or set sticky styles on the filter bar itself), attach a `ResizeObserver` in `onMount` to expose `--filter-bar-height` on `document.documentElement`, disconnect on `onDestroy`.
-5. **Sticky day headers** — update `TransactionDayGroup.svelte`'s `.date-header-row` to `position: sticky; top: var(--filter-bar-height, 0px);` with a solid background and the correct z-order below the filter bar. Visual check by scrolling a long day group.
-6. **In-place list reload** — in `+page.svelte`, move `selectedRow = null` out of `loadData()` and into `changeFilters()`. Update the transactions section markup: the "Loading transactions" empty panel is only shown when `result === null`. When `result !== null && dataLoading`, render the list with a loading indicator on top (thin indeterminate progress bar via CSS animation). On error during reload, render the list plus an inline error banner; do not clear `result`.
-7. **Verify** — `pnpm check`, grep for deleted symbols, line count, and a full manual pass of the acceptance criteria in the dev server.
+1. **Package skeleton.** Create `services/parsers/__init__.py`, `types.py`, `registry.py`, `implementations/__init__.py`. Write the dataclasses and protocols in `types.py`; the decorators, accessors, `autodetect_adapter`, and `discover` in `registry.py`.
+2. **Smoke-verify imports.** From the repo root: `uv run python -c "from app.backend.services.parsers import types, registry; registry.discover(); print('ok')"`. Fix any import errors before proceeding. Commit the skeleton.
+3. **Wells Fargo fixture first.** Grab a real WF CSV, sanitize payees (preserve `CHECK #` and `REF #` patterns), write to `tests/fixtures/csv_snapshots/wells_fargo/input.csv`. Run today's `normalize_csv_to_intermediate()` on it from a throwaway script or REPL, capture the output to `expected_intermediate.csv`. Commit both files.
+4. **Test file with WF only.** Write `test_csv_parser_fixtures.py` with the parameterization limited to `["wells_fargo"]`. Run `uv run pytest app/backend/tests/test_csv_parser_fixtures.py -q`. Must be green. Commit.
+5. **Alipay fixture.** GB18030, 13-row preamble, 1-row footer. Sanitize non-Latin payee text to deterministic placeholders (write a small helper if needed). Preserve BOM and line endings. Re-save in GB18030, not UTF-8. Generate expected output, commit both files, extend the test parameterization to include `alipay`, verify green.
+6. **ICBC fixture.** 7-row preamble, 2-row footer, USD+CNY mixed rows, 美元 currency indicator. Sanitize, generate expected, extend parameterization, verify green.
+7. **BJB fixture.** 1-row preamble, sign-prefix amounts, counterparty column. Sanitize, generate expected, extend parameterization, verify green.
+8. **Autodetect smoke test.** Add `test_autodetect_adapter_returns_unique_match` with the local throwaway adapter class. Verify green.
+9. **Zero-integration verification.** Run the grep commands from Acceptance Criteria. Confirm no pre-existing file was touched. Run `git diff --stat` against the branch point to verify only new files.
+10. **Final commit and Delivery Notes.** Fill in Delivery Notes below with the commit hashes, the pytest outcome (pass or pre-existing `fastapi` failure only), and any deferred fixture.
+
+Commit granularity: one commit for the package skeleton (step 1), one commit per fixture+test-extension pair (steps 3–7), one commit for the autodetect smoke test (step 8). Bisect-friendly.
 
 ## Definition of Done
 
 - All acceptance criteria met.
-- All regression risks above verified manually or by code inspection.
-- `pnpm check` passes with 0 errors and 0 warnings.
-- No `grep` hit for any deleted symbol.
-- Page stays under 600 lines.
-- No new dead code introduced — every new helper, prop, or state has a live caller.
-- The sticky filter bar and sticky day headers behave correctly across at least one "long day group scroll" manual test and one filter-change test in the dev server.
+- `services/parsers/` imports cleanly from a fresh REPL.
+- `test_csv_parser_fixtures.py` is green for every committed fixture (or fails only on the pre-existing `fastapi` environment issue, documented in Delivery Notes).
+- `Scripts/BankCSV.py`, `csv_normalizer.py`, `institution_registry.py`, `custom_csv_service.py`, and every non-`parsers/` file under `services/` is untouched.
+- No committed fixture contains identifying information beyond what a reasonable reviewer would consider sanitized.
+- The task leaves the tree in the exact state Task 1 expects: a scaffold ready to receive the intermediate writer, with golden fixtures ready to regress-test it.
 
-## UX Notes
+## Upcoming Tasks (for reference — not Task 0 scope)
 
-- **Row secondary line when empty**: always render the `<p>` with `min-height: 1.1em` (or equivalent) so row heights stay consistent between multi-account rows and single-account rows that have no secondary text or pills. Do not conditionally omit the element.
-- **Loading indicator style**: a 2px indeterminate progress bar (`animation: shimmer 1.2s linear infinite`) pinned to the top of the `.view-card` transactions section is preferred. Reserve background dimming for cases where the content is actually unreadable during load.
-- **Error banner during reload**: use the same `.error-text` style from the current first-load error path, placed inside a small inline card at the top of the transactions section. Do not use a modal or toast — the list needs to stay focal.
-- **Filter bar visual separation when pinned**: once scrolled, the sticky filter bar should look deliberately attached to the top of the viewport. A subtle bottom `box-shadow` when pinned is enough. Do not add a heavy border.
-- **Day header background**: must be opaque. If the app background is a gradient, use a solid color that matches the card background (`rgba(255, 255, 255, 0.96)` or the `.view-card` surface color). Rows bleeding through the header is the highest-severity visual bug for this feature.
-- **Accessibility**: day headers are still `<h4>` elements inside the group — no change to heading semantics. The filter bar's chip clear buttons keep their `aria-label`s. If the status chip changes from "Status: Cleared" markup to just "Cleared", make sure the chip container or its clear button has an aria-label that includes the word "status".
+1. **Task 1 — Intermediate serializer.** Write `services/parsers/intermediate_writer.py` consuming `LedgerTransaction` streams, producing the same intermediate CSV bytes as today. Cash-only (no commodity-posting rendering — Schwab is out of scope). Unit tests against the Task 0 fixtures.
+2. **Task 2 — Wells Fargo adapter + `generic.checking` translator** behind a `use_new_parser` config flag. Golden test must match the Task 0 WF fixture byte-exact before flipping the flag.
+3. **Task 3 — `generic.credit` translator.** Single-file add. No institution ports.
+4. **Task 4 — Alipay adapter.** GB18030 + 13/1 slicing. Stress-tests the adapter plumbing; may require a `BaseAdapter` refactor if per-adapter slicing duplication gets painful.
+5. **Task 5 — ICBC adapter.** USD/CNY currency-from-column, 7/2 slicing. Validates the base class from Task 4.
+6. **Task 6 — BJB adapter + derive `institution_registry` from the adapter registry.** `_REGISTRY` becomes generated state.
+7. **Task 7 — Delete `Scripts/BankCSV.py`.** Must ship as its **own isolated git commit** so the Schwab implementation is easy to locate in history if brokerage support lands later. Per-user instruction captured in project memory.
 
 ## Out of Scope
 
-- Multi-category filtering (type widen, dialog multi-select, URL serialization).
-- Stale-bookmark behavior change.
-- `pushState` vs `replaceState` for filter history.
-- Any Phase 4c polish items (live totals strip, search formula, mobile bottom sheet, keyboard shortcuts).
-- Migrating `ManualResolutionDialog` or `TransactionsExplanationHeader` off their legacy types.
-- Transfer-pair collapse.
+- Any adapter or translator implementation (Tasks 2+).
+- Intermediate writer (Task 1).
+- `csv_normalizer.py` routing changes.
+- Derivation of `institution_registry` from the adapter registry (Task 6).
+- Deletion of `Scripts/BankCSV.py` (Task 7).
+- Schwab/brokerage support in any form.
+- Autodetect-on-upload UI.
+- Plaid, SimpleFIN, GoCardless, or any aggregator adapter.
+- Privacy-oriented removal of the public "supported institutions" list.
 - Fixing the pre-existing `fastapi` pytest environment issue.
 
 ## Delivery Notes
 
-Shipped on branch `worktree-phase-4b-polish` over two commits: implementation (`0537e15`) and review fixes (`c5f45be`). `pnpm check` green (0 errors / 0 warnings, 667 files). All acceptance-criteria greps return zero matches. `+page.svelte` sits at 463 lines.
-
-One fix cycle was needed. Code review caught:
-
-- **Blocker — sticky-ancestor trap**: the transactions section had inherited `overflow-hidden` which would have broken `position: sticky` day headers (TASK.md Regression Risks called this out by name). Fixed by removing the class from the outer section and insetting the `.reload-progress` shimmer horizontally by `var(--radius-card)` so it stays clear of the card's rounded corners without needing parent clipping.
-- **Convention slip on utility-first CSS**: three simple scoped selectors (`.filter-bar-sticky` positioning, `.transactions-section { position: relative }`, `.reload-error`) were moved to Tailwind utilities. The remaining scoped CSS is justified (piercing `:global(.filter-bar)` box-shadow, `.reload-progress` keyframe+gradient). Raw rgba values on the error banner swapped for `bg-bad/10 border-bad/20` theme tokens.
-- **Status chip a11y**: `aria-label` on a non-interactive `<span>` is ignored by screen readers; replaced with a visually-hidden `"Status: "` prefix inside the chip so SRs read "Status: Cleared" instead of the ambiguous "Cleared".
-- Two low-severity tidy-ups (dropped the redundant `typeof document` SSR guard in `onDestroy` since Svelte lifecycles don't run on the server; kept the `typeof ResizeObserver` feature-detect since the task explicitly requires an old-browser fallback; replaced `.tx-secondary { min-height }` with a `min-h-[1.1em]` utility).
-
-QA verdict: **PASS** (both cycles). Review verdict: **REQUEST CHANGES** → **SHIP** after fix cycle 1.
-
-Visual verification was code-level only — no browser screenshot pass. The dev server booted clean and `/transactions` returned 200, but the sticky-scroll behavior, filter-bar wrap responsiveness, and shimmer timing should be exercised manually before merge.
+*To be filled in at task completion.*
