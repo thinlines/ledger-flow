@@ -40,3 +40,7 @@ DrCr/
 workspace/
 /.claude
 /.codex
+
+# Local planning notes kept alongside tracked task briefs
+tasks/parsers/
+tasks/parsers-cadence.md

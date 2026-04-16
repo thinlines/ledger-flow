@@ -1,426 +1,181 @@
-# Current Task
-
-**Status: COMPLETED — 2026-04-14**
+# Task 01 — Intermediate CSV Writer
 
 ## Title
 
-Adapter/translator scaffolding and golden-fixture baselines for the CSV import refactor
+Serialize `LedgerTransaction` streams into the project's intermediate CSV format byte-exact.
 
 ## Objective
 
-Establish the internal contract for the `services/parsers/` refactor (dataclasses, protocols, registry, discovery) and check in golden-fixture baselines of the current intermediate CSV output for every bank the app currently imports. After this task the repo contains a fully-wired but unused parser package, and every subsequent refactor task has a byte-exact regression oracle to test against.
+Add the serializer that Tasks 02, 04, and 05 will chain onto (adapter → translator → **writer** → bytes). The writer's output must match today's `normalize_csv_to_intermediate()` output byte-for-byte on every Task 0 golden fixture, so the SHA-256 import-identity hashes do not drift when Tasks 02+ start routing real CSVs through the new pipeline.
 
-This task ships no user-visible change. Its value is that Tasks 1–7 become safe to write because they have something to verify against.
+This task is not user-visible. Its value is that every subsequent task has a deterministic byte-level target.
 
 ## Context
 
-This is Task 0 of an 8-task backend refactor that splits `Scripts/BankCSV.py` into a two-layer adapter/translator architecture under `app/backend/services/parsers/`. The full task sequence, decisions, and rationale are captured in memory (`project_csv_parser_refactor.md`). In one-line form:
-
-- **Adapters** parse per-institution CSV text → stream of `Record` dataclasses.
-- **Translators** turn `Record`s into `LedgerTransaction`/`Posting` structures that an intermediate writer (Task 1) serializes to the same intermediate CSV format today's pipeline produces.
-
-The load-bearing constraint is **import identity hash stability** (ARCHITECTURE.md §"Import Pipeline and Identity Model"): `source_identity` and `source_payload_hash` are SHA-256 over the normalized intermediate, so any drift in the intermediate's byte-exact output makes previously imported transactions reappear as "new" on reimport. Task 0 establishes the golden fixtures that prove Tasks 1–7 didn't drift.
+Task 0 shipped golden fixtures for Wells Fargo, Alipay, and ICBC at `app/backend/tests/fixtures/csv_snapshots/<institution>/{input,expected_intermediate}.csv` and the end-to-end parameterized test `app/backend/tests/test_csv_parser_fixtures.py`. The fixtures are byte-exact records of what today's `normalize_csv_to_intermediate()` produces. This task must be able to reproduce those bytes starting from a synthesized `LedgerTransaction` stream.
 
 ## Scope
 
 ### Included
 
-**New files under `app/backend/services/parsers/`:**
+**Extend `app/backend/services/parsers/types.py`:**
 
-- `__init__.py` — empty, marks the package
-- `types.py` — `Record`, `Posting`, `LedgerTransaction` dataclasses and `Adapter`, `Translator` protocols
-- `registry.py` — `_ADAPTERS` and `_TRANSLATORS` registries, `@register_adapter` / `@register_translator` decorators, `get_adapter`, `get_translator`, `list_adapters`, `list_translators`, `autodetect_adapter`, `discover`
-- `implementations/__init__.py` — empty, marks the subpackage Tasks 2+ will populate
+- `Record`: add `balance: Decimal | None = None` and `note: str | None = None` below the existing fields. Aggregator-neutral; CSV adapters populate these when the source CSV exposes a running-balance column and a free-text note column. Leave unchanged otherwise.
+- `LedgerTransaction`: add `balance: Decimal | None = None` (mirrors the running balance of the primary tracked-account posting at the time of this transaction).
+- `Posting`: no changes.
+- `Adapter` / `Translator` protocols: no changes.
 
-**New golden fixtures under `app/backend/tests/fixtures/csv_snapshots/`:**
+**New file `app/backend/services/parsers/intermediate_writer.py`:**
 
-- `wells_fargo/input.csv` — sanitized real Wells Fargo CSV. Must exercise regular debits, regular credits, a `CHECK #` entry, a `REF #` entry, and the headerless shape.
-- `wells_fargo/expected_intermediate.csv` — byte-exact output of today's `normalize_csv_to_intermediate()` applied to `input.csv`.
-- `alipay/input.csv` — sanitized Alipay sample. Must exercise income (收入) rows, expense (支出) rows, the 13-row preamble, the 1-row footer, GB18030 encoding, and non-Latin column/payee text.
-- `alipay/expected_intermediate.csv` — byte-exact output.
-- `icbc/input.csv` — sanitized ICBC sample. Must exercise USD and CNY amounts in the same file, the 美元 currency indicator mapping to USD, the 7-row preamble, the 2-row footer, and the debit/credit split columns.
-- `icbc/expected_intermediate.csv` — byte-exact output.
-- `bank_of_beijing/input.csv` — sanitized BJB sample. Must exercise the 1-row preamble, sign-prefix amounts (`+123.45` / `-67.89`), and the counterparty-name column (对方户名).
-- `bank_of_beijing/expected_intermediate.csv` — byte-exact output.
+```python
+from __future__ import annotations
+from collections.abc import Iterable, Sequence
+from io import StringIO
 
-**New test file under `app/backend/tests/`:**
+from .types import LedgerTransaction
 
-- `test_csv_parser_fixtures.py` — one parameterized test `test_fixture_reproduces_expected_intermediate(institution)` that runs the current `normalize_csv_to_intermediate()` against each fixture's `input.csv` and asserts byte-exact equality with `expected_intermediate.csv`. Plus one small unit test for `autodetect_adapter()` using a local throwaway adapter class.
+INTERMEDIATE_FIELDNAMES: tuple[str, ...] = (
+    "date", "code", "description", "amount", "total", "note",
+)
+
+
+def write_intermediate(
+    transactions: Iterable[LedgerTransaction],
+    *,
+    fieldnames: Sequence[str] = INTERMEDIATE_FIELDNAMES,
+) -> str:
+    """Serialize LedgerTransactions to the project's intermediate CSV format.
+
+    Contract:
+    - Ordering: writes transactions in the order received. Callers that need
+      newest-first ordering (the legacy convention) reverse before passing.
+    - Line endings: CRLF (Python csv.DictWriter default in text mode).
+    - Encoding: returns str; caller encodes to UTF-8 if bytes are needed.
+    - Columns: writes exactly `fieldnames` as the header row; LedgerTransactions
+      that carry fields outside this list have them dropped.
+    - Amount/total formatting: see module docstring.
+    """
+```
+
+Formatting rules the writer implements (these mirror the behavior of today's `BankCSV.amount()`, `BankCSV.total()`, and `BankCSV.currency()` across the shipped fixtures):
+
+- **Primary-posting selection.** For each `LedgerTransaction`, the posting whose `account` equals the translator's tracked-account argument is the primary posting; the writer renders its `amount` as the `amount` column. If a translator emits `LedgerTransaction.postings[0]` as the tracked-account posting by convention, the writer can rely on that — document the convention and enforce it in the translator tests.
+- **Amount cell.** `{commodity}{amount:.2f}` when `len(commodity) == 1` (e.g., `$-1000.00`). `{amount:.2f}{commodity}` when `len(commodity) > 1` (e.g., `-9.90CNY`, `-12.34USD`). Sign is preserved; negative numbers render as `$-1000.00`, not `-$1000.00`, to match the current fixtures.
+- **Total cell.** Formatted the same way as amount BUT uses thousand separators: `{commodity}{balance:,.2f}` or `{balance:,.2f}{commodity}`. If `LedgerTransaction.balance` is `None`, the cell is emitted empty (this is the Wells Fargo case; the WF fixture has empty totals throughout).
+- **Date cell.** `YYYY/MM/DD` (forward slashes). Matches `LedgerTransaction.date.strftime("%Y/%m/%d")`.
+- **Code cell.** `LedgerTransaction.code` or empty string if `None`.
+- **Description cell.** `LedgerTransaction.payee`. No prefix, no trimming.
+- **Note cell.** `LedgerTransaction.note` or empty string if `None`.
+
+The `:f` vs `:,f` split (amount no thousand sep, total with thousand sep) is a historical quirk inherited from `BankCSV.amount()` vs `BankCSV.total()`. Capture it in comments tied to the specific fixtures it reproduces; post-refactor normalization is out of scope for this task.
+
+**New file `app/backend/tests/test_intermediate_writer.py`:**
+
+Unit tests covering:
+
+- Empty iterable → single header row with CRLF terminator.
+- Single transaction with 1-char commodity (`"$"`) and positive amount, negative amount, amount with cents → matches literal byte string.
+- Single transaction with multi-char commodity (`"CNY"`, `"USD"`) → suffix format matches literal byte string.
+- Transaction with `balance=None` → empty total cell.
+- Transaction with `balance` that crosses the thousand mark → comma-separated total, properly CSV-quoted because of the embedded comma.
+- Multiple transactions → ordering preserved (no reversal by the writer).
+- Transaction with `note=None` → empty note cell; transaction with `note="CHECK # 281"` → literal note cell.
+
+Each test asserts `write_intermediate(...).encode("utf-8") == b"<literal>"`. Byte-level, not string-level.
 
 ### Explicitly excluded
 
-- **No modification to `csv_normalizer.py`, `institution_registry.py`, `custom_csv_service.py`, `import_service.py`, or `Scripts/BankCSV.py`.** The new `services/parsers/` package exists alongside them with zero integration.
-- **No adapter or translator implementations.** `implementations/` is empty in this task. Tasks 2+ populate it.
-- **No intermediate writer.** That's Task 1.
-- **No changes to import identity, import service, import profile, import history, or any route handler.**
-- **No removal of any legacy code.** Everything `Scripts/BankCSV.py` does today keeps working unchanged.
-- **No securities/brokerage fields on `Record`** (`action`, `symbol`, `quantity`, `price`, `fees`). Deferred until brokerage support is a real feature.
-- **No aggregator adapter** (Plaid/SimpleFIN/GoCardless). `Record` reserves fields for future aggregators but no aggregator code exists in this task.
-- **No frontend changes whatsoever.**
-- **No call to `discover()` from app startup.** The function exists so Tasks 2+ can call it from `csv_normalizer.py`; until then nothing invokes it.
+- No adapter or translator implementations. This task ships the writer alone.
+- No wiring into `csv_normalizer.py` — the legacy pipeline keeps running unchanged. Task 02 adds the dispatch seam.
+- No commodity-style postings (stocks, securities). The `Posting.price` / `Posting.commodity` round-trip for multi-commodity transactions is out of scope; Schwab is being deleted in Task 07.
+- No modifications to the existing `test_csv_parser_fixtures.py` — the end-to-end oracle is unchanged and untouched.
+- No changes to `csv_normalizer.py`, `custom_csv_service.py`, `institution_registry.py`, `Scripts/BankCSV.py`, or any route handler.
+- No support for variable `fieldnames` beyond the default tuple — the `fieldnames` parameter exists for future use (Schwab-style `symbol`/`price` columns) but is not exercised in tests.
 
 ## System Behavior
 
-### Inputs
+**Inputs:** an `Iterable[LedgerTransaction]` from a caller (translator output).
 
-- Developer runs `uv run pytest app/backend/tests/test_csv_parser_fixtures.py -q`
-- Developer imports `app.backend.services.parsers` from a REPL or another test
-- No user-facing input; this task has no runtime surface
+**Logic:** for each transaction, build a `dict` keyed by `INTERMEDIATE_FIELDNAMES`, applying the formatting rules above. Feed through `csv.DictWriter(out, fieldnames=fieldnames, extrasaction="ignore")`. `out` is a `StringIO`. Return `out.getvalue()`.
 
-### Logic
-
-**`services/parsers/types.py`:**
-
-```python
-from __future__ import annotations
-from dataclasses import dataclass, field
-from datetime import date
-from decimal import Decimal
-from typing import Any, Iterator, Protocol, runtime_checkable
-
-
-@dataclass
-class Record:
-    """Normalized output from an Adapter, input to a Translator.
-
-    Cash fields are signed from the account holder's perspective:
-    positive = money in, negative = money out.
-    """
-    date: date
-    description: str
-
-    amount: Decimal | None = None
-    currency: str = "USD"
-    counterparty: str | None = None
-    code: str | None = None
-    effective_date: date | None = None
-
-    # Reserved for future aggregator adapters (Plaid, SimpleFIN, GoCardless).
-    # CSV adapters leave these as defaults.
-    provider_id: str | None = None
-    pending: bool = False
-    suggested_category: str | None = None
-    provider_payee: str | None = None
-
-    raw: dict[str, Any] = field(default_factory=dict)
-
-
-@dataclass
-class Posting:
-    account: str
-    amount: Decimal | None = None
-    commodity: str | None = None
-    price: Decimal | None = None
-
-
-@dataclass
-class LedgerTransaction:
-    date: date
-    payee: str
-    postings: list[Posting]
-    effective_date: date | None = None
-    code: str | None = None
-    note: str | None = None
-
-
-@runtime_checkable
-class Adapter(Protocol):
-    name: str
-    institution: str
-    formats: tuple[str, ...]
-
-    def parse(self, text: str) -> Iterator[Record]: ...
-    # matches(text, filename) -> bool is optional; adapters may omit it.
-    # Account binding is the routing mechanism; autodetect is a future feature.
-
-
-@runtime_checkable
-class Translator(Protocol):
-    name: str
-
-    def translate(self, record: Record, account: str) -> LedgerTransaction: ...
-```
-
-Notes:
-- `parse()` takes `text: str`, not `bytes` — `csv_normalizer.py` continues to own encoding and head/tail slicing (Option B).
-- No securities fields on `Record`. Aggregator fields (`provider_id`, `pending`, `suggested_category`, `provider_payee`) default to None/False so CSV adapters can ignore them entirely.
-- `matches()` is documented as optional in a comment, not in the protocol — Python's `Protocol` doesn't express optional methods cleanly. `autodetect_adapter()` uses `getattr(adapter, "matches", None)` to handle its absence.
-
-**`services/parsers/registry.py`:**
-
-```python
-from __future__ import annotations
-import importlib
-import pkgutil
-from typing import Optional
-
-from .types import Adapter, Translator
-
-_ADAPTERS: dict[str, Adapter] = {}
-_TRANSLATORS: dict[str, Translator] = {}
-
-
-def register_adapter(cls):
-    """Class decorator: instantiate and register an Adapter."""
-    instance = cls()
-    if instance.name in _ADAPTERS:
-        raise RuntimeError(f"Duplicate adapter name: {instance.name!r}")
-    _ADAPTERS[instance.name] = instance
-    return cls
-
-
-def register_translator(cls):
-    """Class decorator: instantiate and register a Translator."""
-    instance = cls()
-    if instance.name in _TRANSLATORS:
-        raise RuntimeError(f"Duplicate translator name: {instance.name!r}")
-    _TRANSLATORS[instance.name] = instance
-    return cls
-
-
-def get_adapter(name: str) -> Adapter:
-    return _ADAPTERS[name]
-
-
-def get_translator(name: str) -> Translator:
-    return _TRANSLATORS[name]
-
-
-def list_adapters() -> list[Adapter]:
-    return list(_ADAPTERS.values())
-
-
-def list_translators() -> list[Translator]:
-    return list(_TRANSLATORS.values())
-
-
-def autodetect_adapter(text: str, filename: str) -> Optional[Adapter]:
-    """Reserved for future autodetect-on-upload. Walks adapters that define
-    a matches() method and returns the unique match, or None if 0 or >1 match.
-    """
-    hits = []
-    for adapter in _ADAPTERS.values():
-        matcher = getattr(adapter, "matches", None)
-        if matcher is not None and matcher(text, filename):
-            hits.append(adapter)
-    return hits[0] if len(hits) == 1 else None
-
-
-def discover() -> None:
-    """Import every parsers/implementations/<name> subpackage so that
-    @register_adapter and @register_translator decorators execute."""
-    from . import implementations
-    for _, name, is_pkg in pkgutil.iter_modules(implementations.__path__):
-        if is_pkg:
-            importlib.import_module(f"{implementations.__name__}.{name}")
-```
-
-`registry.py` imports only from `.types` and the standard library. No reverse dependency from `registry.py` to any implementation — `discover()` imports `implementations` lazily inside the function body.
-
-**Golden-fixture generation (one-shot, not committed code):**
-
-For each bank, the author:
-1. Copies a real CSV from the workspace to a working directory.
-2. Sanitizes the input: replace payee text with deterministic placeholders (`PAYEE_001`, `PAYEE_002`, ...), strip account numbers, preserve code-extraction patterns (`REF #XXXXX`, `CHECK #NNN`) literally, preserve the BOM and line endings exactly as the real file has them, preserve the original encoding (GB18030 for Alipay — write back as GB18030, not UTF-8).
-3. Runs today's `normalize_csv_to_intermediate(config, sanitized_path, account_cfg)` with a minimal `AppConfig` and `account_cfg` that point at the sanitized input.
-4. Captures the returned string to `expected_intermediate.csv`.
-5. Commits both files under `tests/fixtures/csv_snapshots/<institution>/`.
-
-Sanitization happens on the *input* first; the expected output is then regenerated from the sanitized input, never hand-edited.
-
-**`test_csv_parser_fixtures.py`:**
-
-```python
-import pytest
-from pathlib import Path
-
-FIXTURES_DIR = Path(__file__).parent / "fixtures" / "csv_snapshots"
-INSTITUTIONS = ["wells_fargo", "alipay", "icbc", "bank_of_beijing"]
-
-
-@pytest.mark.parametrize("institution", INSTITUTIONS)
-def test_fixture_reproduces_expected_intermediate(institution):
-    from app.backend.services.csv_normalizer import normalize_csv_to_intermediate
-    # Load fixture, construct minimal AppConfig and account_cfg pointing at
-    # the fixture input, invoke normalize_csv_to_intermediate, and assert
-    # byte-exact equality with the fixture's expected_intermediate.csv.
-    ...
-
-
-def test_autodetect_adapter_returns_unique_match():
-    from app.backend.services.parsers import registry
-    from app.backend.services.parsers.types import Record
-
-    class _FakeAdapter:
-        name = "fake.test"
-        institution = "fake"
-        formats = ("csv",)
-        def parse(self, text): return iter([])
-        def matches(self, text, filename): return filename == "fake.csv"
-
-    try:
-        registry.register_adapter(_FakeAdapter)
-        assert registry.autodetect_adapter("", "fake.csv").name == "fake.test"
-        assert registry.autodetect_adapter("", "other.csv") is None
-    finally:
-        registry._ADAPTERS.pop("fake.test", None)
-```
-
-The exact `AppConfig` + `account_cfg` shape is whatever `csv_normalizer.py` expects today — the test is a characterization test against the current pipeline, not a unit test of the new parser package.
-
-### Outputs
-
-- New Python package at `app/backend/services/parsers/` with `types.py`, `registry.py`, and two empty `__init__.py` files. Importable but unused by the running backend.
-- Four golden-fixture directories under `app/backend/tests/fixtures/csv_snapshots/` with sanitized `input.csv` and `expected_intermediate.csv` for each of Wells Fargo, Alipay, ICBC, Bank of Beijing.
-- One new test file that runs the current pipeline against each fixture and asserts byte-exact output, plus a smoke test for `autodetect_adapter`.
-- **Zero changes to any pre-existing file.** `git diff` on anything outside `services/parsers/` and `tests/fixtures/csv_snapshots/` and `tests/test_csv_parser_fixtures.py` is empty.
+**Outputs:** a `str` containing the full CSV document (header + rows), CRLF-terminated, UTF-8-safe (only ASCII + whatever characters the payee/note text carries).
 
 ## System Invariants
 
-- `services/csv_normalizer.py`, `services/institution_registry.py`, `services/custom_csv_service.py`, `Scripts/BankCSV.py`, and every import-pipeline consumer remain byte-identical after this task.
-- Import identity (`source_identity`, `source_payload_hash`) is untouched. This task ships no code path that produces intermediate CSV output — it only records what the existing code path produces.
-- The new `services/parsers/` package is not imported from anywhere in the running backend. It's only reachable through `pytest` or a deliberate REPL import. No API routes, no startup hooks, no implicit discovery.
-- `discover()` is not called anywhere in the app's startup path in this task. It exists for Tasks 2+ to invoke from `csv_normalizer.py` once adapters exist to discover.
-- The golden fixtures are sanitized. No real payee names, no real account numbers, no recognizable real-world merchants in the committed files. Real amounts and dates are acceptable only if they're not personally identifying in combination with the sanitized payees.
-- `Record` reserves aggregator-friendly fields (`provider_id`, `pending`, `suggested_category`, `provider_payee`) with safe defaults. Tasks 2–7 must not remove these fields.
+- The intermediate CSV format is a byte-exact regression target. Any change to the writer's output format invalidates every previously imported transaction's `source_identity` hash. This task's entire reason to exist is preserving that invariant.
+- The writer does not know about institutions or account configs. It consumes only `LedgerTransaction`. All institution-specific knowledge lives upstream (adapter, translator).
+- No file I/O. The writer returns a string; the caller writes to disk or stdin if needed.
+- No dependency on the legacy `Scripts/BankCSV.py`. The writer is self-contained.
+- `LedgerTransaction.postings` can have any length ≥ 2. The writer only renders the primary posting's amount; additional postings (the other side of the double-entry, opening-balance stubs, fee splits) are not visible in the intermediate CSV — they are synthesized later by `ledger convert`.
 
 ## States
 
-Not applicable. This task ships no UI, no user-visible state, no runtime behavior, no failure modes that a user would perceive.
+Not applicable — no UI, no runtime state.
 
 ## Edge Cases
 
-- **Real CSV unavailable for a bank.** If the author doesn't have a real sample on hand for a given bank, that fixture is blocked on obtaining one. Deferring one bank is acceptable if the deferred bank is noted in Delivery Notes, but the task does not ship without fixtures for at least **Wells Fargo + one Chinese bank** (ICBC or Alipay). Those two cover the two hardest existing code paths: headerless CSV and GB18030-encoded preamble-heavy CSV.
-- **Sanitization breaks code-extraction patterns.** Replacing payee text with placeholders may accidentally remove the `REF #XXXXX` or `CHECK #NNN` patterns that `WellsFargoCSV.code()` depends on. Verify post-sanitization that each code-extraction branch (REF, CHECK, fallback-to-note, fallback-to-empty) is exercised by at least one row.
-- **BOM handling.** Alipay files often begin with a UTF-8 or GB18030 BOM. The sanitized fixture must preserve the BOM exactly as the real file has it — stripping it silently makes today's parser produce different output on the fixture than on real files, and the baseline becomes worthless.
-- **Trailing newline and line endings.** Some banks end their CSV with `\n`, some with `\r\n`, some with neither. The fixture must preserve whatever the real file has. Do not let an editor "tidy up" line endings during sanitization.
-- **Encoding round-trip.** When saving a sanitized Alipay input back to disk, it must be written in GB18030, not UTF-8. Writing it as UTF-8 and then pointing the parser at it silently produces different output because the non-Latin column names decode wrong.
-- **Deterministic placeholder collisions.** If sanitization replaces two distinct real payees with the same placeholder (e.g., both become `PAYEE_001`), the intermediate output still reproduces deterministically — but the fixture loses coverage of a duplicate-payee case. If the original file had rows that depended on unique payee text, use distinct placeholders.
+- **`LedgerTransaction.balance == None`.** Emit empty total cell. (Wells Fargo fixture exercise.)
+- **Balance crosses thousand boundary.** Emit with comma thousand separator; csv.DictWriter auto-quotes cells containing commas, matching ICBC fixture's `"2,568.44CNY"`.
+- **Commodity is a 1-char symbol like `"$"`.** Prefix format.
+- **Commodity is a 3-letter ISO code like `"USD"` or `"CNY"`.** Suffix format.
+- **Commodity is an empty string or `None`.** Not expected from a well-formed translator. Fail loudly (raise `ValueError`) rather than emit ambiguous output.
+- **Amount has more than 2 decimal places.** `:.2f` rounds to 2 — matches legacy. If the source CSV has sub-cent precision, legacy drops it; writer does the same.
+- **Negative balance.** Renders as `$-2,568.44` or `-2,568.44CNY`. Sign handled identically to amount.
+- **Empty description (payee).** Emit empty cell. Not synthesized.
 
 ## Failure Behavior
 
-- **Golden test fails on first run.** The fixture was generated incorrectly — sanitization broke something, encoding mismatched, BOM missing, line endings changed. Fix the fixture, never touch the parser. The test's purpose is to catch author errors before Tasks 1+ rely on the baseline.
-- **Import of `services.parsers` fails at module load.** `types.py` or `registry.py` has a syntax error or a circular import. Fix before landing.
-- **`discover()` raises on empty `implementations/`.** `pkgutil.iter_modules` must return an empty iterator on an empty directory, not raise. Verify in a REPL before landing.
-- **Sanitization leaks real data into the repo.** Hard failure — revert the commit, regenerate the fixture, re-verify. Treat fixture files with the same care as logs or backups: once committed, assume they're discoverable.
-- **Pre-existing pytest environment issue.** Phase 4b's TASK.md noted that `uv run pytest -q` currently fails on `ModuleNotFoundError: fastapi` in some environments. If the author hits this, the test file still lands; acceptance degrades to "pytest collects and runs the new test file, and the only failures are the same pre-existing environment issue, not new ones caused by this branch." Document it in Delivery Notes if it happens.
+- **Empty commodity.** Raise `ValueError("LedgerTransaction posting commodity is required")`. Translator bugs must surface loudly.
+- **Primary-posting amount is `None`.** Raise `ValueError("Primary posting amount is required")`. Same rationale.
+- **Non-`Decimal` amount.** Raise `TypeError`. Do not silently coerce — translator must emit `Decimal`.
+- **Caller passes a wrong `fieldnames` that omits required columns like `"amount"`.** Let `csv.DictWriter` raise whatever it raises — no custom validation beyond what the stdlib provides.
 
 ## Regression Risks
 
-- **Accidental integration.** Importing `services.parsers` from `csv_normalizer.py` or any other existing service at any point in this task would break its "zero-integration scaffolding" posture. Verification: `grep -rE "from .parsers|from app.backend.services.parsers|import parsers" app/backend/services/ --include='*.py'` returns matches only inside `services/parsers/` itself.
-- **Circular import when `implementations/` grows later.** `registry.py` must only import from `.types` and the standard library. `discover()` must import `implementations` lazily inside its function body, not at module top-level. If `registry.py` ever imports an implementation module eagerly, Tasks 2+ will hit circular-import errors.
-- **Golden fixtures drift between now and Task 7.** The committed baseline assumes `Scripts/BankCSV.py` is frozen. If someone patches `BankCSV.py` between this task and Task 7, Tasks 2+ will fail against a stale fixture even though they're correct. Mitigation: the `Scripts/BankCSV.py` file should be treated as frozen for the duration of the refactor; if a bug fix is needed there, regenerate the affected fixture in the same commit.
-- **`autodetect_adapter` is dead code in this task.** It's included because Tasks 2+ will eventually need it and it's cheap to write now. A bug would hide until autodetect becomes a real feature. Mitigation: the `test_autodetect_adapter_returns_unique_match` smoke test above exercises the register/detect/cleanup path.
-- **Fixture pollution from the smoke test.** If `_FakeAdapter` isn't cleaned up after `test_autodetect_adapter_returns_unique_match`, subsequent tests might see it in the registry. Mitigation: the test wraps registration in `try/finally` and pops the fake from `_ADAPTERS` after the assertions.
-- **Schwab fixture missing by design.** The current `Scripts/BankCSV.py` supports Schwab, but Task 0 does not generate a Schwab fixture because Schwab is out of scope for the full refactor. If a reviewer expects fixtures for every bank in `institution_registry._REGISTRY`, remind them that Schwab gets deleted in Task 7 and fixtures for deleted paths are wasted work.
+- **Drift from legacy byte output.** The only honest verification is running the writer against real fixtures end-to-end (Task 02 starts doing this). This task's tests exercise the formatting rules in isolation; they cannot prove byte-exactness against real CSVs by themselves. Mitigation: the unit tests use byte strings derived from literal excerpts of the Task 0 fixtures (pull 2–3 rows from each fixture, hand-construct the LedgerTransaction that produces them, assert the writer emits those exact bytes).
+- **Accidental UTF-8 BOM.** `StringIO` + `csv.DictWriter` does not add a BOM; writing `out.getvalue().encode("utf-8")` produces BOM-less bytes. Verify in the tests.
+- **CRLF vs LF line endings.** `csv.DictWriter` uses CRLF by default when given a text-mode StringIO. Verify with `\r\n` checks in the tests; do not open the StringIO with `newline=""` — that would drop the CRLF conversion.
+- **Thousand-separator inconsistency.** Rule is: amount no thousand sep, total thousand sep. Easy to invert. Tests must cover both.
+- **Breaking Task 0's test.** The parameterized test still routes through the legacy `normalize_csv_to_intermediate()` in this task. It must stay green. Do not touch `test_csv_parser_fixtures.py`.
+- **Regression in `types.py`.** Adding fields to `Record` and `LedgerTransaction` is additive; no existing consumer reads the new fields. Verify: `grep -rE "Record\(|LedgerTransaction\(" app/backend/` returns no call sites outside `types.py` (Task 0 did not introduce any).
 
 ## Acceptance Criteria
 
-- `app/backend/services/parsers/__init__.py`, `types.py`, `registry.py`, and `implementations/__init__.py` exist.
-- `uv run python -c "from app.backend.services.parsers import types, registry; registry.discover(); print('ok')"` prints `ok` from the repo root.
-- `Record`, `Posting`, `LedgerTransaction`, `Adapter`, `Translator` are all importable from `app.backend.services.parsers.types`.
-- `Record` has all fields listed in the Logic section, including the aggregator-friendly fields `provider_id`, `pending`, `suggested_category`, `provider_payee` with their documented defaults.
-- `register_adapter`, `register_translator`, `get_adapter`, `get_translator`, `list_adapters`, `list_translators`, `autodetect_adapter`, `discover` are all importable from `app.backend.services.parsers.registry`.
-- Golden fixtures exist under `app/backend/tests/fixtures/csv_snapshots/` for `wells_fargo`, `alipay`, `icbc`, and `bank_of_beijing` (or at least Wells Fargo + one Chinese bank, with the deferred fixtures documented in Delivery Notes). Each directory contains both `input.csv` and `expected_intermediate.csv`.
-- `test_csv_parser_fixtures.py` runs. Every shipped fixture is green. The only acceptable failure is the pre-existing `fastapi` environment issue from Phase 4b, documented in Delivery Notes.
-- `grep -rE "from .parsers|from app.backend.services.parsers|import parsers" app/backend/services/ --include='*.py' | grep -v 'services/parsers/'` returns no matches.
-- `git diff --stat HEAD~N -- 'app/backend/services/' ':!app/backend/services/parsers/'` shows zero pre-existing backend service files modified (for appropriate N covering this task's commits).
+- `Record.balance: Decimal | None = None`, `Record.note: str | None = None`, `LedgerTransaction.balance: Decimal | None = None` all importable from `app.backend.services.parsers.types`.
+- `write_intermediate` and `INTERMEDIATE_FIELDNAMES` importable from `app.backend.services.parsers.intermediate_writer`.
+- `uv run python -c "from app.backend.services.parsers.intermediate_writer import write_intermediate; print(write_intermediate([]))"` prints exactly `date,code,description,amount,total,note\r\n` (with a literal CRLF).
+- `uv run pytest app/backend/tests/test_intermediate_writer.py -q` is green.
+- `uv run pytest app/backend/tests/test_csv_parser_fixtures.py -q` is still green (unchanged; legacy pipeline still owns it).
+- `grep -rE "from .*intermediate_writer|import intermediate_writer" app/backend/` returns hits only in this task's own test file (the writer is not yet wired into the runtime).
+- `git diff --stat HEAD~N -- 'app/backend/services/' ':!app/backend/services/parsers/'` shows zero files modified outside `services/parsers/`.
 - `git diff --stat HEAD~N -- Scripts/` shows zero changes.
-- Spot-check: grep a committed fixture for any name, merchant, or account number the author recognizes from real usage. No hits.
 
 ## Proposed Sequence
 
-1. **Package skeleton.** Create `services/parsers/__init__.py`, `types.py`, `registry.py`, `implementations/__init__.py`. Write the dataclasses and protocols in `types.py`; the decorators, accessors, `autodetect_adapter`, and `discover` in `registry.py`.
-2. **Smoke-verify imports.** From the repo root: `uv run python -c "from app.backend.services.parsers import types, registry; registry.discover(); print('ok')"`. Fix any import errors before proceeding. Commit the skeleton.
-3. **Wells Fargo fixture first.** Grab a real WF CSV, sanitize payees (preserve `CHECK #` and `REF #` patterns), write to `tests/fixtures/csv_snapshots/wells_fargo/input.csv`. Run today's `normalize_csv_to_intermediate()` on it from a throwaway script or REPL, capture the output to `expected_intermediate.csv`. Commit both files.
-4. **Test file with WF only.** Write `test_csv_parser_fixtures.py` with the parameterization limited to `["wells_fargo"]`. Run `uv run pytest app/backend/tests/test_csv_parser_fixtures.py -q`. Must be green. Commit.
-5. **Alipay fixture.** GB18030, 13-row preamble, 1-row footer. Sanitize non-Latin payee text to deterministic placeholders (write a small helper if needed). Preserve BOM and line endings. Re-save in GB18030, not UTF-8. Generate expected output, commit both files, extend the test parameterization to include `alipay`, verify green.
-6. **ICBC fixture.** 7-row preamble, 2-row footer, USD+CNY mixed rows, 美元 currency indicator. Sanitize, generate expected, extend parameterization, verify green.
-7. **BJB fixture.** 1-row preamble, sign-prefix amounts, counterparty column. Sanitize, generate expected, extend parameterization, verify green.
-8. **Autodetect smoke test.** Add `test_autodetect_adapter_returns_unique_match` with the local throwaway adapter class. Verify green.
-9. **Zero-integration verification.** Run the grep commands from Acceptance Criteria. Confirm no pre-existing file was touched. Run `git diff --stat` against the branch point to verify only new files.
-10. **Final commit and Delivery Notes.** Fill in Delivery Notes below with the commit hashes, the pytest outcome (pass or pre-existing `fastapi` failure only), and any deferred fixture.
+1. **Extend `types.py`.** Add the three fields. Verify `uv run python -c "from app.backend.services.parsers.types import Record, LedgerTransaction; Record(date=..., description='x'); LedgerTransaction(date=..., payee='x', postings=[])"` constructs cleanly with defaults. Commit.
+2. **Draft `intermediate_writer.py`** with the formatting rules and docstring. Commit.
+3. **Write `test_intermediate_writer.py`** with byte-literal assertions for the edge cases listed above. Iterate until green. Commit.
+4. **Cross-check against Task 0 fixtures.** For Wells Fargo, hand-construct 2–3 `LedgerTransaction` instances from the first 2–3 rows of `wells_fargo/expected_intermediate.csv` and assert the writer reproduces those rows. Same for Alipay and ICBC (cover both prefix and suffix commodities). Add these as part of `test_intermediate_writer.py`. Commit.
+5. **Verify zero integration.** Run the `grep` and `git diff --stat` commands from Acceptance Criteria. Commit any needed delivery notes.
 
-Commit granularity: one commit for the package skeleton (step 1), one commit per fixture+test-extension pair (steps 3–7), one commit for the autodetect smoke test (step 8). Bisect-friendly.
+Commit granularity: one commit for types.py; one commit for the writer module; one commit for the tests; one commit for the fixture-cross-check tests. Bisect-friendly.
 
 ## Definition of Done
 
-- All acceptance criteria met.
-- `services/parsers/` imports cleanly from a fresh REPL.
-- `test_csv_parser_fixtures.py` is green for every committed fixture (or fails only on the pre-existing `fastapi` environment issue, documented in Delivery Notes).
-- `Scripts/BankCSV.py`, `csv_normalizer.py`, `institution_registry.py`, `custom_csv_service.py`, and every non-`parsers/` file under `services/` is untouched.
-- No committed fixture contains identifying information beyond what a reasonable reviewer would consider sanitized.
-- The task leaves the tree in the exact state Task 1 expects: a scaffold ready to receive the intermediate writer, with golden fixtures ready to regress-test it.
+- All Acceptance Criteria met.
+- Byte-exact reproduction verified against at least three fixture excerpts (WF, Alipay, ICBC).
+- No file outside `app/backend/services/parsers/` or `app/backend/tests/` modified.
+- `types.py` changes are purely additive; no existing field renamed or repositioned.
+- `test_csv_parser_fixtures.py` still green.
 
-## Upcoming Tasks (for reference — not Task 0 scope)
+## Dependencies
 
-1. **Task 1 — Intermediate serializer.** Write `services/parsers/intermediate_writer.py` consuming `LedgerTransaction` streams, producing the same intermediate CSV bytes as today. Cash-only (no commodity-posting rendering — Schwab is out of scope). Unit tests against the Task 0 fixtures.
-2. **Task 2 — Wells Fargo adapter + `generic.checking` translator** behind a `use_new_parser` config flag. Golden test must match the Task 0 WF fixture byte-exact before flipping the flag.
-3. **Task 3 — `generic.credit` translator.** Single-file add. No institution ports.
-4. **Task 4 — Alipay adapter.** GB18030 + 13/1 slicing. Stress-tests the adapter plumbing; may require a `BaseAdapter` refactor if per-adapter slicing duplication gets painful.
-5. **Task 5 — ICBC adapter.** USD/CNY currency-from-column, 7/2 slicing. Validates the base class from Task 4.
-6. **Task 6 — BJB adapter + derive `institution_registry` from the adapter registry.** `_REGISTRY` becomes generated state.
-7. **Task 7 — Delete `Scripts/BankCSV.py`.** Must ship as its **own isolated git commit** so the Schwab implementation is easy to locate in history if brokerage support lands later. Per-user instruction captured in project memory.
+None — this task lands on master directly.
 
 ## Out of Scope
 
-- Any adapter or translator implementation (Tasks 2+).
-- Intermediate writer (Task 1).
-- `csv_normalizer.py` routing changes.
-- Derivation of `institution_registry` from the adapter registry (Task 6).
-- Deletion of `Scripts/BankCSV.py` (Task 7).
-- Schwab/brokerage support in any form.
-- Autodetect-on-upload UI.
-- Plaid, SimpleFIN, GoCardless, or any aggregator adapter.
-- Privacy-oriented removal of the public "supported institutions" list.
-- Fixing the pre-existing `fastapi` pytest environment issue.
-
-## Delivery Notes
-
-**Status: COMPLETE — landed 2026-04-14**
-
-### Commits (in order)
-
-1. `4c2e9b5` — `feat(parsers): scaffold services/parsers package skeleton`
-2. `9b05815` — `test(parsers): add Wells Fargo golden fixture for CSV import refactor`
-3. `20187fd` — `test(parsers): add Alipay golden fixture (GB18030 + 13/1 slicing)`
-4. `a8a0066` — `test(parsers): add ICBC golden fixture (USD+CNY mixed currency)`
-5. `4dc4daf` — `test(parsers): add autodetect_adapter smoke test`
-6. (this commit) — `docs: record Task 0 delivery notes`
-
-### Fixtures shipped vs deferred
-
-- **Wells Fargo** — shipped. Sourced from `workspace/imports/processed/2026/wells_fargo_checking_4770/2026__wells_fargo_checking_4770__Checking1-1-036de688-74786d4a218f.csv` (the file with the broadest pattern coverage). Exercises regular debits, regular credits, multiple `REF #` rows, and three `CHECK #` rows where the bank populates the note column. **Gap:** the `CHECK # in description with empty note` branch of `WellsFargoCSV.code()` is not exercised — the source data never produces that shape (every CHECK row in the real export populates the note column with the check number, so branch 1 always fires before branch 3). I chose not to synthesize a row to cover that branch because synthetic rows in a regression-oracle fixture are worse than a documented gap. Tasks 2 and beyond should add a unit test for that branch directly against the new Wells Fargo adapter once it lands.
-- **Alipay** — shipped. Sourced from `workspace/imports/2024-alipay.csv`. Encoded as GB18030, LF line endings, 13-row preamble, 1-row footer. Body trimmed from 233 source rows to 12 representative rows (3 income / 9 expense), enough to exercise the income/expense split-column branches without inflating the fixture file.
-- **ICBC** — shipped. Sourced from `workspace/imports/2025-icbc.csv`. Encoded as UTF-8 with BOM, CRLF line endings, 7-row preamble, 2-row footer. The source file is CNY-only, so a single synthetic USD row was added at the top of the body to exercise the `美元 -> USD` branch in `IcbcCSV.currency()` and the USD path in `IcbcCSV.amount()`. Without it the regression oracle would not catch a refactor that broke the USD mapping. Body has 6 rows total: 1 USD expense, 4 CNY expense (different shapes), 1 CNY income (退款) row.
-- **Bank of Beijing** — **deferred**. Reason: no BJB sample on this machine. The fixture will land with Task 6 (BJB adapter) so the sanitization, generation, and characterization can happen against a real source file when one becomes available. The senior-developer brief explicitly authorized this deferral.
-
-### Verification outcomes
-
-All Acceptance Criteria checks pass. Literal stdout is reproduced in the agent report.
-
-- `uv run python -c "from app.backend.services.parsers import types, registry; registry.discover(); print('ok')"` → `ok`
-- `uv run pytest app/backend/tests/test_csv_parser_fixtures.py -q` → `4 passed in 0.02s` (3 fixture parametrizations + 1 autodetect smoke test)
-- `grep -rE "from .parsers|from app.backend.services.parsers|import parsers" app/backend/services/ --include='*.py' | grep -v 'services/parsers/'` → empty (no integration into pre-existing services)
-- `git diff --stat 08e64a4..HEAD` → only new files under `app/backend/services/parsers/`, `app/backend/tests/fixtures/csv_snapshots/`, and `app/backend/tests/test_csv_parser_fixtures.py`, plus this Delivery Notes block. Zero pre-existing backend service files modified, zero `Scripts/` changes.
-- Spot-grep for real-world identifiers in committed fixtures (merchant names, account fragments, holder name) → empty. Sanitization is clean.
-
-### Pre-existing environment issue
-
-Confirmed: running `uv run pytest app/backend/tests/ -q` aborts collection because `test_unknown_stage_resume.py` and `test_workspace_bootstrap.py` import `main`, which imports `fastapi`, which is not installed in this environment. This is the same pre-existing issue Phase 4b documented; it is unrelated to this branch. With those two test modules excluded (`--ignore=app/backend/tests/test_unknown_stage_resume.py --ignore=app/backend/tests/test_workspace_bootstrap.py`), the full backend suite passes (282 tests). The new fixture test file runs cleanly in isolation and does not introduce any new failure.
-
-### Ambiguity resolved
-
-- **Test import path.** The smoke acceptance criterion uses `from app.backend.services.parsers import ...` (run from worktree root, namespace-package style). Inside the test file, however, the `conftest.py` at `app/backend/tests/conftest.py` puts `app/backend` on `sys.path`, so other tests use `from services.X` directly. The new test file follows the in-test convention (`from services.csv_normalizer import ...`, `from services.parsers import registry`) to match the rest of the suite. Both paths resolve to the same module and both are exercised by the verification commands.
-- **ICBC USD coverage.** See "Fixtures shipped" above. One synthetic row was added; the alternative (defer the entire ICBC fixture or ship it without USD coverage) was worse than a clearly-documented synthetic addition.
-- **Wells Fargo CHECK branch 3.** See "Fixtures shipped" above. Not synthesized; documented gap instead.
-
-### Post-review fix cycle
-
-Code review flagged two findings worth fixing before merging to master. Both were landed as separate commits on top of the initial six so the history stays bisect-friendly.
-
-1. `4782bfe` — `test(parsers): sanitize Alipay 流水号 to deterministic placeholders`. Reviewer caught that the Alipay `input.csv` still carried real-looking 流水号 (transaction IDs), with an 11-digit middle segment (`22001412391`) repeating across 10 of 12 body rows — structurally consistent with an account-side partition and therefore a persistent correlatable identifier we do not want in public git history. Fix: replaced each 流水号 with a deterministic `ORD_000001..ORD_000012` placeholder, preserving GB18030 encoding, LF line endings, no BOM, and the trailing TAB on each cell. `expected_intermediate.csv` was regenerated from the sanitized input by running today's `normalize_csv_to_intermediate()` via `/tmp/task0_helpers/gen_expected.py` — not hand-edited.
-2. `4bc729f` — `test(parsers): tighten golden comparison to literal bytes`. Reviewer noted the oracle is described as byte-exact in TASK.md and ARCHITECTURE.md, but the test compared strings after decoding the expected file as UTF-8 — semantically equivalent for the three shipped fixtures, but silently absorbs a BOM drift if a future fixture ships with one. Fix: encode the actual output to UTF-8 and compare against `read_bytes()` directly, so the assertion is bytes-vs-bytes.
-3. `<this commit>` — `docs: record Task 0 post-review fix cycle in delivery notes`. This subsection.
-
-After all three commits, `uv run pytest app/backend/tests/test_csv_parser_fixtures.py -v` still reports `4 passed` (3 fixture parametrizations + 1 autodetect smoke test), and the branch-diff spot-checks (`grep "22001412391"`, `grep "ORD_0000"`) confirm no real 流水号 remain and all 12 placeholders are present in both `input.csv` and `expected_intermediate.csv`.
+- Adapter and translator implementations (Tasks 02, 04, 05).
+- Dispatch seam wiring in `csv_normalizer.py` (Task 02).
+- Commodity/price support (stocks, securities; Schwab is going away in Task 07).
+- Any `Record` or `LedgerTransaction` field beyond the three listed.
+- Normalizing the amount-vs-total formatting inconsistency (thousand sep on one, not the other) — this is a legacy quirk the writer reproduces; cleanup is post-Task 07.
