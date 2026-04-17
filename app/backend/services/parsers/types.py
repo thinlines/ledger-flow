@@ -60,6 +60,8 @@ class Adapter(Protocol):
     name: str
     institution: str
     formats: tuple[str, ...]
+    # translator_name: str — class attribute naming the translator this adapter
+    # pairs with. Required by the dispatch seam in csv_normalizer.
 
     def parse(self, text: str) -> Iterator[Record]: ...
     # matches(text, filename) -> bool is optional; adapters may omit it.
