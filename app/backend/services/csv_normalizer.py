@@ -10,6 +10,8 @@ from typing import Callable
 from .custom_csv_service import normalize_custom_csv_to_intermediate
 from .config_service import AppConfig
 from .import_profile_service import resolve_import_source
+from .parsers import registry
+from .parsers.intermediate_writer import write_intermediate
 
 
 @lru_cache(maxsize=1)
@@ -37,13 +39,38 @@ def normalize_csv_to_intermediate(config: AppConfig, csv_path: Path, account_cfg
     tail = int(tail_cfg) if tail_cfg else 0
     encoding = str(inst_cfg.get("encoding", "utf-8"))
 
-    create_bank_csv = _load_create_bank_csv()
-
     with csv_path.open("r", encoding=encoding) as f:
         lines = f.readlines()
 
     end_idx = -tail if tail else len(lines)
     sliced = lines[head:end_idx]
+
+    # --- Dispatch seam: registered adapters take priority over legacy BankCSV ---
+    registry.discover()
+    try:
+        adapter = registry.get_adapter(institution_template_id)
+    except KeyError:
+        adapter = None
+
+    if adapter is not None:
+        translator_name = getattr(adapter, "translator_name", None)
+        if translator_name is None:
+            raise RuntimeError(
+                f"Adapter {adapter.name!r} did not declare translator_name; "
+                f"cannot route without an explicit translator"
+            )
+        translator = registry.get_translator(translator_name)
+        account = str(account_cfg["ledger_account"])
+
+        text = "".join(sliced)
+        records = adapter.parse(text)
+        transactions = [translator.translate(r, account) for r in records]
+        # Legacy pipeline reverses output rows; preserve that for byte-exact parity.
+        transactions.reverse()
+        return write_intermediate(transactions)
+
+    # --- Legacy fallback for institutions without a registered adapter ---
+    create_bank_csv = _load_create_bank_csv()
 
     create_cfg = {
         "institutions": {
