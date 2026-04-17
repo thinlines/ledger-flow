@@ -28,6 +28,11 @@ class Record:
     suggested_category: str | None = None
     provider_payee: str | None = None
 
+    # Populated by CSV adapters when the source CSV exposes a running-balance
+    # column and a free-text note column. Left as defaults otherwise.
+    balance: Decimal | None = None
+    note: str | None = None
+
     raw: dict[str, Any] = field(default_factory=dict)
 
 
@@ -47,6 +52,7 @@ class LedgerTransaction:
     effective_date: date | None = None
     code: str | None = None
     note: str | None = None
+    balance: Decimal | None = None
 
 
 @runtime_checkable
