@@ -56,9 +56,8 @@ def autodetect_adapter(text: str, filename: str) -> Optional[Adapter]:
 
 
 def discover() -> None:
-    """Import every parsers/implementations/<name> subpackage so that
-    @register_adapter and @register_translator decorators execute."""
+    """Import every module and subpackage under parsers/implementations/ so
+    that @register_adapter and @register_translator decorators execute."""
     from . import implementations
-    for _, name, is_pkg in pkgutil.iter_modules(implementations.__path__):
-        if is_pkg:
-            importlib.import_module(f"{implementations.__name__}.{name}")
+    for _, name, _is_pkg in pkgutil.iter_modules(implementations.__path__):
+        importlib.import_module(f"{implementations.__name__}.{name}")
