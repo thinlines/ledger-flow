@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from .parsers import registry as parsers_registry
+
 
 @dataclass(frozen=True)
 class InstitutionTemplate:
@@ -37,16 +39,12 @@ class InstitutionTemplate:
         }
 
 
-_REGISTRY: dict[str, InstitutionTemplate] = {
-    "wells_fargo": InstitutionTemplate(
-        id="wells_fargo",
-        display_name="Wells Fargo",
-        parser="wfchk",
-        csv_date_format="%m/%d/%Y",
-        suggested_ledger_prefix="Assets:Bank:Wells Fargo",
-        aliases=("wfchk", "wfsav", "wfcc", "wells-fargo", "wellsfargo"),
-    ),
-    "charles_schwab": InstitutionTemplate(
+# Schwab and BJB stay as hardcoded bridge entries until Task 07 deletes them.
+# Both are out of scope for the CSV parser refactor (brokerage support deferred;
+# BJB cut as YAGNI per 2026-04-15 scope trim). See memory
+# project_csv_parser_refactor.md.
+_LEGACY_BRIDGES: tuple[InstitutionTemplate, ...] = (
+    InstitutionTemplate(
         id="charles_schwab",
         display_name="Charles Schwab",
         parser="schwab",
@@ -54,28 +52,7 @@ _REGISTRY: dict[str, InstitutionTemplate] = {
         suggested_ledger_prefix="Assets:Investments:Schwab",
         aliases=("schwab",),
     ),
-    "icbc": InstitutionTemplate(
-        id="icbc",
-        display_name="Industrial and Commercial Bank of China",
-        parser="icbc",
-        csv_date_format="%Y-%m-%d",
-        suggested_ledger_prefix="Assets:Bank:ICBC",
-        aliases=("icbc",),
-        head=7,
-        tail=2,
-    ),
-    "alipay": InstitutionTemplate(
-        id="alipay",
-        display_name="Alipay",
-        parser="alipay",
-        csv_date_format="%Y-%m-%d",
-        suggested_ledger_prefix="Assets:Alipay",
-        aliases=("alipay",),
-        head=13,
-        tail=1,
-        encoding="GB18030",
-    ),
-    "bank_of_beijing": InstitutionTemplate(
+    InstitutionTemplate(
         id="bank_of_beijing",
         display_name="Bank of Beijing",
         parser="bjb",
@@ -85,7 +62,58 @@ _REGISTRY: dict[str, InstitutionTemplate] = {
         head=1,
         tail=0,
     ),
-}
+)
+
+
+def _build_registry() -> dict[str, InstitutionTemplate]:
+    """Construct the institution registry from registered adapters + legacy bridges.
+
+    Adapters provide presentation metadata via class attributes (display_name,
+    csv_date_format, suggested_ledger_prefix, aliases, head, tail, encoding).
+    Legacy bridges (Schwab, BJB) are hardcoded until Task 07 removes them.
+    """
+    parsers_registry.discover()
+    out: dict[str, InstitutionTemplate] = {b.id: b for b in _LEGACY_BRIDGES}
+
+    # Track all aliases for collision detection.
+    seen_aliases: dict[str, str] = {}
+    for bridge in _LEGACY_BRIDGES:
+        for alias in (bridge.id, *bridge.aliases):
+            seen_aliases[alias.lower()] = bridge.id
+
+    for adapter in parsers_registry.list_adapters():
+        if adapter.institution in out:
+            raise RuntimeError(
+                f"Institution slug collision: {adapter.institution!r} already "
+                f"declared by a legacy bridge"
+            )
+
+        # Check for alias collisions across institutions.
+        adapter_aliases = tuple(adapter.aliases)
+        for alias in (adapter.institution, *adapter_aliases):
+            lower = alias.lower()
+            if lower in seen_aliases and seen_aliases[lower] != adapter.institution:
+                raise RuntimeError(
+                    f"Alias collision: {alias!r} claimed by both "
+                    f"{seen_aliases[lower]!r} and {adapter.institution!r}"
+                )
+            seen_aliases[lower] = adapter.institution
+
+        out[adapter.institution] = InstitutionTemplate(
+            id=adapter.institution,
+            display_name=adapter.display_name,
+            parser=adapter.name,
+            csv_date_format=adapter.csv_date_format,
+            suggested_ledger_prefix=adapter.suggested_ledger_prefix,
+            aliases=adapter_aliases,
+            head=int(adapter.head),
+            tail=int(adapter.tail),
+            encoding=str(adapter.encoding),
+        )
+    return out
+
+
+_REGISTRY: dict[str, InstitutionTemplate] = _build_registry()
 
 _ALIAS_TO_ID: dict[str, str] = {}
 for _id, _tpl in _REGISTRY.items():
