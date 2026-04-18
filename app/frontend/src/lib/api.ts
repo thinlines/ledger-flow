@@ -21,8 +21,8 @@ function normalizeError(path: string, status: number, text: string): string {
   return text;
 }
 
-export async function apiGet<T>(path: string): Promise<T> {
-  const res = await fetch(path);
+export async function apiGet<T>(path: string, opts?: { signal?: AbortSignal }): Promise<T> {
+  const res = await fetch(path, opts?.signal ? { signal: opts.signal } : undefined);
   if (!res.ok) {
     const text = await res.text();
     throw new Error(normalizeError(path, res.status, text));

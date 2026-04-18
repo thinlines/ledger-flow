@@ -270,7 +270,7 @@
                             <Command.Group value="categories">
                               {#each filteredAccounts as account (account)}
                                 <Command.Item value={account} onSelect={() => void selectCategory(account)}>
-                                  <CheckIcon class={cn('size-4', categoryDisplay !== account && 'text-transparent')} />
+                                  <CheckIcon class={cn('size-4', row?.categories[0]?.account !== account && 'text-transparent')} />
                                   <span class="truncate">{account}</span>
                                 </Command.Item>
                               {/each}

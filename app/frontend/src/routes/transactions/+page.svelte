@@ -38,6 +38,7 @@
   let loading = true;
   let dataLoading = false;
   let requestSeq = 0;
+  let abortController: AbortController | null = null;
   let selectedRow: TxRow | null = null;
   let lastSelectedRowId: string | null = null;
   let confirmDeleteRow: TxRow | null = null;
@@ -92,14 +93,17 @@
   }
 
   async function loadData() {
+    if (abortController) abortController.abort();
+    abortController = new AbortController();
     const seq = ++requestSeq;
     dataLoading = true; error = '';
     try {
-      const res = await loadTransactions(filters);
+      const res = await loadTransactions(filters, { signal: abortController.signal });
       if (seq !== requestSeq) return;
       result = res; baseCurrency = res.baseCurrency;
     } catch (e) {
       if (seq !== requestSeq) return;
+      if (e instanceof DOMException && e.name === 'AbortError') return;
       error = String(e);
     } finally { if (seq === requestSeq) dataLoading = false; }
   }
@@ -145,11 +149,12 @@
   });
 
   onDestroy(() => {
+    if (abortController) abortController.abort();
     if (filterBarObserver) {
       filterBarObserver.disconnect();
       filterBarObserver = null;
     }
-    document.documentElement.style.removeProperty('--filter-bar-height');
+    if (typeof document !== 'undefined') document.documentElement.style.removeProperty('--filter-bar-height');
   });
 
   async function doDelete(row: TxRow) {
@@ -255,7 +260,7 @@
         <h2 class="page-title">{selectedAccount.displayName}</h2>
         <p class="subtitle">{trust()?.note || 'Review recent activity and running balances for this account.'}</p>
         {#if selectedAccount.openingBalance}
-          <p class="text-muted-foreground text-sm">Starting balance {formatStoredAmount(selectedAccount.openingBalance, baseCurrency)}{#if selectedAccount.openingBalanceDate} on {shortDate(selectedAccount.openingBalanceDate)}{/if}</p>
+          <p class="text-muted-foreground text-sm">Starting balance {formatStoredAmount(selectedAccount.openingBalance, baseCurrency)}{#if selectedAccount.openingBalanceDate}{' '}on {shortDate(selectedAccount.openingBalanceDate)}{/if}</p>
         {/if}
       {:else}
         <h2 class="page-title">All activity</h2>
@@ -317,7 +322,7 @@
   {/if}
 
   {#if showAddForm && isSingleAccount}
-    <AddTransactionForm selectedAccountId={filters.accounts[0]} {allAccounts} onCancel={() => (showAddForm = false)} onSuccess={handleAddSuccess} />
+    <AddTransactionForm selectedAccountId={filters.accounts[0]} {allAccounts} onCancel={() => (showAddForm = false)} onSuccess={handleAddSuccess} onAccountsChanged={(a) => (allAccounts = a)} />
   {/if}
 
   {#if showExpl && result?.summary}

@@ -107,17 +107,3 @@ export function filtersToApiParams(filters: TransactionFilters): string {
 
   return params.toString();
 }
-
-/**
- * Count active non-default filters (for badge display).
- */
-export function activeFilterCount(filters: TransactionFilters): number {
-  let count = 0;
-  if (filters.accounts.length > 0) count++;
-  if (filters.period) count++;
-  if (filters.month) count++;
-  if (filters.category) count++;
-  if (filters.search) count++;
-  if (filters.status) count++;
-  return count;
-}

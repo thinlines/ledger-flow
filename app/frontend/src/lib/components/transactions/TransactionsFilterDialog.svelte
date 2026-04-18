@@ -80,18 +80,18 @@
       </div>
 
       <!-- Tab bar -->
-      <div class="flex border-b border-line/60">
+      <div class="flex border-b border-line/60" role="tablist" aria-label="Filter categories">
         <button
           class="filter-tab" class:filter-tab-active={activeTab === 'accounts'}
-          type="button" on:click={() => (activeTab = 'accounts')}
+          type="button" role="tab" aria-selected={activeTab === 'accounts'} on:click={() => (activeTab = 'accounts')}
         >Accounts</button>
         <button
           class="filter-tab" class:filter-tab-active={activeTab === 'categories'}
-          type="button" on:click={() => (activeTab = 'categories')}
+          type="button" role="tab" aria-selected={activeTab === 'categories'} on:click={() => (activeTab = 'categories')}
         >Categories</button>
         <button
           class="filter-tab" class:filter-tab-active={activeTab === 'status'}
-          type="button" on:click={() => (activeTab = 'status')}
+          type="button" role="tab" aria-selected={activeTab === 'status'} on:click={() => (activeTab = 'status')}
         >Status</button>
       </div>
 

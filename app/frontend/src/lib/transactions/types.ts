@@ -11,6 +11,7 @@ export type TrackedAccount = {
   openingBalanceDate?: string | null;
 };
 
+/** @deprecated Used by ManualResolutionDialog during transition to TransactionRow */
 export type RegisterEntry = {
   id: string;
   date: string;
@@ -35,6 +36,7 @@ export type RegisterEntry = {
   notes?: string | null;
 };
 
+/** @deprecated Used by TransactionsExplanationHeader during transition to TransactionRow */
 export type ActivityTransaction = {
   date: string;
   payee: string;

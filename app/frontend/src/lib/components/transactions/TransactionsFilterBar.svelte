@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onDestroy } from 'svelte';
   import type { TransactionFilters, TrackedAccount } from '$lib/transactions/types';
 
   export let filters: TransactionFilters;
@@ -8,6 +9,8 @@
 
   let searchInput = filters.search;
   let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+
+  onDestroy(() => { if (debounceTimer) clearTimeout(debounceTimer); });
 
   $: if (filters.search !== searchInput && !debounceTimer) {
     searchInput = filters.search;

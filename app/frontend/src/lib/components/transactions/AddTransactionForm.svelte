@@ -1,7 +1,8 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { apiPost } from '$lib/api';
+  import { apiGet, apiPost } from '$lib/api';
   import AccountCombobox from '$lib/components/AccountCombobox.svelte';
+  import CreateAccountModal from '$lib/components/CreateAccountModal.svelte';
 
   export let selectedAccountId: string;
   export let allAccounts: string[];
@@ -12,6 +13,7 @@
     warning: string | null;
     eventId: string | null;
   }) => void = () => {};
+  export let onAccountsChanged: (accounts: string[]) => void = () => {};
 
   let addDate = '';
   let addPayee = '';
@@ -20,6 +22,63 @@
   let addError = '';
   let addSubmitting = false;
   let addDateEl: HTMLInputElement | null = null;
+
+  /* ── Create-account modal state ── */
+  let showCreateModal = false;
+  let newAccountName = '';
+  let newAccountType = 'Expense';
+  let newAccountDescription = '';
+  let createError = '';
+  let createLoading = false;
+
+  function inferAccountType(name: string): string {
+    const prefix = name.split(':', 1)[0]?.trim().toLowerCase() || '';
+    if (prefix === 'assets') return 'Asset';
+    if (prefix === 'liabilities' || prefix === 'liability') return 'Liability';
+    if (prefix === 'expenses' || prefix === 'expense') return 'Expense';
+    if (prefix === 'income' || prefix === 'revenue') return 'Revenue';
+    if (prefix === 'equity') return 'Equity';
+    return 'Expense';
+  }
+
+  function openCreateModal(seed: string) {
+    newAccountName = seed;
+    newAccountType = inferAccountType(seed);
+    newAccountDescription = '';
+    createError = '';
+    showCreateModal = true;
+  }
+
+  function closeCreateModal() {
+    createError = '';
+    showCreateModal = false;
+  }
+
+  async function createAccountAndSelect() {
+    if (!newAccountName || !newAccountType) return;
+    createLoading = true;
+    createError = '';
+    try {
+      const result = await apiPost<{ added: boolean; warning: string | null }>('/api/accounts', {
+        account: newAccountName,
+        accountType: newAccountType,
+        description: newAccountDescription
+      });
+      if (result.warning) {
+        createError = result.warning;
+        return;
+      }
+      const refreshed = await apiGet<{ accounts: string[] }>('/api/accounts');
+      allAccounts = refreshed.accounts;
+      onAccountsChanged(allAccounts);
+      addDestination = newAccountName;
+      showCreateModal = false;
+    } catch (e) {
+      createError = String(e);
+    } finally {
+      createLoading = false;
+    }
+  }
 
   function todayISO(): string {
     const d = new Date();
@@ -121,8 +180,8 @@
         accounts={allAccounts}
         value={addDestination}
         placeholder="e.g. Expenses:Food"
-        allowCreate={false}
         onChange={(account) => (addDestination = account)}
+        onCreate={(seed) => openCreateModal(seed)}
       />
     </div>
   </div>
@@ -142,6 +201,19 @@
     </button>
   </div>
 </section>
+
+<CreateAccountModal
+  bind:open={showCreateModal}
+  bind:accountName={newAccountName}
+  bind:accountType={newAccountType}
+  bind:accountDescription={newAccountDescription}
+  error={createError}
+  loading={createLoading}
+  accountNamePlaceholder="Expenses:Food:Dining"
+  onNameInput={() => { newAccountType = inferAccountType(newAccountName); }}
+  onClose={closeCreateModal}
+  onSubmit={createAccountAndSelect}
+/>
 
 <style>
   .add-txn-card {
