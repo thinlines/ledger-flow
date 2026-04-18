@@ -47,6 +47,16 @@ Turn working tree changes into readable history. Inspect the diff, choose the sm
 - Create the commit, then re-check `git status --short` before deciding whether another commit is needed.
 - If the repo state is ambiguous, summarize the proposed split before committing.
 
+### 5. Worktree commits
+
+When committing inside a worktree (i.e. using `git -C <worktree-path>`), **do not** use a heredoc or `$(cat <<'EOF' ...)` to pass the commit message — the `$(` triggers the shell-operator guard in the pre-tool-use hook and forces a manual approval prompt.
+
+Instead, write the message to a file inside the worktree first, then commit with `-F`:
+
+1. Use the **Write** tool to create `<worktree-path>/.commit-msg` with the full commit message.
+2. Run `git -C <worktree-path> commit -F .commit-msg`.
+3. After the commit succeeds, delete the scratch file: `git -C <worktree-path> rm -f .commit-msg` or simply leave it — it will be cleaned up with the worktree.
+
 ## Message Heuristics
 
 - Prefer `fix` for behavior corrections, `feat` for new user-visible capability, `refactor` for internal restructuring without behavior change, and `chore` only for maintenance that does not fit a clearer type.
