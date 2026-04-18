@@ -293,7 +293,7 @@ def test_account_register_uses_transfer_peer_metadata_for_pending_transfers(tmp_
 
     latest = register["entries"][0]
     assert latest["summary"] == "Transfer · Savings (Pending)"
-    assert latest["transferState"] == "pending"
+    assert latest["transferState"] is None
     assert latest["transferPeerAccountId"] == "savings"
     assert latest["transferPeerAccountName"] == "Savings"
     assert latest["detailLines"] == [
@@ -572,14 +572,14 @@ def test_account_register_leaves_only_grouped_transfer_residue_pending(tmp_path:
     assert savings_register["transactionCount"] == 3
     assert savings_register["entryCount"] == 3
 
-    pending_entries = [entry for entry in savings_register["entries"] if entry["transferState"] == "pending"]
     settled_entries = [entry for entry in savings_register["entries"] if entry["transferState"] == "settled_grouped"]
+    residue_entries = [entry for entry in savings_register["entries"] if entry["transferState"] is None]
 
-    assert len(pending_entries) == 1
-    assert pending_entries[0]["amount"] == 0.10
-    assert pending_entries[0]["summary"] == "Transfer · Wells Fargo Checking (Pending)"
     assert len(settled_entries) == 2
     assert sorted(entry["amount"] for entry in settled_entries) == [0.12, 0.34]
+    assert len(residue_entries) == 1
+    assert residue_entries[0]["amount"] == 0.10
+    assert residue_entries[0]["summary"] == "Transfer · Wells Fargo Checking (Pending)"
 
 
 def test_account_register_fails_closed_for_ambiguous_same_window_grouped_transfers(tmp_path: Path) -> None:
@@ -1000,13 +1000,16 @@ def test_bilateral_match_ambiguous_same_amount_remains_pending(tmp_path: Path) -
     )
 
     checking_register = build_account_register(config, "checking")
-    # All four remain pending: two same-amount pairs are ambiguous
+    # All four remain pending: two same-amount pairs are ambiguous.
+    # Source-side entries have no transferState; peer-side synthetics keep "pending".
     assert checking_register["entryCount"] == 4
-    assert all(entry["transferState"] == "pending" for entry in checking_register["entries"])
+    checking_states = sorted(entry["transferState"] or "" for entry in checking_register["entries"])
+    assert checking_states == ["", "", "pending", "pending"]
 
     savings_register = build_account_register(config, "savings")
     assert savings_register["entryCount"] == 4
-    assert all(entry["transferState"] == "pending" for entry in savings_register["entries"])
+    savings_states = sorted(entry["transferState"] or "" for entry in savings_register["entries"])
+    assert savings_states == ["", "", "pending", "pending"]
 
 
 def test_bilateral_match_date_boundary_exact_window_matches(tmp_path: Path) -> None:
@@ -1071,10 +1074,12 @@ def test_bilateral_match_date_boundary_exceeds_window_remains_pending(tmp_path: 
         + "\n",
     )
 
-    # MAX_TRANSFER_MATCH_DAYS + 1 (8 days) apart → should NOT match
+    # MAX_TRANSFER_MATCH_DAYS + 1 (8 days) apart → should NOT match.
+    # Source-side entry has no transferState; peer-side synthetic keeps "pending".
     checking_register = build_account_register(config, "checking")
     assert checking_register["entryCount"] == 2
-    assert all(entry["transferState"] == "pending" for entry in checking_register["entries"])
+    states = sorted(entry["transferState"] or "" for entry in checking_register["entries"])
+    assert states == ["", "pending"]
 
 
 def test_bilateral_match_single_sided_pending_still_shows_synthetic_peer(tmp_path: Path) -> None:
@@ -1100,7 +1105,7 @@ def test_bilateral_match_single_sided_pending_still_shows_synthetic_peer(tmp_pat
     checking_register = build_account_register(config, "checking")
     assert checking_register["entryCount"] == 1
     checking_entry = checking_register["entries"][0]
-    assert checking_entry["transferState"] == "pending"
+    assert checking_entry["transferState"] is None
     assert "(Pending)" in checking_entry["summary"]
     assert checking_entry["manualResolutionToken"] is not None
 

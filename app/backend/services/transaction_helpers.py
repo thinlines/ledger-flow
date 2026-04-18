@@ -578,6 +578,7 @@ def transaction_summary(
             transfer_state = TRANSFER_STATE_BILATERAL_MATCH
         elif transfer.is_pending:
             summary = f"{summary} (Pending)"
+            transfer_state = None
         return (summary, False, transfer_state, transfer_peer_account_id, label)
 
     if not other_postings:
