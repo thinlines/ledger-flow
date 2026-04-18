@@ -20,9 +20,7 @@ def create_bank_csv(institution, input_lines, config):
         "bjb": BjbCSV,
         "bank_of_beijing": BjbCSV,
         "icbc": IcbcCSV,
-        "schwab": SchwabCSV,
-        "charles_schwab": SchwabCSV,
-        "wfchk": WellsFargoCSV,
+"wfchk": WellsFargoCSV,
         "wfsav": WellsFargoCSV,
         "wfcc": WellsFargoCSV,
         "wells_fargo": WellsFargoCSV,
@@ -209,80 +207,6 @@ class IcbcCSV(BankCSV):
     def total(self, row):
         currency = self.currency(row)
         return row["余额"].strip() + currency
-
-
-class SchwabCSV(BankCSV):
-    """A CSV of transactions from Schwab"""
-
-    def __init__(self, input_csv):
-        super().__init__(input_csv)
-        self.dateFmt = r"[0-9]{2}/[0-9]{2}/[0-9]{4}"
-        self.currency = ""
-        self.header = [
-            "Date",
-            "Action",
-            "Symbol",
-            "Description",
-            "Quantity",
-            "Price",
-            "Fees & Comm",
-            "Amount",
-        ]
-        self.header.extend(["symbol", "price"])
-
-    def date(self, row):
-        if "as of" in row["Date"]:
-            searchstring = f"({self.dateFmt}) as of ({self.dateFmt})"
-            match = re.search(searchstring, row["Date"])
-            date = match.group(2)
-        else:
-            date = row["Date"]
-        return date
-
-    def code(self, row):
-        pass
-
-    def description(self, row):
-        q = row["Quantity"]
-        a = row["Action"]
-        symb = row["Symbol"]
-        amt = row["Amount"]
-        d = row["Description"]
-        if symb and q:
-            desc = f"Schwab - {a} {q} {symb} @@ {amt[1:]}"
-        elif symb:
-            desc = f"Schwab - {a}"
-        else:
-            desc = f"Schwab - {a} - {d}"
-        return desc
-
-    def amount(self, row):
-        qnty = row["Quantity"]
-        symb = row["Symbol"]
-        amt = row["Amount"]
-        action = row["Action"]
-        if symb and qnty:
-            amt = amt[1:]
-            amount = f"-{qnty} {symb} @@ {amt}"
-        else:
-            amount = amt
-        return amount
-
-    def total(self, row):
-        return None
-
-    def note(self, row):
-        if "as of" in row["Date"]:
-            searchstring = f"({self.dateFmt}) as of {self.dateFmt}"
-            match = re.search(searchstring, row["Date"])
-            note = f"[={match.group(1)}], date: {match.group(1)}"
-            return note
-
-    def symbol(self, row):
-        return row["Symbol"] or None
-
-    def price(self, row):
-        return row["Price"] or None
 
 
 class WellsFargoCSV(BankCSV):

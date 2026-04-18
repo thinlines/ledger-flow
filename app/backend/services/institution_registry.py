@@ -39,19 +39,10 @@ class InstitutionTemplate:
         }
 
 
-# Schwab and BJB stay as hardcoded bridge entries until Task 07 deletes them.
-# Both are out of scope for the CSV parser refactor (brokerage support deferred;
-# BJB cut as YAGNI per 2026-04-15 scope trim). See memory
-# project_csv_parser_refactor.md.
+# BJB stays as a hardcoded bridge entry until Task 07 Commit B deletes it.
+# Out of scope for the CSV parser refactor (YAGNI per 2026-04-15 scope trim).
+# See memory project_csv_parser_refactor.md.
 _LEGACY_BRIDGES: tuple[InstitutionTemplate, ...] = (
-    InstitutionTemplate(
-        id="charles_schwab",
-        display_name="Charles Schwab",
-        parser="schwab",
-        csv_date_format="%m/%d/%Y",
-        suggested_ledger_prefix="Assets:Investments:Schwab",
-        aliases=("schwab",),
-    ),
     InstitutionTemplate(
         id="bank_of_beijing",
         display_name="Bank of Beijing",
@@ -70,7 +61,7 @@ def _build_registry() -> dict[str, InstitutionTemplate]:
 
     Adapters provide presentation metadata via class attributes (display_name,
     csv_date_format, suggested_ledger_prefix, aliases, head, tail, encoding).
-    Legacy bridges (Schwab, BJB) are hardcoded until Task 07 removes them.
+    Legacy bridges (BJB) are hardcoded until removed.
     """
     parsers_registry.discover()
     out: dict[str, InstitutionTemplate] = {b.id: b for b in _LEGACY_BRIDGES}

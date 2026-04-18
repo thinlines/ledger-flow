@@ -1,7 +1,7 @@
 """Tests for institution_registry derivation from adapter registry.
 
 Verifies that _build_registry() produces identical InstitutionTemplate entries
-from adapter class attributes + legacy bridges (Schwab, BJB).
+from adapter class attributes + legacy bridges (BJB).
 """
 
 from __future__ import annotations
@@ -18,15 +18,15 @@ from services.institution_registry import (
 
 
 class TestRegistryContents:
-    """All five institutions present with correct field values."""
+    """All four institutions present with correct field values."""
 
     def test_list_templates_count(self):
         templates = list(_REGISTRY.values())
-        assert len(templates) == 5
+        assert len(templates) == 4
 
     def test_all_ids_present(self):
         ids = sorted(_REGISTRY.keys())
-        assert ids == ["alipay", "bank_of_beijing", "charles_schwab", "icbc", "wells_fargo"]
+        assert ids == ["alipay", "bank_of_beijing", "icbc", "wells_fargo"]
 
     def test_wells_fargo_fields(self):
         t = _REGISTRY["wells_fargo"]
@@ -64,15 +64,6 @@ class TestRegistryContents:
         assert t.tail == 2
         assert t.encoding == "utf-8"
 
-    def test_schwab_bridge_fields(self):
-        t = _REGISTRY["charles_schwab"]
-        assert t.id == "charles_schwab"
-        assert t.display_name == "Charles Schwab"
-        assert t.parser == "schwab"
-        assert t.csv_date_format == "%m/%d/%Y"
-        assert t.suggested_ledger_prefix == "Assets:Investments:Schwab"
-        assert t.aliases == ("schwab",)
-
     def test_bjb_bridge_fields(self):
         t = _REGISTRY["bank_of_beijing"]
         assert t.id == "bank_of_beijing"
@@ -103,9 +94,6 @@ class TestAliasResolution:
     def test_wells_fargo_alias_nospace(self):
         assert canonical_template_id("wellsfargo") == "wells_fargo"
 
-    def test_schwab_bridge_alias(self):
-        assert canonical_template_id("schwab") == "charles_schwab"
-
     def test_bjb_bridge_alias(self):
         assert canonical_template_id("bjb") == "bank_of_beijing"
 
@@ -123,7 +111,6 @@ class TestAliasResolution:
 
     def test_case_insensitive(self):
         assert canonical_template_id("WFCHK") == "wells_fargo"
-        assert canonical_template_id("Schwab") == "charles_schwab"
 
     def test_unknown_returns_none(self):
         assert canonical_template_id("nonexistent") is None
@@ -172,12 +159,12 @@ class TestCollisionDetection:
         from services.parsers import registry as parsers_registry
 
         class _FakeCollidingAdapter:
-            name = "fake_schwab"
-            institution = "charles_schwab"
+            name = "fake_bjb"
+            institution = "bank_of_beijing"
             formats = ("csv",)
             translator_name = "generic.checking"
-            display_name = "Fake Schwab"
-            csv_date_format = "%m/%d/%Y"
+            display_name = "Fake BJB"
+            csv_date_format = "%Y/%m/%d"
             suggested_ledger_prefix = "Assets:Fake"
             aliases = ()
             head = 0
@@ -201,7 +188,7 @@ class TestPublicAPI:
     def test_list_templates_returns_list_of_dicts(self):
         result = list_templates()
         assert isinstance(result, list)
-        assert len(result) == 5
+        assert len(result) == 4
         for item in result:
             assert isinstance(item, dict)
             assert "id" in item
