@@ -147,9 +147,9 @@ The import flow component (1708 lines) renders two near-duplicate layouts (setup
 
 The transactions page (1442 lines) is the cleanest of the four — functional as-is. Plan: [`plans/transactions-decomposition.md`](plans/transactions-decomposition.md). 4 lightweight steps, expected outcome ~800 lines. Lower priority; becomes high-value before transaction editing lands.
 
-### CSV parser refactor (concurrent backend track)
+### CSV parser refactor — COMPLETED 2026-04-15
 
-Port `Scripts/BankCSV.py` into an adapter/translator package under `app/backend/services/parsers/`. Task 0 (scaffolding + golden fixtures for WF/Alipay/ICBC) shipped 2026-04-14. Remaining execution tasks (01, 02, 04, 05, 06, 07) plus a wave-based concurrency manifest live in [`tasks/`](tasks/MANIFEST.md); `generic.credit` translator and BJB adapter were both cut as YAGNI on 2026-04-15, with Schwab and BJB deleted together in Task 07. No user-visible change; the load-bearing constraint is import-identity hash stability. Runs as a parallel backend track alongside Feature 7 sub-features on the frontend; cleanup of `tasks/` and this entry happens at Task 07 landing.
+`Scripts/BankCSV.py` retired. All institution CSV parsing now routes through `app/backend/services/parsers/` adapters (Wells Fargo, Alipay, ICBC). Schwab and Bank of Beijing removed as YAGNI. `institution_registry.py` derives from the adapter registry. Import-identity hashes preserved byte-exact throughout.
 
 ## Deferred for Now
 
