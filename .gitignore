@@ -16,6 +16,7 @@ app/frontend/dist/
 
 # Runtime / temp
 .workflow/
+.commit-msg
 *.tmp
 *.bak
 *.swp
