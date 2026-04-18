@@ -55,7 +55,7 @@ Instead, write the message to a file inside the worktree first, then commit with
 
 1. Use the **Write** tool to create `<worktree-path>/.commit-msg` with the full commit message.
 2. Run `git -C <worktree-path> commit -F .commit-msg`.
-3. After the commit succeeds, delete the scratch file: `git -C <worktree-path> rm -f .commit-msg` or simply leave it — it will be cleaned up with the worktree.
+3. Do not clean up `.commit-msg` — the worktree is ephemeral and the file is overwritten on subsequent commits.
 
 ## Message Heuristics
 
