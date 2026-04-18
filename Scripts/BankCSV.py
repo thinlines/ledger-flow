@@ -17,10 +17,8 @@ from datetime import datetime
 def create_bank_csv(institution, input_lines, config):
     institutions = {
         "alipay": AlipayCSV,
-        "bjb": BjbCSV,
-        "bank_of_beijing": BjbCSV,
         "icbc": IcbcCSV,
-"wfchk": WellsFargoCSV,
+        "wfchk": WellsFargoCSV,
         "wfsav": WellsFargoCSV,
         "wfcc": WellsFargoCSV,
         "wells_fargo": WellsFargoCSV,
@@ -122,44 +120,6 @@ class AlipayCSV(BankCSV):
 
     def total(self, row):
         return self.currency + row["账户余额（元）"].strip()
-
-
-class BjbCSV(BankCSV):
-    """A CSV of transactions from Beijing Bank"""
-
-    def __init__(self, input_csv):
-        super().__init__(input_csv)
-        self.currency = "CNY"
-        self.header = [
-            "交易日期",
-            "币种",
-            "钞汇",
-            "业务摘要",
-            "发生额",
-            "余额",
-            "对方户名",
-            "对方账号",
-            "流水单号"
-        ]
-
-    def code(self, row):
-        return row["业务摘要"]
-
-    def description(self, row):
-        return f'{row["对方户名"]}'
-
-    def amount(self, row):
-        amt_type = row["发生额"][0]
-        if amt_type == "+":
-            amount = f'{row["发生额"][1:]} {self.currency}'
-        elif amt_type == "-":
-            amount = f'-{row["发生额"][1:]} {self.currency}'
-        else:
-            raise ValueError(f"Unknown amount type: {amt_type}")
-        return amount
-
-    def total(self, row):
-        return f'{row["余额"]} {self.currency}'
 
 
 class IcbcCSV(BankCSV):

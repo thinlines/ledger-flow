@@ -1,12 +1,10 @@
 """Tests for institution_registry derivation from adapter registry.
 
 Verifies that _build_registry() produces identical InstitutionTemplate entries
-from adapter class attributes + legacy bridges (BJB).
+from adapter class attributes.
 """
 
 from __future__ import annotations
-
-import pytest
 
 from services.institution_registry import (
     InstitutionTemplate,
@@ -18,15 +16,15 @@ from services.institution_registry import (
 
 
 class TestRegistryContents:
-    """All four institutions present with correct field values."""
+    """All three institutions present with correct field values."""
 
     def test_list_templates_count(self):
         templates = list(_REGISTRY.values())
-        assert len(templates) == 4
+        assert len(templates) == 3
 
     def test_all_ids_present(self):
         ids = sorted(_REGISTRY.keys())
-        assert ids == ["alipay", "bank_of_beijing", "icbc", "wells_fargo"]
+        assert ids == ["alipay", "icbc", "wells_fargo"]
 
     def test_wells_fargo_fields(self):
         t = _REGISTRY["wells_fargo"]
@@ -64,20 +62,9 @@ class TestRegistryContents:
         assert t.tail == 2
         assert t.encoding == "utf-8"
 
-    def test_bjb_bridge_fields(self):
-        t = _REGISTRY["bank_of_beijing"]
-        assert t.id == "bank_of_beijing"
-        assert t.display_name == "Bank of Beijing"
-        assert t.parser == "bjb"
-        assert t.csv_date_format == "%Y/%m/%d"
-        assert t.suggested_ledger_prefix == "Assets:Bank:BJB"
-        assert t.aliases == ("bjb", "beijing-bank", "bank-of-beijing")
-        assert t.head == 1
-        assert t.tail == 0
-
 
 class TestAliasResolution:
-    """Aliases from adapter class attributes and legacy bridges resolve correctly."""
+    """Aliases from adapter class attributes resolve correctly."""
 
     def test_wells_fargo_alias_wfchk(self):
         assert canonical_template_id("wfchk") == "wells_fargo"
@@ -93,15 +80,6 @@ class TestAliasResolution:
 
     def test_wells_fargo_alias_nospace(self):
         assert canonical_template_id("wellsfargo") == "wells_fargo"
-
-    def test_bjb_bridge_alias(self):
-        assert canonical_template_id("bjb") == "bank_of_beijing"
-
-    def test_bjb_bridge_alias_dash(self):
-        assert canonical_template_id("beijing-bank") == "bank_of_beijing"
-
-    def test_bjb_bridge_alias_bank_of_beijing(self):
-        assert canonical_template_id("bank-of-beijing") == "bank_of_beijing"
 
     def test_alipay_alias(self):
         assert canonical_template_id("alipay") == "alipay"
@@ -152,43 +130,13 @@ class TestEncodingHeadTail:
         assert t.encoding == "utf-8"
 
 
-class TestCollisionDetection:
-    """_build_registry() raises RuntimeError on slug collisions."""
-
-    def test_institution_slug_collision_with_legacy_bridge(self):
-        from services.parsers import registry as parsers_registry
-
-        class _FakeCollidingAdapter:
-            name = "fake_bjb"
-            institution = "bank_of_beijing"
-            formats = ("csv",)
-            translator_name = "generic.checking"
-            display_name = "Fake BJB"
-            csv_date_format = "%Y/%m/%d"
-            suggested_ledger_prefix = "Assets:Fake"
-            aliases = ()
-            head = 0
-            tail = 0
-            encoding = "utf-8"
-
-        # Manually register the colliding adapter.
-        instance = _FakeCollidingAdapter()
-        parsers_registry._ADAPTERS[instance.name] = instance
-        try:
-            from services.institution_registry import _build_registry
-            with pytest.raises(RuntimeError, match="Institution slug collision"):
-                _build_registry()
-        finally:
-            del parsers_registry._ADAPTERS[instance.name]
-
-
 class TestPublicAPI:
     """Public function signatures and return shapes are preserved."""
 
     def test_list_templates_returns_list_of_dicts(self):
         result = list_templates()
         assert isinstance(result, list)
-        assert len(result) == 4
+        assert len(result) == 3
         for item in result:
             assert isinstance(item, dict)
             assert "id" in item

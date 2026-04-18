@@ -39,21 +39,7 @@ class InstitutionTemplate:
         }
 
 
-# BJB stays as a hardcoded bridge entry until Task 07 Commit B deletes it.
-# Out of scope for the CSV parser refactor (YAGNI per 2026-04-15 scope trim).
-# See memory project_csv_parser_refactor.md.
-_LEGACY_BRIDGES: tuple[InstitutionTemplate, ...] = (
-    InstitutionTemplate(
-        id="bank_of_beijing",
-        display_name="Bank of Beijing",
-        parser="bjb",
-        csv_date_format="%Y/%m/%d",
-        suggested_ledger_prefix="Assets:Bank:BJB",
-        aliases=("bjb", "beijing-bank", "bank-of-beijing"),
-        head=1,
-        tail=0,
-    ),
-)
+_LEGACY_BRIDGES: tuple[InstitutionTemplate, ...] = ()
 
 
 def _build_registry() -> dict[str, InstitutionTemplate]:
