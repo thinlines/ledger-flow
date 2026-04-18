@@ -1,59 +1,67 @@
 # Ledger Flow
 
-A GUI-first bookkeeping app for people who want a polished personal finance workspace without learning plaintext accounting. Data lives in open, human-readable [Ledger](https://www.ledger-cli.org/) files for durability and portability, but the product feels like a finance app first.
+Ledger Flow is a local-first personal finance app built on top of plain-text [Ledger](https://www.ledger-cli.org/) journals. It gives you a polished workspace for setting up accounts, importing statements, reviewing uncategorized activity, and tracking balances without turning everyday use into an accounting exercise.
 
-> **Status:** Work in progress, mostly AI-generated. Built as an experiment in collaborating with coding agents on a real consumer-grade app. Expect rough edges, breaking changes, and incomplete features. Not yet recommended for managing your actual finances.
+Everything stays on your machine in human-readable files, so your books remain durable and portable.
 
-## What it's for
+## Capabilities
 
-Ledger Flow tries to answer three questions every time you open it:
+- Guided setup for creating a new workspace or opening an existing one
+- Account management for assets and liabilities, including opening balances
+- CSV statement import with preview, duplicate detection, and file archiving
+- Review queue for uncategorized transactions and transfer matching
+- Rules for automating recurring categorization decisions
+- Dashboard, account, and transaction views for balances, cash flow, and recent activity
 
-- Where do I stand right now?
-- What changed recently?
-- What needs attention next?
+## Installation
 
-It leads with money, accounts, balances, and activity — not journals and postings. The plain-text foundation stays real and durable, but behind the curtain in normal workflows.
+### Requirements
 
-## Requirements
+- [Ledger CLI](https://www.ledger-cli.org/)
+- Python 3.11+
+- [uv](https://docs.astral.sh/uv/)
+- Node.js 20+
+- [pnpm](https://pnpm.io/)
+- [`just`](https://github.com/casey/just) (optional, for the shortcut commands below)
 
-- [Ledger](https://www.ledger-cli.org/) CLI (the canonical accounting engine — Ledger Flow reads and writes its journal files)
-- [Python 3.11+](https://www.python.org/) and [uv](https://docs.astral.sh/uv/) for the backend
-- [Node.js 20+](https://nodejs.org/) and [pnpm](https://pnpm.io/) for the frontend
-- [just](https://github.com/casey/just) (optional, for the dev shortcuts below)
-
-## Install
+### Clone and install dependencies
 
 ```sh
 git clone https://github.com/thinlines/ledger-flow.git
 cd ledger-flow
 
-# Backend (FastAPI + uvicorn, managed by uv)
-cd app/backend && uv sync && cd ../..
-
-# Frontend (SvelteKit + Vite + Tailwind v4)
-cd app/frontend && pnpm install && cd ../..
+cd app/backend
+uv sync
+cd ../frontend
+pnpm install
+cd ../..
 ```
 
-## Run
+### Run the app
 
-In two terminals:
+Using `just`:
 
 ```sh
-just app-backend     # http://127.0.0.1:8000
-just app-frontend    # http://127.0.0.1:5173
+just app-backend
+just app-frontend
 ```
 
 Without `just`:
 
 ```sh
-cd app/backend  && uv run uvicorn main:app --reload --host 127.0.0.1 --port 8000
-cd app/frontend && pnpm dev
+cd app/backend
+uv run uvicorn main:app --reload --host 127.0.0.1 --port 8000
 ```
 
-Then open the frontend URL in your browser.
+```sh
+cd app/frontend
+pnpm dev
+```
 
-## Project docs
+Open `http://127.0.0.1:5173` in your browser, then follow the setup flow to create or select a workspace and import your first account.
 
-- [ARCHITECTURE.md](ARCHITECTURE.md) — system shape, boundaries, invariants
-- [ROADMAP.md](ROADMAP.md) — product direction and milestones
-- [DECISIONS.md](DECISIONS.md) — durable tradeoffs and rationale
+## Documentation
+
+- [ARCHITECTURE.md](ARCHITECTURE.md)
+- [ROADMAP.md](ROADMAP.md)
+- [DECISIONS.md](DECISIONS.md)
