@@ -44,6 +44,14 @@ class WellsFargoAdapter:
     formats = ("csv",)
     translator_name = GENERIC_CHECKING
 
+    display_name = "Wells Fargo"
+    csv_date_format = "%m/%d/%Y"
+    suggested_ledger_prefix = "Assets:Bank:Wells Fargo"
+    aliases = ("wfchk", "wfsav", "wfcc", "wells-fargo", "wellsfargo")
+    head = 0
+    tail = 0
+    encoding = "utf-8"
+
     _REF_RE = re.compile(r"REF #([A-Z0-9]+)")
     _CHECK_RE = re.compile(r"CHECK # ?(\d+)")
 

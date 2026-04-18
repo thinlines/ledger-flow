@@ -31,6 +31,14 @@ class AlipayAdapter:
     formats = ("csv",)
     translator_name = "generic.checking"
 
+    display_name = "Alipay"
+    csv_date_format = "%Y-%m-%d"
+    suggested_ledger_prefix = "Assets:Alipay"
+    aliases = ("alipay",)
+    head = 13
+    tail = 1
+    encoding = "GB18030"
+
     def parse(self, text: str) -> Iterator[Record]:
         reader = csv.DictReader(io.StringIO(text), fieldnames=_FIELDNAMES)
         for row in reader:

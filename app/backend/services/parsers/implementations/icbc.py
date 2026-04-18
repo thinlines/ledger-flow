@@ -38,6 +38,14 @@ class IcbcAdapter:
     formats = ("csv",)
     translator_name = "generic.checking"
 
+    display_name = "Industrial and Commercial Bank of China"
+    csv_date_format = "%Y-%m-%d"
+    suggested_ledger_prefix = "Assets:Bank:ICBC"
+    aliases = ("icbc",)
+    head = 7
+    tail = 2
+    encoding = "utf-8"
+
     def parse(self, text: str) -> Iterator[Record]:
         reader = csv.DictReader(io.StringIO(text), fieldnames=FIELDNAMES)
         for row in reader:
