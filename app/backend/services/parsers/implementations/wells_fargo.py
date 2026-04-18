@@ -72,7 +72,7 @@ class WellsFargoAdapter:
             )
 
     def _extract_code(self, note: str, description: str) -> str | None:
-        """Matches WellsFargoCSV.code() in Scripts/BankCSV.py.
+        """Extract the transaction code from note/description fields.
 
         Precedence:
         1. note column (if non-empty)

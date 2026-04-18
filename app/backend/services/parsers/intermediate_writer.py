@@ -9,9 +9,8 @@ Commodity placement:
 - 1-char symbols (``$``, ``¥``): prefix  → ``$-1000.00``, ``¥-332.50``
 - Multi-char codes (``CNY``, ``USD``): suffix → ``-9.90CNY``, ``500.00USD``
 
-The split between ``:f`` and ``:,f`` is inherited from the legacy
-``BankCSV.amount()`` vs ``BankCSV.total()`` helpers. Normalizing this is
-out of scope until post-Task 07.
+The split between ``:f`` and ``:,f`` is inherited from the legacy parser.
+Normalizing this is a post-refactor follow-up.
 """
 
 from __future__ import annotations
@@ -37,8 +36,7 @@ def _format_amount(amount: Decimal, commodity: str) -> str:
     """Format a monetary amount *without* thousand separators.
 
     Commodity placement: prefix for 1-char symbols, suffix for multi-char codes.
-    Matches the legacy ``BankCSV.amount()`` output across WF, Alipay, and ICBC
-    fixtures.
+    Matches the legacy parser output across WF, Alipay, and ICBC fixtures.
     """
     formatted = f"{amount:.2f}"
     if len(commodity) == 1:
@@ -50,7 +48,7 @@ def _format_total(balance: Decimal, commodity: str) -> str:
     """Format a running-balance total *with* thousand separators.
 
     Same commodity-placement rules as ``_format_amount``.  Matches the legacy
-    ``BankCSV.total()`` output (e.g. ``"2,568.44CNY"`` in the ICBC fixture).
+    parser output (e.g. ``"2,568.44CNY"`` in the ICBC fixture).
     """
     formatted = f"{balance:,.2f}"
     if len(commodity) == 1:

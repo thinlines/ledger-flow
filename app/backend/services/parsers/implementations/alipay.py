@@ -9,9 +9,8 @@ from typing import Iterator
 from ..registry import register_adapter
 from ..types import Record
 
-# Column names matching AlipayCSV.__init__ in Scripts/BankCSV.py:105-114.
-# The CSV header row is sliced off by csv_normalizer (head=13), so
-# DictReader needs explicit fieldnames — same list the legacy parser uses.
+# Alipay CSV column names. The CSV header row is sliced off by
+# csv_normalizer (head=13), so DictReader needs explicit fieldnames.
 _FIELDNAMES = [
     "流水号",
     "时间",
@@ -45,7 +44,7 @@ class AlipayAdapter:
             income = row.get("收入", "").strip()
             expense = row.get("支出", "").strip()
             # Alipay source has signs embedded: income positive, expense negative.
-            # Matches Scripts/BankCSV.py:122 amount() behavior.
+            # Income positive, expense negative — concatenated into one field.
             raw_amount = income + expense
             yield Record(
                 date=datetime.strptime(
@@ -60,6 +59,6 @@ class AlipayAdapter:
                     if row.get("账户余额（元）", "").strip()
                     else None
                 ),
-                note=None,  # AlipayCSV does not override BankCSV.note(); always None.
+                note=None,
                 raw={k: v for k, v in row.items() if v},
             )

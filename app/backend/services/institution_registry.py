@@ -39,56 +39,19 @@ class InstitutionTemplate:
         }
 
 
-# Schwab and BJB stay as hardcoded bridge entries until Task 07 deletes them.
-# Both are out of scope for the CSV parser refactor (brokerage support deferred;
-# BJB cut as YAGNI per 2026-04-15 scope trim). See memory
-# project_csv_parser_refactor.md.
-_LEGACY_BRIDGES: tuple[InstitutionTemplate, ...] = (
-    InstitutionTemplate(
-        id="charles_schwab",
-        display_name="Charles Schwab",
-        parser="schwab",
-        csv_date_format="%m/%d/%Y",
-        suggested_ledger_prefix="Assets:Investments:Schwab",
-        aliases=("schwab",),
-    ),
-    InstitutionTemplate(
-        id="bank_of_beijing",
-        display_name="Bank of Beijing",
-        parser="bjb",
-        csv_date_format="%Y/%m/%d",
-        suggested_ledger_prefix="Assets:Bank:BJB",
-        aliases=("bjb", "beijing-bank", "bank-of-beijing"),
-        head=1,
-        tail=0,
-    ),
-)
-
-
 def _build_registry() -> dict[str, InstitutionTemplate]:
-    """Construct the institution registry from registered adapters + legacy bridges.
+    """Construct the institution registry from registered adapters.
 
     Adapters provide presentation metadata via class attributes (display_name,
     csv_date_format, suggested_ledger_prefix, aliases, head, tail, encoding).
-    Legacy bridges (Schwab, BJB) are hardcoded until Task 07 removes them.
     """
     parsers_registry.discover()
-    out: dict[str, InstitutionTemplate] = {b.id: b for b in _LEGACY_BRIDGES}
+    out: dict[str, InstitutionTemplate] = {}
 
     # Track all aliases for collision detection.
     seen_aliases: dict[str, str] = {}
-    for bridge in _LEGACY_BRIDGES:
-        for alias in (bridge.id, *bridge.aliases):
-            seen_aliases[alias.lower()] = bridge.id
 
     for adapter in parsers_registry.list_adapters():
-        if adapter.institution in out:
-            raise RuntimeError(
-                f"Institution slug collision: {adapter.institution!r} already "
-                f"declared by a legacy bridge"
-            )
-
-        # Check for alias collisions across institutions.
         adapter_aliases = tuple(adapter.aliases)
         for alias in (adapter.institution, *adapter_aliases):
             lower = alias.lower()
