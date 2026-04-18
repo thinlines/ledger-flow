@@ -9,9 +9,9 @@ from typing import Iterator
 from ..registry import register_adapter
 from ..types import Record
 
-# Column names matching IcbcCSV.__init__ at Scripts/BankCSV.py:172-188.
-# The preamble (including the header row) is sliced off by csv_normalizer.py,
-# so the adapter must supply explicit fieldnames to DictReader.
+# ICBC CSV column names. The preamble (including the header row) is sliced
+# off by csv_normalizer.py, so the adapter must supply explicit fieldnames
+# to DictReader.
 FIELDNAMES = [
     "交易日期",
     "摘要",
@@ -85,6 +85,6 @@ class IcbcAdapter:
     def _currency(row: dict) -> str:
         """Per-row currency detection.
 
-        Mirrors Scripts/BankCSV.py:196-198: 美元 → USD, anything else → CNY.
+        Maps 美元 → USD, anything else → CNY.
         """
         return "USD" if row.get("记账币种", "").strip() == "美元" else "CNY"

@@ -39,33 +39,19 @@ class InstitutionTemplate:
         }
 
 
-_LEGACY_BRIDGES: tuple[InstitutionTemplate, ...] = ()
-
-
 def _build_registry() -> dict[str, InstitutionTemplate]:
-    """Construct the institution registry from registered adapters + legacy bridges.
+    """Construct the institution registry from registered adapters.
 
     Adapters provide presentation metadata via class attributes (display_name,
     csv_date_format, suggested_ledger_prefix, aliases, head, tail, encoding).
-    Legacy bridges (BJB) are hardcoded until removed.
     """
     parsers_registry.discover()
-    out: dict[str, InstitutionTemplate] = {b.id: b for b in _LEGACY_BRIDGES}
+    out: dict[str, InstitutionTemplate] = {}
 
     # Track all aliases for collision detection.
     seen_aliases: dict[str, str] = {}
-    for bridge in _LEGACY_BRIDGES:
-        for alias in (bridge.id, *bridge.aliases):
-            seen_aliases[alias.lower()] = bridge.id
 
     for adapter in parsers_registry.list_adapters():
-        if adapter.institution in out:
-            raise RuntimeError(
-                f"Institution slug collision: {adapter.institution!r} already "
-                f"declared by a legacy bridge"
-            )
-
-        # Check for alias collisions across institutions.
         adapter_aliases = tuple(adapter.aliases)
         for alias in (adapter.institution, *adapter_aliases):
             lower = alias.lower()

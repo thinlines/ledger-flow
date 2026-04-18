@@ -17,8 +17,7 @@ FIXTURES_DIR = Path(__file__).parent / "fixtures" / "csv_snapshots"
 # ---------------------------------------------------------------------------
 
 class TestExtractCode:
-    """Exercise every branch of WellsFargoAdapter._extract_code against
-    the same logic as WellsFargoCSV.code() in Scripts/BankCSV.py.
+    """Exercise every branch of WellsFargoAdapter._extract_code.
     """
 
     @pytest.fixture()
