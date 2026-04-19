@@ -3,6 +3,8 @@
   import { apiGet } from '$lib/api';
   import { accountSubtypeLabel } from '$lib/account-subtypes';
   import { normalizeCurrencyCode } from '$lib/currency-format';
+  import DashboardDirection from '$lib/components/dashboard/DashboardDirection.svelte';
+  import type { DirectionData } from '$lib/components/dashboard/direction-types';
 
   type SetupState = {
     needsAccounts: boolean;
@@ -139,6 +141,8 @@
 
   let state: AppState | null = null;
   let dashboard: DashboardOverview | null = null;
+  let direction: DirectionData | null = null;
+  let directionLoading = false;
   let trackedAccounts: TrackedAccount[] = [];
   let overviewAccounts: OverviewAccount[] = [];
   let balanceGroups: BalanceGroup[] = [];
@@ -496,12 +500,19 @@
     try {
       state = await apiGet<AppState>('/api/app/state');
       if (state.initialized) {
+        directionLoading = true;
         const [dashboardData, accountsData] = await Promise.all([
           apiGet<DashboardOverview>('/api/dashboard/overview'),
           apiGet<{ trackedAccounts: TrackedAccount[] }>('/api/tracked-accounts')
         ]);
         dashboard = dashboardData;
         trackedAccounts = accountsData.trackedAccounts;
+
+        // Direction is supplementary — failure must not break the dashboard
+        apiGet<DirectionData>('/api/dashboard/direction')
+          .then((data: DirectionData) => { direction = data; })
+          .catch(() => { direction = null; })
+          .finally(() => { directionLoading = false; });
       }
     } catch (e) {
       error = String(e);
@@ -746,6 +757,8 @@
       {/if}
     </article>
   </section>
+
+  <DashboardDirection {direction} baseCurrency={dashboard.baseCurrency} loading={directionLoading} />
 
   <section class="view-card p-5">
     <div class="mb-4 flex items-start justify-between gap-4 max-tablet:grid max-tablet:grid-cols-1">

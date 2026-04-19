@@ -55,6 +55,7 @@ from services.commodity_service import CommodityMismatchError
 from services.custom_csv_service import inspect_csv_bytes
 from services.activity_service import build_activity_view
 from services.dashboard_service import build_dashboard_overview
+from services.direction_service import build_dashboard_direction
 from services.unified_transactions_service import (
     UnifiedTransactionFilters,
     build_unified_transactions,
@@ -428,6 +429,15 @@ def dashboard_overview() -> dict:
     config = _require_workspace_config()
     try:
         return build_dashboard_overview(config)
+    except CommodityMismatchError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+@app.get("/api/dashboard/direction")
+def dashboard_direction() -> dict:
+    config = _require_workspace_config()
+    try:
+        return build_dashboard_direction(config)
     except CommodityMismatchError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
 
