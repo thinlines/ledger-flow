@@ -67,6 +67,7 @@
   $: dayGroups = groupByDate(postedRows);
   $: pendingCount = pendingRows.length;
   $: pendingTotal = pendingRows.reduce((s: number, r: TxRow) => s + r.amount, 0);
+  $: filteredTotal = postedRows.reduce((s: number, r: TxRow) => s + r.amount, 0);
   $: meta = result?.accountMeta ?? null;
   $: curBal = meta?.currentBalance ?? null;
   $: balPending = curBal !== null ? curBal + pendingTotal : null;
@@ -394,6 +395,12 @@
           </TransactionDayGroup>
         {/each}
       </div>
+      {#if postedRows.length > 0}
+        <div class="sticky bottom-0 flex items-center justify-between border-t border-[rgba(10,61,89,0.08)] bg-white/90 backdrop-blur-sm px-4 py-2 text-sm text-muted-foreground">
+          <span>{postedRows.length} {postedRows.length === 1 ? 'transaction' : 'transactions'}</span>
+          <span class:text-green-600={filteredTotal > 0} class:text-red-500={filteredTotal < 0} class="font-medium">{formatCurrency(filteredTotal, baseCurrency, { signed: true })}</span>
+        </div>
+      {/if}
     {/if}
   </section>
 {/if}
