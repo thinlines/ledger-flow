@@ -29,6 +29,7 @@ from .transaction_helpers import (
     tracked_account_display,
     transaction_summary,
 )
+from .search_parser import SearchTerm, parse_search
 from .transfer_service import (
     is_transfer_account,
     parse_transfer_metadata,
@@ -289,7 +290,17 @@ def build_unified_transactions(
                 ))
 
     # 5. Apply filters.
-    date_range = _resolve_date_range(filters, current_day)
+    search_terms = parse_search(filters.search or "")
+
+    # date: and status: formula terms override their chip counterparts.
+    date_search_terms = [t for t in search_terms if t.field == "date"]
+    status_search_terms = [t for t in search_terms if t.field == "status"]
+
+    if date_search_terms:
+        # Search formula date term overrides chip date filters.
+        date_range = _resolve_search_date_range(date_search_terms[0], current_day)
+    else:
+        date_range = _resolve_date_range(filters, current_day)
 
     if date_range is not None:
         unified_rows = [r for r in unified_rows if date_range.start <= r.event.posted_on <= date_range.end]
@@ -297,13 +308,18 @@ def build_unified_transactions(
     if filters.categories:
         unified_rows = _filter_by_categories(unified_rows, filters.categories)
 
-    if filters.status:
+    if status_search_terms:
+        # Search formula status term overrides chip status filter.
+        status_set = {t.value for t in status_search_terms}
+        unified_rows = [r for r in unified_rows if r.event.clearing_status in status_set]
+    elif filters.status:
         status_set = set(filters.status)
         unified_rows = [r for r in unified_rows if r.event.clearing_status in status_set]
 
-    if filters.search:
-        search_lower = filters.search.lower()
-        unified_rows = [r for r in unified_rows if search_lower in r.event.payee.lower()]
+    # Apply remaining (non-date, non-status) search terms.
+    non_override_terms = [t for t in search_terms if t.field not in ("date", "status")]
+    if non_override_terms:
+        unified_rows = _apply_search_terms(unified_rows, non_override_terms)
 
     # 6. Sort.
     unified_rows.sort(key=lambda r: (r.event.posted_on, r.event.order))
@@ -342,6 +358,87 @@ def build_unified_transactions(
 
 
 # -- Internal helpers --
+
+
+def _resolve_search_date_range(term: SearchTerm, today: date) -> PeriodRange | None:
+    """Resolve a date: search term into a PeriodRange."""
+    val = term.value
+    if val == "this-month":
+        start = first_of_month(today.year, today.month)
+        end = last_day_of_month(start)
+        return PeriodRange(start, end)
+    if val == "last-month":
+        y, m = shift_month(today.year, today.month, -1)
+        start = first_of_month(y, m)
+        end = last_day_of_month(start)
+        return PeriodRange(start, end)
+    if val == "this-year":
+        start = date(today.year, 1, 1)
+        end = date(today.year, 12, 31)
+        return PeriodRange(start, end)
+    # YYYY-MM
+    if len(val) == 7 and val[4:5] == "-":
+        try:
+            y, m = int(val[:4]), int(val[5:7])
+            start = first_of_month(y, m)
+            end = last_day_of_month(start)
+            return PeriodRange(start, end)
+        except (ValueError, OverflowError):
+            return None
+    # YYYY-MM-DD
+    if len(val) == 10 and val[4:5] == "-" and val[7:8] == "-":
+        try:
+            d = date.fromisoformat(val)
+            return PeriodRange(d, d)
+        except ValueError:
+            return None
+    return None
+
+
+def _apply_search_terms(
+    rows: list[_UnifiedRow],
+    terms: list[SearchTerm],
+) -> list[_UnifiedRow]:
+    """Filter rows by AND-combining all search terms."""
+    for term in terms:
+        rows = [r for r in rows if _row_matches_term(r, term)]
+    return rows
+
+
+def _row_matches_term(row: _UnifiedRow, term: SearchTerm) -> bool:
+    """Test whether a single unified row matches a single search term."""
+    if term.field == "payee":
+        return term.value.lower() in row.event.payee.lower()
+
+    if term.field == "amount":
+        abs_amount = abs(row.event.amount)
+        if term.operator == "gt":
+            return abs_amount > term.value_num
+        if term.operator == "lt":
+            return abs_amount < term.value_num
+        if term.operator == "gte":
+            return abs_amount >= term.value_num
+        if term.operator == "lte":
+            return abs_amount <= term.value_num
+        if term.operator == "eq":
+            return abs_amount == term.value_num
+        if term.operator == "range":
+            return term.value_num <= abs_amount <= term.value_num_end
+        return False
+
+    if term.field == "category":
+        val_lower = term.value.lower()
+        for cat in row.categories:
+            label = cat.get("label", "")
+            if val_lower in label.lower():
+                return True
+        return False
+
+    if term.field == "account":
+        return term.value.lower() in row.account_label.lower()
+
+    # date and status are handled before this function is called.
+    return True
 
 
 def _build_categories(transaction, tracked_ledger_account: str) -> list[dict]:
