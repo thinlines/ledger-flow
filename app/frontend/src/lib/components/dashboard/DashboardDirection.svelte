@@ -174,12 +174,19 @@
           {#if direction.netWorthTrend && direction.netWorthTrend.length >= 2}
             {@const trend = sparklineTrending(direction.netWorthTrend)}
             {@const lastValue = direction.netWorthTrend[direction.netWorthTrend.length - 1].value}
+            {@const values = direction.netWorthTrend.map((d) => d.value)}
+            {@const minVal = Math.min(...values)}
+            {@const maxVal = Math.max(...values)}
             <p class="m-0 mb-1 text-xs font-bold uppercase tracking-wider text-muted-foreground">Net worth trend</p>
             <p class="m-0 font-display text-2xl font-bold {trend === 'up' ? 'text-ok' : trend === 'down' ? 'text-bad' : ''}">
               {fmt(lastValue, { compact: true })}
             </p>
-            <div class="mt-2">
-              <svg viewBox="0 0 200 48" class="block h-12 w-full" preserveAspectRatio="none">
+            <div class="mt-2 flex items-stretch gap-1">
+              <div class="flex flex-col justify-between text-[10px] text-muted-foreground leading-none">
+                <span>{fmt(maxVal, { compact: true })}</span>
+                <span>{fmt(minVal, { compact: true })}</span>
+              </div>
+              <svg viewBox="0 0 200 48" class="block h-12 flex-1" preserveAspectRatio="none">
                 <polyline
                   points={sparklinePoints(direction.netWorthTrend, 200, 48)}
                   fill="none"
