@@ -134,6 +134,7 @@ class WorkspaceImportAccountRequest(BaseModel):
     openingBalance: str | None = None
     openingBalanceDate: str | None = Field(default=None, pattern=DATE_PATTERN)
     openingBalanceOffsetAccountId: str | None = None
+    minimumPayment: str | None = None
 
 
 class WorkspaceBootstrapRequest(BaseModel):
@@ -182,6 +183,7 @@ class CustomImportAccountUpsertRequest(BaseModel):
     openingBalance: str | None = None
     openingBalanceDate: str | None = Field(default=None, pattern=DATE_PATTERN)
     openingBalanceOffsetAccountId: str | None = None
+    minimumPayment: str | None = None
     customProfile: CustomCsvProfileRequest
 
 
@@ -231,3 +233,4 @@ class TrackedAccountUpsertRequest(BaseModel):
     openingBalance: str | None = None
     openingBalanceDate: str | None = Field(default=None, pattern=DATE_PATTERN)
     openingBalanceOffsetAccountId: str | None = None
+    minimumPayment: str | None = None

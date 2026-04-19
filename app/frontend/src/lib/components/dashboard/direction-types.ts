@@ -2,6 +2,7 @@ export type RunwayData = {
   months: number;
   spendableCash: number;
   avgMonthlySpending: number;
+  monthlyObligations: number;
 };
 
 export type NetWorthPoint = {

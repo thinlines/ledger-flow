@@ -67,6 +67,7 @@
     openingBalance?: string | null;
     openingBalanceDate?: string | null;
     openingBalanceOffsetAccountId?: string | null;
+    minimumPayment?: string | null;
   };
 
   type DashboardOverview = {
@@ -117,6 +118,7 @@
     openingBalance: string;
     openingBalanceDate: string;
     openingBalanceOffsetAccountId: string;
+    minimumPayment: string;
     customProfile: CustomProfileDraft;
   };
 
@@ -240,6 +242,7 @@
       openingBalance: '0',
       openingBalanceDate: openingBalanceDateForDraft(null),
       openingBalanceOffsetAccountId: '',
+      minimumPayment: '',
       customProfile: newCustomProfileDraft()
     };
   }
@@ -564,6 +567,7 @@
       openingBalance: account.openingBalance ?? '',
       openingBalanceDate: openingBalanceDateForDraft(account.openingBalanceDate),
       openingBalanceOffsetAccountId: account.openingBalanceOffsetAccountId ?? '',
+      minimumPayment: account.minimumPayment ?? '',
       customProfile: profileDraftFromAccount(account)
     });
     showAdvancedSettings = false;
@@ -731,7 +735,8 @@
       last4: draft.last4.trim() || null,
       openingBalance: draft.openingBalance,
       openingBalanceDate: draft.openingBalanceDate || null,
-      openingBalanceOffsetAccountId: draft.openingBalanceOffsetAccountId || null
+      openingBalanceOffsetAccountId: draft.openingBalanceOffsetAccountId || null,
+      minimumPayment: draft.minimumPayment.trim() || null
     };
 
     saving = true;
@@ -746,7 +751,8 @@
           subtype: payload.subtype,
           last4: payload.last4,
           openingBalance: payload.openingBalance,
-          openingBalanceDate: payload.openingBalanceDate
+          openingBalanceDate: payload.openingBalanceDate,
+          minimumPayment: payload.minimumPayment
         });
       } else if (editorMode === 'custom') {
         await apiPost('/api/workspace/custom-import-accounts', {
@@ -757,6 +763,7 @@
           last4: payload.last4,
           openingBalance: payload.openingBalance,
           openingBalanceDate: payload.openingBalanceDate,
+          minimumPayment: payload.minimumPayment,
           customProfile: customProfilePayload()
         });
       } else {
@@ -1017,6 +1024,19 @@
         </select>
         <p class="muted text-sm">{openingBalanceOffsetHint()}</p>
       </div>
+
+      {#if draft.kind === 'liability'}
+        <div class="field">
+          <label for="minimumPayment">Minimum monthly payment</label>
+          <input
+            id="minimumPayment"
+            value={draft.minimumPayment}
+            placeholder="1850.00"
+            on:input={(e) => updateDraft({ minimumPayment: (e.currentTarget as HTMLInputElement).value })}
+          />
+          <p class="muted text-sm">The minimum required payment each month (mortgage, loan, credit card). Used to calculate your financial runway.</p>
+        </div>
+      {/if}
 
       <details class="advanced-panel" bind:open={showAdvancedSettings}>
         <summary>Advanced account settings</summary>

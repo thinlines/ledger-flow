@@ -133,13 +133,25 @@ def build_dashboard_direction(config: AppConfig, *, today: date | None = None) -
     )
     avg_monthly_spending_6m = total_spending_6m / 6 if trailing_6 else Decimal("0")
 
+    # Sum minimum payments across all tracked liabilities with the field set
+    monthly_obligations = Decimal("0")
+    for account_id, account_cfg in config.tracked_accounts.items():
+        ledger_account = str(account_cfg.get("ledger_account", "")).strip()
+        if not ledger_account or infer_account_kind(ledger_account) != "liability":
+            continue
+        ob_entry = opening_by_ledger_account.get(ledger_account)
+        if ob_entry and ob_entry.minimum_payment:
+            monthly_obligations += abs(ob_entry.minimum_payment)
+
     runway = None
-    if avg_monthly_spending_6m > 0:
-        months_of_runway = float(spendable_cash / avg_monthly_spending_6m)
+    total_monthly_burn = avg_monthly_spending_6m + monthly_obligations
+    if total_monthly_burn > 0:
+        months_of_runway = float(spendable_cash / total_monthly_burn)
         runway = {
             "months": round(months_of_runway, 1),
             "spendableCash": amount_to_number(spendable_cash),
             "avgMonthlySpending": amount_to_number(avg_monthly_spending_6m),
+            "monthlyObligations": amount_to_number(monthly_obligations),
         }
 
     # -----------------------------------------------------------------------

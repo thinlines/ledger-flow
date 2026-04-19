@@ -216,6 +216,7 @@ def _tracked_account_ui(
         "openingBalance": str(opening_entry.amount) if opening_entry is not None else None,
         "openingBalanceDate": opening_entry.date if opening_entry is not None else None,
         "openingBalanceOffsetAccountId": opening_balance_offset_account_id,
+        "minimumPayment": str(opening_entry.minimum_payment) if opening_entry and opening_entry.minimum_payment is not None else None,
     }
 
 
@@ -1171,6 +1172,7 @@ def workspace_import_account_upsert(req: WorkspaceImportAccountUpsertRequest) ->
             opening_balance=req.openingBalance,
             opening_balance_date=req.openingBalanceDate,
             opening_balance_offset_account_id=_opening_balance_offset_request_value(req),
+            minimum_payment=req.minimumPayment,
         )
     except (OSError, ValueError) as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
@@ -1208,6 +1210,7 @@ def workspace_custom_import_account_upsert(req: CustomImportAccountUpsertRequest
             opening_balance=req.openingBalance,
             opening_balance_date=req.openingBalanceDate,
             opening_balance_offset_account_id=_opening_balance_offset_request_value(req),
+            minimum_payment=req.minimumPayment,
         )
     except (OSError, ValueError) as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
@@ -1259,6 +1262,7 @@ def tracked_account_upsert(req: TrackedAccountUpsertRequest) -> dict:
             opening_balance=req.openingBalance,
             opening_balance_date=req.openingBalanceDate,
             opening_balance_offset_account_id=_opening_balance_offset_request_value(req),
+            minimum_payment=req.minimumPayment,
         )
     except (OSError, ValueError) as e:
         raise HTTPException(status_code=400, detail=str(e)) from e

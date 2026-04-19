@@ -24,6 +24,7 @@ class OpeningBalanceEntry:
     offset_account: str
     amount: Decimal
     date: str
+    minimum_payment: Decimal | None = None
 
 
 def _parse_amount(raw: str) -> Decimal | None:
@@ -63,6 +64,7 @@ def _entry_from_transaction(lines: list[str]) -> OpeningBalanceEntry | None:
         return None
 
     tracked_account_id: str | None = None
+    minimum_payment: Decimal | None = None
     postings: list[tuple[str, Decimal | None]] = []
 
     for line in lines[1:]:
@@ -71,6 +73,8 @@ def _entry_from_transaction(lines: list[str]) -> OpeningBalanceEntry | None:
             key = meta_match.group(1).strip().lower()
             if key == "tracked_account_id":
                 tracked_account_id = meta_match.group(2).strip() or None
+            elif key == "minimum_payment":
+                minimum_payment = _parse_amount(meta_match.group(2).strip())
             continue
 
         posting_match = POSTING_RE.match(line)
@@ -107,6 +111,7 @@ def _entry_from_transaction(lines: list[str]) -> OpeningBalanceEntry | None:
         offset_account=offset_account,
         amount=primary_amount,
         date=header_match.group("date").replace("/", "-"),
+        minimum_payment=minimum_payment,
     )
 
 
@@ -166,6 +171,7 @@ def write_opening_balance(
     amount_text: str,
     opening_date: str | None = None,
     offset_account: str = OPENING_BALANCES_EQUITY,
+    minimum_payment: str | None = None,
 ) -> None:
     cleaned_amount = amount_text.strip()
     target_path = config.opening_bal_dir / f"{tracked_account_id}.journal"
@@ -187,11 +193,19 @@ def write_opening_balance(
     offset_ledger_account = offset_account.strip() or OPENING_BALANCES_EQUITY
     currency = str(config.workspace.get("base_currency", "USD")).strip() or "USD"
     target_path.parent.mkdir(parents=True, exist_ok=True)
+    meta_lines = [
+        f"    ; tracked_account_id: {tracked_account_id}",
+    ]
+    cleaned_min_payment = (minimum_payment or "").strip()
+    if cleaned_min_payment:
+        parsed_min_payment = _parse_amount(cleaned_min_payment)
+        if parsed_min_payment is not None:
+            meta_lines.append(f"    ; minimum_payment: {_format_amount(parsed_min_payment)}")
     target_path.write_text(
         "\n".join(
             [
                 f"{date} Opening balance",
-                f"    ; tracked_account_id: {tracked_account_id}",
+                *meta_lines,
                 f"    {ledger_account}  {currency} {_format_amount(amount)}",
                 f"    {offset_ledger_account}",
                 "",

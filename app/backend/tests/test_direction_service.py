@@ -456,3 +456,207 @@ def test_all_signals_null_gracefully(tmp_path: Path) -> None:
     assert result["notableSignals"]["largestThisWeek"] is None
     assert result["notableSignals"]["categorySpike"] is None
     assert result["notableSignals"]["spendingStreak"] is None
+
+
+# ---------------------------------------------------------------------------
+# Runway with minimum payment obligations
+# ---------------------------------------------------------------------------
+
+
+def test_runway_includes_minimum_payments(tmp_path: Path) -> None:
+    """Runway formula should be cash / (expenses + obligations)."""
+    config = _make_config(tmp_path / "workspace")
+
+    # Write an opening balance with minimum_payment for the visa liability
+    (config.opening_bal_dir / "visa.journal").write_text(
+        "\n".join([
+            "2026-01-01 Opening balance",
+            "    ; tracked_account_id: visa",
+            "    ; minimum_payment: 500.00",
+            "    Liabilities:Cards:Visa  USD -5000.00",
+            "    Equity:Opening-Balances",
+            "",
+        ]),
+        encoding="utf-8",
+    )
+
+    # 6 months of spending at $1000/mo, income at $2000/mo
+    journal = ""
+    for month_num in range(11, 17):
+        year = 2025 if month_num <= 12 else 2026
+        m = month_num if month_num <= 12 else month_num - 12
+        journal += f"""
+{year:04d}/{m:02d}/15 Paycheck
+    ; import_account_id: checking
+    Assets:Bank:Checking  $2000.00
+    Income:Salary
+
+{year:04d}/{m:02d}/20 Rent
+    ; import_account_id: checking
+    Expenses:Housing:Rent  $1000.00
+    Assets:Bank:Checking
+"""
+    _write_journal(config, "2025.journal", "")
+    (config.journal_dir / "2025.journal").write_text(journal, encoding="utf-8")
+    ensure_workspace_journal_includes(config)
+
+    result = build_dashboard_direction(config, today=date(2026, 4, 18))
+
+    assert result["runway"] is not None
+    # spendable cash = 6 * $2000 - 6 * $1000 = $6000
+    assert result["runway"]["spendableCash"] == 6000.0
+    assert result["runway"]["avgMonthlySpending"] == 1000.0
+    assert result["runway"]["monthlyObligations"] == 500.0
+    # runway = 6000 / (1000 + 500) = 4.0
+    assert result["runway"]["months"] == 4.0
+
+
+def test_runway_no_minimum_payments_zero_obligations(tmp_path: Path) -> None:
+    """When no liabilities have minimum payments, monthlyObligations is 0."""
+    config = _make_config(tmp_path / "workspace")
+
+    # 6 months of spending
+    journal = ""
+    for month_num in range(11, 17):
+        year = 2025 if month_num <= 12 else 2026
+        m = month_num if month_num <= 12 else month_num - 12
+        journal += f"""
+{year:04d}/{m:02d}/15 Paycheck
+    ; import_account_id: checking
+    Assets:Bank:Checking  $2000.00
+    Income:Salary
+
+{year:04d}/{m:02d}/20 Rent
+    ; import_account_id: checking
+    Expenses:Housing:Rent  $1000.00
+    Assets:Bank:Checking
+"""
+    _write_journal(config, "2025.journal", "")
+    (config.journal_dir / "2025.journal").write_text(journal, encoding="utf-8")
+    ensure_workspace_journal_includes(config)
+
+    result = build_dashboard_direction(config, today=date(2026, 4, 18))
+
+    assert result["runway"] is not None
+    assert result["runway"]["monthlyObligations"] == 0.0
+    # Without obligations, runway = 6000 / 1000 = 6.0
+    assert result["runway"]["months"] == 6.0
+
+
+def test_runway_with_obligations_only_no_spending(tmp_path: Path) -> None:
+    """Runway should work even with zero spending if obligations exist."""
+    config = _make_config(tmp_path / "workspace")
+
+    # Opening balance with minimum_payment for visa
+    (config.opening_bal_dir / "visa.journal").write_text(
+        "\n".join([
+            "2026-01-01 Opening balance",
+            "    ; tracked_account_id: visa",
+            "    ; minimum_payment: 500.00",
+            "    Liabilities:Cards:Visa  USD -5000.00",
+            "    Equity:Opening-Balances",
+            "",
+        ]),
+        encoding="utf-8",
+    )
+
+    # Provide spendable cash via journal transaction (not opening balance)
+    _write_journal(
+        config,
+        "2025.journal",
+        "\n".join([
+            "2025/12/01 Deposit",
+            "    ; import_account_id: checking",
+            "    Assets:Bank:Checking  $6000.00",
+            "    Income:Salary",
+            "",
+        ]),
+    )
+
+    result = build_dashboard_direction(config, today=date(2026, 4, 18))
+
+    assert result["runway"] is not None
+    assert result["runway"]["spendableCash"] == 6000.0
+    assert result["runway"]["avgMonthlySpending"] == 0.0
+    assert result["runway"]["monthlyObligations"] == 500.0
+    # runway = 6000 / (0 + 500) = 12.0
+    assert result["runway"]["months"] == 12.0
+
+
+def test_runway_negative_minimum_payment_uses_abs(tmp_path: Path) -> None:
+    """Negative minimum_payment should be treated as positive obligation."""
+    config = _make_config(tmp_path / "workspace")
+
+    (config.opening_bal_dir / "visa.journal").write_text(
+        "\n".join([
+            "2026-01-01 Opening balance",
+            "    ; tracked_account_id: visa",
+            "    ; minimum_payment: -500.00",
+            "    Liabilities:Cards:Visa  USD -5000.00",
+            "    Equity:Opening-Balances",
+            "",
+        ]),
+        encoding="utf-8",
+    )
+
+    journal = ""
+    for month_num in range(11, 17):
+        year = 2025 if month_num <= 12 else 2026
+        m = month_num if month_num <= 12 else month_num - 12
+        journal += f"""
+{year:04d}/{m:02d}/15 Paycheck
+    ; import_account_id: checking
+    Assets:Bank:Checking  $2000.00
+    Income:Salary
+
+{year:04d}/{m:02d}/20 Rent
+    ; import_account_id: checking
+    Expenses:Housing:Rent  $1000.00
+    Assets:Bank:Checking
+"""
+    _write_journal(config, "2025.journal", "")
+    (config.journal_dir / "2025.journal").write_text(journal, encoding="utf-8")
+    ensure_workspace_journal_includes(config)
+
+    result = build_dashboard_direction(config, today=date(2026, 4, 18))
+
+    assert result["runway"] is not None
+    assert result["runway"]["monthlyObligations"] == 500.0
+
+
+def test_runway_asset_minimum_payment_ignored(tmp_path: Path) -> None:
+    """minimum_payment on an asset account should NOT count as obligation."""
+    config = _make_config(tmp_path / "workspace")
+
+    # Weird: minimum_payment on an asset opening balance
+    (config.opening_bal_dir / "checking.journal").write_text(
+        "\n".join([
+            "2026-01-01 Opening balance",
+            "    ; tracked_account_id: checking",
+            "    ; minimum_payment: 999.00",
+            "    Assets:Bank:Checking  USD 6000.00",
+            "    Equity:Opening-Balances",
+            "",
+        ]),
+        encoding="utf-8",
+    )
+
+    journal = ""
+    for month_num in range(11, 17):
+        year = 2025 if month_num <= 12 else 2026
+        m = month_num if month_num <= 12 else month_num - 12
+        journal += f"""
+{year:04d}/{m:02d}/20 Rent
+    ; import_account_id: checking
+    Expenses:Housing:Rent  $1000.00
+    Assets:Bank:Checking
+"""
+    _write_journal(config, "2025.journal", "")
+    (config.journal_dir / "2025.journal").write_text(journal, encoding="utf-8")
+    ensure_workspace_journal_includes(config)
+
+    result = build_dashboard_direction(config, today=date(2026, 4, 18))
+
+    assert result["runway"] is not None
+    # Asset minimum_payment should be ignored
+    assert result["runway"]["monthlyObligations"] == 0.0

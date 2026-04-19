@@ -161,7 +161,11 @@
               ></div>
             </div>
             <p class="m-0 mt-1.5 text-xs text-muted-foreground">
-              {fmt(direction.runway.spendableCash, { compact: true })} at {fmt(direction.runway.avgMonthlySpending, { compact: true })}/mo
+              {#if direction.runway.monthlyObligations > 0}
+                {fmt(direction.runway.spendableCash, { compact: true })} at {fmt(direction.runway.avgMonthlySpending, { compact: true })} expenses + {fmt(direction.runway.monthlyObligations, { compact: true })} obligations/mo
+              {:else}
+                {fmt(direction.runway.spendableCash, { compact: true })} at {fmt(direction.runway.avgMonthlySpending, { compact: true })}/mo
+              {/if}
             </p>
           {:else}
             <p class="m-0 mb-1 text-xs font-bold uppercase tracking-wider text-muted-foreground">Runway</p>

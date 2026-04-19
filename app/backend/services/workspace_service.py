@@ -685,6 +685,7 @@ class WorkspaceManager:
         opening_balance: str | None = None,
         opening_balance_date: str | None = None,
         opening_balance_offset_account_id: object = OPENING_BALANCE_OFFSET_ACCOUNT_UNSET,
+        minimum_payment: str | None = None,
     ) -> None:
         openings_by_id, _ = opening_balance_index(config)
         existing = openings_by_id.get(tracked_account_id)
@@ -696,6 +697,12 @@ class WorkspaceManager:
             opening_balance_offset_account_id=opening_balance_offset_account_id,
         )
 
+        # Resolve effective minimum_payment: explicit value wins,
+        # then fall back to what's already stored.
+        effective_min_payment = minimum_payment
+        if effective_min_payment is None and existing is not None and existing.minimum_payment is not None:
+            effective_min_payment = str(existing.minimum_payment)
+
         if opening_balance is not None:
             write_opening_balance(
                 config,
@@ -704,6 +711,7 @@ class WorkspaceManager:
                 opening_balance,
                 opening_balance_date,
                 offset_account=offset_account,
+                minimum_payment=effective_min_payment,
             )
             return
 
@@ -717,6 +725,7 @@ class WorkspaceManager:
             str(existing.amount),
             opening_balance_date or existing.date,
             offset_account=offset_account,
+            minimum_payment=effective_min_payment,
         )
 
     def _resolve_opening_balance_offset_account(
@@ -1035,6 +1044,7 @@ class WorkspaceManager:
         opening_balance: str | None = None,
         opening_balance_date: str | None = None,
         opening_balance_offset_account_id: object = OPENING_BALANCE_OFFSET_ACCOUNT_UNSET,
+        minimum_payment: str | None = None,
     ) -> tuple[str, dict]:
         existing_accounts = {
             key: dict(value)
@@ -1124,6 +1134,7 @@ class WorkspaceManager:
             opening_balance=opening_balance,
             opening_balance_date=opening_balance_date,
             opening_balance_offset_account_id=opening_balance_offset_account_id,
+            minimum_payment=minimum_payment,
         )
 
         return normalized["id"], existing_accounts[normalized["id"]]
@@ -1137,6 +1148,7 @@ class WorkspaceManager:
         opening_balance: str | None = None,
         opening_balance_date: str | None = None,
         opening_balance_offset_account_id: object = OPENING_BALANCE_OFFSET_ACCOUNT_UNSET,
+        minimum_payment: str | None = None,
     ) -> tuple[str, dict]:
         existing_accounts = {
             key: dict(value)
@@ -1227,6 +1239,7 @@ class WorkspaceManager:
             opening_balance=opening_balance,
             opening_balance_date=opening_balance_date,
             opening_balance_offset_account_id=opening_balance_offset_account_id,
+            minimum_payment=minimum_payment,
         )
 
         return normalized["id"], existing_accounts[normalized["id"]]
@@ -1240,6 +1253,7 @@ class WorkspaceManager:
         opening_balance: str | None = None,
         opening_balance_date: str | None = None,
         opening_balance_offset_account_id: object = OPENING_BALANCE_OFFSET_ACCOUNT_UNSET,
+        minimum_payment: str | None = None,
     ) -> tuple[str, dict]:
         existing_tracked_accounts = {
             key: dict(value)
@@ -1305,5 +1319,6 @@ class WorkspaceManager:
             opening_balance=opening_balance,
             opening_balance_date=opening_balance_date,
             opening_balance_offset_account_id=opening_balance_offset_account_id,
+            minimum_payment=minimum_payment,
         )
         return normalized["id"], existing_tracked_accounts[normalized["id"]]
