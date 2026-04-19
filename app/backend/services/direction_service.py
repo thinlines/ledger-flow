@@ -116,10 +116,16 @@ def build_dashboard_direction(config: AppConfig, *, today: date | None = None) -
         for cfg in config.tracked_accounts.values()
     }
 
+    LIQUID_SUBTYPES = {"checking", "savings", "cash"}
+    FIXED_ASSET_SUBTYPES = {"vehicle", "real_estate"}
+
     spendable_cash = Decimal("0")
     for account_id, account_cfg in config.tracked_accounts.items():
         ledger_account = str(account_cfg.get("ledger_account", "")).strip()
-        if ledger_account and infer_account_kind(ledger_account) == "asset":
+        if not ledger_account or infer_account_kind(ledger_account) != "asset":
+            continue
+        subtype = account_cfg.get("subtype")
+        if subtype is None or subtype in LIQUID_SUBTYPES:
             spendable_cash += account_balances.get(ledger_account, Decimal("0"))
 
     total_spending_6m = sum(
@@ -299,11 +305,14 @@ def build_dashboard_direction(config: AppConfig, *, today: date | None = None) -
         pass
 
     # Stale accounts (> 30 days since last transaction)
+    # Skip fixed assets (vehicles, real estate) — inactivity is expected, not a loose end.
     stale_threshold = current_day - timedelta(days=30)
     stale_accounts: list[dict] = []
     for account_id, account_cfg in config.tracked_accounts.items():
         ledger_account = str(account_cfg.get("ledger_account", "")).strip()
         if not ledger_account:
+            continue
+        if account_cfg.get("subtype") in FIXED_ASSET_SUBTYPES:
             continue
         last_date = account_last_transaction.get(ledger_account)
         if last_date is not None and last_date < stale_threshold:
