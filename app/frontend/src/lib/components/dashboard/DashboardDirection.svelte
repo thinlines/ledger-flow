@@ -147,11 +147,11 @@
 
       <div class="grid grid-cols-3 gap-4 max-tablet:grid-cols-1">
         <!-- Runway gauge -->
-        <div class="direction-tile rounded-xl border border-card-edge p-4">
+        <div class="rounded-xl border border-card-edge bg-white/60 p-4">
           {#if direction.runway}
             {@const rc = runwayColor(direction.runway.months)}
             <p class="m-0 mb-1 text-xs font-bold uppercase tracking-wider text-muted-foreground">Runway</p>
-            <p class="m-0 font-display text-2xl font-bold direction-value-{rc}">
+            <p class="m-0 font-display text-2xl font-bold {rc === 'ok' ? 'text-ok' : rc === 'caution' ? 'text-warn' : 'text-bad'}">
               {direction.runway.months} months
             </p>
             <div class="mt-2 h-2.5 overflow-hidden rounded-full bg-card-edge">
@@ -170,16 +170,16 @@
         </div>
 
         <!-- Net worth sparkline -->
-        <div class="direction-tile rounded-xl border border-card-edge p-4">
+        <div class="rounded-xl border border-card-edge bg-white/60 p-4">
           {#if direction.netWorthTrend && direction.netWorthTrend.length >= 2}
             {@const trend = sparklineTrending(direction.netWorthTrend)}
             {@const lastValue = direction.netWorthTrend[direction.netWorthTrend.length - 1].value}
             <p class="m-0 mb-1 text-xs font-bold uppercase tracking-wider text-muted-foreground">Net worth trend</p>
-            <p class="m-0 font-display text-2xl font-bold {trend === 'up' ? 'direction-value-ok' : trend === 'down' ? 'direction-value-concern' : ''}">
+            <p class="m-0 font-display text-2xl font-bold {trend === 'up' ? 'text-ok' : trend === 'down' ? 'text-bad' : ''}">
               {fmt(lastValue, { compact: true })}
             </p>
             <div class="mt-2">
-              <svg viewBox="0 0 200 48" class="sparkline-svg w-full" preserveAspectRatio="none">
+              <svg viewBox="0 0 200 48" class="block h-12 w-full" preserveAspectRatio="none">
                 <polyline
                   points={sparklinePoints(direction.netWorthTrend, 200, 48)}
                   fill="none"
@@ -200,7 +200,7 @@
         </div>
 
         <!-- Recurring vs discretionary -->
-        <div class="direction-tile rounded-xl border border-card-edge p-4">
+        <div class="rounded-xl border border-card-edge bg-white/60 p-4">
           {#if direction.recurringVsDiscretionary.total > 0}
             <p class="m-0 mb-1 text-xs font-bold uppercase tracking-wider text-muted-foreground">Spending split</p>
             <p class="m-0 font-display text-2xl font-bold">
@@ -218,11 +218,11 @@
             </div>
             <div class="mt-1.5 flex items-center justify-between gap-2 text-xs text-muted-foreground">
               <span>
-                <span class="recurring-dot mr-1 inline-block h-2 w-2 rounded-full"></span>
+                <span class="mr-1 inline-block h-2 w-2 rounded-full bg-brand"></span>
                 Recurring {fmt(direction.recurringVsDiscretionary.recurring, { compact: true })}
               </span>
               <span>
-                <span class="discretionary-dot mr-1 inline-block h-2 w-2 rounded-full"></span>
+                <span class="mr-1 inline-block h-2 w-2 rounded-full bg-ok"></span>
                 Flex {fmt(direction.recurringVsDiscretionary.discretionary, { compact: true })}
               </span>
             </div>
@@ -279,22 +279,6 @@
 {/if}
 
 <style>
-  .direction-tile {
-    background: rgba(255, 255, 255, 0.6);
-  }
-
-  .direction-value-ok {
-    color: var(--ok);
-  }
-
-  .direction-value-caution {
-    color: var(--warn);
-  }
-
-  .direction-value-concern {
-    color: var(--bad);
-  }
-
   .runway-ok {
     background: linear-gradient(90deg, #1d9f6e, #6fd6ae);
   }
@@ -313,19 +297,6 @@
 
   .discretionary-bar {
     background: linear-gradient(90deg, #1d9f6e, #6fd6ae);
-  }
-
-  .recurring-dot {
-    background: #0f5f88;
-  }
-
-  .discretionary-dot {
-    background: #1d9f6e;
-  }
-
-  .sparkline-svg {
-    height: 48px;
-    display: block;
   }
 
   .signal-bullet::before {

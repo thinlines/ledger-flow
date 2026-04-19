@@ -5,8 +5,10 @@ from datetime import date, timedelta
 from decimal import Decimal
 
 from .config_service import AppConfig, infer_account_kind
+from .dashboard_service import _primary_posting, _primary_account_display
 from .journal_query_service import (
     ParsedTransaction,
+    Posting,
     amount_to_number,
     is_generated_opening_balance_transaction,
     load_transactions,
@@ -34,23 +36,25 @@ def _month_window(today: date, count: int) -> list[str]:
     return keys
 
 
-def _primary_account_display(transaction: ParsedTransaction, config: AppConfig) -> str:
-    """Return a human-readable account label for the primary tracked posting."""
-    for posting in transaction.postings:
-        for account_id, account_cfg in config.tracked_accounts.items():
-            ledger_account = str(account_cfg.get("ledger_account", "")).strip()
-            if ledger_account and posting.account == ledger_account:
-                return str(account_cfg.get("display_name", account_id))
-    return pretty_account_name(transaction.postings[0].account) if transaction.postings else "Unknown"
+def _matches_base_currency(posting: Posting, base_currency: str) -> bool:
+    """Return True if the posting's commodity matches the base currency or is unmarked."""
+    from .commodity_service import BASE_CURRENCY_SYMBOLS
+
+    if posting.commodity is None:
+        return True
+    symbol = BASE_CURRENCY_SYMBOLS.get(base_currency)
+    return posting.commodity == base_currency or posting.commodity == symbol
 
 
 def build_dashboard_direction(config: AppConfig, *, today: date | None = None) -> dict:
     current_day = today or date.today()
     transactions = load_transactions(config)
     _, opening_by_ledger_account = opening_balance_index(config)
+    base_currency = str(config.workspace.get("base_currency", "USD"))
 
     # -----------------------------------------------------------------------
     # Accumulate per-account balances, monthly spending/income, category data
+    # Filter postings to the base currency to avoid cross-commodity math.
     # -----------------------------------------------------------------------
     account_balances: defaultdict[str, Decimal] = defaultdict(Decimal)
     account_last_transaction: dict[str, date] = {}
@@ -71,6 +75,8 @@ def build_dashboard_direction(config: AppConfig, *, today: date | None = None) -
 
         for posting in transaction.postings:
             if posting.amount is None:
+                continue
+            if not _matches_base_currency(posting, base_currency):
                 continue
 
             kind = infer_account_kind(posting.account)
@@ -137,14 +143,14 @@ def build_dashboard_direction(config: AppConfig, *, today: date | None = None) -
     # sorted by date.
     month_end_net_worth: dict[str, float] = {}
 
-    # Accumulate all postings (including opening balances) by month
-    running_nw = Decimal("0")
     # Gather all (month, amount) pairs from asset/liability postings
     monthly_nw_delta: defaultdict[str, Decimal] = defaultdict(Decimal)
     for txn in transactions:
         m = _month_key(txn.posted_on)
         for posting in txn.postings:
             if posting.amount is None:
+                continue
+            if not _matches_base_currency(posting, base_currency):
                 continue
             if infer_account_kind(posting.account) in {"asset", "liability"}:
                 monthly_nw_delta[m] += posting.amount
@@ -229,7 +235,7 @@ def build_dashboard_direction(config: AppConfig, *, today: date | None = None) -
                         "payee": txn.payee,
                         "amount": amount_to_number(posting.amount),
                         "date": txn.posted_on.isoformat(),
-                        "accountLabel": _primary_account_display(txn, config),
+                        "accountLabel": _primary_account_display(_primary_posting(txn, config), config)[0],
                     }
 
     # -----------------------------------------------------------------------
@@ -341,5 +347,5 @@ def build_dashboard_direction(config: AppConfig, *, today: date | None = None) -
             "staleAccounts": stale_accounts,
             "missingOpeningBalances": missing_opening_balances,
         },
-        "baseCurrency": str(config.workspace.get("base_currency", "USD")),
+        "baseCurrency": base_currency,
     }
