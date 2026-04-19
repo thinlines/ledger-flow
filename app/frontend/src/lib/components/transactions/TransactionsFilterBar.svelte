@@ -9,8 +9,49 @@
 
   let searchInput = filters.search;
   let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+  let helpOpen = false;
+  let helpPopoverEl: HTMLDivElement | null = null;
+  let helpBtnEl: HTMLButtonElement | null = null;
 
-  onDestroy(() => { if (debounceTimer) clearTimeout(debounceTimer); });
+  onDestroy(() => {
+    if (debounceTimer) clearTimeout(debounceTimer);
+    removeHelpListeners();
+  });
+
+  function toggleHelp() {
+    helpOpen = !helpOpen;
+    if (helpOpen) {
+      // Listen for outside clicks and Escape on next tick.
+      setTimeout(() => {
+        document.addEventListener('click', handleHelpOutsideClick, true);
+        document.addEventListener('keydown', handleHelpEscape, true);
+      }, 0);
+    } else {
+      removeHelpListeners();
+    }
+  }
+
+  function handleHelpOutsideClick(e: MouseEvent) {
+    if (
+      helpPopoverEl && !helpPopoverEl.contains(e.target as Node) &&
+      helpBtnEl && !helpBtnEl.contains(e.target as Node)
+    ) {
+      helpOpen = false;
+      removeHelpListeners();
+    }
+  }
+
+  function handleHelpEscape(e: KeyboardEvent) {
+    if (e.key === 'Escape') {
+      helpOpen = false;
+      removeHelpListeners();
+    }
+  }
+
+  function removeHelpListeners() {
+    document.removeEventListener('click', handleHelpOutsideClick, true);
+    document.removeEventListener('keydown', handleHelpEscape, true);
+  }
 
   $: if (filters.search !== searchInput && !debounceTimer) {
     searchInput = filters.search;
@@ -76,16 +117,42 @@
 
 <section class="view-card filter-bar">
   <div class="flex flex-wrap items-center gap-2">
-    <div class="filter-search">
+    <div class="filter-search relative">
       <input
         type="search"
-        placeholder="Search payee..."
+        placeholder="Search transactions..."
         value={searchInput}
         on:input={handleSearchInput}
         class="filter-search-input"
       />
       {#if searchInput}
         <button class="filter-clear" type="button" on:click={clearSearch} aria-label="Clear search">&times;</button>
+      {/if}
+      <button
+        bind:this={helpBtnEl}
+        class="ml-1 inline-flex items-center justify-center w-5 h-5 rounded-full border border-[rgba(10,61,89,0.15)] bg-white text-[0.7rem] font-semibold text-[var(--muted-foreground)] hover:bg-[rgba(15,95,136,0.08)] hover:text-[var(--foreground)] transition-colors cursor-pointer"
+        type="button"
+        on:click={toggleHelp}
+        aria-label="Search syntax help"
+      >?</button>
+      {#if helpOpen}
+        <div
+          bind:this={helpPopoverEl}
+          class="absolute top-full left-0 mt-1.5 z-50 w-72 rounded-lg border border-[rgba(10,61,89,0.12)] bg-white shadow-lg p-3"
+        >
+          <p class="text-[0.78rem] font-semibold text-[var(--foreground)] mb-2">Search syntax</p>
+          <table class="w-full text-[0.74rem] leading-snug">
+            <tbody>
+              <tr><td class="pr-3 py-0.5 font-mono text-[var(--brand-strong)] whitespace-nowrap">amount:&gt;100</td><td class="text-[var(--muted-foreground)]">Over $100</td></tr>
+              <tr><td class="pr-3 py-0.5 font-mono text-[var(--brand-strong)] whitespace-nowrap">amount:50..200</td><td class="text-[var(--muted-foreground)]">$50 to $200</td></tr>
+              <tr><td class="pr-3 py-0.5 font-mono text-[var(--brand-strong)] whitespace-nowrap">category:food</td><td class="text-[var(--muted-foreground)]">Category contains "food"</td></tr>
+              <tr><td class="pr-3 py-0.5 font-mono text-[var(--brand-strong)] whitespace-nowrap">date:this-month</td><td class="text-[var(--muted-foreground)]">Current month</td></tr>
+              <tr><td class="pr-3 py-0.5 font-mono text-[var(--brand-strong)] whitespace-nowrap">status:cleared</td><td class="text-[var(--muted-foreground)]">Bank-confirmed only</td></tr>
+              <tr><td class="pr-3 py-0.5 font-mono text-[var(--brand-strong)] whitespace-nowrap">account:chase</td><td class="text-[var(--muted-foreground)]">Account name contains "chase"</td></tr>
+            </tbody>
+          </table>
+          <p class="mt-2 text-[0.7rem] text-[var(--muted-foreground)]">Combine terms with spaces. Plain text matches payee.</p>
+        </div>
       {/if}
     </div>
 
