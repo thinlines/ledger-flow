@@ -47,15 +47,33 @@ Turn working tree changes into readable history. Inspect the diff, choose the sm
 - Create the commit, then re-check `git status --short` before deciding whether another commit is needed.
 - If the repo state is ambiguous, summarize the proposed split before committing.
 
-### 5. Worktree commits
+### 5. Worktree git commands
 
-When committing inside a worktree (i.e. using `git -C <worktree-path>`), **do not** use a heredoc or `$(cat <<'EOF' ...)` to pass the commit message — the `$(` triggers the shell-operator guard in the pre-tool-use hook and forces a manual approval prompt.
+A pre-tool-use hook auto-approves `git -C <worktree-path>` commands that follow specific patterns. Deviating from these patterns forces a manual approval prompt, which blocks agents.
 
-Instead, write the message to a file inside the worktree first, then commit with `-F`:
+#### Commit messages
+
+Do **not** use a heredoc or `$(cat <<'EOF' ...)` — the `$(` triggers the shell-operator guard.
+
+Instead, write the message to a file first, then commit with `-F`:
 
 1. Use the **Write** tool to create `<worktree-path>/.commit-msg` with the full commit message.
 2. Run `git -C <worktree-path> commit -F .commit-msg`.
 3. Do not clean up `.commit-msg` — the worktree is ephemeral and the file is overwritten on subsequent commits.
+
+#### Pipes
+
+The hook allows piping git output to these commands only: `wc`, `head`, `tail`, `sort`, `uniq`, `grep`, `cat`, `less`, `cut`, `awk`, `sed`, `tr`, `column`, `fmt`, `nl`. Note: `sed -i` is blocked (in-place edit). You may prefix any of these with `xargs` (e.g. `| xargs wc -l`). Multiple pipes are fine as long as every segment follows these rules.
+
+Do **not** use shell loops (`while read`, `for`, `do`, etc.), subshells, or process substitution after a pipe — they will be rejected. Use `xargs <safe-command>` instead when you need to apply a command per line. If you need more complex post-processing, use the **Read** or **Grep** tools instead of shell constructs.
+
+#### Stderr redirects
+
+`2>&1` and `2>/dev/null` are stripped before checking. Other redirects (`>`, `<`) are rejected.
+
+#### Chaining
+
+Do **not** chain commands with `&&`, `||`, or `;` after a git command. Run separate `git -C` calls instead.
 
 ## Message Heuristics
 
