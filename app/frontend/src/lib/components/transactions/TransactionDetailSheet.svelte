@@ -7,8 +7,9 @@
   import ChevronsUpDownIcon from '@lucide/svelte/icons/chevrons-up-down';
   import * as Popover from '$lib/components/ui/popover/index.js';
   import * as Command from '$lib/components/ui/command/index.js';
+  import ArrowLeftRightIcon from '@lucide/svelte/icons/arrow-left-right';
   import type { TransactionRow } from '$lib/transactions/types';
-  import { formatCurrency, shortDate } from '$lib/format';
+  import { formatCurrency, goodChangeTone, shortDate, type AccountKind } from '$lib/format';
   import { canDeleteRow, canRecategorizeRow, canUnmatchRow } from '$lib/transactions/helpers';
   import { apiPost } from '$lib/api';
   import { cn } from '$lib/utils.js';
@@ -16,6 +17,7 @@
   export let row: TransactionRow | null = null;
   export let baseCurrency: string;
   export let accounts: string[] = [];
+  export let accountKind: AccountKind | null = null;
   export let actionError: string = '';
   export let onDelete: (row: TransactionRow) => void = () => {};
   export let onResetCategory: (row: TransactionRow) => void = () => {};
@@ -47,6 +49,19 @@
       ? row.categories.map((c) => c.label).join(' \u00B7 ')
       : row.isTransfer ? 'Transfer' : 'Uncategorized'
     : '';
+
+  // Sign convention for amount display. Transfers render unsigned neutral with
+  // the ArrowLeftRight icon. Otherwise apply good-change-plus when we know the
+  // account kind; fall through to unsigned-neutral when we don't.
+  $: isTransferRow = row?.isTransfer === true;
+  $: amountKind = isTransferRow ? undefined : accountKind ?? undefined;
+  $: amountTone = isTransferRow || !amountKind ? 'neutral' : goodChangeTone(amount, amountKind);
+  $: amountFormatted = isTransferRow
+    ? formatCurrency(Math.abs(amount), baseCurrency, { signMode: 'negative-only' })
+    : formatCurrency(amount, baseCurrency, {
+        signMode: amountKind ? 'good-change-plus' : 'negative-only',
+        accountKind: amountKind
+      });
 
   // Category combobox: show for non-opening-balance, non-transfer, non-split rows
   $: showCategoryCombobox = row
@@ -214,8 +229,11 @@
         <div class="grid gap-5">
           <!-- Amount + account label -->
           <div>
-            <p class:sheet-positive={amount > 0} class:sheet-negative={amount < 0} class="m-0 font-display text-2xl leading-none">
-              {formatCurrency(amount, baseCurrency, { signed: true })}
+            <p class:sheet-positive={amountTone === 'positive'} class="m-0 font-display text-2xl leading-none inline-flex items-center gap-1.5">
+              {#if isTransferRow}
+                <ArrowLeftRightIcon class="h-5 w-5 text-muted-foreground shrink-0" />
+              {/if}
+              <span>{amountFormatted}</span>
             </p>
             <p class="mt-1 text-sm text-muted-foreground">{accountLabel}</p>
           </div>
@@ -371,6 +389,7 @@
     color: var(--ok);
   }
 
+  /* Running balance still uses signed negatives for data-integrity signaling. */
   .sheet-negative {
     color: var(--bad);
   }

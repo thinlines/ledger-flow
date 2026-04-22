@@ -1,18 +1,31 @@
 <script lang="ts">
-  import { formatCurrency } from '$lib/format';
+  import { formatCurrency, goodChangeTone, type AccountKind } from '$lib/format';
 
   export let header: string;
   export let isFirst = false;
   export let dailySum: number | null = null;
   export let baseCurrency = 'USD';
+  /**
+   * Account kind of the currently-filtered account in single-account view.
+   * Null/undefined in cross-account views — the day sum renders unsigned
+   * neutral because a mixed-account sum has no meaningful "good" direction.
+   */
+  export let accountKind: AccountKind | null = null;
+
+  $: dailyTone = accountKind && dailySum !== null ? goodChangeTone(dailySum, accountKind) : 'neutral';
+  $: dailyFormatted = dailySum === null
+    ? ''
+    : accountKind
+      ? formatCurrency(dailySum, baseCurrency, { signMode: 'good-change-plus', accountKind })
+      : formatCurrency(Math.abs(dailySum), baseCurrency, { signMode: 'negative-only' });
 </script>
 
 <div class="date-group" class:date-group-first={isFirst}>
   <div class="date-header-row">
     <h4 class="date-header">{header}</h4>
     {#if dailySum !== null}
-      <span class="daily-sum" class:positive={dailySum > 0} class:negative={dailySum < 0}>
-        {formatCurrency(dailySum, baseCurrency, { signed: true })}
+      <span class="daily-sum" class:positive={dailyTone === 'positive'}>
+        {dailyFormatted}
       </span>
     {/if}
   </div>
@@ -57,9 +70,5 @@
 
   .positive {
     color: var(--ok);
-  }
-
-  .negative {
-    color: var(--bad);
   }
 </style>

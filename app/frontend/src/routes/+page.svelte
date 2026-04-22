@@ -5,6 +5,7 @@
   import { normalizeCurrencyCode } from '$lib/currency-format';
   import DashboardDirection from '$lib/components/dashboard/DashboardDirection.svelte';
   import type { DirectionData } from '$lib/components/dashboard/direction-types';
+  import type { AccountKind } from '$lib/format';
 
   type SetupState = {
     needsAccounts: boolean;
@@ -82,6 +83,7 @@
     date: string;
     payee: string;
     accountLabel: string;
+    importAccountId: string | null;
     category: string;
     amount: number;
     isIncome: boolean;
@@ -161,6 +163,36 @@
     }).format(value);
   }
 
+  /**
+   * Format an amount for the Recent Activity list using the good-change-plus
+   * sign convention. Positive changes on asset or liability accounts render as
+   * "+$X.XX" (caller shows in green); everything else renders unsigned absolute.
+   * Falls through to negative-only when the kind is unknown.
+   */
+  function formatRecentAmount(value: number, kind: AccountKind | null): string {
+    const currency = normalizeCurrencyCode(dashboard?.baseCurrency);
+    const absolute = new Intl.NumberFormat(undefined, {
+      style: 'currency',
+      currency,
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+      signDisplay: 'never'
+    }).format(Math.abs(value));
+    if (kind && value > 0) return `+${absolute}`;
+    if (!kind && value < 0) {
+      return `-${absolute}`;
+    }
+    return absolute;
+  }
+
+  function recentAccountKind(importAccountId: string | null): AccountKind | null {
+    if (!importAccountId) return null;
+    const account = trackedAccounts.find((a) => a.id === importAccountId);
+    if (!account) return null;
+    if (account.kind === 'asset' || account.kind === 'liability') return account.kind;
+    return null;
+  }
+
   function formatDate(value: string | null): string {
     if (!value) return 'No activity yet';
     const parsed = new Date(`${value}T00:00:00`);
@@ -184,7 +216,8 @@
 
   function formatTrend(delta: number): string {
     if (delta === 0) return 'Flat vs last month';
-    return `${delta > 0 ? '+' : ''}${formatCurrency(delta)} vs last month`;
+    const direction = delta > 0 ? 'up' : 'down';
+    return `${formatCurrency(Math.abs(delta))} ${direction} vs last month`;
   }
 
   function countLabel(count: number, singular: string, plural = `${singular}s`): string {
@@ -692,6 +725,7 @@
           <div class="date-group">
             <h4 class="m-0 text-xs font-bold uppercase tracking-wider text-muted-foreground">{group.header}</h4>
             {#each group.transactions as transaction}
+              {@const txKind = recentAccountKind(transaction.importAccountId)}
               <div class="transaction-row flex items-center justify-between gap-4 py-3.5 max-tablet:grid max-tablet:grid-cols-1">
                 <div class="grid gap-0.5">
                   <p class="m-0 font-bold">{transaction.payee}</p>
@@ -701,11 +735,10 @@
                 </div>
                 <div class="grid gap-0.5 justify-items-end max-tablet:justify-items-start">
                   <p
-                    class:positive={transaction.amount > 0}
-                    class:negative={transaction.amount < 0}
+                    class:positive={txKind && transaction.amount > 0}
                     class="m-0 font-display text-base"
                   >
-                    {formatCurrency(transaction.amount, { signed: true })}
+                    {formatRecentAmount(transaction.amount, txKind)}
                   </p>
                   {#if transaction.isUnknown}
                     <a class="pill warn no-underline" href="/unknowns">Needs review</a>

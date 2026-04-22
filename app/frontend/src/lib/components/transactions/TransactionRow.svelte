@@ -1,8 +1,9 @@
 <script lang="ts">
   import type { TransactionRow } from '$lib/transactions/types';
-  import { formatCurrency } from '$lib/format';
+  import { formatCurrency, goodChangeTone, type AccountKind } from '$lib/format';
   import { truncatePayee, CLEARING_TOOLTIPS } from '$lib/transactions/helpers';
   import ChevronRightIcon from '@lucide/svelte/icons/chevron-right';
+  import ArrowLeftRightIcon from '@lucide/svelte/icons/arrow-left-right';
 
   export let row: TransactionRow;
   export let baseCurrency: string;
@@ -10,6 +11,7 @@
   export let showCategory = true;
   export let showAccountLabel = true;
   export let isSingleAccount = false;
+  export let accountKind: AccountKind | null = null;
   export let onToggleClearing: ((row: TransactionRow, event: MouseEvent) => void) | null = null;
   export let onRowClick: (() => void) | null = null;
 
@@ -19,6 +21,16 @@
     ? row.categories.map((c) => c.label).join(' \u00B7 ')
     : row.isTransfer ? 'Transfer' : '';
   $: secondaryText = showAccountLabel && !isSingleAccount ? row.account.label : '';
+  // Transfer rows always render unsigned and neutral regardless of direction.
+  // Otherwise use good-change-plus when we know the account kind.
+  $: amountKind = row.isTransfer ? undefined : accountKind ?? undefined;
+  $: amountTone = row.isTransfer ? 'neutral' : goodChangeTone(row.amount, amountKind);
+  $: formattedAmount = row.isTransfer
+    ? formatCurrency(Math.abs(row.amount), baseCurrency, { signMode: 'negative-only' })
+    : formatCurrency(row.amount, baseCurrency, {
+        signMode: 'good-change-plus',
+        accountKind: amountKind
+      });
 </script>
 
 <div class="tx-row" class:opening-row={row.isOpeningBalance}>
@@ -59,8 +71,11 @@
     </div>
 
     <div class="tx-amount shrink-0 text-right">
-      <p class:positive={row.amount > 0} class:negative={row.amount < 0} class="font-bold whitespace-nowrap">
-        {formatCurrency(row.amount, baseCurrency, { signed: true })}
+      <p class:positive={amountTone === 'positive'} class="font-bold whitespace-nowrap inline-flex items-center justify-end gap-1">
+        {#if row.isTransfer}
+          <ArrowLeftRightIcon class="h-4 w-4 text-muted-foreground shrink-0" />
+        {/if}
+        <span>{formattedAmount}</span>
       </p>
     </div>
 
