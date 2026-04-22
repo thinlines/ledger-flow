@@ -266,10 +266,6 @@
     return 'Ready to bring in new statement activity.';
   }
 
-  function hasAdvancedDetails(account: TrackedAccount): boolean {
-    return Boolean(account.ledgerAccount) || (account.importMode === 'custom' && Boolean(account.importProfile));
-  }
-
   function matchesAccountQuery(account: TrackedAccount, query: string): boolean {
     if (!query) return true;
     const haystack = [
@@ -609,7 +605,6 @@
                         </div>
                         <div class="flex flex-wrap justify-end gap-2 max-shell:justify-start">
                           <a class="inline-link" href={`/transactions?accounts=${account.id}`}>Transactions</a>
-                          <a class="inline-link" href={`/accounts/configure?accountId=${account.id}`}>Edit</a>
                         </div>
                       </div>
 
@@ -658,10 +653,13 @@
                     </div>
                   </div>
 
-                  {#if hasAdvancedDetails(account)}
-                    <details class="advanced-details border-t border-card-edge pt-3.5">
-                      <summary class="cursor-pointer font-bold text-brand-strong">Accounting details</summary>
-                      <p class="muted text-sm">Ledger account: {account.ledgerAccount}</p>
+                  <details class="advanced-details border-t border-card-edge pt-3.5">
+                    <summary class="cursor-pointer font-bold text-brand-strong">Accounting details</summary>
+                    <div class="mt-3 grid gap-2">
+                      <a class="btn w-fit" href={`/accounts/configure?accountId=${account.id}`}>Edit account</a>
+                      {#if account.ledgerAccount}
+                        <p class="muted text-sm">Ledger account: {account.ledgerAccount}</p>
+                      {/if}
                       {#if account.importMode === 'custom' && account.importProfile}
                         <p class="muted text-sm">{customProfileSummary(account)}</p>
                         <p class="muted text-sm">Currency symbol: {account.importProfile.currency || '$'}</p>
@@ -669,8 +667,8 @@
                         <p class="muted text-sm">Description column: {account.importProfile.descriptionColumn || 'Not set'}</p>
                         <p class="muted text-sm">Code column: {account.importProfile.codeColumn || 'Not set'}</p>
                       {/if}
-                    </details>
-                  {/if}
+                    </div>
+                  </details>
                 </article>
               {/each}
             </div>
