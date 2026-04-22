@@ -21,7 +21,7 @@
 		},
 		{
 			title: 'Automation',
-			items: [{ href: '/rules', label: 'Rules', note: 'Matching and categorization logic' }]
+			items: [{ href: '/rules', label: 'Rules', note: 'Automate how new transactions get categorized' }]
 		},
 		{
 			title: 'Workspace',
@@ -77,7 +77,7 @@
 			</div>
 
 			<p class="mt-4 mb-0 text-sm leading-snug text-muted-foreground">
-				Track balances, imports, and review work without exposing the accounting internals unless you need them.
+				Your money, accounts, and spending &mdash; all in one place.
 			</p>
 		</div>
 
