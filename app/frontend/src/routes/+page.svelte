@@ -419,9 +419,9 @@
       };
     }
     return {
-      href: '/transactions',
-      label: 'Open transactions',
-      note: 'Scan the latest activity or drill into an account register.'
+      href: '/#direction',
+      label: 'Review your direction',
+      note: 'No bookkeeping work is waiting. Take a moment to scan your financial direction panel.'
     };
   }
 
@@ -434,8 +434,6 @@
     const actions: ActionLink[] = [];
     if (hasReviewQueue()) {
       actions.push({ href: '/rules', label: 'Refine automation' });
-    } else {
-      actions.push({ href: '/transactions', label: 'Open transactions' });
     }
     actions.push({ href: '/accounts', label: 'Manage accounts' });
     return actions;
@@ -482,15 +480,20 @@
   $: balanceGroups = buildBalanceGroups(overviewAccounts);
 
   let cashFlowPreset: 'month' | 'last3' | 'last6' = 'last3';
+  $: filteredCashFlowSeries = (dashboard?.cashFlow.series ?? [])
+    .filter((row) => row.income !== 0 || row.spending !== 0 || row.net !== 0);
+  $: filteredCategoryTrends = (dashboard?.categoryTrends ?? [])
+    .filter((row) => row.current !== 0 || row.previous !== 0);
   $: visibleCashFlow = (() => {
-    const reversed = [...(dashboard?.cashFlow.series ?? [])].reverse();
+    const reversed = [...filteredCashFlowSeries].reverse();
     if (cashFlowPreset === 'month') return reversed.slice(0, 1);
     if (cashFlowPreset === 'last6') return reversed;
     return reversed.slice(0, 3);
   })();
   $: cashFlowMax = Math.max(...visibleCashFlow.map((row) => Math.max(row.income, row.spending)), 0);
   $: categoryMax = Math.max(
-    ...(dashboard?.categoryTrends.flatMap((row) => [row.current, row.previous]) ?? [0])
+    ...filteredCategoryTrends.flatMap((row) => [row.current, row.previous]),
+    0
   );
 
   onMount(async () => {
@@ -724,9 +727,9 @@
         <p class="m-0 text-sm text-muted-foreground">{monthTitle(dashboard.cashFlow.currentMonth)} vs {monthTitle(dashboard.cashFlow.previousMonth)}</p>
       </div>
 
-      {#if dashboard.categoryTrends.length > 0}
+      {#if filteredCategoryTrends.length > 0}
         <div class="grid gap-3.5">
-          {#each dashboard.categoryTrends as row}
+          {#each filteredCategoryTrends as row}
             <a
               class="category-row drilldown-link grid gap-1.5 -mx-2 -my-1.5 rounded-xl px-2 py-1.5 text-inherit no-underline transition-colors"
               href={`/transactions?category=${encodeURIComponent(row.account)}`}
@@ -758,7 +761,9 @@
     </article>
   </section>
 
-  <DashboardDirection {direction} baseCurrency={dashboard.baseCurrency} loading={directionLoading} />
+  <div id="direction" class="scroll-mt-6">
+    <DashboardDirection {direction} baseCurrency={dashboard.baseCurrency} loading={directionLoading} />
+  </div>
 
   <section class="view-card p-5">
     <div class="mb-4 flex items-start justify-between gap-4 max-tablet:grid max-tablet:grid-cols-1">
@@ -777,21 +782,27 @@
     </div>
 
     <div class="grid gap-3.5">
-      {#each visibleCashFlow as row}
-        <a
-          class="cashflow-row drilldown-link grid gap-1.5 -mx-2 -my-1.5 rounded-xl px-2 py-1.5 text-inherit no-underline transition-colors"
-          href={`/transactions?month=${row.month}`}
-        >
-          <div class="flex items-center justify-between gap-3 max-tablet:grid max-tablet:grid-cols-1">
-            <p class="m-0 font-bold">{row.label}</p>
-            <span class:positive={row.net >= 0} class:negative={row.net < 0}>{formatCurrency(row.net, { signed: true, compact: true })}</span>
-          </div>
-          <div class="flex h-2.5 gap-1">
-            <span class="bar-income h-full min-w-[2px] rounded-full" style={`width: ${barWidth(row.income, cashFlowMax)}`}></span>
-            <span class="bar-spending h-full min-w-[2px] rounded-full" style={`width: ${barWidth(row.spending, cashFlowMax)}`}></span>
-          </div>
-        </a>
-      {/each}
+      {#if visibleCashFlow.length > 0}
+        {#each visibleCashFlow as row}
+          <a
+            class="cashflow-row drilldown-link grid gap-1.5 -mx-2 -my-1.5 rounded-xl px-2 py-1.5 text-inherit no-underline transition-colors"
+            href={`/transactions?month=${row.month}`}
+          >
+            <div class="flex items-center justify-between gap-3 max-tablet:grid max-tablet:grid-cols-1">
+              <p class="m-0 font-bold">{row.label}</p>
+              <span class:positive={row.net >= 0} class:negative={row.net < 0}>{formatCurrency(row.net, { signed: true, compact: true })}</span>
+            </div>
+            <div class="flex h-2.5 gap-1">
+              <span class="bar-income h-full min-w-[2px] rounded-full" style={`width: ${barWidth(row.income, cashFlowMax)}`}></span>
+              <span class="bar-spending h-full min-w-[2px] rounded-full" style={`width: ${barWidth(row.spending, cashFlowMax)}`}></span>
+            </div>
+          </a>
+        {/each}
+      {:else}
+        <p class="m-0 text-sm text-muted-foreground">
+          No income or spending landed in the selected window.
+        </p>
+      {/if}
     </div>
   </section>
 
