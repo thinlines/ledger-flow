@@ -310,5 +310,5 @@ Shipped on branch `worktree-agent-adbcd4d0` after QA + code review (one fix cycl
 - `/rules` error-path copy: when `/api/app/state` fails, the user now sees the "Workspace not initialized yet." fallback rather than the raw error message. The deadlock is resolved, but surfacing the actual error independent of `initialized` would be a future polish.
 - Mobile drawer has both a hardcoded `aria-label="Main navigation"` and a new `DialogPrimitive.Title` "Navigation menu"; `aria-label` wins, so the redundancy is a minor a11y polish item.
 
-**Manual verification still required:**
-The task's Definition of Done calls for visual confirmation at 360px / 768px / 980px / 1440px viewport widths. Neither the implementer nor the QA verifier could exercise a live browser; this is the one remaining gate before the branch is merged. Run `pnpm dev` and spot-check: mobile top bar + drawer slide-in, hero CTA in all-caught-up state, accounts Edit demotion, green `+` / neutral sign rendering across transactions / recent activity / totals strip.
+**Manual verification:**
+User signed off on the visual-confirmation gate after merge. Future regressions at 360 / 768 / 980 / 1440 viewport widths should be caught by the normal review-ui cadence; no remaining blockers on this task.
