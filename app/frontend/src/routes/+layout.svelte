@@ -45,7 +45,7 @@
 	// immediate and the new page is visible right away.
 	$: if ($page.url.pathname !== lastPathname) {
 		lastPathname = $page.url.pathname;
-		drawerOpen = false;
+		if (drawerOpen) drawerOpen = false;
 	}
 </script>
 
@@ -154,6 +154,8 @@
 			class="mobile-drawer fixed inset-y-0 left-0 z-40 flex w-[min(20rem,85vw)] flex-col gap-4 overflow-y-auto border-r border-card-edge bg-white p-4 shadow-card"
 			aria-label="Main navigation"
 		>
+			<DialogPrimitive.Title class="sr-only">Navigation menu</DialogPrimitive.Title>
+
 			<div class="flex items-center justify-between gap-3">
 				<div class="flex items-center gap-2.5">
 					<span class="brand-mark grid h-9 w-9 place-items-center rounded-lg font-display font-bold text-white">

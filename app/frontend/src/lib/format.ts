@@ -37,7 +37,7 @@ export function formatCurrency(
   if (value == null) return 'No balance yet';
 
   const mode = resolveSignMode(options);
-  const signDisplay = mode === 'always' ? 'always' : mode === 'good-change-plus' ? 'auto' : 'auto';
+  const signDisplay = mode === 'always' ? 'always' : 'auto';
 
   // In good-change-plus mode, hand-format the sign: "+$X" for good changes,
   // unsigned for everything else (including $0 and bad-direction changes).

@@ -282,7 +282,6 @@
     try {
       const state = await apiGet<{ initialized: boolean }>('/api/app/state');
       initialized = state.initialized;
-      stateLoading = false;
       if (!initialized) return;
       const [rulesData, accountsData, journalsData] = await Promise.all([
         apiGet<{ rules: Rule[] }>('/api/rules'),
@@ -303,6 +302,7 @@
       error = String(e);
     } finally {
       loading = false;
+      stateLoading = false;
     }
   }
 
