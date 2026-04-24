@@ -36,6 +36,13 @@ class ParsedTransaction:
     status: TransactionStatus = TransactionStatus.unmarked
     header_line: str = ""
     source_journal: str = ""
+    # Zero-indexed offset of the header line within the *physical* file at
+    # ``source_journal`` (matches ``Path(source_journal).read_text().splitlines()``
+    # indexing). For transactions that physically live in an included file, the
+    # header line will not be found in the top-level file; in that case this is
+    # set to ``-1`` (sentinel), and mutation endpoints will reject the request
+    # via the same drift path that catches stale data.
+    header_line_number: int = -1
 
 
 def amount_to_number(value: Decimal) -> float:
@@ -51,18 +58,30 @@ def pretty_account_name(account: str) -> str:
     return " / ".join(part.title() for part in parts[1:])
 
 
-def _split_transactions(journal_text: str) -> list[list[str]]:
-    transactions: list[list[str]] = []
+def _split_transactions(journal_text: str) -> list[tuple[int, list[str]]]:
+    """Split a (possibly include-expanded) journal text into transaction blocks.
+
+    Returns a list of ``(start_line_index, block_lines)`` tuples, where
+    ``start_line_index`` is the zero-indexed offset of the header line within
+    ``journal_text.splitlines()``. The expanded text's line numbering is *not*
+    the same as the on-disk top-level file's numbering when ``include``
+    directives were followed; ``load_transactions`` resolves that to a real
+    on-disk offset (or the ``-1`` sentinel) by re-scanning the raw top-level
+    text after parsing.
+    """
+    transactions: list[tuple[int, list[str]]] = []
     current: list[str] = []
-    for raw in journal_text.splitlines():
+    current_start = -1
+    for index, raw in enumerate(journal_text.splitlines()):
         if TXN_START_RE.match(raw):
             if current:
-                transactions.append(current)
+                transactions.append((current_start, current))
             current = [raw]
+            current_start = index
         elif current:
             current.append(raw)
     if current:
-        transactions.append(current)
+        transactions.append((current_start, current))
     return transactions
 
 
@@ -86,16 +105,37 @@ def _resolve_include_paths(base_dir: Path, target: str) -> list[Path]:
 
 
 def _expand_journal_lines(path: Path, stack: tuple[Path, ...] = ()) -> list[str]:
+    """Backward-compatible expansion that drops origin metadata.
+
+    Prefer :func:`_expand_journal_lines_with_origins` when callers need to
+    map an expanded-line index back to a physical (file, line) pair.
+    """
+    return [line for line, _ in _expand_journal_lines_with_origins(path, stack)]
+
+
+def _expand_journal_lines_with_origins(
+    path: Path,
+    stack: tuple[Path, ...] = (),
+) -> list[tuple[str, tuple[Path, int] | None]]:
+    """Expand ``include`` directives, retaining the (file, line-index) origin
+    for each emitted line.
+
+    The origin is ``(physical_path, zero_indexed_line_in_that_file)`` for
+    lines that came from a real file, or ``None`` if the line could not be
+    attributed (e.g., a cycle was suppressed). Mutation endpoints read the
+    *top-level* file's raw text, so only lines whose origin matches the
+    top-level path can be mutated; everything else is drift-protected.
+    """
     resolved_path = path.resolve()
     if resolved_path in stack or not path.exists():
         return []
 
-    lines: list[str] = []
+    out: list[tuple[str, tuple[Path, int] | None]] = []
     next_stack = (*stack, resolved_path)
-    for raw in path.read_text(encoding="utf-8").splitlines():
+    for raw_idx, raw in enumerate(path.read_text(encoding="utf-8").splitlines()):
         include_match = INCLUDE_RE.match(raw)
         if not include_match:
-            lines.append(raw)
+            out.append((raw, (resolved_path, raw_idx)))
             continue
 
         include_target = _normalize_include_target(include_match.group(1))
@@ -103,8 +143,8 @@ def _expand_journal_lines(path: Path, stack: tuple[Path, ...] = ()) -> list[str]
         if not include_paths:
             continue
         for include_path in include_paths:
-            lines.extend(_expand_journal_lines(include_path, next_stack))
-    return lines
+            out.extend(_expand_journal_lines_with_origins(include_path, next_stack))
+    return out
 
 
 def _parse_transaction(lines: list[str]) -> ParsedTransaction | None:
@@ -185,9 +225,28 @@ def load_transactions(config: AppConfig) -> list[ParsedTransaction]:
         # imported counterpart in the register.
         if journal_path.name == ARCHIVED_MANUAL_JOURNAL_NAME:
             continue
-        text = "\n".join(_expand_journal_lines(journal_path))
-        for lines in _split_transactions(text):
+        # Track each expanded line's physical origin so we can attribute a real
+        # on-disk line number to every transaction. Mutation endpoints read the
+        # *top-level* file (without include expansion), so only transactions
+        # whose header line lives in that file can be mutated; everything else
+        # gets the -1 sentinel and is drift-protected.
+        top_level_resolved = journal_path.resolve()
+        expanded = _expand_journal_lines_with_origins(journal_path)
+        text = "\n".join(line for line, _ in expanded)
+        for expanded_start, lines in _split_transactions(text):
             transaction = _parse_transaction(lines)
-            if transaction is not None:
-                transactions.append(replace(transaction, source_journal=str(journal_path)))
+            if transaction is None:
+                continue
+            origin = expanded[expanded_start][1] if 0 <= expanded_start < len(expanded) else None
+            if origin is not None and origin[0] == top_level_resolved:
+                physical_line_number = origin[1]
+            else:
+                physical_line_number = -1
+            transactions.append(
+                replace(
+                    transaction,
+                    source_journal=str(journal_path),
+                    header_line_number=physical_line_number,
+                )
+            )
     return sorted(transactions, key=lambda txn: txn.posted_on)

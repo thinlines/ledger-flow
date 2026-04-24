@@ -43,10 +43,9 @@ from services.git_snapshot_service import hours_since_last_snapshot, snapshot_co
 from services.header_parser import TransactionStatus, parse_header, set_header_status, HEADER_RE as _HEADER_RE
 from services.undo_service import UndoOutcome, undo_event
 from services.journal_block_service import (
-    AmbiguousHeaderError,
     HeaderNotFoundError,
     find_transaction_block,
-    locate_header,
+    locate_header_at,
 )
 from services.journal_query_service import TXN_START_RE
 from services.transfer_service import ACCOUNT_LINE_RE, ACCOUNT_ONLY_RE, rewrite_posting_account
@@ -632,13 +631,9 @@ def transactions_toggle_status(req: ToggleStatusRequest) -> dict:
     text = journal_path.read_text(encoding="utf-8")
     lines = text.splitlines()
 
-    match_indexes = [i for i, line in enumerate(lines) if line == req.headerLine]
-    if len(match_indexes) == 0:
-        raise HTTPException(status_code=404, detail="Header line not found in journal (stale data — try refreshing)")
-    if len(match_indexes) > 1:
-        raise HTTPException(status_code=409, detail="Ambiguous: multiple matching header lines found")
+    header_idx = _locate_header(lines, req.lineNumber, req.headerLine)
 
-    lines[match_indexes[0]] = new_line
+    lines[header_idx] = new_line
     journal_path.write_text("\n".join(lines) + ("\n" if text.endswith("\n") else ""), encoding="utf-8")
 
     event_id = None
@@ -671,19 +666,19 @@ def transactions_toggle_status(req: ToggleStatusRequest) -> dict:
 # ---------------------------------------------------------------------------
 
 
-def _locate_header(lines: list[str], header_line: str) -> int:
-    """Thin wrapper around :func:`locate_header` that raises HTTPException."""
+def _locate_header(lines: list[str], line_number: int, expected_header: str) -> int:
+    """Thin wrapper around :func:`locate_header_at` that raises HTTPException.
+
+    The position-based identity scheme makes the old ``AmbiguousHeaderError``
+    unreachable from mutation endpoints — the line number disambiguates two
+    transactions whose header lines are byte-identical.
+    """
     try:
-        return locate_header(lines, header_line)
+        return locate_header_at(lines, line_number, expected_header)
     except HeaderNotFoundError:
         raise HTTPException(
             status_code=404,
             detail="Transaction not found in journal (stale data — try refreshing)",
-        )
-    except AmbiguousHeaderError:
-        raise HTTPException(
-            status_code=409,
-            detail="Ambiguous: multiple matching header lines found",
         )
 
 
@@ -699,7 +694,7 @@ def transactions_delete(req: DeleteTransactionRequest) -> dict:
 
     text = journal_path.read_text(encoding="utf-8")
     lines = text.splitlines()
-    header_idx = _locate_header(lines, req.headerLine)
+    header_idx = _locate_header(lines, req.lineNumber, req.headerLine)
     block_start, block_end = find_transaction_block(lines, header_idx)
     deleted_block = "\n".join(lines[block_start:block_end])
 
@@ -751,7 +746,7 @@ def transactions_recategorize(req: RecategorizeTransactionRequest) -> dict:
 
     text = journal_path.read_text(encoding="utf-8")
     lines = text.splitlines()
-    header_idx = _locate_header(lines, req.headerLine)
+    header_idx = _locate_header(lines, req.lineNumber, req.headerLine)
     block_start, block_end = find_transaction_block(lines, header_idx)
 
     # Collect tracked account ledger names for distinguishing categories from
@@ -848,7 +843,7 @@ def transactions_notes(req: UpdateNotesRequest) -> dict:
 
     text = journal_path.read_text(encoding="utf-8")
     lines = text.splitlines()
-    header_idx = _locate_header(lines, req.headerLine)
+    header_idx = _locate_header(lines, req.lineNumber, req.headerLine)
     block_start, block_end = find_transaction_block(lines, header_idx)
 
     # Find existing notes line within the block.
@@ -950,7 +945,7 @@ def transactions_unmatch(req: UnmatchTransactionRequest) -> dict:
     #     rewrite destination to Expenses:Unknown ---
     main_text = journal_path.read_text(encoding="utf-8")
     main_lines = main_text.splitlines()
-    header_idx = _locate_header(main_lines, req.headerLine)
+    header_idx = _locate_header(main_lines, req.lineNumber, req.headerLine)
     block_start, block_end = find_transaction_block(main_lines, header_idx)
 
     from services.transfer_service import ACCOUNT_LINE_RE, ACCOUNT_ONLY_RE

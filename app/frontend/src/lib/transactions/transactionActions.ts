@@ -14,6 +14,7 @@ export async function deleteTransaction(
     const res = await apiPost<{ success: boolean; eventId: string | null }>('/api/transactions/delete', {
       journalPath: leg.journalPath,
       headerLine: leg.headerLine,
+      lineNumber: leg.lineNumber,
     });
     if (res.eventId) showUndoToast(res.eventId, `Removed ${row.payee} on ${row.date}`, reload);
     await reload();
@@ -33,6 +34,7 @@ export async function resetCategory(
     const res = await apiPost<{ success: boolean; eventId: string | null }>('/api/transactions/recategorize', {
       journalPath: leg.journalPath,
       headerLine: leg.headerLine,
+      lineNumber: leg.lineNumber,
     });
     if (res.eventId) showUndoToast(res.eventId, `Reset category on ${row.payee}`, reload);
     await reload();
@@ -53,6 +55,7 @@ export async function recategorize(
     const res = await apiPost<{ success: boolean; eventId: string | null }>('/api/transactions/recategorize', {
       journalPath: leg.journalPath,
       headerLine: leg.headerLine,
+      lineNumber: leg.lineNumber,
       newCategory,
     });
     if (res.eventId) showUndoToast(res.eventId, `Recategorized ${row.payee}`, reload);
@@ -73,6 +76,7 @@ export async function unmatchTransaction(
     const res = await apiPost<{ success: boolean; eventId: string | null }>('/api/transactions/unmatch', {
       journalPath: leg.journalPath,
       headerLine: leg.headerLine,
+      lineNumber: leg.lineNumber,
       matchId: row.matchId,
     });
     if (res.eventId) showUndoToast(res.eventId, `Undid match for ${row.payee}`, reload);
@@ -98,9 +102,12 @@ export async function toggleClearing(row: TransactionRow): Promise<void> {
   try {
     const res = await apiPost<{ newStatus: string; newHeaderLine: string }>(
       '/api/transactions/toggle-status',
-      { journalPath: leg.journalPath, headerLine: leg.headerLine }
+      { journalPath: leg.journalPath, headerLine: leg.headerLine, lineNumber: leg.lineNumber }
     );
     row.status = res.newStatus as 'unmarked' | 'pending' | 'cleared';
+    // Toggle rewrites the header line in place — same line, new text. The
+    // spread preserves lineNumber so a follow-up toggle's drift check uses the
+    // updated headerLine and the same line number.
     row.legs[0] = { ...leg, headerLine: res.newHeaderLine };
   } catch {
     row.status = previousStatus;

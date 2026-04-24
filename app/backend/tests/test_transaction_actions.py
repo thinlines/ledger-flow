@@ -135,6 +135,233 @@ class TestLocateHeader:
             locate_header(lines, "2026-03-15 * Dupe")
 
 
+class TestLocateHeaderAt:
+    """Position-based identity with a byte-for-byte drift check.
+
+    Mutation endpoints call this helper with the ``(lineNumber, headerLine)``
+    pair from the frontend's row model. It disambiguates two byte-identical
+    header lines by their physical position and catches stale client state
+    when the file has shifted under the caller.
+    """
+
+    def test_exact_match_at_line_number(self) -> None:
+        from services.journal_block_service import locate_header_at
+
+        lines = SAMPLE_JOURNAL.splitlines()
+        target = next(i for i, l in enumerate(lines) if "Whole Foods" in l)
+        idx = locate_header_at(lines, target, "2026-03-15 * Whole Foods")
+        assert idx == target
+
+    def test_disambiguates_identical_header_lines(self) -> None:
+        """The whole point of this module — two byte-identical headers at
+        different positions resolve to the correct one by line number."""
+        from services.journal_block_service import locate_header_at
+
+        lines = [
+            "2026-03-15 * Dupe",
+            "    posting",
+            "",
+            "2026-03-15 * Dupe",
+            "    posting",
+        ]
+        assert locate_header_at(lines, 0, "2026-03-15 * Dupe") == 0
+        assert locate_header_at(lines, 3, "2026-03-15 * Dupe") == 3
+
+    def test_drift_mismatched_text_raises(self) -> None:
+        """If the content at ``lineNumber`` does not match, the client's row
+        model is stale and the mutation must be refused."""
+        from services.journal_block_service import HeaderNotFoundError, locate_header_at
+
+        lines = SAMPLE_JOURNAL.splitlines()
+        with pytest.raises(HeaderNotFoundError):
+            # Line 3 in SAMPLE_JOURNAL is "    Assets:Bank:Checking  $1000.00",
+            # not a header line. The drift check catches it.
+            locate_header_at(lines, 3, "2026-03-15 * Whole Foods")
+
+    def test_drift_out_of_range_raises(self) -> None:
+        from services.journal_block_service import HeaderNotFoundError, locate_header_at
+
+        lines = SAMPLE_JOURNAL.splitlines()
+        with pytest.raises(HeaderNotFoundError):
+            locate_header_at(lines, len(lines), "2026-03-15 * Whole Foods")
+        with pytest.raises(HeaderNotFoundError):
+            locate_header_at(lines, -1, "2026-03-15 * Whole Foods")
+
+    def test_drift_does_not_normalize_whitespace(self) -> None:
+        """Byte-for-byte equality — trailing whitespace differences are drift."""
+        from services.journal_block_service import HeaderNotFoundError, locate_header_at
+
+        lines = ["2026-03-15 * Whole Foods  "]  # trailing spaces
+        with pytest.raises(HeaderNotFoundError):
+            locate_header_at(lines, 0, "2026-03-15 * Whole Foods")
+
+
+# ---------------------------------------------------------------------------
+# Regression: identical header lines can each be mutated individually.
+# ---------------------------------------------------------------------------
+
+IDENTICAL_HEADERS_JOURNAL = """\
+2026-03-15 * Starbucks
+    Assets:Bank:Checking  -$5.00
+    Expenses:Groceries  $5.00
+
+2026-03-15 * Starbucks
+    Assets:Bank:Checking  -$7.00
+    Expenses:Groceries  $7.00
+"""
+
+
+class TestIdenticalHeaderLineMutation:
+    """The ambiguity that motivated this task: two transactions on the same
+    day with the same payee/status produce byte-identical header lines. Each
+    must be individually mutatable via every endpoint. The old code raised
+    HTTP 409 ``AmbiguousHeaderError``; the new position-based identity
+    resolves them by line number.
+    """
+
+    def test_locate_header_at_picks_the_right_one(self, tmp_path: Path) -> None:
+        """Given two byte-identical headers, each line number resolves to its
+        own block."""
+        from services.journal_block_service import locate_header_at
+
+        workspace = _setup_workspace(tmp_path)
+        journal = _write_journal(workspace, "2026.journal", IDENTICAL_HEADERS_JOURNAL)
+
+        lines = journal.read_text(encoding="utf-8").splitlines()
+        header_indexes = [i for i, l in enumerate(lines) if l == "2026-03-15 * Starbucks"]
+        assert len(header_indexes) == 2
+        first_idx, second_idx = header_indexes
+
+        # Both line numbers resolve individually without conflict.
+        assert locate_header_at(lines, first_idx, "2026-03-15 * Starbucks") == first_idx
+        assert locate_header_at(lines, second_idx, "2026-03-15 * Starbucks") == second_idx
+
+    def test_delete_mutates_only_the_requested_block(self, tmp_path: Path) -> None:
+        """Mutating the second of two identical-header transactions leaves
+        the first intact."""
+        from services.journal_block_service import find_transaction_block, locate_header_at
+
+        workspace = _setup_workspace(tmp_path)
+        journal = _write_journal(workspace, "2026.journal", IDENTICAL_HEADERS_JOURNAL)
+
+        text = journal.read_text(encoding="utf-8")
+        lines = text.splitlines()
+        header_indexes = [i for i, l in enumerate(lines) if l == "2026-03-15 * Starbucks"]
+        second_idx = header_indexes[1]
+
+        header_idx = locate_header_at(lines, second_idx, "2026-03-15 * Starbucks")
+        block_start, block_end = find_transaction_block(lines, header_idx)
+        remove_start = block_start
+        if remove_start > 0 and lines[remove_start - 1].strip() == "":
+            remove_start -= 1
+        new_lines = lines[:remove_start] + lines[block_end:]
+        journal.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
+
+        result = journal.read_text()
+        # The first (-$5.00) transaction remains. The second (-$7.00) is gone.
+        assert "-$5.00" in result
+        assert "-$7.00" not in result
+        # Exactly one Starbucks header remains.
+        assert result.count("2026-03-15 * Starbucks") == 1
+
+    def test_toggle_mutates_only_the_requested_block(self, tmp_path: Path) -> None:
+        """Toggling clearing status on one of two identical headers only
+        changes the targeted line; the other keeps its original status."""
+        from services.header_parser import TransactionStatus, set_header_status
+        from services.journal_block_service import locate_header_at
+
+        workspace = _setup_workspace(tmp_path)
+        journal = _write_journal(workspace, "2026.journal", IDENTICAL_HEADERS_JOURNAL)
+
+        text = journal.read_text(encoding="utf-8")
+        lines = text.splitlines()
+        header_indexes = [i for i, l in enumerate(lines) if l == "2026-03-15 * Starbucks"]
+        first_idx = header_indexes[0]
+
+        header_idx = locate_header_at(lines, first_idx, "2026-03-15 * Starbucks")
+        new_header = set_header_status(lines[header_idx], TransactionStatus.pending)
+        lines[header_idx] = new_header
+        journal.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+        result_lines = journal.read_text().splitlines()
+        starbucks_headers = [l for l in result_lines if "Starbucks" in l]
+        assert len(starbucks_headers) == 2
+        # One is now pending ("!"), the other is still cleared ("*").
+        assert any(" ! Starbucks" in h for h in starbucks_headers)
+        assert any(" * Starbucks" in h for h in starbucks_headers)
+
+
+# ---------------------------------------------------------------------------
+# Drift: a stale ``lineNumber`` whose file content has shifted returns 404,
+# not a silent wrong-row mutation.
+# ---------------------------------------------------------------------------
+
+
+class TestDriftDetection:
+    """If another tab inserted a transaction above the targeted one, the
+    client's ``lineNumber`` now points at the wrong line. The drift check
+    catches it and refuses the mutation."""
+
+    def test_inserted_transaction_shifts_line_numbers(self, tmp_path: Path) -> None:
+        from services.journal_block_service import HeaderNotFoundError, locate_header_at
+
+        workspace = _setup_workspace(tmp_path)
+        journal = _write_journal(workspace, "2026.journal", SAMPLE_JOURNAL)
+
+        # Capture the valid lineNumber the client would have seen.
+        original_lines = journal.read_text(encoding="utf-8").splitlines()
+        valid_line_number = next(
+            i for i, l in enumerate(original_lines) if l == "2026-03-15 * Whole Foods"
+        )
+        header_text = "2026-03-15 * Whole Foods"
+
+        # Simulate an external edit: prepend a new transaction before Whole
+        # Foods, shifting all subsequent line numbers down.
+        shifted = (
+            "2026-03-05 * Earlier transaction\n"
+            "    Assets:Bank:Checking  -$10.00\n"
+            "    Expenses:Groceries  $10.00\n"
+            "\n"
+        ) + SAMPLE_JOURNAL
+        journal.write_text(shifted, encoding="utf-8")
+
+        # The previously-valid lineNumber now points at the wrong line.
+        new_lines = journal.read_text(encoding="utf-8").splitlines()
+        assert new_lines[valid_line_number] != header_text
+
+        # The drift check catches it — endpoint would return 404.
+        with pytest.raises(HeaderNotFoundError):
+            locate_header_at(new_lines, valid_line_number, header_text)
+
+    def test_mutated_header_shifts_drift_check_on_followup(self, tmp_path: Path) -> None:
+        """After toggle rewrites a header in place, sending the *old* header
+        text at the same line number is drift — the client should send the
+        new text (which the toggle response returns as ``newHeaderLine``)."""
+        from services.header_parser import TransactionStatus, set_header_status
+        from services.journal_block_service import HeaderNotFoundError, locate_header_at
+
+        workspace = _setup_workspace(tmp_path)
+        journal = _write_journal(workspace, "2026.journal", SAMPLE_JOURNAL)
+
+        text = journal.read_text(encoding="utf-8")
+        lines = text.splitlines()
+        line_number = next(i for i, l in enumerate(lines) if l == "2026-03-15 * Whole Foods")
+
+        # Apply a toggle.
+        new_header = set_header_status(lines[line_number], TransactionStatus.pending)
+        lines[line_number] = new_header
+        journal.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+        # A follow-up mutation using the *old* header text would drift.
+        refreshed = journal.read_text(encoding="utf-8").splitlines()
+        with pytest.raises(HeaderNotFoundError):
+            locate_header_at(refreshed, line_number, "2026-03-15 * Whole Foods")
+
+        # Using the *new* header text at the same line number succeeds.
+        idx = locate_header_at(refreshed, line_number, new_header)
+        assert idx == line_number
+
+
 # ---------------------------------------------------------------------------
 # Delete: full integration
 # ---------------------------------------------------------------------------

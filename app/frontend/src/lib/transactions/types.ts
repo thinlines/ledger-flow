@@ -32,6 +32,9 @@ export type RegisterEntry = {
   clearingStatus?: 'unmarked' | 'pending' | 'cleared';
   headerLine?: string;
   journalPath?: string;
+  // Companion to headerLine/journalPath for position-based identity. Null for
+  // legacy row shapes that never flow into a mutation request.
+  lineNumber?: number | null;
   matchId?: string | null;
   notes?: string | null;
 };
@@ -115,7 +118,7 @@ export type TransactionRow = {
   isUnknown: boolean;
   isManual: boolean;
   isOpeningBalance: boolean;
-  legs: Array<{ journalPath: string; headerLine: string }>;
+  legs: Array<{ journalPath: string; headerLine: string; lineNumber: number }>;
   matchId?: string | null;
   transferState?: string | null;
   manualResolutionToken?: string | null;

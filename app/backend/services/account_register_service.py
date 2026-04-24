@@ -92,6 +92,7 @@ def build_account_register(config: AppConfig, account_id: str) -> dict:
                     clearing_status=transaction.status.value,
                     header_line=transaction.header_line,
                     journal_path=transaction.source_journal,
+                    header_line_number=transaction.header_line_number,
                     match_id=transaction.metadata.get("match-id") or None,
                     notes=transaction.metadata.get("notes") or None,
                     counts_as_transaction=not is_generated_opening,
