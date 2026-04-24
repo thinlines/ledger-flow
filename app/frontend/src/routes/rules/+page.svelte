@@ -49,6 +49,7 @@
   let initialized = false;
   let error = '';
   let loading = false;
+  let stateLoading = true;
   let rules: Rule[] = [];
   let accounts: string[] = [];
   let journals: JournalRow[] = [];
@@ -301,6 +302,7 @@
       error = String(e);
     } finally {
       loading = false;
+      stateLoading = false;
     }
   }
 
@@ -581,7 +583,11 @@
   <p class="subtitle">Save repeat decisions once and let future imports arrive with less cleanup.</p>
 </section>
 
-{#if !initialized}
+{#if stateLoading}
+  <section class="view-card grid gap-3.5">
+    <p class="muted">Loading rules&hellip;</p>
+  </section>
+{:else if !initialized}
   <section class="view-card grid gap-3.5">
     <p class="error-text">Workspace not initialized yet.</p>
     <a class="btn btn-primary" href="/setup">Go to Setup</a>

@@ -16,7 +16,7 @@
     TrackedAccount, TransactionRow as TxRow, TransactionsResponse,
     TransactionFilters, ManualResolutionApplyResult
   } from '$lib/transactions/types';
-  import { formatCurrency, formatStoredAmount, shortDate, countLabel } from '$lib/format';
+  import { formatCurrency, formatStoredAmount, shortDate, countLabel, type AccountKind } from '$lib/format';
   import { groupByDate, CLEARING_TOOLTIPS } from '$lib/transactions/helpers';
   import { filtersFromUrl, filtersToUrl, EMPTY_FILTERS } from '$lib/transactions/transactionFilters';
   import { loadTransactions } from '$lib/transactions/loadTransactions';
@@ -61,6 +61,11 @@
 
   $: isSingleAccount = filters.accounts.length === 1;
   $: selectedAccount = isSingleAccount ? trackedAccounts.find((a) => a.id === filters.accounts[0]) ?? null : null;
+  $: accountKindById = buildAccountKindMap(trackedAccounts);
+  // Single-account view drives the filtered-account kind; cross-account views
+  // render unsigned/neutral because mixed accounts have no coherent "good"
+  // direction.
+  $: filteredAccountKind = isSingleAccount ? (accountKindById.get(filters.accounts[0]) ?? null) : null;
   $: rows = result?.rows ?? [];
   $: postedRows = rows.filter((r: TxRow) => r.transferState !== 'pending');
   $: pendingRows = isSingleAccount ? rows.filter((r: TxRow) => r.transferState === 'pending') : [];
@@ -74,6 +79,20 @@
   $: showRunBal = isSingleAccount;
   $: showExpl = !isSingleAccount && result?.summary != null;
   $: explTxs = postedRows.map(toExplTx);
+
+  function buildAccountKindMap(accounts: TrackedAccount[]): Map<string, AccountKind> {
+    const map = new Map<string, AccountKind>();
+    for (const account of accounts) {
+      if (account.kind === 'asset' || account.kind === 'liability') {
+        map.set(account.id, account.kind);
+      }
+    }
+    return map;
+  }
+
+  function rowAccountKind(row: TxRow): AccountKind | null {
+    return accountKindById.get(row.account.id) ?? null;
+  }
 
   function toExplTx(r: TxRow) {
     return {
@@ -349,7 +368,7 @@
                   <span class="pill pending-pill">Pending</span>
                 </div>
               </div>
-              <div class="text-right"><p class:positive={row.amount > 0} class:negative={row.amount < 0} class="font-bold">{formatCurrency(row.amount, baseCurrency, { signed: true })}</p></div>
+              <div class="text-right"><p class:positive={filteredAccountKind && row.amount > 0 && !row.isTransfer} class="font-bold">{row.isTransfer ? formatCurrency(Math.abs(row.amount), baseCurrency, { signMode: 'negative-only' }) : formatCurrency(row.amount, baseCurrency, { signMode: filteredAccountKind ? 'good-change-plus' : 'negative-only', accountKind: filteredAccountKind ?? undefined })}</p></div>
             </summary>
             <div class="px-4 pb-4 grid gap-3">
               <p class="text-muted-foreground text-sm pending-details-note">{row.manualResolutionToken ? 'Resolve manually when no imported counterpart is expected.' : 'Waiting for the imported transaction to land.'}</p>
@@ -388,9 +407,9 @@
     {:else if result !== null}
       <div class="grid">
         {#each dayGroups as group, gi}
-          <TransactionDayGroup header={group.header} isFirst={gi === 0} dailySum={group.dailySum} {baseCurrency}>
+          <TransactionDayGroup header={group.header} isFirst={gi === 0} dailySum={group.dailySum} {baseCurrency} accountKind={filteredAccountKind}>
             {#each group.rows as row}
-              <TransactionRow {row} {baseCurrency} showRunningBalance={showRunBal} showCategory={!filters.category} showAccountLabel={!isSingleAccount} {isSingleAccount} onToggleClearing={isSingleAccount ? handleToggleClearing : null} onRowClick={() => (selectedRow = row)} />
+              <TransactionRow {row} {baseCurrency} accountKind={rowAccountKind(row)} showRunningBalance={showRunBal} showCategory={!filters.category} showAccountLabel={!isSingleAccount} {isSingleAccount} onToggleClearing={isSingleAccount ? handleToggleClearing : null} onRowClick={() => (selectedRow = row)} />
             {/each}
           </TransactionDayGroup>
         {/each}
@@ -398,14 +417,18 @@
       {#if postedRows.length > 0}
         <div class="sticky bottom-0 flex items-center justify-between border-t border-[rgba(10,61,89,0.08)] bg-white/90 backdrop-blur-sm px-4 py-2 text-sm text-muted-foreground">
           <span>{postedRows.length} {postedRows.length === 1 ? 'transaction' : 'transactions'}</span>
-          <span class:text-green-600={filteredTotal > 0} class:text-red-500={filteredTotal < 0} class="font-medium">{formatCurrency(filteredTotal, baseCurrency, { signed: true })}</span>
+          <span class:text-green-600={filteredAccountKind && filteredTotal > 0} class="font-medium">
+            {filteredAccountKind
+              ? formatCurrency(filteredTotal, baseCurrency, { signMode: 'good-change-plus', accountKind: filteredAccountKind })
+              : formatCurrency(Math.abs(filteredTotal), baseCurrency, { signMode: 'negative-only' })}
+          </span>
         </div>
       {/if}
     {/if}
   </section>
 {/if}
 
-<TransactionDetailSheet row={selectedRow} {baseCurrency} accounts={allAccounts} {actionError} onDelete={handleSheetDelete} onResetCategory={handleSheetResetCat} onRecategorize={handleSheetRecat} onUnmatch={handleSheetUnmatch} onClose={() => (selectedRow = null)} />
+<TransactionDetailSheet row={selectedRow} {baseCurrency} accounts={allAccounts} accountKind={selectedRow ? rowAccountKind(selectedRow) : null} {actionError} onDelete={handleSheetDelete} onResetCategory={handleSheetResetCat} onRecategorize={handleSheetRecat} onUnmatch={handleSheetUnmatch} onClose={() => (selectedRow = null)} />
 <ManualResolutionDialog bind:entry={manualResolutionEntry} bind:baseCurrency onResolved={handleResolved} />
 <TransactionsFilterDialog bind:open={filterDialogOpen} {filters} {trackedAccounts} {allAccounts} onApply={handleFilterApply} onClose={() => (filterDialogOpen = false)} />
 

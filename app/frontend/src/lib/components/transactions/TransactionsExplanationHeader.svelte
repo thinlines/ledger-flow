@@ -92,18 +92,18 @@
 {#if summary}
   <section class="view-card explanation-header-card">
     <p class="explanation-period">
-      {formatCurrency(summary.periodTotal, baseCurrency)} across {summary.periodCount} {periodNoun}{#if !periodIsMixed && summary.periodCount > 0} · avg {formatCurrency(summary.averageAmount, baseCurrency)} each{/if}
+      {formatCurrency(Math.abs(summary.periodTotal), baseCurrency)} across {summary.periodCount} {periodNoun}{#if !periodIsMixed && summary.periodCount > 0} · avg {formatCurrency(Math.abs(summary.averageAmount), baseCurrency)} each{/if}
     </p>
 
     {#if summary.priorPeriodTotal !== null && summary.priorPeriodCount !== null}
       <p class="explanation-prior">
-        {priorLabel}: {formatCurrency(summary.priorPeriodTotal, baseCurrency)} across {summary.priorPeriodCount} {nounForCategory(category, summary.priorPeriodCount)}{#if deltaPresentation} — <span class={deltaPresentation.className}>{deltaPresentation.arrow}{deltaPresentation.displayPercent.toFixed(0)}%</span>{/if}
+        {priorLabel}: {formatCurrency(Math.abs(summary.priorPeriodTotal), baseCurrency)} across {summary.priorPeriodCount} {nounForCategory(category, summary.priorPeriodCount)}{#if deltaPresentation} — <span class={deltaPresentation.className}>{deltaPresentation.arrow}{deltaPresentation.displayPercent.toFixed(0)}%</span>{/if}
       </p>
     {/if}
 
     {#if summary.rollingMonthlyAverage !== null}
       <p class="explanation-baseline">
-        6-month average: {formatCurrency(summary.rollingMonthlyAverage, baseCurrency)}/mo
+        6-month average: {formatCurrency(Math.abs(summary.rollingMonthlyAverage), baseCurrency)}/mo
       </p>
     {/if}
 
