@@ -1,5 +1,11 @@
 # Transaction Identity Fix — Line-Number-Based Lookup
 
+**Status: COMPLETED — 2026-04-23**
+
+QA: PASS WITH FINDINGS. Review: SHIP. Findings (non-blocking):
+1. HTTP-level (FastAPI `TestClient`) regression tests cover only `delete` and `toggle-status` end-to-end; `recategorize`, `notes`, and `unmatch` are covered at the helper layer (`TestLocateHeaderAt` + uniform `_locate_header` wrapper) and via live smoke test, but not via `TestClient`. Root cause is the pre-existing Phase-4b `fastapi` ModuleNotFoundError under `uv run pytest`. Follow-up: fix the pytest env, then add `TestClient` regression coverage for the remaining three endpoints.
+2. Cosmetic: `test_drift_mismatched_text_raises` comment in `test_transaction_actions.py:175-179` describes the wrong line number; the assertion still holds because both lines fail equality. Worth a one-line cleanup.
+
 ## Title
 
 Replace header-line string matching with position-based identity (`journalPath + lineNumber`) plus a header-line drift check for every transaction mutation endpoint.
