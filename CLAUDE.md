@@ -6,9 +6,22 @@ When the user asks to implement, build, ship, finish, or work on a task — or r
 
 ## Shell command style
 
-Prefer non-chaining command forms so per-subcommand permission rules apply cleanly. The Bash permission matcher is shell-operator aware: a rule like `Bash(git add:*)` does **not** match `cd /worktree && git add .`, so chaining forces a fresh approval prompt every time.
+**Prefer built-in tools over Bash.** Built-in tools are fast, cached, and don't trigger permission prompts. Every shell command passes through a pre-tool-use hook with strict pattern rules — deviations force a manual approval that blocks worktree agents.
 
-- **Git in another directory**: _always_ use the /git-committer skill to commit to git.
-- **One-shot reads**: use absolute paths with the dedicated tool (Read, Glob, Grep) instead of `cd <dir> && cat file`.
-- **Multi-step work in one directory**: if you genuinely need to run several commands in the same place, `cd` once at the top of the work block and then run plain commands — don't re-prefix `cd` on each call.
+| Instead of...                         | Use...                                      |
+|---------------------------------------|---------------------------------------------|
+| `cat <file>`                          | **Read**                                    |
+| `head -N <file>` / `tail -N <file>`   | **Read** with `offset` / `limit`            |
+| `grep <pattern> <file>`               | **Grep**                                    |
+| `find . -name "<pattern>"`            | **Glob**                                    |
+| `ls <dir>/`                           | **Glob** with `<dir>/**`                    |
+| `git show HEAD:<path>` (file on disk) | **Read** (unless you need a past revision)  |
+| `sed 's/.../.../' <file>` to edit     | **Edit**                                    |
+
+**Reserve Bash for what built-ins cannot do:** running tests, build commands, git operations (`commit`, `add`, `status`, `log`, `diff`), dev servers, installing dependencies, linters.
+
+**Never chain commands with `&&`, `||`, `;`, or shell loops (`while read`, `for`).** Issue multiple tool calls instead — independent ones can run in parallel. The hook rejects chained commands to keep the trust boundary simple.
+
+- **Git**: _always_ use the /git-committer skill to commit to git.
+- **Multi-step work in one directory**: if you genuinely need several commands in the same place, `cd` once at the top and then run plain commands — don't re-prefix `cd` on each call.
 - **Only chain with `&&` when the steps are inherently coupled** (e.g., `mkdir -p foo && touch foo/bar`), not as a shortcut to set a working directory.
