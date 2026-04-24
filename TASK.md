@@ -1,5 +1,7 @@
 # Shell, Copy, and Visual Polish (7c)
 
+**Status: COMPLETED — 2026-04-20**
+
 ## Objective
 
 Close out Feature 7 by removing implementation-leak language from the shell, fixing misleading copy and CTA states, demoting noisy secondary actions on the accounts page, adopting a consistent sign convention for money amounts, and making the mobile layout financial-data-first. The result: a polished, consumer-grade app shell where every word and visual hierarchy decision reflects the finance-first principle.
@@ -292,3 +294,21 @@ None. 7d-4c, 7b, and the CSV parser refactor are all shipped. This task closes o
 ## Open Questions
 
 None. All scope decisions resolved.
+
+## Delivery Notes
+
+Shipped on branch `worktree-agent-adbcd4d0` after QA + code review (one fix cycle). All seven items delivered per spec; `pnpm check` clean (671 files, 0 errors, 0 warnings).
+
+**Fix cycle addressed:**
+- `/rules` loading deadlock on `/api/app/state` error — `stateLoading` reset moved into `finally` block so the page no longer stalls on "Loading rules…" indefinitely. Mirrors the `/accounts` pattern.
+- Minor cleanups: collapsed dead ternary in `format.ts`, added `sr-only` `DialogPrimitive.Title` on mobile drawer for a11y, gated `drawerOpen` reset with idempotency check.
+
+**Follow-up items (non-blocking, deferred):**
+- Dashboard's local `formatCurrency` wrapper remains scoped to the dashboard; Recent Activity uses a small `formatRecentAmount` helper. Future cleanup: migrate dashboard to the shared `formatCurrency` after adding `compact` notation support there, then delete the local helper.
+- Pending-transfer summary line on `/transactions` still uses `signed: true` (not enumerated in the sign-convention migration scope).
+- Pending-row transfer rendering does not prepend the ArrowLeftRight icon (pending transfers aren't explicitly covered by the spec's transfer-row section).
+- `/rules` error-path copy: when `/api/app/state` fails, the user now sees the "Workspace not initialized yet." fallback rather than the raw error message. The deadlock is resolved, but surfacing the actual error independent of `initialized` would be a future polish.
+- Mobile drawer has both a hardcoded `aria-label="Main navigation"` and a new `DialogPrimitive.Title` "Navigation menu"; `aria-label` wins, so the redundancy is a minor a11y polish item.
+
+**Manual verification still required:**
+The task's Definition of Done calls for visual confirmation at 360px / 768px / 980px / 1440px viewport widths. Neither the implementer nor the QA verifier could exercise a live browser; this is the one remaining gate before the branch is merged. Run `pnpm dev` and spot-check: mobile top bar + drawer slide-in, hero CTA in all-caught-up state, accounts Edit demotion, green `+` / neutral sign rendering across transactions / recent activity / totals strip.
