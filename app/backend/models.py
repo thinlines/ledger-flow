@@ -198,28 +198,33 @@ class ManualTransactionCreateRequest(BaseModel):
 class ToggleStatusRequest(BaseModel):
     journalPath: str
     headerLine: str
+    lineNumber: int
 
 
 class DeleteTransactionRequest(BaseModel):
     journalPath: str
     headerLine: str
+    lineNumber: int
 
 
 class RecategorizeTransactionRequest(BaseModel):
     journalPath: str
     headerLine: str
+    lineNumber: int
     newCategory: str | None = None
 
 
 class UnmatchTransactionRequest(BaseModel):
     journalPath: str
     headerLine: str
+    lineNumber: int
     matchId: str
 
 
 class UpdateNotesRequest(BaseModel):
     journalPath: str
     headerLine: str
+    lineNumber: int
     notes: str
 
 

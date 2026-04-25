@@ -48,6 +48,10 @@ class RegisterEvent:
     clearing_status: str = "unmarked"
     header_line: str = ""
     journal_path: str = ""
+    # Zero-indexed offset of ``header_line`` within the physical file at
+    # ``journal_path``. ``-1`` for transactions hoisted from include files;
+    # mutation endpoints reject those via the drift check.
+    header_line_number: int = -1
     match_id: str | None = None
     notes: str | None = None
     affects_balance: bool = True
@@ -669,6 +673,7 @@ def pending_transfer_event_for_peer_account(
         clearing_status=transaction.status.value,
         header_line=transaction.header_line,
         journal_path=transaction.source_journal,
+        header_line_number=transaction.header_line_number,
         affects_balance=False,
         counts_as_transaction=False,
     )
@@ -715,6 +720,7 @@ def direct_transfer_event_for_peer_account(
         clearing_status=transaction.status.value,
         header_line=transaction.header_line,
         journal_path=transaction.source_journal,
+        header_line_number=transaction.header_line_number,
         affects_balance=True,
         counts_as_transaction=True,
     )

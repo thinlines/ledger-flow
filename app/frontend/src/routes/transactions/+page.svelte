@@ -218,6 +218,7 @@
       isOpeningBalance: row.isOpeningBalance, detailLines: row.detailLines,
       manualResolutionToken: row.manualResolutionToken, manualResolutionNote: row.manualResolutionNote ?? null,
       clearingStatus: row.status, headerLine: leg?.headerLine, journalPath: leg?.journalPath,
+      lineNumber: leg?.lineNumber ?? null,
       matchId: row.matchId ?? null, notes: row.notes ?? null, transferState: row.transferState ?? null,
     };
   }

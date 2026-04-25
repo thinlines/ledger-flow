@@ -154,6 +154,7 @@
       await apiPost<{ success: boolean }>('/api/transactions/notes', {
         journalPath: leg.journalPath,
         headerLine: leg.headerLine,
+        lineNumber: leg.lineNumber,
         notes: trimmed
       });
       notesSaveState = 'saved';

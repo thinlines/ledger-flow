@@ -1,5 +1,11 @@
 # Transaction Identity Fix — Line-Number-Based Lookup
 
+**Status: COMPLETED — 2026-04-23**
+
+QA: PASS WITH FINDINGS. Review: SHIP. Findings (non-blocking):
+1. HTTP-level (FastAPI `TestClient`) regression tests cover only `delete` and `toggle-status` end-to-end; `recategorize`, `notes`, and `unmatch` are covered at the helper layer (`TestLocateHeaderAt` + uniform `_locate_header` wrapper) and via live smoke test, but not via `TestClient`. Root cause is the pre-existing Phase-4b `fastapi` ModuleNotFoundError under `uv run pytest`. Follow-up: fix the pytest env, then add `TestClient` regression coverage for the remaining three endpoints.
+2. Cosmetic: `test_drift_mismatched_text_raises` comment in `test_transaction_actions.py:175-179` describes the wrong line number; the assertion still holds because both lines fail equality. Worth a one-line cleanup.
+
 ## Title
 
 Replace header-line string matching with position-based identity (`journalPath + lineNumber`) plus a header-line drift check for every transaction mutation endpoint.
@@ -219,35 +225,180 @@ Commits 2 and 3 may be combined into a single commit if the reviewer prefers ato
 
 ## Delivery Notes
 
-_To be filled in by the shipping agent._
+Shipped on branch `worktree-agent-ae56c32b` as a single coordinated commit
+covering backend identity contract, query-service plumbing, frontend wire
+contract, regression and drift tests. Per `feedback_prefer_completeness.md`:
+no backward-compat field, no feature flag — the wire contract changed
+atomically.
 
 ### Commits (in order)
 
-1. _(hash)_ — _title_
-2. _…_
+1. `feat(transactions): position-based identity for mutation endpoints` —
+   single commit on the worktree branch covering all five workstreams
+   (backend models, query-service line-number plumbing, journal_block_service
+   helper, endpoint handlers, frontend types, frontend action callers, tests).
 
 ### Include-file strategy chosen
 
-_Sentinel `-1` vs. row suppression. Document which, and whether any real workspace under `workspace/journals/` actually uses `include` directives._
+**Sentinel `-1`.** Confirmed via `Grep` that real workspaces use `include`
+directives heavily: `workspace/journals/2026.journal` includes three
+`rules/*.dat` files plus `opening/_opening_balances.journal`, which itself
+includes six per-account opening files. Row suppression would have made
+opening-balance rows silently disappear from the register — clearly the
+wrong call. With the sentinel, included-file transactions still render in
+the register; mutation attempts get 404 "stale data — try refreshing" via
+the same drift path that catches concurrent edits, which matches the
+endpoints' existing pre-task behaviour against include-file rows
+(`HeaderNotFoundError` from the old string-scan).
+
+Implementation: `_expand_journal_lines_with_origins` retains
+`(physical_path, raw_line_index)` for every line emitted by include
+expansion. `load_transactions` checks each transaction's expanded-text
+start offset against that map. If the origin file matches the top-level
+journal, the offset becomes a real `header_line_number`; otherwise `-1`.
 
 ### Exhaustive frontend callsite list
 
-_Every file touched and why. A reviewer should be able to confirm no mutation-sending callsite was missed by comparing this list against `git grep 'apiPost' app/frontend/src/` for the five endpoints._
+Every file the wire contract touches:
+
+- `app/frontend/src/lib/transactions/types.ts` — `TransactionRow.legs[]`
+  element gains required `lineNumber: number`. `RegisterEntry` (deprecated
+  shim used by `ManualResolutionDialog`) gains `lineNumber?: number | null`
+  to mirror its existing `headerLine`/`journalPath` companions.
+- `app/frontend/src/lib/transactions/transactionActions.ts` — every
+  `apiPost` call to the five mutation endpoints sends
+  `lineNumber: leg.lineNumber`. The `toggleClearing` spread already kept
+  `leg.lineNumber` via `{ ...leg }`; only `headerLine` needed update — no
+  drift-on-followup risk.
+- `app/frontend/src/lib/components/transactions/TransactionDetailSheet.svelte`
+  — the inline notes `apiPost('/api/transactions/notes', ...)` call now
+  sends `lineNumber: leg.lineNumber`.
+- `app/frontend/src/routes/transactions/+page.svelte` — `openManualRes`
+  builds a legacy `RegisterEntry` from a `TransactionRow.legs[0]`; updated
+  to forward `lineNumber: leg?.lineNumber ?? null`.
+
+`Grep` confirmed no other consumer of `legs[0].headerLine`,
+`legs[0].journalPath`, or `leg.lineNumber` exists. `ManualResolutionDialog`
+itself never reads `headerLine`/`journalPath`/`lineNumber` from
+`RegisterEntry`; the fields are payload-only carriers.
 
 ### Ambiguity repro
 
-_Command used to construct a two-identical-header-line fixture and the observed behavior (before: 409; after: success)._
+Constructed in-process via FastAPI `TestClient` against a tmp workspace
+seeded with two byte-identical headers (same date `2026-03-15`, same
+status `unmarked`, same payee `Starbucks`, different amounts $5 and $7):
+
+```
+2026-03-15 Starbucks
+    Assets:Bank:Checking  -$5.00
+    Expenses:Coffee  $5.00
+
+2026-03-15 Starbucks
+    Assets:Bank:Checking  -$7.00
+    Expenses:Coffee  $7.00
+```
+
+GET `/api/transactions` returned two rows with distinct `legs[0].lineNumber`
+(5 and 9). On the old code, POSTing toggle-status with the shared
+`headerLine` would have returned HTTP 409
+`Ambiguous: multiple matching header lines found`. With the new code:
+
+- Toggle-status on the $5 row → 200, only the $5 transaction's header
+  changed to `* → !`; the $7 row remained `unmarked`.
+- Recategorize on the $7 row → 200, only the $7 row's category changed.
+- Notes on the $5 row → 200, notes line inserted only on the $5 block.
+- Delete on the $5 row → 200, only the $5 block removed.
+- Drift case: replay an old `lineNumber` after the file shifts → 404
+  with the existing stale-data detail message.
 
 ### Verification outcomes
 
-- `pnpm check` → _outcome_
-- `uv run pytest app/backend/tests/test_transaction_actions.py app/backend/tests/test_notes_and_recategorize.py -q` → _outcome_
-- Manual smoke test → _which mutations were exercised on which row types (regular, transfer-peer, split-posting, opening-balance)_
+- `pnpm check` → **PASS**: `671 FILES 0 ERRORS 0 WARNINGS 0 FILES_WITH_PROBLEMS`.
+- `uv run pytest app/backend/tests/test_transaction_actions.py app/backend/tests/test_notes_and_recategorize.py -q` →
+  **PASS**: 32 passed (was 22 — 10 new regression and drift tests added).
+- Targeted broader run (`test_transaction_actions`,
+  `test_notes_and_recategorize`, `test_unified_transactions_service`,
+  `test_account_register_service`, `test_undo_service`) → 102 passed.
+- Full backend suite (excluding pre-existing fastapi-broken modules):
+  525 passed, 3 failed in
+  `test_institution_registry_derivation.py` — all three failures are
+  pre-existing (`assert len(result) == 3` against an 8-template registry)
+  and reproduce on `master` before any of my changes.
+- **Manual smoke test (live FastAPI app via TestClient against a tmp
+  workspace):**
+  - **Regular row** with byte-identical-header neighbour: toggle-status,
+    recategorize, notes, delete — all 200, all mutated the right block.
+  - **Transfer-peer row** (synthetic, single-account scope on the peer
+    side of a direct cross-account transfer): GET returned a row whose
+    `legs[0].lineNumber` was the real backing transaction's offset
+    (not `-1`); toggle-status via that row → 200, mutated the backing
+    transaction in its actual journal file.
+  - **Drift case**: external file edit invalidated a captured
+    `lineNumber`, retry → 404 with
+    `"Transaction not found in journal (stale data — try refreshing)"`.
+  - **Unmatch endpoint**: not exercised live (requires `match-id`
+    metadata + an `archived-manual.journal` sidecar, more setup than the
+    smoke value warranted). The handler path is identical
+    (`_locate_header(main_lines, req.lineNumber, req.headerLine)`); the
+    Pydantic model now requires `lineNumber`.
+  - **Split-posting row**: not exercised live (the existing
+    recategorize endpoint already 422s on splits regardless of identity
+    scheme).
+  - **Opening-balance row** in include-file: load-transactions
+    correctness verified by automated test
+    (`test_include_file_transactions_get_sentinel_line_number`); a live
+    mutation attempt would 404 by design.
 
 ### Pre-existing environment issue
 
-_Does the Phase-4b `fastapi` ModuleNotFoundError still prevent full-suite pytest collection? If yes, document the ignores used. If it's been fixed in the meantime, note that._
+The Phase-4b `fastapi` ModuleNotFoundError persists in the pytest env
+(`uv run pytest`, no `--active`). Two test modules cannot be collected:
+`test_unknown_stage_resume.py` and `test_workspace_bootstrap.py` — both
+import from `main`, which transitively imports `fastapi`. They were
+ignored via `--ignore` flags during full-suite verification. The same
+issue prevented adding pytest-style FastAPI integration tests; the live
+smoke tests above were run via `uv run python` from `app/backend` (which
+does have `fastapi` available — separate venv resolution). Filing a
+follow-up to align the pytest environment is out of scope.
 
 ### Ambiguity resolved during implementation
 
-_Any sub-decisions the author made that the plan left open. Example: whether `locate_header` got deleted or kept, and why._
+- **`locate_header` and `AmbiguousHeaderError` kept, not deleted.**
+  `services/undo_service.py` still calls `locate_header` from four
+  places (`_undo_transaction_recategorized`,
+  `_undo_transaction_status_toggled`, `_undo_manual_entry_created`,
+  `_undo_transaction_unmatched`). Per the plan §"Out of Scope":
+  "No migration or cleanup of old event-log payloads. The event log's
+  historical `header_line` payloads stay as-is." Event payloads carry
+  `header_line` text, not `line_number`, so undo replay still has to
+  scan. I documented `AmbiguousHeaderError` as deprecated-for-mutation,
+  and the `locate_header` docstring now points readers to
+  `locate_header_at` for any new mutation-style work.
+
+- **The five-endpoint `_locate_header` wrapper kept, signature changed.**
+  Renamed semantically (now takes `(lines, line_number, expected_header)`)
+  but kept under the same name to minimize diff churn and keep the
+  HTTPException translation localized. Its 409 branch is gone; only the
+  404 path remains.
+
+- **`_split_transactions` signature change is contained.** Only
+  `journal_query_service._split_transactions` changed
+  (`list[list[str]]` → `list[tuple[int, list[str]]]`); the lookalike
+  helpers in `import_service.py` and `opening_balance_service.py` are
+  separate copies and did not need to change.
+
+- **Drift-check granularity.** Per the plan, the byte-for-byte equality
+  check in `locate_header_at` does not normalize whitespace, does not
+  parse the header, and does not `.strip()` either side. A test
+  (`test_drift_does_not_normalize_whitespace`) locks this down so a
+  future "be lenient" patch trips a regression.
+
+- **Synthetic peer rows attribution verified.** `RegisterEvent`
+  constructions in `transaction_helpers.py` (both
+  `pending_transfer_event_for_peer_account` and
+  `direct_transfer_event_for_peer_account`) and the inline
+  construction in `unified_transactions_service.py` and
+  `account_register_service.py` all forward
+  `header_line_number=transaction.header_line_number`. The live smoke
+  test confirmed the peer row's `legs[0].lineNumber` resolves to the
+  real backing transaction's offset and mutates correctly.
