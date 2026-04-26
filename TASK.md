@@ -1,357 +1,198 @@
-# Reconciliation Backend (8a) — Reconcile Endpoint, Assertion Writer, Import Fence, Failure Detection
-
-**Status: COMPLETED — 2026-04-26**
-
-## Delivery Notes
-
-- QA verdict: PASS. All 11 acceptance criteria mapped to passing tests. 600 tests pass; `pnpm check` clean.
-- Code review verdict: SHIP WITH NOTES. Non-blocking follow-ups:
-  - `parse_closing_balance` mildly duplicates `manual_entry_service._parse_amount_str`; consider promoting to a shared currency module if a third caller appears.
-  - No test simulates `verify_assertion` raising `RuntimeError` (the 500-with-rollback path); production path is small and reads correctly, but a unit test would close the loop.
-  - Event `summary` uses raw user input for the closing balance (`... · 2500.00`) rather than the spec-formatted `... · $2,500.00`; cosmetic.
-  - `_journal_files` listing in `reconciliation_service` mirrors the one in `journal_query_service.load_transactions`; extract to a shared helper if a third caller appears.
-- Spec ambiguities resolved during implementation (also recorded in `plans/statement-reconciliation.md` "8a Implementation Notes"):
-  - `_main_journal_path` doesn't exist; verification iterates `workspace/journals/*.journal` (excluding the archive sidecar) instead.
-  - The canonical shared `TrackedAccount` type lives at `app/frontend/src/lib/transactions/types.ts`, not `app/frontend/src/lib/api/types.ts` — the new optional fields landed there.
-  - Line numbers in the API response are 0-indexed to match `locate_header_at`. The 8b modal will need to know this.
-  - Ledger error wording is inverted vs. ours: ledger's "expected to see" is our `actual`. Captured in `LEDGER_ASSERTION_FAILURE_FIXTURE` and tested both directions.
-  - The spec's "GET /api/accounts" surface for broken-status is actually `/api/tracked-accounts`, the dashboard balance sheet, and `/api/workspace/bootstrap` — `_tracked_account_ui` wiring covers all three.
+# Reconciliation Modal (8b) — Setup, Review, Finish
 
 ## Objective
 
-A user can hit `POST /api/accounts/{id}/reconcile` with a period and closing balance, and the system writes one zero-amount balance-assertion transaction to the journal, verifies the assertion holds, and emits an `account.reconciled.v1` event. After a date is reconciled, any new import on or before that date is classified as a `conflict`, never silently inserted. The account API and dashboard payloads gain a `reconciliationStatus` field that surfaces broken assertions with the failure date, expected balance, and actual balance.
-
-This task delivers the substrate for 8b (the modal) and 8c (the rendering). It does not deliver any UI; the only user-visible effect is that broken reconciliations and reconciled-date conflicts now exist in API responses, and a cURL request can write a reconciliation.
+A user clicks **Reconcile** on a tracked-account card in `/accounts`, enters the statement period and closing balance, ticks transactions until the difference is zero, and clicks **Reconcile** to finish. The flow calls 8a's `POST /api/accounts/{id}/reconcile`. The modal closes on success; on validation or assertion failure it stays open with a banner. No other UI lands here — assertion-row rendering, broken-status surfacing, history view, loose-ends entries, and pre-reconciliation edit confirmation are all 8c / 8e / 8h.
 
 ## Scope
 
 ### Included
 
-1. `POST /api/accounts/{accountId}/reconcile` — the reconcile endpoint.
-2. Assertion writer — locates the journal file holding `periodEnd`, appends a zero-amount transaction with a balance assertion as the last transaction on its date in that file, then verifies the assertion holds. Rolls back on failure.
-3. `account.reconciled.v1` event in the event log, with the standard `journal_refs` hash-before / hash-after pair so existing semantic undo handles deletion of the assertion transaction via the existing transaction actions menu (no new undo handler).
-4. Reconciled-date import fence — when classifying an import row, if its date is on or before the most recent reconciliation assertion for the affected tracked account, classify as `conflict` with reason `reconciled_date_fence`. Existing `new` / `duplicate` / `conflict` model is preserved.
-5. Read-side failure detection — a service that runs `ledger`/`hledger` against the journal, parses balance-assertion errors, and exposes per-account `reconciliationStatus`. Wire into `_tracked_account_ui` in `main.py:169` so all account-shaped responses (account list, dashboard balance sheet) carry it.
-6. Tests for: writer happy path, writer rollback on failure, assertion ordering invariant (last-on-date), event emission, import fence triggers, failure-detection translation, `reconciliationStatus` on the account UI shape.
+1. New backend endpoint `GET /api/accounts/{accountId}/reconciliation-context?period_start=YYYY-MM-DD&period_end=YYYY-MM-DD` returning the openings, transactions, and currency the modal needs in one round-trip.
+2. **Reconcile** button on each tracked-account card on `/accounts` (`app/frontend/src/routes/accounts/+page.svelte`). Placement: secondary action alongside the demoted Edit affordance under the Accounting details disclosure (per `feedback_component_patterns.md` and the 7c shell-polish convention).
+3. New component `ReconcileModal.svelte` (desktop dialog) / bottom-sheet variant (<980px) with two steps: **Setup** and **Review**.
+4. Setup step: `periodStart` (date), `periodEnd` (date), `closingBalance` (text). Defaults: `periodStart` = day after the most recent reconciliation date for this account (or earliest journal posting on the account if none); `periodEnd` = today; `closingBalance` empty. Continue is disabled until all three parse.
+5. Review step: list of transactions on the asserted account in `[periodStart, periodEnd]`, each with a checkbox. A live diff strip at the top: `Opening · $X · Ticked · $Y · Closing · $Z · Difference · $W`. **Reconcile** button is disabled until `Difference == 0`.
+6. Finish handler: `POST /api/accounts/{accountId}/reconcile` with `{periodStart, periodEnd, closingBalance, currency}`. On 200 → close modal and re-fetch the accounts list. On 422 / 409 / 400 → stay open, render the structured error in a banner.
+7. Cancel: closes the modal, no network calls.
+8. Backend currency-parser consolidation: extract a single shared helper (e.g. `app/backend/services/currency_parser.py` exposing `parse_amount(raw: str) -> Decimal`) that both `manual_entry_service._parse_amount_str` and `reconciliation_service.parse_closing_balance` call. No new behavior — same accepted shapes (optional `$`, comma group separators, optional minus, optional whitespace), same `ValueError` on reject. Existing call sites switch to the shared helper; the two old wrappers can be deleted or reduced to thin re-exports if any external test imports them.
+9. Frontend currency parser used in the modal accepts the same shapes as the shared backend helper. A shared JSON fixture (e.g. `app/backend/tests/fixtures/currency_parser_cases.json`) drives both pytest and Vitest parity tests — every input either parses identically on both sides or rejects on both sides.
+10. Backend test for the context endpoint. Vitest unit tests for the diff math and the parser parity. One Playwright-or-equivalent end-to-end test is **not** required; manual verification covers the integration path.
 
 ### Explicitly Excluded
 
-- Reconciliation modal on `/accounts` (8b).
-- Assertion rendering in the transactions list and account card (8c).
-- Loose-ends entry for broken reconciliations (8c).
-- PDF upload / storage (8d).
-- Reconciliation history view on the account page (8e).
-- Subset-sum solver (8f).
-- Adjustment-transaction button (8g).
-- Confirmation modal for edits/deletes of pre-reconciliation transactions (8h).
-- Multi-currency reconciliation. Single posting, single currency per the plan.
-- Reconciliation of income / expense / equity accounts. Balance-sheet accounts only — the endpoint returns `400` if the account's ledger account is not under `Assets:` or `Liabilities:`.
-- Smart-date offsets (Beancount Reds-style `min(statement_end - 2, last_posting_date)`). Use the user-entered `periodEnd` as the assertion date verbatim. Document the trade-off in `DECISIONS.md §16`.
-- New undo handler for reconciliation. Deletion via the existing transaction actions menu reverses it; the existing `transaction.deleted.v1` handler suffices.
+- Statement PDF upload (8d).
+- Subset-sum solver — "Find the difference" button (8f).
+- Adjustment-transaction button — "Post adjustment and finish" (8g). The MVP workaround stays documented inline (cancel → post a manual transaction to `Equity:Reconciliation Discrepancies` → reopen).
+- Pre-checked locked rows for transactions in prior reconciliations. Locking `periodStart >= last_reconciliation_date + 1 day` removes the need.
+- Transactions list rendering of the new assertion row (8c).
+- Account card "Last reconciled" line and broken-status copy (8c).
+- Loose-ends entry for broken reconciliation (8c).
+- Reconciliation history view (8e).
+- Edit/delete confirmation modal for pre-reconciliation transactions (8h).
+- Multi-currency reconciliation. The endpoint already rejects with 400.
+- Reconciliation of income / expense / equity accounts. The endpoint already rejects with 400; the modal hides the **Reconcile** button on non-balance-sheet accounts.
+- Success toast. Constructive action — modal closing is the confirmation. Saved feedback `feedback_undo_toast_scope.md` reserves toasts for destructive / non-obvious reversals.
 
 ## System Behavior
 
-### 1. `POST /api/accounts/{accountId}/reconcile`
+### Inputs
 
-**Request body:**
+- Click **Reconcile** on a tracked-account card → opens the modal scoped to that account.
+- User edits `periodStart` / `periodEnd` / `closingBalance` in Setup; clicks **Continue** to advance to Review.
+- User toggles row checkboxes in Review; live diff updates synchronously.
+- User clicks **Reconcile** (Finish) or **Cancel**.
 
-```json
-{
-  "periodStart": "2026-03-18",
-  "periodEnd": "2026-04-17",
-  "closingBalance": "2500.00",
-  "currency": "USD"
-}
-```
+### Logic
 
-- `accountId` — tracked-account id (the same id used by the `/api/accounts` and `/api/tracked-accounts` endpoints).
-- `periodStart`, `periodEnd` — ISO dates (`YYYY-MM-DD`). `periodStart <= periodEnd` required.
-- `closingBalance` — string-encoded decimal, parsed by the existing currency parser (`app/backend/services/manual_entry_service.py` has the canonical regex; reuse, don't reinvent).
-- `currency` — must match the workspace base currency. Reject other values with `400` and the message `Multi-currency accounts are out of scope (#TODO multi-currency support).`
+- On open, the modal calls `GET /api/accounts/{id}/reconciliation-context` with the current Setup values. Refetches when `periodStart` or `periodEnd` changes (debounce 250ms).
+- Diff math: `difference = parsed(closingBalance) - (openingBalance + sum_signed(ticked_rows, asserted_account))`.
+- Diff comparison uses string-decimal equality after parsing (no floating point). Match 8a's parser exactly: strip leading `$`, strip commas, optional minus, then `Decimal()`. Empty string is invalid.
+- **Reconcile** disabled while `difference != 0`, while a fetch is in flight, or while `closingBalance` is invalid.
+- On click → `POST /api/accounts/{accountId}/reconcile` with body matching the 8a contract.
+- On 200, the modal calls the accounts list refresh hook and closes. (8c will render the now-populated `reconciliationStatus`.)
+- On 422 (assertion failed — defense-in-depth, should be unreachable when `difference == 0`), render `message`, `expected`, `actual` from the structured response in a banner. Keep modal open. Do not auto-clear; the user re-reads inputs.
+- On 409 (existing reconciliation collision), render the server `detail` and re-enable the date inputs.
+- On 400 (validation), render the `detail` and let the user edit.
+- On 5xx or network error, render a generic banner with the underlying message; user can retry.
 
-**Validation:**
+### Outputs
 
-- Tracked account exists. Otherwise `404 Tracked account not found: <id>`.
-- Account is balance-sheet (ledger account starts with `Assets:` or `Liabilities:`). Otherwise `400 Reconciliation is only supported for asset and liability accounts.`
-- `periodStart <= periodEnd`, both parseable. Otherwise `400 Invalid period: <reason>`.
-- `closingBalance` parses to a decimal. Otherwise `400 Invalid closing balance: <value>`.
-- `periodEnd` is on or after the most recent existing reconciliation date for this account. Otherwise `409 A more recent reconciliation already exists for this account on <date>. Delete it first if you want to reconcile an earlier period.`
-- `currency` matches the workspace base currency. Otherwise `400` per above.
-
-**Side effects:**
-
-- Backup the target journal via the existing `backup_file` helper (`backup_service.py`) with reason `reconcile`.
-- Append the assertion transaction (see "Assertion writer" below).
-- Verify the assertion via `ledger -f <main journal> bal --strict <ledger_account>`. Parse the exit code and stderr.
-- If verification succeeds, emit `account.reconciled.v1` to the event log with `journal_refs` carrying `hash_before` and `hash_after` of the journal file.
-- If verification fails, roll back the journal file from the backup, do NOT emit an event, and return `422` with the parsed error.
-
-**Response (success):**
-
-```json
-{
-  "ok": true,
-  "assertionTransaction": {
-    "journalPath": "journals/2026.journal",
-    "headerLine": "2026-04-17 * Statement reconciliation · Wells Fargo Checking · ending 2026-04-17",
-    "lineNumber": 1487
-  },
-  "eventId": "01HGE..."
-}
-```
-
-**Response (assertion failed):**
-
-```json
-{
-  "outcome": "assertion_failed",
-  "message": "Reconciliation rejected — expected $2,500.00, found $2,487.43.",
-  "expected": "2500.00",
-  "actual": "2487.43",
-  "rawError": "<unparsed ledger stderr>"
-}
-```
-
-HTTP `422` for the assertion-failed outcome.
-
-### 2. Assertion Writer
-
-A new service module: `app/backend/services/reconciliation_service.py`.
-
-**Locating the target journal:**
-
-- Year-derived: `journal_dir / f"{periodEnd[:4]}.journal"`. Same convention used by `transactions_create` in `main.py:496`.
-- If the file does not exist, create it (consistent with the import path).
-
-**Composing the transaction block:**
-
-```
-2026-04-17 * Statement reconciliation · <accountDisplayName> · ending 2026-04-17
-    ; reconciliation_event_id: <uuidv7>
-    ; statement_period: 2026-03-18..2026-04-17
-    <ledger_account>  $0 = $2,500.00
-```
-
-- `<accountDisplayName>` — `tracked_account_cfg["display_name"]`, falling back to `accountId`.
-- `<ledger_account>` — `tracked_account_cfg["ledger_account"]`. Required; if empty, return `400 Tracked account is missing a ledger account.`
-- `<uuidv7>` — generated by the writer **before** `emit_event` is called, then passed to `emit_event` as the explicit event id (extend `emit_event` if it doesn't already accept a caller-supplied id; if not feasible without invasive changes, generate the id inside `reconciliation_service`, write the journal with it, then ask `emit_event` to use it). Both the journal metadata and the event log row must reference the same id.
-- Currency formatting: use the existing `format_currency_for_ledger` helper if present in `manual_entry_service.py` or `transaction_helpers.py`; if not, format as `$<value>` for USD and `<value> <CCY>` for other currencies. Reuse, don't reinvent.
-
-**Insertion ordering (critical invariant):**
-
-- Read the file. Find the last line whose date prefix (`line[:10]`) equals `periodEnd` and that matches `TXN_START_RE` (from `journal_query_service.py`). The assertion transaction inserts immediately after that block ends (i.e., after that block's last line and any trailing blank line that belongs to it).
-- If no transaction with date `periodEnd` exists in the file, find the last transaction with date `< periodEnd` and insert after its block. If no such transaction exists, append to the end of file.
-- Always insert with one blank line before the new block (unless inserting at file start, no preceding blank).
-- After insertion, the assertion transaction must be the last transaction with date `periodEnd` in file order. Add a unit test that asserts this on a journal where another `periodEnd`-dated transaction exists later in the file (this case can arise if the journal was hand-edited or merged).
-
-**Verification:**
-
-- Run `ledger -f <root>/<main_journal> bal --strict <ledger_account>` via `run_cmd` (`ledger_runner.py`). The main journal is determined by the existing `_main_journal_path` helper (find it in `main.py` or `workspace_service.py`; reuse).
-- If `run_cmd` raises `CommandError`, parse stderr for `Balance assertion off by` (ledger) and `assertion failed` / `expected ... but found ...` (hledger) patterns. Extract `expected` and `actual` if present; otherwise pass the raw error in `rawError`.
-- If parsing succeeds, return the structured failure to the endpoint. The endpoint rolls back from the pre-write backup.
-- If `run_cmd` returns successfully (exit 0), the assertion holds.
-
-**Rollback:**
-
-- The backup_file helper copies the file before mutation. On verification failure, copy the backup back over the live file. Do NOT emit any event in this branch — the reconciliation never happened, from the event log's perspective.
-
-### 3. `account.reconciled.v1` event
-
-Emitted via the existing `emit_event` from `event_log_service.py`. Shape:
-
-```json
-{
-  "id": "01HGE...",
-  "type": "account.reconciled.v1",
-  "timestamp": "2026-04-26T15:42:11Z",
-  "actor": "user",
-  "summary": "Reconciled Wells Fargo Checking · ending 2026-04-17 · $2,500.00",
-  "payload": {
-    "tracked_account_id": "wells-checking",
-    "ledger_account": "Assets:Checking:Wells Fargo",
-    "period_start": "2026-03-18",
-    "period_end": "2026-04-17",
-    "closing_balance": "2500.00",
+- New endpoint response shape:
+  ```json
+  {
+    "openingBalance": "1240.50",
     "currency": "USD",
-    "journal_path": "journals/2026.journal",
-    "header_line": "2026-04-17 * Statement reconciliation · Wells Fargo Checking · ending 2026-04-17",
-    "line_number": 1487
-  },
-  "journal_refs": [
-    { "path": "journals/2026.journal", "hash_before": "...", "hash_after": "..." }
-  ]
-}
-```
+    "lastReconciliationDate": "2026-03-17",
+    "transactions": [
+      {
+        "id": "abc123",
+        "date": "2026-03-22",
+        "payee": "Coffee Shop",
+        "category": "Expenses:Food:Coffee",
+        "signedAmount": "-4.75"
+      }
+    ]
+  }
+  ```
+  `signedAmount` is the asserted account's posting amount (positive when the account balance increases). Transfer rows surface only their effect on the asserted account.
+- On finish-success: account list payload is re-fetched; the existing `reconciliationStatus` field (8a) reflects the new state.
 
-No new undo handler. Deletion is covered by the existing transaction actions menu (`transaction.deleted.v1` + the existing handler in `undo_service.py`). Document this in the test for the writer: round-trip "reconcile then delete the assertion transaction" should leave the journal byte-equivalent to before the reconcile (modulo trailing whitespace).
+## System Invariants
 
-### 4. Reconciled-date import fence
+- Modal cannot finish with `difference != 0`. Defense-in-depth against 8a's assertion check.
+- `periodStart >= last_reconciliation_date + 1 day` when a previous reconciliation exists. Modal locks `periodStart` to that floor; the date input refuses lower values.
+- `periodStart <= periodEnd`. Backend already validates; modal disables Continue when violated.
+- Closing-balance parser is byte-equivalent to 8a's. Vitest test asserts a shared fixture of inputs returns the same Decimal on both sides (or symmetric reject).
+- Cancel never writes. Finish writes via 8a only. No client-side journal mutation.
+- The context endpoint is read-only. It does not emit events or backup anything.
 
-**Where:** the import classification path, not the import application path. Currently at `main.py:396` (`return "new" / "duplicate" / "conflict"` ladder — confirm the exact location). Reuse the existing classification function; do not duplicate it.
+## States
 
-**Logic:**
+- **Closed:** modal not mounted.
+- **Setup:** period inputs and `closingBalance` editable. **Continue** enabled when all three parse and ranges are valid.
+- **Review (loading):** fetching context. Transaction list area shows a skeleton or spinner; **Reconcile** disabled.
+- **Review (loaded):** transaction list with checkboxes, live diff strip. **Reconcile** enabled iff `difference == 0`.
+- **Review (empty period):** "No transactions on this account between `<periodStart>` and `<periodEnd>`." Diff still computable from openings + closingBalance alone. **Reconcile** enabled iff `closingBalance == openingBalance`.
+- **Submitting:** **Reconcile** shows pending state, all inputs and checkboxes disabled.
+- **Success:** modal closes; accounts list refreshes.
+- **Error:** modal stays open, banner shows the structured error or fallback copy. User can edit and retry.
 
-- Resolve the tracked account for the import row. If the row maps to no tracked account (orphan import), do not apply the fence — fall through to the existing classification.
-- Look up the most recent reconciliation date for that tracked account. The lookup function lives in `reconciliation_service.py` (a small `latest_reconciliation_date(config, ledger_account) -> date | None` helper that scans the journal for assertion transactions with `; reconciliation_event_id:` metadata on the asserted account's posting). Cache once per import classification pass — do not re-parse per row.
-- If the row's date is on or before that date, the row's `matchStatus` becomes `conflict` and a new field `conflictReason: "reconciled_date_fence"` is added (existing rows without this reason get `conflictReason: null` to keep the response shape stable).
-- The conflict reason carries the reconciliation date in a separate field: `reconciledThrough: "2026-04-17"`. The frontend can render copy from this without re-deriving.
+## Edge Cases
 
-**Response shape:** existing `{ matchStatus, ... }` rows gain two optional fields:
+- **First reconciliation for an account.** `lastReconciliationDate` is `null`. `periodStart` defaults to the earliest journal posting on the asserted account, or the account's opening-balance date, whichever exists. `openingBalance` may be `0`.
+- **Account with no transactions in the period.** Empty list message. Reconcile still possible if `closingBalance == openingBalance` (catches the "I attest nothing happened" case).
+- **`periodEnd` in the past.** Allowed; reconciling a historical statement.
+- **Closing balance with `$` and commas (`$2,500.00`).** Parser strips both and accepts. Must match 8a server-side.
+- **Negative closing balance** (liability account, e.g., credit card statement of `$1,234.56` owed represented as a negative asset balance). Parser accepts leading `-`. Must match 8a's posting-side semantics — reuse the existing convention.
+- **Transfer row in the period.** Endpoint returns the transfer with `signedAmount` reflecting only the asserted account's posting. Two sides of a tracked-to-tracked transfer collapse to one row per the existing N-1 / transfer-pair rules; the modal does not need to dedupe.
+- **Two reconciliation modals open in two browser tabs.** No client locking. Whichever finishes first wins; the second sees 409 if the date collides, otherwise its own assertion check rules.
+- **Account renamed or deleted while modal is open.** On Finish, 8a returns 404; modal banner shows the message. User cancels.
+- **Mobile viewport (<980px).** Modal renders as a bottom sheet using the same `bits-ui` Sheet primitive `RecentActivitySheet.svelte` uses, with the same right-side / bottom variant switch keyed on the existing breakpoint store.
+- **Income / expense / equity account.** **Reconcile** button is hidden on these account cards. Defense-in-depth: 8a returns 400 if it ever gets called.
 
-```json
-{ "matchStatus": "conflict", "conflictReason": "reconciled_date_fence", "reconciledThrough": "2026-04-17" }
-```
+## Failure Behavior
 
-Existing conflict rows (e.g., `source_identity` collisions) get `conflictReason: "identity_collision"` and `reconciledThrough: null`. Pick a stable enum: `"identity_collision" | "reconciled_date_fence"`.
+- Context fetch fails: stay in Review with a retry button. **Reconcile** disabled until the fetch succeeds (without `openingBalance` the diff math is meaningless).
+- 8a 422 (assertion failed): render translated copy plus the disclosure of `rawError` for diagnosis. Modal stays open. Journal already rolled back by 8a; no client cleanup needed.
+- 8a 409: render `detail`, re-enable date inputs, leave checkboxes intact.
+- 8a 400: render `detail`, allow edit.
+- 8a 5xx or network: generic banner with retry. Journal state on the server is whatever 8a left it — for the 500 path 8a rolled back.
+- Accounts-list refresh failure after a successful reconcile: do not block the close. Show a non-blocking refresh-error toast (one of the few uses of toast here, and only because the data desync is a trust issue).
 
-**Apply path:** the apply endpoint must refuse to apply any row with `matchStatus === "conflict"` regardless of reason. Confirm this is already the case (it should be — conflicts are gated today) and add a test that proves it for the new reason.
+## Regression Risks
 
-### 5. Failure detection
-
-A new function in `reconciliation_service.py`:
-
-```python
-def reconciliation_status(config) -> dict[str, ReconciliationStatus]:
-    """Returns {tracked_account_id: ReconciliationStatus}.
-
-    ReconciliationStatus is either {"ok": True} or
-    {"ok": False, "broken": {"date": "YYYY-MM-DD", "expected": "...", "actual": "...", "rawError": "..."}}.
-    """
-```
-
-**Implementation:**
-
-- Run `ledger -f <main_journal> bal --strict` once. Parse stderr.
-- Ledger emits one error line per failed assertion, with the form `Error: Balance assertion off by ... in <file>:<line>`. Extract: file, line, expected, actual.
-- Map each failed assertion line back to a tracked account by reading the journal at that line and finding the asserted ledger account. The ledger account → tracked account mapping already exists (`_tracked_account_id_for_ledger_account` in `main.py:222`).
-- Cache the result for the duration of a single request. Do NOT cache across requests — the journal can change.
-- If `ledger` is unavailable (CommandError other than assertion failure), return `{ok: True}` for every account and log a warning. Do NOT pretend a reconciliation is broken just because the CLI is missing.
-
-**Wiring:**
-
-- `_tracked_account_ui` in `main.py:169` adds `reconciliationStatus` to its return dict. Default `{"ok": true}` when no entry is present in the map.
-- This propagates automatically into:
-  - `GET /api/accounts` (account list)
-  - `GET /api/dashboard/overview` balance sheet (which calls `_tracked_account_ui`)
-  - Any other endpoint reusing `_tracked_account_ui`
-
-**Performance:** the failure-detection ledger call is one shell-out per page load that hits these endpoints. Acceptable for MVP — the same path already runs `ledger` for other queries. If profiling shows it's hot, gate it behind a `?withReconciliationStatus=1` query param.
-
-### System Invariants
-
-- The assertion transaction is always the last transaction on its date in the journal file that holds it. The writer enforces this on insert; future imports must respect it (covered by the import fence).
-- Once a reconciled date exists for an account, the journal is never silently mutated on or before that date by the import path. Only an explicit user action (delete the assertion transaction) clears the fence.
-- The `ledger account → tracked account` mapping is the single source of truth for routing failures. If a journal contains an assertion on a ledger account no tracked account currently maps to (e.g., because the user deleted the tracked account but kept the journal), the failure shows up in logs but does NOT crash the endpoint — return `{ok: True}` for known tracked accounts and ignore the orphaned failure.
-- The event log is append-only. A failed reconciliation never writes an event.
-- Hand-written or imported balance-assertion transactions (no `reconciliation_event_id` metadata) trigger failure detection but are NOT part of the "most recent reconciliation date" computation for the import fence. Only assertions with the `reconciliation_event_id` metadata count toward the fence and the future history view.
-
-### States
-
-- **Default:** No reconciliations exist for any account. All `reconciliationStatus` fields default `{ok: true}`. Import classification proceeds unchanged.
-- **At least one reconciliation, all valid:** `{ok: true}` per account. Import fence active for dates ≤ most-recent reconciliation per account.
-- **Broken reconciliation:** `{ok: false, broken: {date, expected, actual, rawError}}` for the affected account. Failure surfaces in account/dashboard responses.
-- **Endpoint loading:** standard FastAPI request lifecycle — no special UI state, this is API-only work.
-- **Reconcile request — success:** `200` with the assertion transaction descriptor and event id.
-- **Reconcile request — assertion failed:** `422` with structured error.
-- **Reconcile request — validation error:** `400` / `404` / `409` with a human-readable message.
-
-### Edge Cases
-
-- **Period end on an unused date.** If no transactions exist on `periodEnd`, the assertion still inserts at the position just after the last transaction with date `< periodEnd`. Test this.
-- **`periodEnd` precedes any existing transaction in the file.** Insert at the top, no preceding blank line. Test this.
-- **`periodEnd` year file does not exist.** Create it, insert as the only transaction in the file. Test this.
-- **Two reconciliations on the same date for the same account.** Refuse with `409 A reconciliation already exists for this account on <date>.` (Same-day re-reconciliation makes no sense — delete the prior one and redo if needed.)
-- **`periodStart > periodEnd`.** Reject with `400`. Tested in validation.
-- **Import row date equals reconciliation date.** Treated as `≤ reconciled_date` → `conflict`. Verified by test: a reconciliation written on 2026-04-17 fences out an import row also dated 2026-04-17.
-- **Import row date is the day after a reconciliation.** Allowed through. Test this.
-- **Tracked account whose ledger account contains a colon-prefixed parent that's also tracked** (e.g., parent `Assets:Checking` and child `Assets:Checking:Wells`). The lookup must match the *exact* ledger account from the assertion posting, not a parent. Test with overlapping account hierarchies.
-- **Hand-edited assertion line that the user wrote before this feature shipped.** Failure detection picks it up. Import fence does NOT pick it up (no `reconciliation_event_id`). Documented in the test: "hand-written assertion is honored for failure detection only".
-- **Assertion fails immediately after write.** Rollback restores the byte-equivalent file. Test with a fixture journal where the closing balance is wrong on purpose, assert that after the failed reconcile the file is byte-identical to the pre-write backup and no event is emitted.
-- **Concurrent reconcile + import.** No locking in MVP. If the user reconciles in tab A while an import classification is in flight in tab B, tab B may complete its classification before tab A's writer runs — its classifications will not see the new fence. Acceptable; documented as a known race.
-
-### Failure Behavior
-
-- Validation failures: `400` / `404` / `409` with concrete messages. Do not leak Python tracebacks.
-- Assertion failure on write: `422`, journal rolled back via the pre-write backup, no event emitted. Existing journal byte-equivalence preserved.
-- Ledger CLI missing or crashes during verification: rollback (treat as failure), `500 Could not verify the assertion: ledger CLI is unavailable.` Log the underlying error.
-- Failure detection unavailable (ledger CLI missing): every account reports `{ok: true}` with a single warning log line per request. Account/dashboard endpoints continue to serve. The user does not see a misleading "all good" banner — this layer's job is data, not copy; 8c handles the surface and can defensively render `Last verified: <timestamp>` once we wire that.
-- Import classification with the fence: a row that flips from `new` to `conflict` because of the fence is gated by the existing apply-time conflict check. Re-running classification reproducibly returns the same answer.
-
-### Regression Risks
-
-- **`_tracked_account_ui` shape change.** Adding `reconciliationStatus` to every account-shaped response could break any frontend reader that asserts a fixed key set. Audit consumers — the dashboard balance sheet, the accounts list page, the account chip helpers in transactions. Add the field as optional in the TS types so old code paths don't error.
-- **Import classification refactor.** Threading the fence in without breaking the existing `new` / `duplicate` / `conflict` semantics is the highest-risk piece. Wrap the fence in a small `apply_reconciliation_fence(rows, latest_dates)` helper, run it after the existing classifier, and test the unaltered path explicitly (no reconciliations → identical outputs to today).
-- **Journal-write ordering.** A bug in the "last on its date" insertion would silently break future reconciliations of the same account (the assertion would check an intermediate balance and could pass for the wrong reason). Cover with a dedicated test that inserts an assertion when later transactions exist on the same date.
-- **Failure-detection ledger error parsing.** `ledger` and `hledger` produce slightly different error formats. MVP targets `ledger` only — capture the regex, snapshot a real error string in a fixture, and add a test. If hledger support comes later, extend the parser, not the call site.
-- **Event-log linkage.** The `reconciliation_event_id` in the journal metadata must equal the event id in `events.jsonl`. If they diverge, the future history view (8e) loses the ability to associate assertions with events. Cover with an integration test: write a reconciliation, read both the assertion transaction's metadata and the most recent event, assert the ids match.
+- **Account card layout shift on mobile.** Adding **Reconcile** alongside Edit must not push card content off-screen at 375px. Test by visually confirming the accounts page on a narrow viewport before and after.
+- **Currency-parser drift between client and server.** If the modal accepts `$2 500,00` (European format) but 8a rejects it, **Reconcile** could be enabled when the backend will 422. Vitest fixture asserts shared inputs round-trip identically.
+- **Transfer-row signed amount.** A transfer between two tracked accounts shows up as one row in the unified transactions endpoint. The modal must use the asserted-account posting amount, not the row's display amount, or the diff math is wrong. Backend test covers this on a fixture journal containing a tracked-to-tracked transfer.
+- **Sheet primitive z-index.** Opening Reconcile while the recent-activity sheet (5e) is open must not stack incorrectly. Reuse the existing dialog mutex.
+- **Refetch after success.** If the accounts list is cached client-side (likely via load function), the cache must invalidate after a successful reconcile or the new `reconciliationStatus` won't appear until the next navigation. Use the existing `invalidate()` hook used elsewhere on /accounts after Edit.
 
 ## Acceptance Criteria
 
-- `POST /api/accounts/{id}/reconcile` with a valid body writes one transaction to the journal file matching `periodEnd[:4]`, of the form `<periodEnd> * Statement reconciliation · <displayName> · ending <periodEnd>`, with `; reconciliation_event_id:` and `; statement_period:` metadata lines, and one posting `<ledger_account>  $0 = $<closingBalance>`.
-- The written transaction is the last transaction with date `periodEnd` in its file, even when other transactions on `periodEnd` already exist below the insertion point.
-- `account.reconciled.v1` is appended to `events.jsonl` with the documented payload and `journal_refs`. The event id matches the `reconciliation_event_id` in the journal metadata.
-- A reconcile request whose closing balance does not match the journal-derived balance returns `422`, leaves the journal byte-identical to the pre-write state, and emits NO event.
-- A reconcile request for the same account on the same date as an existing reconciliation returns `409`.
-- A reconcile request for an income / expense / equity account returns `400`.
-- A reconcile request with a non-base currency returns `400`.
-- After a reconciliation exists for tracked account `X` with `periodEnd = D`, an import preview of a row dated `D` mapped to `X` reports `matchStatus: "conflict"` with `conflictReason: "reconciled_date_fence"` and `reconciledThrough: D`. A row dated `D + 1 day` reports unchanged classification.
-- After an external edit breaks an existing assertion, `GET /api/accounts` returns the affected account with `reconciliationStatus: {ok: false, broken: {date, expected, actual, rawError}}`. Other accounts continue to report `{ok: true}`.
-- Deleting the assertion transaction via the existing transaction actions menu (`/api/transactions/delete`) leaves the journal in a state byte-equivalent to before the reconciliation (modulo any transactions added in between), and removes the import fence for that account.
-- `pnpm check` passes (no frontend changes are required, but type changes in `app/frontend/src/lib/api/types.ts` for the new optional fields must compile).
-- `uv run pytest -q` passes, including the new tests enumerated under Regression Risks.
+- `manual_entry_service` and `reconciliation_service` both call a single `parse_amount` from a shared currency-parser module. The two old wrapper functions either delegate or are removed; no parser code is duplicated.
+- A `currency_parser_cases.json` fixture lives under `app/backend/tests/fixtures/` and is consumed by both pytest and Vitest. Every input in the fixture has the same accept/reject outcome on both sides.
+- A **Reconcile** button is visible on every tracked-account card on `/accounts` whose ledger account starts with `Assets:` or `Liabilities:`. Hidden on income / expense / equity accounts.
+- Clicking opens a modal titled `Reconcile statement · <accountName>` with two steps.
+- Setup step shows three inputs with the documented defaults; **Continue** is disabled until all three parse and `periodStart >= last_reconciliation_date + 1 day` (when one exists).
+- Review step shows a transaction list filtered to the asserted account in `[periodStart, periodEnd]`, with checkboxes per row and a live diff strip showing Opening, Ticked, Closing, Difference. **Reconcile** is disabled while `Difference != 0` or while a fetch is in flight.
+- On **Reconcile** with `Difference == 0`, the modal POSTs to `/api/accounts/{id}/reconcile` with the documented payload and closes on 200. On 422 / 409 / 400, the modal stays open with a banner reflecting the structured error.
+- The new `GET /api/accounts/{id}/reconciliation-context` endpoint returns `openingBalance`, `currency`, `lastReconciliationDate`, and a `transactions` array with `signedAmount` reflecting the asserted account's posting (transfers included).
+- **Cancel** closes the modal without any network call.
+- Mobile viewport (<980px) renders the modal as a bottom sheet using the existing `bits-ui` Sheet primitive.
+- After a successful reconciliation, the accounts list payload is invalidated and re-fetched so the existing `reconciliationStatus` field reflects the new state.
+- Currency parser used by the modal accepts the same shapes as 8a's `parse_closing_balance`. A Vitest fixture asserts parity.
+- `pnpm check` passes; `uv run pytest -q` passes including the new context-endpoint test.
 
 ## Proposed Sequence
 
-Each step independently verifiable.
-
-1. **Skeleton service module + writer.** Create `reconciliation_service.py` with `write_assertion_transaction(...)` and `latest_reconciliation_date(...)`. No endpoint yet. Tests: ordering invariant on a synthetic journal (insertion when nothing on date, when other txns on date, at file start, into nonexistent file).
-2. **Verification + rollback.** Add the post-write `ledger bal --strict` call inside the writer. Test: bad closing balance triggers rollback and journal byte-equivalence; good closing balance proceeds.
-3. **Endpoint + event emission.** Wire `POST /api/accounts/{id}/reconcile` in `main.py`. Add the validation ladder. Emit `account.reconciled.v1`. Tests: round-trip success returns the documented response; validation failures hit the right HTTP codes.
-4. **Failure detection.** Add `reconciliation_status(config)` and wire into `_tracked_account_ui`. Tests: synthetic broken assertion in a fixture journal surfaces in `/api/accounts`; healthy journal returns `{ok: true}` per account; missing ledger CLI degrades gracefully.
-5. **Import fence.** Add `apply_reconciliation_fence(rows, latest_dates)` post-classifier in the import preview path. Tests: row on/before reconciliation → conflict; row after → unchanged; existing conflict reasons still attach as `identity_collision`.
-6. **Round-trip integration test.** Write a reconciliation, then delete the assertion transaction via `/api/transactions/delete`, then assert the journal is byte-equivalent to pre-reconciliation, the event log has `account.reconciled.v1` followed by `transaction.deleted.v1` linked via the standard delete handler, and `latest_reconciliation_date` for that account returns `None`.
+1. **Currency-parser consolidation.** Extract `parse_amount` to a shared module. Switch `manual_entry_service` and `reconciliation_service` to call it. Pytest fixture (`tests/fixtures/currency_parser_cases.json`) covers the accepted/rejected shapes. All existing tests continue to pass — no behavior change. **Verifiable in isolation: 600 backend tests still green.**
+2. **Backend context endpoint.** Add `GET /api/accounts/{accountId}/reconciliation-context` to `app/backend/main.py`. Use existing helpers (`_resolve_tracked_account`, `_account_kind`, the running-balance computation from `transaction_helpers.py`, `latest_reconciliation_date` from `reconciliation_service.py`). Tests: opening balance equals the running balance at `periodStart - 1 day`; transaction list contains only postings on the asserted account; transfer rows surface the asserted-account amount; income/expense accounts return 400.
+3. **Reconcile button on the account card.** Add the affordance under the Accounting details disclosure on `app/frontend/src/routes/accounts/+page.svelte`. No-op handler. Verify mobile layout.
+4. **ReconcileModal scaffolding (Setup step).** New component under `app/frontend/src/lib/components/accounts/ReconcileModal.svelte`. Three inputs with defaults computed from the account's `lastReconciliationDate`. Continue gating. Cancel.
+5. **Review step.** Fetch context on entering Review and on date-input changes (debounced 250ms). Render transaction list with checkboxes. Live diff strip with `formatCurrency` (use the existing helper). Finish gating.
+6. **Finish wiring.** POST to 8a, error banner on non-2xx, accounts-list invalidation on 200. Surface 422 with `expected` / `actual` translated; show `rawError` behind a disclosure.
+7. **Mobile sheet variant.** Switch primitive at <980px following `RecentActivitySheet.svelte`'s pattern. Verify on a 375px viewport.
+8. **Parser parity test.** Vitest reads the same `currency_parser_cases.json` fixture and asserts the frontend parser accepts/rejects identically.
 
 ## Definition of Done
 
-- All 11 acceptance criteria pass.
-- `uv run pytest -q` passes — new tests listed above, plus all existing tests.
+- All 13 acceptance criteria pass.
+- `uv run pytest -q` passes (new context-endpoint test plus the existing 600).
 - `pnpm check` passes.
-- `DECISIONS.md` gains §14, §15, §16, §17, §19 per `plans/statement-reconciliation.md`. (§18 about PDFs lands with 8d.)
-- `ROADMAP.md` updated: 8a marked shipped, 8b promoted to active.
-- A short follow-up note added at the bottom of [`plans/statement-reconciliation.md`](plans/statement-reconciliation.md) describing any deviations from spec encountered during implementation.
+- Manual end-to-end on a fixture workspace: reconcile a tracked account with the correct closing balance — modal closes, accounts list shows the updated `reconciliationStatus`. With a wrong balance: 422 banner appears with translated copy. With a colliding date: 409 banner.
+- ROADMAP.md: 8b marked shipped; 8c promoted to current focus.
+- A short follow-up note appended to `plans/statement-reconciliation.md` capturing any deviations encountered (matching the 8a precedent).
 
 ## UX Notes
 
-This task is API-only — no UI surfaces here. UX follows in 8b and 8c. One note carries forward: the `rawError` field on broken-status payloads is the source of truth for the "details" disclosure 8c will render. Make sure the parser preserves the original ledger error text verbatim, not a cleaned-up version. The translated copy (`expected`, `actual`, `date`) is on top of `rawError`, not instead of it.
+- Modal title: `Reconcile statement · <accountName>`.
+- Setup layout: three inputs in a single column, labels above. Period inputs side-by-side at desktop, stacked at mobile. Closing-balance input is the visual anchor — slightly larger / a heavier weight, since it's the typed-in value the user is attesting to.
+- Diff strip layout: horizontal row of four labeled values. Difference auto-styles: red when non-zero, green/neutral when exactly zero. Use `formatCurrency` with `signMode: 'good-change-plus'` to stay consistent with 7c.
+- **Reconcile** button label is the verb, not "Submit" or "Finish". Cancel sits secondary in the footer.
+- Transaction row in the review list: date · payee (truncated, raw bank text demoted per 7a hierarchy) · signed amount · checkbox. No category pill — the modal isn't an editing surface, it's a verifying one.
+- Empty period copy: `No transactions on this account between <date> and <date>.`
+- Banner copy on 422: `Reconciliation rejected — expected $X, found $Y.` plus a `View details` disclosure showing the raw `ledger` error verbatim (per 8a's invariant on `rawError`).
 
 ## Out of Scope
 
-- Reconciliation modal (8b).
-- Assertion rendering (8c).
-- PDF upload (8d).
-- History view (8e).
-- Subset-sum solver (8f).
-- Adjustment button (8g).
-- Pre-reconciliation edit confirmation (8h).
-- Multi-currency support.
-- Smart-date offsets.
-- Reconciliation of non-balance-sheet accounts.
-- A new undo handler for `account.reconciled.v1` — deletion via the transaction actions menu suffices.
+- All items under "Explicitly Excluded" above.
+- Any change to the 8a endpoint contract.
+- Any change to `_tracked_account_ui` or the dashboard balance row builder (8a already wired the read-side).
 
 ## Dependencies
 
-- 5b (event log) — shipped.
-- 5d (transaction actions menu, including delete) — shipped. The delete action's existing undo path is what reverses a reconciliation.
-- 5e core (undo dispatcher) — shipped. No new handler added in this task; the existing `transaction.deleted.v1` handler covers reconciliation reversal.
-- The `ledger` CLI is required at runtime for both writer verification and read-side failure detection. The codebase already depends on it (see `import_service.py:486`); no new dependency.
+- 8a (backend) — shipped.
+- `bits-ui` Dialog and Sheet primitives — already in use (`RecentActivitySheet.svelte`, `TransactionDetailSheet.svelte`, `ManualResolutionDialog.svelte`).
+- The accounts page shell and tracked-account card layout from 7c — shipped.
+- `formatCurrency` with `signMode: 'good-change-plus'` from 7c — shipped.
 
 ## Open Questions
 
 None. Decisions inline:
 
-- **Single-currency MVP.** Multi-currency rejected at validation. Revisit when a real user reports it.
-- **Statement-end date is the assertion date.** No smart-date offset. Revisit if a real user reports lagging-postings issues.
-- **No new undo handler.** Reuse the existing delete handler via the transaction actions menu.
-- **Failure detection runs on every account/dashboard request.** Acceptable cost for MVP. Gate behind a query param if profiling shows it's hot.
-- **Ledger error parsing targets `ledger` only.** hledger support is a follow-up; MVP runs on the same CLI the import path already uses.
-- **Same-day re-reconciliation is rejected (`409`).** User must delete the prior reconciliation first.
+- **Opening balance derivation.** New context endpoint returns it via the running-balance helper at `periodStart - 1 day`. Reuses existing infrastructure; avoids the modal computing it client-side from a transaction list (which is brittle on partial pages).
+- **No success toast.** Modal closing is sufficient; matches saved feedback `feedback_undo_toast_scope.md`.
+- **`periodStart` locked to `last_reconciliation_date + 1 day`.** Avoids the "pre-checked locked rows" UI complexity in MVP. Users who genuinely want to redo an earlier period delete the prior reconciliation first (8a's 409 path is the breadcrumb).
+- **Cancel does not warn.** No network calls have been made; nothing to lose. Saved feedback `feedback_undo_toast_scope.md` extends here: no friction on trivially reversible actions.
+- **Refetch failure surfaces a toast.** One of the rare toast uses — the data desync is a trust issue and the user needs to know to reload manually.
