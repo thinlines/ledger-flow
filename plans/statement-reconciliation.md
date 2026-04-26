@@ -168,3 +168,14 @@ Triggered from each account card via a "Reconcile" affordance (placement: second
 - Auto-reconciliation against an "online balance" feed. Ledger Flow has no aggregator; the only honest target is a published statement.
 - Reconciliation of income/expense or equity accounts. Feature 8 reconciles balance-sheet accounts only.
 - Statistical anomaly detection. Subset-sum (8f) is bounded combinatorics, not statistics.
+
+## 8a Implementation Notes (shipped)
+
+Captured during 8a implementation to feed forward into 8b–8c. No deviations from the plan; the items below are clarifications that surfaced during the build.
+
+- **Verification spans every year journal.** The plan didn't specify how multi-year journals are stitched for the `bal --strict` check. Implementation: `ledger -f <each year journal>` is invoked with one `-f` per file in `workspace/journals/*.journal` (excluding the `archived-manual.journal` sidecar). This matches how the existing `load_transactions` reader composes the user's books.
+- **`reconciliationStatus` on the dashboard balance sheet.** The dashboard builds its own balance-row shape and does not call `_tracked_account_ui`. The status field was added to the dashboard service's row builder directly, with the same `{"ok": true}` / `{"ok": false, "broken": {...}}` contract.
+- **Line numbers are zero-indexed in the API response.** The writer returns the asserted transaction's header line as a zero-indexed offset to match the contract used by `locate_header_at` (and therefore `transactions_delete`). Round-trip "reconcile then delete the assertion via `/api/transactions/delete`" works without the caller having to translate.
+- **`emit_event` accepts a caller-supplied id.** The least-invasive option: the reconcile handler pre-allocates a UUIDv7, threads it into the journal metadata, and passes it to `emit_event(event_id=...)`. Both the journal `; reconciliation_event_id:` line and the event log row reference the same id.
+- **Frontend type surface.** `app/frontend/src/lib/api/types.ts` does not exist in this codebase — the canonical shared `TrackedAccount` type lives at `app/frontend/src/lib/transactions/types.ts`. Optional `reconciliationStatus`, `conflictReason`, `reconciledThrough` fields landed there so `pnpm check` accepts the new payload shape across consumers.
+- **Closing-balance format.** The asserted balance reuses `manual_entry_service._format_currency_amount` (commas, two decimal places). The zero half of the posting renders as `$0` for USD per the plan example, not `$0.00` — both forms are valid ledger syntax.

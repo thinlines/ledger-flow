@@ -123,3 +123,52 @@ This document records stable product and architecture choices that explain why t
 - Investment tracking (401(k), HSA, pretax contributions) is explicitly out of scope. These accounts don't appear in tracked balances and the health signals reflect only what the workspace knows about.
 - This decision complements §11 rather than replacing it. §11's "inline signals over action cards" still holds for bookkeeping tasks (review queue badges, staleness notes, opening-balance hints). The new direction section is not a notification center: signals are computed each load from current data, there is no dismissal state, no priority weights, no persistent alert infrastructure. The loose-ends aggregator at the bottom of the direction panel collapses what was previously scattered across inline locations into one view, but it is one component of a panel whose primary purpose is financial direction, not an alert inbox.
 - Comparisons across the app gain a 6-month rolling baseline alongside "vs last month" framing. A one-month comparison treats whichever month happens to be "last" as the source of truth, which makes every reading noisy. The rolling baseline anchors comparisons to typical behavior so signals stop crying wolf.
+
+## 14. Statement Reconciliation Is Camp 1 (Explicit, Statement-Driven)
+
+**Decision:** Reconciliation in Ledger Flow follows the Quicken/YNAB/QuickBooks pattern: the user opens an account against a published statement, enters opening + closing balances, ticks transactions until the difference is zero, and finishes — at which point the app records a single zero-amount transaction with a balance assertion to attest the result.
+
+**Why:** The product accepts manual transaction entry, which means real account balances drift from bank reality whenever a manual entry isn't matched on import. Without a periodic reconciliation step the user has no structured way to find a missing or duplicated transaction. Camp 2 (Monarch/Copilot) substitutes an aggregator feed for reconciliation, which is incompatible with the plain-text canon Ledger Flow stands on. Camp 1 fits the existing import → review → confirm trust boundary and gives the same vigilance value the rest of the bookkeeping layer is already delivering.
+
+**Implication:** Reconciliation is statement-driven, human-in-the-loop, single-currency, balance-sheet only. There is no auto-reconciliation against an "online balance" — the only honest target is a published statement.
+
+## 15. Reconciliation = Zero-Amount Transaction with Native Balance Assertion
+
+**Decision:** A successful reconciliation writes one transaction of the form
+
+```
+2026-04-17 * Statement reconciliation · <account> · ending 2026-04-17
+    ; reconciliation_event_id: <uuidv7>
+    ; statement_period: <start>..<end>
+    <ledger_account>  $0 = $<closingBalance>
+```
+
+with one zero-amount posting carrying a native balance assertion. Existing transactions are never mutated (no per-posting `; reconciled:` tag). Undo is deletion of this transaction via the existing transaction-actions menu — no dedicated undo handler is required, because the existing `transaction.deleted.v1` handler reverses the assertion in place.
+
+**Why:** Native balance assertions are cross-compatible with `ledger`/`hledger`, so a user opening the journal in any tool gets the same correctness check the app gets. Per-posting metadata would have required mutating every reconciled row, which violates §4. One write, one undo, zero schema overhead.
+
+**Implication:** Hand-written or imported balance-assertion transactions still trigger the read-side failure-detection layer; only assertions carrying the `reconciliation_event_id` metadata participate in the import fence and the future reconciliation history view. The `reconciliation_event_id` is generated before `emit_event` is called and threaded through both the journal metadata and the event log so the two references stay byte-identical.
+
+## 16. Statement-End Date Is the Assertion Date — Verbatim, No Smart-Date Offset
+
+**Decision:** Use the user-entered `periodEnd` as the assertion date and as the position the writer inserts at. The assertion transaction must always be the last transaction with date `periodEnd` in the journal file that holds it, so the assertion checks the running balance after every other transaction on that day.
+
+**Why:** Beancount Reds and similar tools use a "smart-date" offset (`min(statement_end - 2, last_posting_date)`) to absorb posting lag where institutions report transactions on dates after the statement end. The institutions Ledger Flow currently serves (Wells Fargo and similar) only include posted transactions in their statements and use posting date, so end-of-statement-period assertions hold without an offset. Keeping the date verbatim keeps the math simple, the import fence boundary unambiguous, and the reconciliation history view trivial. Revisit if a real user reports lagging-postings issues.
+
+**Implication:** The writer enforces "last on its date" within the year-derived journal file. Future imports must respect that ordering — covered by §17 below. If smart-date offsets become necessary they layer on top of this rule, not in place of it.
+
+## 17. Reconciled Dates Are Import-Fenced
+
+**Decision:** Once a reconciliation assertion exists for tracked account `X` with `periodEnd = D`, any new import row mapped to `X` whose date is on or before `D` is classified as a `conflict` with `conflictReason: "reconciled_date_fence"` and `reconciledThrough: D`. The existing `new`/`duplicate`/`conflict` model is preserved — fence rows simply land in the conflict bucket alongside identity-collision rows. The apply path refuses any conflict row regardless of reason.
+
+**Why:** The user has personally attested to a balance on a date. Silently inserting a transaction on or before that date would change a balance the user already signed off on, which violates §4's non-rewriting principle. Fail closed: surface the would-be insert as a conflict, force an explicit "delete the reconciliation, then re-import or reject the row" choice.
+
+**Implication:** Hand-written balance assertions don't participate in the fence (no `reconciliation_event_id`); they only show up in failure detection. The fence treats `date == reconciled_date` as fenced (i.e. the boundary is `<=`). Concurrent reconcile-while-import is not locked: classifications taken before a reconciliation lands won't see the new fence and may be applied. Acceptable for MVP.
+
+## 19. No Hard Lock on Reconciled Transactions
+
+**Decision:** The app does not lock pre-reconciliation transactions against editing or deletion. Trust is enforced by event-sourced undo (§12) and, in 8h, a confirmation modal that asks the user before they edit/delete a transaction whose date falls before the most recent reconciliation. There is no Quicken/QuickBooks-style "this transaction is reconciled and cannot be edited" hard lock.
+
+**Why:** Hard locks add a second mutation surface (toggle a flag on each posting) and pose their own undo problem. The event log already gives full history and undo, the import fence already protects against silent re-imports, and the reconciliation assertion itself fails loudly the moment its underlying balance changes — so the "did anything drift" signal is already present without locking. A confirmation modal at the edit/delete moment captures the user's intent without freezing the journal.
+
+**Implication:** Edits and deletes that happen to break a prior reconciliation cause the assertion to fail at next read; the broken state is visible on the account card and dashboard, and the user can either re-reconcile or undo the change. This matches the rest of the product's posture: human-in-the-loop, evidence-rich, no irreversible UI states.
