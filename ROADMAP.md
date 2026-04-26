@@ -42,8 +42,14 @@ Dashboard direction: the dashboard answers "Where do I stand right now?" and "Wh
      - **7d-4c. Polish** — two items shipped (~~live totals strip~~, ~~search formula syntax~~). Remaining: day-group daily sums, mobile bottom sheet. Keyboard shortcuts deferred until a design pass is greenlit.
    - ~~**7b. Dashboard direction panel and health signals**~~ — shipped. "Where should I go next?" section with runway gauge (including liability minimum-payment obligations), 6-month net worth sparkline with y-axis labels, recurring vs discretionary spending split, notable signals, and loose-ends aggregator. Runway scoped to liquid assets; fixed assets excluded from stale-account alerts.
    - ~~**7c. Shell and copy polish**~~ — shipped. Finance-first sidebar copy, hero CTA fallthrough, /rules loading state, dashboard zero-row filtering, mobile nav drawer, accounts Edit demotion, and good-change-plus sign convention with ArrowLeftRight transfer glyph. Closes Feature 7.
-8. **Semantic undo + toast (5e)** — resumes after Feature 7.
-9. **Transaction editing** — deferred. See Deferred for Now.
+8. **Semantic undo + toast (5e)** — next up. Feature 7 closed 2026-04-20.
+9. **Statement reconciliation (Feature 8)** — pulled forward from Deferred. Camp 1 (Quicken/YNAB-style explicit reconciliation) over a journal-native balance-assertion substrate. See [`plans/statement-reconciliation.md`](plans/statement-reconciliation.md). MVP sub-features:
+   - **8a. Backend** — reconcile endpoint, assertion writer, import-merge fence for reconciled dates, assertion-failure detection.
+   - **8b. Reconciliation modal on `/accounts`** — period + closing balance, ticked transactions, live diff, finish.
+   - **8c. Assertion rendering + failure surfacing** — subtle row style in transactions list; failure state on account card and loose-ends aggregator; translated error copy.
+
+   Phased follow-ups (each independently shippable, sequenced after MVP): **8d** statement PDF attachment, **8e** reconciliation history view on the account page, **8f** subset-sum "find the difference" solver, **8g** adjustment-transaction button, **8h** confirmation modal for edits/deletes of pre-reconciliation transactions.
+10. **Transaction editing** — deferred. See Deferred for Now.
 
 ### Feature 1: Manual Entry + Import Matching ✓
 
@@ -120,6 +126,24 @@ This feature closed three gaps (two shipped, one remaining):
 - A consolidated "needs attention" panel is allowed here only because it's part of the broader direction section — it does not violate `DECISIONS.md` §11. The loose-ends list is one component of a panel whose primary purpose is health signals and investigation hooks, not a notification center. See §13 for the rationale.
 - This feature does not introduce a notification center, dismissable cards, or persistent alert state. Signals are computed each load from current data.
 
+### Feature 8: Statement Reconciliation
+
+Pulled forward from Deferred. Camp 1 (explicit, statement-driven) reconciliation, expressed in the journal as a single zero-amount transaction with a balance assertion. The full spec lives in [`plans/statement-reconciliation.md`](plans/statement-reconciliation.md). Summary:
+
+- **Why now:** users can enter manual transactions, so account balances drift from bank reality if a manual entry isn't matched on import. Periodic statement reconciliation is the trust mechanism that catches drift and keeps users vigilant.
+- **Architecture:** reconciliation finish writes one transaction of the form `Statement reconciliation · <account> · ending YYYY-MM-DD` with a single zero-amount posting carrying a balance assertion (`Assets:Checking  $0 = $2,500.00`). No mutations to existing transactions. Undo = delete the assertion transaction (the existing actions menu already handles this). Detection of assertion failures runs on all assertions in the journal — including hand-written ones — but the reconciliation history view only lists assertions written by the flow (identified by `; reconciliation_event_id:` metadata).
+- **MVP sub-features:** 8a backend (reconcile endpoint, assertion writer, import-merge fence, failure detection), 8b reconciliation modal on `/accounts`, 8c assertion rendering + failure surfacing.
+- **Phased follow-ups:** 8d PDF attachment, 8e history view, 8f subset-sum solver, 8g adjustment-transaction button, 8h confirmation modal for pre-reconciliation edits.
+
+#### Constraints
+
+- The assertion transaction must be the last transaction on its date in the journal file, so the assertion checks the end-of-day balance. The writer enforces this; the import path enforces it on subsequent inserts.
+- Once a date is reconciled, any new import on or before that date surfaces as a conflict, not a silent insert. Fail-closed.
+- Reconciliation history surfaces only assertions written by the flow. Hand-written or imported balance assertions are honored for failure detection but do not appear in history.
+- Single-currency MVP. Multi-currency accounts are out of scope until a real user need surfaces.
+- No hard lock on reconciled transactions. Trust is enforced by event-sourced undo (5b–5d) and, in 8h, a confirmation modal for edits/deletes that fall before a reconciliation point.
+- Statement PDFs (8d onward) live under `workspace/statements/<account-slug>/statement-ending-YYYY-MM-DD.pdf`. They are evidence, not data — the journal remains canonical.
+
 ### Constraints
 
 - Preserve the existing `new` / `duplicate` / `conflict` import model.
@@ -167,5 +191,5 @@ These are valid ideas, but they are not current priorities:
 - Zero-based/envelope budgeting workflow
 - Long-range forecasting and goals
 - Detailed FI planner with retirement-timeline modeling
-- Statement reconciliation against print/PDF bank statements (will use metadata like `; reconciled: YYYY-MM-DD`, not the clearing flag)
-- Advanced reconciliation features beyond the current safe-edit workflow
+- Multi-currency account support (reconciliation, balance assertions, dashboard rollups all assume single-currency per account today)
+- Reconciliation against electronically downloaded statement files (OFX/QFX) — current Feature 8 plan covers human-attested reconciliation against PDF/print statements only
