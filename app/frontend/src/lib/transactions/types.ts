@@ -1,3 +1,17 @@
+export type ReconciliationStatus =
+  | { ok: true }
+  | {
+      ok: false;
+      broken: {
+        date: string | null;
+        expected: string | null;
+        actual: string | null;
+        rawError: string;
+      };
+    };
+
+export type ImportConflictReason = 'identity_collision' | 'reconciled_date_fence' | null;
+
 export type TrackedAccount = {
   id: string;
   displayName: string;
@@ -9,6 +23,7 @@ export type TrackedAccount = {
   importConfigured: boolean;
   openingBalance?: string | null;
   openingBalanceDate?: string | null;
+  reconciliationStatus?: ReconciliationStatus;
 };
 
 /** @deprecated Used by ManualResolutionDialog during transition to TransactionRow */
