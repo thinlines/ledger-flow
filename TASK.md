@@ -1,210 +1,340 @@
-# Semantic Undo Coverage Completion (5e)
+# Reconciliation Backend (8a) — Reconcile Endpoint, Assertion Writer, Import Fence, Failure Detection
 
 ## Objective
 
-Close out Feature 5 by filling the two remaining gaps in semantic undo: give notes-update events a real undo handler, and add a lightweight operation history list so users can reach events older than the active toast.
+A user can hit `POST /api/accounts/{id}/reconcile` with a period and closing balance, and the system writes one zero-amount balance-assertion transaction to the journal, verifies the assertion holds, and emits an `account.reconciled.v1` event. After a date is reconciled, any new import on or before that date is classified as a `conflict`, never silently inserted. The account API and dashboard payloads gain a `reconciliationStatus` field that surfaces broken assertions with the failure date, expected balance, and actual balance.
 
-## Already Shipped (Confirmed Against Spec)
-
-The bulk of 5e is already in the codebase. Re-confirmed against [`ROADMAP.md`](ROADMAP.md) §5e during PM intake:
-
-- `POST /api/events/undo/{event_id}` endpoint at [main.py:1104](app/backend/main.py#L1104) — dispatches via the `_HANDLERS` table, returns structured outcome (`success` / `drift` / `not_found` / `already_compensated` / `unsupported` / `failed`).
-- Per-file drift verification before applying any compensating action (see `undo_event` in [undo_service.py:108-155](app/backend/services/undo_service.py#L108-L155)).
-- Idempotency guard via `_is_compensated` — re-running undo for the same event returns `ALREADY_COMPENSATED` with the existing compensating-event id.
-- Compensating events emitted with `compensates: <forward_id>` linkage and `<event_type>.compensated.v1` typing; the forward event is never rewritten.
-- Handlers landed for: `transaction.deleted.v1`, `transaction.recategorized.v1`, `transaction.status_toggled.v1`, `manual_entry.created.v1`, `transaction.unmatched.v1`.
-- Toast component ([UndoToast.svelte](app/frontend/src/lib/components/UndoToast.svelte)) and store ([undo-toast.ts](app/frontend/src/lib/undo-toast.ts)) — slide-in from bottom-right, 8s auto-dismiss, `Undo` button → `Undoing…` → `Restored` (2s) or error state. Mounted in [+layout.svelte:203](app/frontend/src/routes/+layout.svelte#L203) so it survives route changes.
-- Toast wired on: delete, reset-category, recategorize, unmatch, and manual-entry-create. See [transactionActions.ts](app/frontend/src/lib/transactions/transactionActions.ts) and [transactions/+page.svelte:235](app/frontend/src/routes/transactions/+page.svelte#L235).
-- Tests in [test_undo_service.py](app/backend/tests/test_undo_service.py): not-found, unsupported, already-compensated, drift, round-trip restore for each handler, and compensating-event emission.
-- Linearity ("most recent → earliest") is enforced implicitly via per-file hash drift: an older event in the same file fails drift if a newer one ran after it.
-
-The "partial-undo report" language in the ROADMAP is N/A for the current handler set — every handler today mutates exactly one transaction, so any drift fails the whole undo. If a future handler touches multiple transactions in a single event, that's where partial-undo would matter; not in scope here.
+This task delivers the substrate for 8b (the modal) and 8c (the rendering). It does not deliver any UI; the only user-visible effect is that broken reconciliations and reconciled-date conflicts now exist in API responses, and a cURL request can write a reconciliation.
 
 ## Scope
 
 ### Included
 
-1. **Notes-update undo** — add `_undo_transaction_notes_updated` handler with the metadata it needs, and surface the toast on save.
-2. **Operation history list** — a small, scoped UI surface listing recent events with an Undo button per row. Reaches events older than the active 8s toast.
-3. **Backend events listing endpoint** — `GET /api/events` returns the latest N events with their type, summary, timestamp, and compensation status, so the history UI has data to render.
+1. `POST /api/accounts/{accountId}/reconcile` — the reconcile endpoint.
+2. Assertion writer — locates the journal file holding `periodEnd`, appends a zero-amount transaction with a balance assertion as the last transaction on its date in that file, then verifies the assertion holds. Rolls back on failure.
+3. `account.reconciled.v1` event in the event log, with the standard `journal_refs` hash-before / hash-after pair so existing semantic undo handles deletion of the assertion transaction via the existing transaction actions menu (no new undo handler).
+4. Reconciled-date import fence — when classifying an import row, if its date is on or before the most recent reconciliation assertion for the affected tracked account, classify as `conflict` with reason `reconciled_date_fence`. Existing `new` / `duplicate` / `conflict` model is preserved.
+5. Read-side failure detection — a service that runs `ledger`/`hledger` against the journal, parses balance-assertion errors, and exposes per-account `reconciliationStatus`. Wire into `_tracked_account_ui` in `main.py:169` so all account-shaped responses (account list, dashboard balance sheet) carry it.
+6. Tests for: writer happy path, writer rollback on failure, assertion ordering invariant (last-on-date), event emission, import fence triggers, failure-detection translation, `reconciliationStatus` on the account UI shape.
 
 ### Explicitly Excluded
 
-- **Toast on clearing-status toggles.** The status pill cycles in one click (`unmarked → pending → cleared → unmarked`); a toast for every toggle would be UI noise, not safety. The backend continues to emit `transaction.status_toggled.v1` so the action lives in the history list and remains undoable from there — only the per-action toast is omitted. The existing `_undo_transaction_status_toggled` handler stays as-is.
-- Redo. Not in spec; compensating events themselves are "redoable" only by repeating the original action.
-- Multi-event undo (selecting two events and undoing both atomically). Linear undo is single-event.
-- Undo for `import.applied.v1`, `unknowns.applied.v1`, `rules.history_applied.v1`, stage operations, or any non-`transaction.*` / non-`manual_entry.*` event types. Import already has its own dedicated `/api/import/undo` flow; the others are large-grain operations whose semantic inverses are out of scope for 5e.
-- Operation history pagination / search / filtering. The list is "lightweight" — N most recent events, full-stop.
-- Sticky / persistent toasts. The 8s auto-dismiss stays; the history list is the path to older actions.
-- Refactoring the dynamic `import('$lib/undo-toast')` in `transactions/+page.svelte:235` to a static import. Cosmetic, deferred.
+- Reconciliation modal on `/accounts` (8b).
+- Assertion rendering in the transactions list and account card (8c).
+- Loose-ends entry for broken reconciliations (8c).
+- PDF upload / storage (8d).
+- Reconciliation history view on the account page (8e).
+- Subset-sum solver (8f).
+- Adjustment-transaction button (8g).
+- Confirmation modal for edits/deletes of pre-reconciliation transactions (8h).
+- Multi-currency reconciliation. Single posting, single currency per the plan.
+- Reconciliation of income / expense / equity accounts. Balance-sheet accounts only — the endpoint returns `400` if the account's ledger account is not under `Assets:` or `Liabilities:`.
+- Smart-date offsets (Beancount Reds-style `min(statement_end - 2, last_posting_date)`). Use the user-entered `periodEnd` as the assertion date verbatim. Document the trade-off in `DECISIONS.md §16`.
+- New undo handler for reconciliation. Deletion via the existing transaction actions menu reverses it; the existing `transaction.deleted.v1` handler suffices.
 
 ## System Behavior
 
-### 1. Notes-Update Undo Handler
+### 1. `POST /api/accounts/{accountId}/reconcile`
 
-**Current state:** [main.py:877](app/backend/main.py#L877) emits `transaction.notes_updated.v1` with payload `{ journal_path, header_line, notes }`. There is no handler in `undo_service._HANDLERS`, so undoing returns `UNSUPPORTED`. No toast is shown today (the wiring isn't there in [TransactionDetailSheet.svelte](app/frontend/src/lib/components/transactions/TransactionDetailSheet.svelte) either).
-
-**Decision:** Make notes fully undoable.
-
-- Enrich the forward event payload with `previous_notes: string` (empty string if no prior notes line existed). Capture the previous value by parsing the block in `transactions_notes` before mutating. `_NOTES_RE` already exists at [main.py:831](app/backend/main.py#L831).
-- Add `_undo_transaction_notes_updated` handler that locates the header, finds (or absence of) the current notes line, and rewrites it to `previous_notes`. Empty `previous_notes` → remove the line; non-empty → replace or insert in the same position the forward write used.
-- Register the handler in `_HANDLERS` under `"transaction.notes_updated.v1"`.
-- Wire the toast in the detail sheet save handler — summary `Notes updated on <payee>`. Payee comes from the current row; call site is the `apiPost` for `/api/transactions/notes` inside `TransactionDetailSheet.svelte` (search for `transactions/notes` to find the exact spot).
-
-**Inputs:** User edits notes in the detail sheet, hits save. Forward event captures both new and previous notes.
-
-**Outputs:** Toast appears with `Notes updated on <payee>`. Undo restores the prior notes (including the empty/absent state).
-
-### 2. Operation History List
-
-**Why:** The 8s toast covers the most recent action only. Users who walk away, switch tabs, or want to undo something from earlier in the session need a path to older events. The spec calls for a "lightweight operation history list".
-
-**Backend:** Add `GET /api/events` returning the most recent **20** events newest-first. Each event row:
+**Request body:**
 
 ```json
 {
-  "id": "<uuidv7>",
-  "type": "transaction.deleted.v1",
-  "summary": "Removed Coffee Shop on 2026-04-12",
-  "timestamp": "2026-04-26T15:42:11Z",
-  "undoable": true,
-  "compensated": false,
-  "compensatedBy": null
+  "periodStart": "2026-03-18",
+  "periodEnd": "2026-04-17",
+  "closingBalance": "2500.00",
+  "currency": "USD"
 }
 ```
 
-- `undoable` = true iff `type` is in `_HANDLERS`. (Forward events only — `*.compensated.v1` events are not undoable themselves.)
-- `compensated` = true iff a later event has `compensates == this.id`.
-- `compensatedBy` = the compensating event id when `compensated` is true.
-- Source of truth is `events.jsonl` — reuse `_read_events` from `undo_service.py` (or extract to `event_log_service.py` if it cleans the dependency direction).
-- Fail-closed: if the file is missing, return an empty list (matches `_read_events` behavior).
+- `accountId` — tracked-account id (the same id used by the `/api/accounts` and `/api/tracked-accounts` endpoints).
+- `periodStart`, `periodEnd` — ISO dates (`YYYY-MM-DD`). `periodStart <= periodEnd` required.
+- `closingBalance` — string-encoded decimal, parsed by the existing currency parser (`app/backend/services/manual_entry_service.py` has the canonical regex; reuse, don't reinvent).
+- `currency` — must match the workspace base currency. Reject other values with `400` and the message `Multi-currency accounts are out of scope (#TODO multi-currency support).`
 
-**Frontend surface:** Add a single trigger (icon button) in the dashboard hero's right-edge / utility area or in the existing utility footer of `+layout.svelte` — pick one and document the choice in the PR. Tapping it opens a `bits-ui` Sheet (right-side, same primitive used by `TransactionDetailSheet`) titled `Recent activity`.
+**Validation:**
 
-The sheet renders a vertical list of the 20 events:
+- Tracked account exists. Otherwise `404 Tracked account not found: <id>`.
+- Account is balance-sheet (ledger account starts with `Assets:` or `Liabilities:`). Otherwise `400 Reconciliation is only supported for asset and liability accounts.`
+- `periodStart <= periodEnd`, both parseable. Otherwise `400 Invalid period: <reason>`.
+- `closingBalance` parses to a decimal. Otherwise `400 Invalid closing balance: <value>`.
+- `periodEnd` is on or after the most recent existing reconciliation date for this account. Otherwise `409 A more recent reconciliation already exists for this account on <date>. Delete it first if you want to reconcile an earlier period.`
+- `currency` matches the workspace base currency. Otherwise `400` per above.
 
-- Each row: summary text on the left, relative-time stamp underneath (`2 minutes ago`, `1 hour ago`, `Yesterday at 3:42 PM` — reuse any existing relative-time helper or write a small one in `$lib/format.ts`).
-- Right side per row: an `Undo` button when `undoable && !compensated`. When `compensated`, render the muted text `Undone` (no button). When `!undoable`, render no trailing element.
-- Clicking `Undo` calls `triggerUndo(eventId)` (export a parameterized variant from `undo-toast.ts` — current `triggerUndo` reads from the store, so add `triggerUndoById(eventId, summary, refresh)` or restructure). On success, the row re-renders as `Undone`. On error, surface a small inline error under the row (`<span class="text-destructive">Undo failed: <message></span>`).
-- After any successful undo, refetch the events list so the new compensating event appears at the top.
+**Side effects:**
 
-Empty state: `No recent activity yet.` Centered, muted.
+- Backup the target journal via the existing `backup_file` helper (`backup_service.py`) with reason `reconcile`.
+- Append the assertion transaction (see "Assertion writer" below).
+- Verify the assertion via `ledger -f <main journal> bal --strict <ledger_account>`. Parse the exit code and stderr.
+- If verification succeeds, emit `account.reconciled.v1` to the event log with `journal_refs` carrying `hash_before` and `hash_after` of the journal file.
+- If verification fails, roll back the journal file from the backup, do NOT emit an event, and return `422` with the parsed error.
 
-Loading state: existing `apiGet` returns a promise — render a single line `Loading…` until it resolves.
+**Response (success):**
 
-Error state on the list fetch: `Couldn't load activity. Try again.` with a retry button.
+```json
+{
+  "ok": true,
+  "assertionTransaction": {
+    "journalPath": "journals/2026.journal",
+    "headerLine": "2026-04-17 * Statement reconciliation · Wells Fargo Checking · ending 2026-04-17",
+    "lineNumber": 1487
+  },
+  "eventId": "01HGE..."
+}
+```
 
-**Refresh hooks:** The sheet refetches every time it opens. No background polling. No Server-Sent Events. No optimism — simplest possible.
+**Response (assertion failed):**
+
+```json
+{
+  "outcome": "assertion_failed",
+  "message": "Reconciliation rejected — expected $2,500.00, found $2,487.43.",
+  "expected": "2500.00",
+  "actual": "2487.43",
+  "rawError": "<unparsed ledger stderr>"
+}
+```
+
+HTTP `422` for the assertion-failed outcome.
+
+### 2. Assertion Writer
+
+A new service module: `app/backend/services/reconciliation_service.py`.
+
+**Locating the target journal:**
+
+- Year-derived: `journal_dir / f"{periodEnd[:4]}.journal"`. Same convention used by `transactions_create` in `main.py:496`.
+- If the file does not exist, create it (consistent with the import path).
+
+**Composing the transaction block:**
+
+```
+2026-04-17 * Statement reconciliation · <accountDisplayName> · ending 2026-04-17
+    ; reconciliation_event_id: <uuidv7>
+    ; statement_period: 2026-03-18..2026-04-17
+    <ledger_account>  $0 = $2,500.00
+```
+
+- `<accountDisplayName>` — `tracked_account_cfg["display_name"]`, falling back to `accountId`.
+- `<ledger_account>` — `tracked_account_cfg["ledger_account"]`. Required; if empty, return `400 Tracked account is missing a ledger account.`
+- `<uuidv7>` — generated by the writer **before** `emit_event` is called, then passed to `emit_event` as the explicit event id (extend `emit_event` if it doesn't already accept a caller-supplied id; if not feasible without invasive changes, generate the id inside `reconciliation_service`, write the journal with it, then ask `emit_event` to use it). Both the journal metadata and the event log row must reference the same id.
+- Currency formatting: use the existing `format_currency_for_ledger` helper if present in `manual_entry_service.py` or `transaction_helpers.py`; if not, format as `$<value>` for USD and `<value> <CCY>` for other currencies. Reuse, don't reinvent.
+
+**Insertion ordering (critical invariant):**
+
+- Read the file. Find the last line whose date prefix (`line[:10]`) equals `periodEnd` and that matches `TXN_START_RE` (from `journal_query_service.py`). The assertion transaction inserts immediately after that block ends (i.e., after that block's last line and any trailing blank line that belongs to it).
+- If no transaction with date `periodEnd` exists in the file, find the last transaction with date `< periodEnd` and insert after its block. If no such transaction exists, append to the end of file.
+- Always insert with one blank line before the new block (unless inserting at file start, no preceding blank).
+- After insertion, the assertion transaction must be the last transaction with date `periodEnd` in file order. Add a unit test that asserts this on a journal where another `periodEnd`-dated transaction exists later in the file (this case can arise if the journal was hand-edited or merged).
+
+**Verification:**
+
+- Run `ledger -f <root>/<main_journal> bal --strict <ledger_account>` via `run_cmd` (`ledger_runner.py`). The main journal is determined by the existing `_main_journal_path` helper (find it in `main.py` or `workspace_service.py`; reuse).
+- If `run_cmd` raises `CommandError`, parse stderr for `Balance assertion off by` (ledger) and `assertion failed` / `expected ... but found ...` (hledger) patterns. Extract `expected` and `actual` if present; otherwise pass the raw error in `rawError`.
+- If parsing succeeds, return the structured failure to the endpoint. The endpoint rolls back from the pre-write backup.
+- If `run_cmd` returns successfully (exit 0), the assertion holds.
+
+**Rollback:**
+
+- The backup_file helper copies the file before mutation. On verification failure, copy the backup back over the live file. Do NOT emit any event in this branch — the reconciliation never happened, from the event log's perspective.
+
+### 3. `account.reconciled.v1` event
+
+Emitted via the existing `emit_event` from `event_log_service.py`. Shape:
+
+```json
+{
+  "id": "01HGE...",
+  "type": "account.reconciled.v1",
+  "timestamp": "2026-04-26T15:42:11Z",
+  "actor": "user",
+  "summary": "Reconciled Wells Fargo Checking · ending 2026-04-17 · $2,500.00",
+  "payload": {
+    "tracked_account_id": "wells-checking",
+    "ledger_account": "Assets:Checking:Wells Fargo",
+    "period_start": "2026-03-18",
+    "period_end": "2026-04-17",
+    "closing_balance": "2500.00",
+    "currency": "USD",
+    "journal_path": "journals/2026.journal",
+    "header_line": "2026-04-17 * Statement reconciliation · Wells Fargo Checking · ending 2026-04-17",
+    "line_number": 1487
+  },
+  "journal_refs": [
+    { "path": "journals/2026.journal", "hash_before": "...", "hash_after": "..." }
+  ]
+}
+```
+
+No new undo handler. Deletion is covered by the existing transaction actions menu (`transaction.deleted.v1` + the existing handler in `undo_service.py`). Document this in the test for the writer: round-trip "reconcile then delete the assertion transaction" should leave the journal byte-equivalent to before the reconcile (modulo trailing whitespace).
+
+### 4. Reconciled-date import fence
+
+**Where:** the import classification path, not the import application path. Currently at `main.py:396` (`return "new" / "duplicate" / "conflict"` ladder — confirm the exact location). Reuse the existing classification function; do not duplicate it.
+
+**Logic:**
+
+- Resolve the tracked account for the import row. If the row maps to no tracked account (orphan import), do not apply the fence — fall through to the existing classification.
+- Look up the most recent reconciliation date for that tracked account. The lookup function lives in `reconciliation_service.py` (a small `latest_reconciliation_date(config, ledger_account) -> date | None` helper that scans the journal for assertion transactions with `; reconciliation_event_id:` metadata on the asserted account's posting). Cache once per import classification pass — do not re-parse per row.
+- If the row's date is on or before that date, the row's `matchStatus` becomes `conflict` and a new field `conflictReason: "reconciled_date_fence"` is added (existing rows without this reason get `conflictReason: null` to keep the response shape stable).
+- The conflict reason carries the reconciliation date in a separate field: `reconciledThrough: "2026-04-17"`. The frontend can render copy from this without re-deriving.
+
+**Response shape:** existing `{ matchStatus, ... }` rows gain two optional fields:
+
+```json
+{ "matchStatus": "conflict", "conflictReason": "reconciled_date_fence", "reconciledThrough": "2026-04-17" }
+```
+
+Existing conflict rows (e.g., `source_identity` collisions) get `conflictReason: "identity_collision"` and `reconciledThrough: null`. Pick a stable enum: `"identity_collision" | "reconciled_date_fence"`.
+
+**Apply path:** the apply endpoint must refuse to apply any row with `matchStatus === "conflict"` regardless of reason. Confirm this is already the case (it should be — conflicts are gated today) and add a test that proves it for the new reason.
+
+### 5. Failure detection
+
+A new function in `reconciliation_service.py`:
+
+```python
+def reconciliation_status(config) -> dict[str, ReconciliationStatus]:
+    """Returns {tracked_account_id: ReconciliationStatus}.
+
+    ReconciliationStatus is either {"ok": True} or
+    {"ok": False, "broken": {"date": "YYYY-MM-DD", "expected": "...", "actual": "...", "rawError": "..."}}.
+    """
+```
+
+**Implementation:**
+
+- Run `ledger -f <main_journal> bal --strict` once. Parse stderr.
+- Ledger emits one error line per failed assertion, with the form `Error: Balance assertion off by ... in <file>:<line>`. Extract: file, line, expected, actual.
+- Map each failed assertion line back to a tracked account by reading the journal at that line and finding the asserted ledger account. The ledger account → tracked account mapping already exists (`_tracked_account_id_for_ledger_account` in `main.py:222`).
+- Cache the result for the duration of a single request. Do NOT cache across requests — the journal can change.
+- If `ledger` is unavailable (CommandError other than assertion failure), return `{ok: True}` for every account and log a warning. Do NOT pretend a reconciliation is broken just because the CLI is missing.
+
+**Wiring:**
+
+- `_tracked_account_ui` in `main.py:169` adds `reconciliationStatus` to its return dict. Default `{"ok": true}` when no entry is present in the map.
+- This propagates automatically into:
+  - `GET /api/accounts` (account list)
+  - `GET /api/dashboard/overview` balance sheet (which calls `_tracked_account_ui`)
+  - Any other endpoint reusing `_tracked_account_ui`
+
+**Performance:** the failure-detection ledger call is one shell-out per page load that hits these endpoints. Acceptable for MVP — the same path already runs `ledger` for other queries. If profiling shows it's hot, gate it behind a `?withReconciliationStatus=1` query param.
 
 ### System Invariants
 
-- The event log remains append-only. Undo via the history list is identical to undo via the toast — both call `POST /api/events/undo/{event_id}` and the backend writes a new compensating event. Past events are never edited or deleted.
-- Drift detection wins over UI optimism: if the user opens the history list, sees an undoable event, then someone (or another tab) modifies the journal in between, the undo returns `DRIFT` and the UI surfaces the message instead of pretending it succeeded.
-- Notes payload migration: events written before this change won't have `previous_notes`. The handler must treat missing `previous_notes` as `UndoFailedError("Pre-existing notes event lacks previous_notes — cannot undo")`. Do not silently default to empty.
-- Toast and history list use the same code path for triggering undo. No duplication of the API call or the post-undo refresh logic.
+- The assertion transaction is always the last transaction on its date in the journal file that holds it. The writer enforces this on insert; future imports must respect it (covered by the import fence).
+- Once a reconciled date exists for an account, the journal is never silently mutated on or before that date by the import path. Only an explicit user action (delete the assertion transaction) clears the fence.
+- The `ledger account → tracked account` mapping is the single source of truth for routing failures. If a journal contains an assertion on a ledger account no tracked account currently maps to (e.g., because the user deleted the tracked account but kept the journal), the failure shows up in logs but does NOT crash the endpoint — return `{ok: True}` for known tracked accounts and ignore the orphaned failure.
+- The event log is append-only. A failed reconciliation never writes an event.
+- Hand-written or imported balance-assertion transactions (no `reconciliation_event_id` metadata) trigger failure detection but are NOT part of the "most recent reconciliation date" computation for the import fence. Only assertions with the `reconciliation_event_id` metadata count toward the fence and the future history view.
 
 ### States
 
-- **History sheet — closed:** existing app state; trigger button visible somewhere obvious.
-- **History sheet — opening:** brief `Loading…` while the list fetches.
-- **History sheet — populated:** scrollable list of up to 20 rows.
-- **History sheet — empty:** `No recent activity yet.`
-- **History sheet — error:** error message + retry.
-- **Row — undoable:** `Undo` button visible.
-- **Row — already compensated:** muted `Undone` label, no button.
-- **Row — not undoable (e.g., import.applied.v1):** no trailing element. Row is shown for transparency, but there's nothing to do.
-- **Row — undo in flight:** button label changes to `Undoing…`, disabled.
-- **Row — undo succeeded:** list refetches; row re-renders as `Undone`.
-- **Row — undo failed (drift, etc.):** inline error under the row.
+- **Default:** No reconciliations exist for any account. All `reconciliationStatus` fields default `{ok: true}`. Import classification proceeds unchanged.
+- **At least one reconciliation, all valid:** `{ok: true}` per account. Import fence active for dates ≤ most-recent reconciliation per account.
+- **Broken reconciliation:** `{ok: false, broken: {date, expected, actual, rawError}}` for the affected account. Failure surfaces in account/dashboard responses.
+- **Endpoint loading:** standard FastAPI request lifecycle — no special UI state, this is API-only work.
+- **Reconcile request — success:** `200` with the assertion transaction descriptor and event id.
+- **Reconcile request — assertion failed:** `422` with structured error.
+- **Reconcile request — validation error:** `400` / `404` / `409` with a human-readable message.
 
 ### Edge Cases
 
-- **User triggers undo from the toast and the history sheet simultaneously:** second call returns `ALREADY_COMPENSATED`. The history sheet should treat that outcome as success-equivalent for the row (mark as `Undone` and refetch), not as an error.
-- **History list shows compensating events:** keep them in the list with `undoable: false` and a label like `Undid: <forward summary>` (the existing `summary` field on the compensating event already reads `Undid: <forward summary>` — reuse it). They are part of the operation history; hiding them would be confusing.
-- **Toggle status spam:** rapid toggling produces a chain of events. Drift detection forces undo in reverse order. The history list correctly reflects this — undoing the latest is the only one that succeeds; older ones show as undoable until the latest is undone, at which point the next becomes undoable. No special UI handling needed; the natural behavior is correct.
-- **Notes-update with identical text:** if the user "saves" notes with the same value, the journal hash doesn't change but an event is still emitted with `previous_notes == notes`. Undo is a no-op write but still emits a compensating event. Acceptable — it's rare and harmless.
-- **Notes-update toast on detail sheet close:** save fires before close. Toast appears under the closing sheet, then the sheet animation completes. Verify the z-index: toast is `z-50`, sheet overlay is also `z-50`-ish. If they collide, bump the toast above the sheet (`z-60` or use bits-ui's portal layering).
-- **Empty/whitespace notes:** treat `notes: "   "` as empty for the purposes of "remove the line", so the journal stays tidy.
+- **Period end on an unused date.** If no transactions exist on `periodEnd`, the assertion still inserts at the position just after the last transaction with date `< periodEnd`. Test this.
+- **`periodEnd` precedes any existing transaction in the file.** Insert at the top, no preceding blank line. Test this.
+- **`periodEnd` year file does not exist.** Create it, insert as the only transaction in the file. Test this.
+- **Two reconciliations on the same date for the same account.** Refuse with `409 A reconciliation already exists for this account on <date>.` (Same-day re-reconciliation makes no sense — delete the prior one and redo if needed.)
+- **`periodStart > periodEnd`.** Reject with `400`. Tested in validation.
+- **Import row date equals reconciliation date.** Treated as `≤ reconciled_date` → `conflict`. Verified by test: a reconciliation written on 2026-04-17 fences out an import row also dated 2026-04-17.
+- **Import row date is the day after a reconciliation.** Allowed through. Test this.
+- **Tracked account whose ledger account contains a colon-prefixed parent that's also tracked** (e.g., parent `Assets:Checking` and child `Assets:Checking:Wells`). The lookup must match the *exact* ledger account from the assertion posting, not a parent. Test with overlapping account hierarchies.
+- **Hand-edited assertion line that the user wrote before this feature shipped.** Failure detection picks it up. Import fence does NOT pick it up (no `reconciliation_event_id`). Documented in the test: "hand-written assertion is honored for failure detection only".
+- **Assertion fails immediately after write.** Rollback restores the byte-equivalent file. Test with a fixture journal where the closing balance is wrong on purpose, assert that after the failed reconcile the file is byte-identical to the pre-write backup and no event is emitted.
+- **Concurrent reconcile + import.** No locking in MVP. If the user reconciles in tab A while an import classification is in flight in tab B, tab B may complete its classification before tab A's writer runs — its classifications will not see the new fence. Acceptable; documented as a known race.
 
 ### Failure Behavior
 
-- `GET /api/events` failure: return 500 with a message; the frontend retry button re-fires the fetch.
-- Notes-update undo on a pre-migration event (no `previous_notes`): `UndoFailedError` → outcome `FAILED` → user sees `Undo failed: Pre-existing notes event lacks previous_notes — cannot undo` in the toast or row error. No silent fallback.
-- Concurrent undo attempts (toast + history): second one resolves as `ALREADY_COMPENSATED` per the existing handler. Frontend treats this as terminal success.
-- Drift on history-list undo: surface the existing `message` ("File changed since the action: <path>") in the inline row error. Do not auto-retry.
+- Validation failures: `400` / `404` / `409` with concrete messages. Do not leak Python tracebacks.
+- Assertion failure on write: `422`, journal rolled back via the pre-write backup, no event emitted. Existing journal byte-equivalence preserved.
+- Ledger CLI missing or crashes during verification: rollback (treat as failure), `500 Could not verify the assertion: ledger CLI is unavailable.` Log the underlying error.
+- Failure detection unavailable (ledger CLI missing): every account reports `{ok: true}` with a single warning log line per request. Account/dashboard endpoints continue to serve. The user does not see a misleading "all good" banner — this layer's job is data, not copy; 8c handles the surface and can defensively render `Last verified: <timestamp>` once we wire that.
+- Import classification with the fence: a row that flips from `new` to `conflict` because of the fence is gated by the existing apply-time conflict check. Re-running classification reproducibly returns the same answer.
 
 ### Regression Risks
 
-- **Notes payload shape:** adding `previous_notes` to the forward event must not break any existing consumer of the event log. Confirm `_HANDLERS` and `_read_events` are the only readers (plus the future history endpoint).
-- **History fetch perf:** parsing `events.jsonl` line-by-line on every open is fine at 20 events but worth a sanity check on a workspace with thousands. If parse + scan-for-compensations is slow, cap the scan at the most recent 200 events (the answer for "is event X compensated" only needs to look at events after X).
-- **Toast z-index under the detail sheet:** confirmed above; verify visually.
-- **Undo on a `transaction.unmatched.v1` event from the history list:** the existing handler is the most complex of the five; if a later edit touched either the main journal or `archived-manual.journal`, drift fails. Make sure the message is legible in the row error UI.
+- **`_tracked_account_ui` shape change.** Adding `reconciliationStatus` to every account-shaped response could break any frontend reader that asserts a fixed key set. Audit consumers — the dashboard balance sheet, the accounts list page, the account chip helpers in transactions. Add the field as optional in the TS types so old code paths don't error.
+- **Import classification refactor.** Threading the fence in without breaking the existing `new` / `duplicate` / `conflict` semantics is the highest-risk piece. Wrap the fence in a small `apply_reconciliation_fence(rows, latest_dates)` helper, run it after the existing classifier, and test the unaltered path explicitly (no reconciliations → identical outputs to today).
+- **Journal-write ordering.** A bug in the "last on its date" insertion would silently break future reconciliations of the same account (the assertion would check an intermediate balance and could pass for the wrong reason). Cover with a dedicated test that inserts an assertion when later transactions exist on the same date.
+- **Failure-detection ledger error parsing.** `ledger` and `hledger` produce slightly different error formats. MVP targets `ledger` only — capture the regex, snapshot a real error string in a fixture, and add a test. If hledger support comes later, extend the parser, not the call site.
+- **Event-log linkage.** The `reconciliation_event_id` in the journal metadata must equal the event id in `events.jsonl`. If they diverge, the future history view (8e) loses the ability to associate assertions with events. Cover with an integration test: write a reconciliation, read both the assertion transaction's metadata and the most recent event, assert the ids match.
 
 ## Acceptance Criteria
 
-- Saving notes from the transaction detail sheet shows an Undo toast with summary `Notes updated on <payee>`. Clicking Undo restores the prior notes (including the case where there were no notes before).
-- Toggling the clearing-status pill does **not** show a toast. The action is still recorded in the event log and remains undoable via the history list.
-- A new `Recent activity` trigger is reachable from the persistent UI shell (one click from any route).
-- Opening `Recent activity` lists the 20 most recent events newest-first. Each row shows the summary, a relative timestamp, and either an Undo button, a muted `Undone` label, or nothing — per the row-state rules above.
-- Clicking Undo in the history sheet performs the same undo as the toast and refreshes the list to reflect the new compensating event.
-- A previously-compensated event in the history sheet shows `Undone` with no Undo button.
-- Compensating events themselves appear in the list as informational rows with no Undo button.
-- Status-toggle events show in the history list as undoable rows. Undoing one from the list restores the prior status.
-- A drift error on history-sheet undo surfaces the backend `message` text inline under the row.
-- `GET /api/events` returns 20 events, newest-first, with the documented schema.
-- `pnpm check` passes.
-- `uv run pytest -q` passes (existing tests + new tests for the notes-update handler and the events listing endpoint).
+- `POST /api/accounts/{id}/reconcile` with a valid body writes one transaction to the journal file matching `periodEnd[:4]`, of the form `<periodEnd> * Statement reconciliation · <displayName> · ending <periodEnd>`, with `; reconciliation_event_id:` and `; statement_period:` metadata lines, and one posting `<ledger_account>  $0 = $<closingBalance>`.
+- The written transaction is the last transaction with date `periodEnd` in its file, even when other transactions on `periodEnd` already exist below the insertion point.
+- `account.reconciled.v1` is appended to `events.jsonl` with the documented payload and `journal_refs`. The event id matches the `reconciliation_event_id` in the journal metadata.
+- A reconcile request whose closing balance does not match the journal-derived balance returns `422`, leaves the journal byte-identical to the pre-write state, and emits NO event.
+- A reconcile request for the same account on the same date as an existing reconciliation returns `409`.
+- A reconcile request for an income / expense / equity account returns `400`.
+- A reconcile request with a non-base currency returns `400`.
+- After a reconciliation exists for tracked account `X` with `periodEnd = D`, an import preview of a row dated `D` mapped to `X` reports `matchStatus: "conflict"` with `conflictReason: "reconciled_date_fence"` and `reconciledThrough: D`. A row dated `D + 1 day` reports unchanged classification.
+- After an external edit breaks an existing assertion, `GET /api/accounts` returns the affected account with `reconciliationStatus: {ok: false, broken: {date, expected, actual, rawError}}`. Other accounts continue to report `{ok: true}`.
+- Deleting the assertion transaction via the existing transaction actions menu (`/api/transactions/delete`) leaves the journal in a state byte-equivalent to before the reconciliation (modulo any transactions added in between), and removes the import fence for that account.
+- `pnpm check` passes (no frontend changes are required, but type changes in `app/frontend/src/lib/api/types.ts` for the new optional fields must compile).
+- `uv run pytest -q` passes, including the new tests enumerated under Regression Risks.
 
 ## Proposed Sequence
 
-Sequenced smallest → largest, each step independently shippable.
+Each step independently verifiable.
 
-1. **Notes-update payload enrichment** — backend change to `transactions_notes` in `main.py`. Adds `previous_notes` to the emitted payload. No undo handler yet; no behavior change yet.
-2. **Notes-update undo handler + toast wiring** — backend handler in `undo_service.py` + dispatch entry; frontend `showUndoToast` call in the detail sheet save path. New backend test mirroring the existing handler tests.
-3. **`GET /api/events` endpoint** — backend-only. New test for the listing response shape, compensation flag, and undoable flag.
-4. **Operation history sheet** — frontend Sheet component, list rows, parameterized undo (`triggerUndoById` or refactored `triggerUndo`), trigger button placement. Manual verification across desktop and mobile widths.
+1. **Skeleton service module + writer.** Create `reconciliation_service.py` with `write_assertion_transaction(...)` and `latest_reconciliation_date(...)`. No endpoint yet. Tests: ordering invariant on a synthetic journal (insertion when nothing on date, when other txns on date, at file start, into nonexistent file).
+2. **Verification + rollback.** Add the post-write `ledger bal --strict` call inside the writer. Test: bad closing balance triggers rollback and journal byte-equivalence; good closing balance proceeds.
+3. **Endpoint + event emission.** Wire `POST /api/accounts/{id}/reconcile` in `main.py`. Add the validation ladder. Emit `account.reconciled.v1`. Tests: round-trip success returns the documented response; validation failures hit the right HTTP codes.
+4. **Failure detection.** Add `reconciliation_status(config)` and wire into `_tracked_account_ui`. Tests: synthetic broken assertion in a fixture journal surfaces in `/api/accounts`; healthy journal returns `{ok: true}` per account; missing ledger CLI degrades gracefully.
+5. **Import fence.** Add `apply_reconciliation_fence(rows, latest_dates)` post-classifier in the import preview path. Tests: row on/before reconciliation → conflict; row after → unchanged; existing conflict reasons still attach as `identity_collision`.
+6. **Round-trip integration test.** Write a reconciliation, then delete the assertion transaction via `/api/transactions/delete`, then assert the journal is byte-equivalent to pre-reconciliation, the event log has `account.reconciled.v1` followed by `transaction.deleted.v1` linked via the standard delete handler, and `latest_reconciliation_date` for that account returns `None`.
 
 ## Definition of Done
 
-- All 10 acceptance criteria visibly confirmed in the running app.
-- `pnpm check` and `uv run pytest -q` both pass.
-- Manual round-trip: every mutating action (delete, recategorize, reset-category, unmatch, manual-entry-create, toggle-status, notes-update) is undoable from the history sheet. Toast-driven undo is verified for all of them except toggle-status, which has no toast by design.
-- Drift detection still works: edit the journal externally between forward action and undo; both surfaces show the drift error.
-- ROADMAP.md updated: 5e marked shipped, Feature 5 closed.
-- DECISIONS.md gets a single-line addendum if any open question's resolution is non-obvious; otherwise no change.
+- All 11 acceptance criteria pass.
+- `uv run pytest -q` passes — new tests listed above, plus all existing tests.
+- `pnpm check` passes.
+- `DECISIONS.md` gains §14, §15, §16, §17, §19 per `plans/statement-reconciliation.md`. (§18 about PDFs lands with 8d.)
+- `ROADMAP.md` updated: 8a marked shipped, 8b promoted to active.
+- A short follow-up note added at the bottom of [`plans/statement-reconciliation.md`](plans/statement-reconciliation.md) describing any deviations from spec encountered during implementation.
 
 ## UX Notes
 
-- The history sheet must feel like a small utility, not a feature. Match the existing detail sheet's visual weight and copy density.
-- `Recent activity` is the right header — neutral, descriptive. Don't call it `Undo history` (sounds like a power-user feature) or `Audit log` (sounds like compliance).
-- Relative timestamps should match consumer-app conventions: `Just now`, `2 minutes ago`, `1 hour ago`, `Yesterday at 3:42 PM`, `Apr 18`. No absolute timestamps in the row body — keep it scannable.
-- The trigger button should be discoverable but not loud. A clock-rewind icon (lucide `History`) in the layout's utility area is a natural fit; verify it doesn't compete with primary nav.
-- Don't show a count badge on the trigger. The history list is informational, not an inbox.
+This task is API-only — no UI surfaces here. UX follows in 8b and 8c. One note carries forward: the `rawError` field on broken-status payloads is the source of truth for the "details" disclosure 8c will render. Make sure the parser preserves the original ledger error text verbatim, not a cleaned-up version. The translated copy (`expected`, `actual`, `date`) is on top of `rawError`, not instead of it.
 
 ## Out of Scope
 
-- Redo
-- Multi-event / batch undo
-- Undo for import / unknowns / rules-history
-- Pagination, filtering, search in the history list
-- Background polling / SSE / live updates of the history sheet
-- Refactor of the dynamic import in `transactions/+page.svelte:235`
-- Visual redesign of the toast component
-- Operation history persistence beyond `events.jsonl` itself
+- Reconciliation modal (8b).
+- Assertion rendering (8c).
+- PDF upload (8d).
+- History view (8e).
+- Subset-sum solver (8f).
+- Adjustment button (8g).
+- Pre-reconciliation edit confirmation (8h).
+- Multi-currency support.
+- Smart-date offsets.
+- Reconciliation of non-balance-sheet accounts.
+- A new undo handler for `account.reconciled.v1` — deletion via the transaction actions menu suffices.
 
 ## Dependencies
 
-None blocking. Depends on:
-
 - 5b (event log) — shipped.
-- 5d (transaction actions menu) — shipped.
-- Toast component — shipped as part of the existing 5e partial.
+- 5d (transaction actions menu, including delete) — shipped. The delete action's existing undo path is what reverses a reconciliation.
+- 5e core (undo dispatcher) — shipped. No new handler added in this task; the existing `transaction.deleted.v1` handler covers reconciliation reversal.
+- The `ledger` CLI is required at runtime for both writer verification and read-side failure detection. The codebase already depends on it (see `import_service.py:486`); no new dependency.
 
 ## Open Questions
 
 None. Decisions inline:
 
-- **No toast on clearing-status toggles.** The pill cycles in one click; a toast would be unwelcome noise. Action remains in the event log and undoable via the history sheet.
-- **Notes update: undoable, not "non-undoable".** Adds `previous_notes` to the payload, parallels the recategorize handler's structure. Pre-migration events fail closed with a legible message.
-- **History list size: 20 events.** Lightweight per spec; adjustable later if real usage demands more.
-- **History trigger placement: layout utility area, not a full nav entry.** The history list is a utility, not a destination. PR should include a screenshot showing the chosen spot at desktop and mobile widths.
+- **Single-currency MVP.** Multi-currency rejected at validation. Revisit when a real user reports it.
+- **Statement-end date is the assertion date.** No smart-date offset. Revisit if a real user reports lagging-postings issues.
+- **No new undo handler.** Reuse the existing delete handler via the transaction actions menu.
+- **Failure detection runs on every account/dashboard request.** Acceptable cost for MVP. Gate behind a query param if profiling shows it's hot.
+- **Ledger error parsing targets `ledger` only.** hledger support is a follow-up; MVP runs on the same CLI the import path already uses.
+- **Same-day re-reconciliation is rejected (`409`).** User must delete the prior reconciliation first.
