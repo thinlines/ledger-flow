@@ -1,5 +1,22 @@
 # Reconciliation Backend (8a) — Reconcile Endpoint, Assertion Writer, Import Fence, Failure Detection
 
+**Status: COMPLETED — 2026-04-26**
+
+## Delivery Notes
+
+- QA verdict: PASS. All 11 acceptance criteria mapped to passing tests. 600 tests pass; `pnpm check` clean.
+- Code review verdict: SHIP WITH NOTES. Non-blocking follow-ups:
+  - `parse_closing_balance` mildly duplicates `manual_entry_service._parse_amount_str`; consider promoting to a shared currency module if a third caller appears.
+  - No test simulates `verify_assertion` raising `RuntimeError` (the 500-with-rollback path); production path is small and reads correctly, but a unit test would close the loop.
+  - Event `summary` uses raw user input for the closing balance (`... · 2500.00`) rather than the spec-formatted `... · $2,500.00`; cosmetic.
+  - `_journal_files` listing in `reconciliation_service` mirrors the one in `journal_query_service.load_transactions`; extract to a shared helper if a third caller appears.
+- Spec ambiguities resolved during implementation (also recorded in `plans/statement-reconciliation.md` "8a Implementation Notes"):
+  - `_main_journal_path` doesn't exist; verification iterates `workspace/journals/*.journal` (excluding the archive sidecar) instead.
+  - The canonical shared `TrackedAccount` type lives at `app/frontend/src/lib/transactions/types.ts`, not `app/frontend/src/lib/api/types.ts` — the new optional fields landed there.
+  - Line numbers in the API response are 0-indexed to match `locate_header_at`. The 8b modal will need to know this.
+  - Ledger error wording is inverted vs. ours: ledger's "expected to see" is our `actual`. Captured in `LEDGER_ASSERTION_FAILURE_FIXTURE` and tested both directions.
+  - The spec's "GET /api/accounts" surface for broken-status is actually `/api/tracked-accounts`, the dashboard balance sheet, and `/api/workspace/bootstrap` — `_tracked_account_ui` wiring covers all three.
+
 ## Objective
 
 A user can hit `POST /api/accounts/{id}/reconcile` with a period and closing balance, and the system writes one zero-amount balance-assertion transaction to the journal, verifies the assertion holds, and emits an `account.reconciled.v1` event. After a date is reconciled, any new import on or before that date is classified as a `conflict`, never silently inserted. The account API and dashboard payloads gain a `reconciliationStatus` field that surfaces broken assertions with the failure date, expected balance, and actual balance.
