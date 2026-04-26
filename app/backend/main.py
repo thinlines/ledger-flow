@@ -5,7 +5,7 @@ from datetime import date
 import logging
 from pathlib import Path
 import re
-from uuid import uuid4
+from uuid import uuid4, uuid7
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -21,6 +21,7 @@ from models import (
     ManualTransferResolutionRequest,
     PayeeRuleRequest,
     RecategorizeTransactionRequest,
+    ReconcileRequest,
     RuleHistoryApplyRequest,
     RuleHistoryScanRequest,
     RuleCreateRequest,
@@ -79,6 +80,15 @@ from services.import_profile_service import import_source_summary
 from services.institution_registry import canonical_template_id, display_name_for, list_templates
 from services.ledger_runner import CommandError, run_cmd
 from services.opening_balance_service import OPENING_BALANCES_EQUITY, opening_balance_index
+from services.reconciliation_service import (
+    AssertionFailure,
+    latest_reconciliation_date,
+    parse_closing_balance,
+    reconciliation_status as compute_reconciliation_status,
+    restore_from_backup,
+    verify_assertion,
+    write_assertion_transaction,
+)
 from services.rule_reapply_service import apply_rule_reapply, scan_rule_reapply
 from services.stage_store import StageStore
 from services.rules_service import (
@@ -173,6 +183,7 @@ def _tracked_account_ui(
     account_cfg: dict,
     opening_by_id: dict,
     opening_by_ledger: dict,
+    reconciliation_status_by_id: dict[str, dict] | None = None,
 ) -> dict:
     import_account_id = str(account_cfg.get("import_account_id") or "").strip() or None
     linked_import_cfg = config.import_accounts.get(import_account_id or "", {}) if import_account_id else {}
@@ -199,6 +210,11 @@ def _tracked_account_ui(
             exclude_account_id=account_id,
         )
 
+    if reconciliation_status_by_id is None:
+        reconciliation_status = {"ok": True}
+    else:
+        reconciliation_status = reconciliation_status_by_id.get(account_id, {"ok": True})
+
     return {
         "id": account_id,
         "displayName": account_cfg.get("display_name", account_id),
@@ -217,6 +233,7 @@ def _tracked_account_ui(
         "openingBalanceDate": opening_entry.date if opening_entry is not None else None,
         "openingBalanceOffsetAccountId": opening_balance_offset_account_id,
         "minimumPayment": str(opening_entry.minimum_payment) if opening_entry and opening_entry.minimum_payment is not None else None,
+        "reconciliationStatus": reconciliation_status,
     }
 
 
@@ -407,8 +424,9 @@ def app_state() -> dict:
                 "displayName": account["institutionDisplayName"],
             }
     opening_by_id, opening_by_ledger = opening_balance_index(config)
+    reconciliation_status_map = compute_reconciliation_status(config)
     tracked_accounts = [
-        _tracked_account_ui(config, account_id, account_cfg, opening_by_id, opening_by_ledger)
+        _tracked_account_ui(config, account_id, account_cfg, opening_by_id, opening_by_ledger, reconciliation_status_map)
         for account_id, account_cfg in sorted(config.tracked_accounts.items(), key=lambda x: x[0])
     ]
     return {
@@ -1273,8 +1291,9 @@ def workspace_custom_import_account_upsert(req: CustomImportAccountUpsertRequest
 def tracked_accounts_list() -> dict:
     config = _require_workspace_config()
     opening_by_id, opening_by_ledger = opening_balance_index(config)
+    reconciliation_status_map = compute_reconciliation_status(config)
     rows = [
-        _tracked_account_ui(config, account_id, account_cfg, opening_by_id, opening_by_ledger)
+        _tracked_account_ui(config, account_id, account_cfg, opening_by_id, opening_by_ledger, reconciliation_status_map)
         for account_id, account_cfg in sorted(
             config.tracked_accounts.items(),
             key=lambda item: str(item[1].get("display_name", item[0])),
@@ -1316,6 +1335,161 @@ def tracked_account_upsert(req: TrackedAccountUpsertRequest) -> dict:
             opening_by_id,
             opening_by_ledger,
         ),
+    }
+
+
+@app.post("/api/accounts/{account_id}/reconcile")
+def accounts_reconcile(account_id: str, req: ReconcileRequest) -> dict:
+    config = _require_workspace_config()
+
+    tracked_account_cfg = config.tracked_accounts.get(account_id)
+    if tracked_account_cfg is None:
+        raise HTTPException(status_code=404, detail=f"Tracked account not found: {account_id}")
+
+    ledger_account = str(tracked_account_cfg.get("ledger_account", "")).strip()
+    if not ledger_account:
+        raise HTTPException(status_code=400, detail="Tracked account is missing a ledger account.")
+
+    if _account_kind(ledger_account) not in {"asset", "liability"}:
+        raise HTTPException(
+            status_code=400,
+            detail="Reconciliation is only supported for asset and liability accounts.",
+        )
+
+    base_currency = str(config.workspace.get("base_currency", "USD")).strip().upper()
+    if (req.currency or "").strip().upper() != base_currency:
+        raise HTTPException(
+            status_code=400,
+            detail="Multi-currency accounts are out of scope (#TODO multi-currency support).",
+        )
+
+    try:
+        period_start = date.fromisoformat(req.periodStart)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid period: {exc}") from exc
+    try:
+        period_end = date.fromisoformat(req.periodEnd)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid period: {exc}") from exc
+    if period_start > period_end:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid period: periodStart {req.periodStart} is after periodEnd {req.periodEnd}",
+        )
+
+    try:
+        closing_balance = parse_closing_balance(req.closingBalance)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid closing balance: {req.closingBalance}") from exc
+
+    existing_latest = latest_reconciliation_date(config, ledger_account)
+    if existing_latest is not None:
+        if period_end < existing_latest:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"A more recent reconciliation already exists for this account on "
+                    f"{existing_latest.isoformat()}. Delete it first if you want to "
+                    "reconcile an earlier period."
+                ),
+            )
+        if period_end == existing_latest:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"A reconciliation already exists for this account on "
+                    f"{existing_latest.isoformat()}."
+                ),
+            )
+
+    # Pre-allocate the event id so the same value is written into the journal
+    # metadata and re-used when emitting the event.
+    event_id = str(uuid7())
+
+    # Drift check the year journal we're about to write before the writer
+    # backs it up — keeps semantics consistent with other mutation endpoints.
+    year = f"{period_end.year:04d}"
+    target_journal_path = config.journal_dir / f"{year}.journal"
+    hash_before = check_drift(config.root_dir, target_journal_path) if target_journal_path.exists() else hash_file(target_journal_path)
+
+    try:
+        write_result, backup_path = write_assertion_transaction(
+            config=config,
+            tracked_account_cfg=tracked_account_cfg,
+            period_start=period_start,
+            period_end=period_end,
+            closing_balance=closing_balance,
+            currency=base_currency,
+            event_id=event_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    try:
+        failure = verify_assertion(config)
+    except RuntimeError as exc:
+        # ledger CLI unavailable — roll back and surface explicit copy.
+        restore_from_backup(write_result.journal_path, backup_path)
+        raise HTTPException(
+            status_code=500,
+            detail="Could not verify the assertion: ledger CLI is unavailable.",
+        ) from exc
+
+    if failure is not None:
+        restore_from_backup(write_result.journal_path, backup_path)
+        message = (
+            f"Reconciliation rejected — expected {failure.expected}, found {failure.actual}."
+            if failure.expected and failure.actual
+            else "Reconciliation rejected — balance assertion failed."
+        )
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "outcome": "assertion_failed",
+                "message": message,
+                "expected": failure.expected,
+                "actual": failure.actual,
+                "rawError": failure.raw_error,
+            },
+        )
+
+    hash_after = hash_file(write_result.journal_path)
+    summary = (
+        f"Reconciled {tracked_account_cfg.get('display_name', account_id)} · "
+        f"ending {period_end.isoformat()} · {req.closingBalance}"
+    )
+
+    emit_event(
+        config.root_dir,
+        event_type="account.reconciled.v1",
+        summary=summary,
+        payload={
+            "tracked_account_id": account_id,
+            "ledger_account": ledger_account,
+            "period_start": period_start.isoformat(),
+            "period_end": period_end.isoformat(),
+            "closing_balance": str(closing_balance),
+            "currency": base_currency,
+            "journal_path": write_result.journal_rel,
+            "header_line": write_result.header_line,
+            "line_number": write_result.line_number,
+        },
+        journal_refs=[{
+            "path": write_result.journal_rel,
+            "hash_before": hash_before,
+            "hash_after": hash_after,
+        }],
+        event_id=event_id,
+    )
+
+    return {
+        "ok": True,
+        "assertionTransaction": {
+            "journalPath": write_result.journal_rel,
+            "headerLine": write_result.header_line,
+            "lineNumber": write_result.line_number,
+        },
+        "eventId": event_id,
     }
 
 

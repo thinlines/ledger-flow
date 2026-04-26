@@ -15,6 +15,7 @@ from .journal_query_service import (
     pretty_account_name,
 )
 from .opening_balance_service import opening_balance_index
+from .reconciliation_service import reconciliation_status as compute_reconciliation_status
 
 
 def _account_kind(account: str) -> str:
@@ -216,6 +217,7 @@ def build_dashboard_overview(config: AppConfig, *, today: date | None = None) ->
     previous_year, previous_month = _shift_month(current_day.year, current_day.month, -1)
     previous_month_key = f"{previous_year:04d}-{previous_month:02d}"
 
+    reconciliation_status_map = compute_reconciliation_status(config)
     balances = []
     tracked_total = Decimal("0")
     tracked_total_commodity: str | None = None
@@ -252,6 +254,7 @@ def build_dashboard_overview(config: AppConfig, *, today: date | None = None) ->
                 "hasTransactionActivity": has_transaction_activity,
                 "hasBalanceSource": ledger_account in accounts_with_balance_source,
                 "lastTransactionDate": account_last_transaction[ledger_account].isoformat() if ledger_account in account_last_transaction else None,
+                "reconciliationStatus": reconciliation_status_map.get(account_id, {"ok": True}),
             }
         )
 

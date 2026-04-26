@@ -239,3 +239,10 @@ class TrackedAccountUpsertRequest(BaseModel):
     openingBalanceDate: str | None = Field(default=None, pattern=DATE_PATTERN)
     openingBalanceOffsetAccountId: str | None = None
     minimumPayment: str | None = None
+
+
+class ReconcileRequest(BaseModel):
+    periodStart: str = Field(pattern=DATE_PATTERN)
+    periodEnd: str = Field(pattern=DATE_PATTERN)
+    closingBalance: str = Field(min_length=1)
+    currency: str = Field(min_length=1)
