@@ -376,6 +376,131 @@ class TestUndoManualEntryCreated:
 # ---------------------------------------------------------------------------
 
 
+class TestUndoNotesUpdated:
+    def _emit_notes_event(
+        self,
+        workspace: Path,
+        journal: Path,
+        header_line: str,
+        notes: str,
+        previous_notes: str,
+        *,
+        include_previous: bool = True,
+    ) -> str:
+        hash_after = hash_file(journal)
+        payload: dict = {
+            "journal_path": "journals/2026.journal",
+            "header_line": header_line,
+            "notes": notes,
+        }
+        if include_previous:
+            payload["previous_notes"] = previous_notes
+        return emit_event(
+            workspace,
+            event_type="transaction.notes_updated.v1",
+            summary=f"Notes updated: {header_line}",
+            payload=payload,
+            journal_refs=[{"path": "journals/2026.journal", "hash_before": "sha256:none", "hash_after": hash_after}],
+        )
+
+    def test_round_trip_set_notes_and_remove(self, tmp_path: Path) -> None:
+        workspace = _setup_workspace(tmp_path)
+        # Post-forward state: notes line was added.
+        post_forward = (
+            "2026-03-15 * Whole Foods\n"
+            "    ; notes: weekly groceries\n"
+            "    Assets:Bank:Checking  -$50.00\n"
+            "    Expenses:Groceries  $50.00\n"
+        )
+        journal = _write_journal(workspace, "2026.journal", post_forward)
+
+        event_id = self._emit_notes_event(
+            workspace, journal,
+            header_line="2026-03-15 * Whole Foods",
+            notes="weekly groceries",
+            previous_notes="",
+        )
+
+        result = undo_event(workspace, event_id)
+        assert result.outcome == UndoOutcome.SUCCESS
+
+        restored = journal.read_text()
+        assert "notes:" not in restored
+        assert "Expenses:Groceries" in restored
+
+    def test_round_trip_replace_notes(self, tmp_path: Path) -> None:
+        workspace = _setup_workspace(tmp_path)
+        # Post-forward state: notes line carries the new value.
+        post_forward = (
+            "2026-03-15 * Whole Foods\n"
+            "    ; notes: new value\n"
+            "    Assets:Bank:Checking  -$50.00\n"
+            "    Expenses:Groceries  $50.00\n"
+        )
+        journal = _write_journal(workspace, "2026.journal", post_forward)
+
+        event_id = self._emit_notes_event(
+            workspace, journal,
+            header_line="2026-03-15 * Whole Foods",
+            notes="new value",
+            previous_notes="old value",
+        )
+
+        result = undo_event(workspace, event_id)
+        assert result.outcome == UndoOutcome.SUCCESS
+
+        restored = journal.read_text()
+        assert "; notes: old value" in restored
+        assert "new value" not in restored
+
+    def test_round_trip_restore_after_deletion(self, tmp_path: Path) -> None:
+        workspace = _setup_workspace(tmp_path)
+        # Post-forward state: notes line was removed (forward saved empty).
+        post_forward = (
+            "2026-03-15 * Whole Foods\n"
+            "    Assets:Bank:Checking  -$50.00\n"
+            "    Expenses:Groceries  $50.00\n"
+        )
+        journal = _write_journal(workspace, "2026.journal", post_forward)
+
+        event_id = self._emit_notes_event(
+            workspace, journal,
+            header_line="2026-03-15 * Whole Foods",
+            notes="",
+            previous_notes="receipt #4711",
+        )
+
+        result = undo_event(workspace, event_id)
+        assert result.outcome == UndoOutcome.SUCCESS
+
+        restored = journal.read_text()
+        # Restored notes line sits immediately under the header.
+        lines = restored.splitlines()
+        assert lines[1].strip() == "; notes: receipt #4711"
+
+    def test_pre_migration_event_fails_closed(self, tmp_path: Path) -> None:
+        workspace = _setup_workspace(tmp_path)
+        post_forward = (
+            "2026-03-15 * Whole Foods\n"
+            "    ; notes: weekly groceries\n"
+            "    Assets:Bank:Checking  -$50.00\n"
+            "    Expenses:Groceries  $50.00\n"
+        )
+        journal = _write_journal(workspace, "2026.journal", post_forward)
+
+        event_id = self._emit_notes_event(
+            workspace, journal,
+            header_line="2026-03-15 * Whole Foods",
+            notes="weekly groceries",
+            previous_notes="",  # ignored — include_previous=False drops the key.
+            include_previous=False,
+        )
+
+        result = undo_event(workspace, event_id)
+        assert result.outcome == UndoOutcome.FAILED
+        assert "previous_notes" in result.message
+
+
 class TestUndoUnmatched:
     def _setup_unmatched_state(self, tmp_path: Path):
         """Set up a workspace in post-unmatch state with the event recorded."""

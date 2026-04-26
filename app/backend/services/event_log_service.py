@@ -56,6 +56,28 @@ def rel_path(file_path: Path, workspace_root: Path) -> str:
 # ---------------------------------------------------------------------------
 
 
+def read_events(workspace_path: Path) -> list[dict]:
+    """Return the parsed event log as a list of dicts (oldest → newest).
+
+    Returns an empty list when the file is missing.  Corrupt JSONL lines are
+    logged and skipped — they never block readers.
+    """
+    events_file = workspace_path / EVENTS_FILENAME
+    if not events_file.is_file():
+        return []
+    lines = events_file.read_text(encoding="utf-8").splitlines()
+    events: list[dict] = []
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            events.append(json.loads(line))
+        except json.JSONDecodeError:
+            logger.warning("Corrupt JSONL line — skipping")
+    return events
+
+
 def get_last_known_hash(events_file: Path, journal_rel_path: str) -> str | None:
     """Scan *events_file* backward for the most recent ``hash_after`` for *journal_rel_path*.
 

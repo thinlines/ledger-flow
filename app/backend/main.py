@@ -41,7 +41,8 @@ from services.backup_service import backup_file
 from services.event_log_service import check_drift, check_startup_drift, emit_event, hash_file, rel_path
 from services.git_snapshot_service import hours_since_last_snapshot, snapshot_commit
 from services.header_parser import TransactionStatus, parse_header, set_header_status, HEADER_RE as _HEADER_RE
-from services.undo_service import UndoOutcome, undo_event
+from services.undo_service import UndoOutcome, is_undoable_type, undo_event
+from services.event_log_service import read_events as _read_events_log
 from services.journal_block_service import (
     HeaderNotFoundError,
     find_transaction_block,
@@ -846,11 +847,14 @@ def transactions_notes(req: UpdateNotesRequest) -> dict:
     header_idx = _locate_header(lines, req.lineNumber, req.headerLine)
     block_start, block_end = find_transaction_block(lines, header_idx)
 
-    # Find existing notes line within the block.
+    # Find existing notes line within the block and capture its prior value.
     notes_idx: int | None = None
+    previous_notes = ""
     for i in range(block_start + 1, block_end):
-        if _NOTES_RE.match(lines[i]):
+        m = _NOTES_RE.match(lines[i])
+        if m:
             notes_idx = i
+            previous_notes = m.group(2).strip()
             break
 
     if req.notes:
@@ -882,6 +886,7 @@ def transactions_notes(req: UpdateNotesRequest) -> dict:
                 "journal_path": rel_path(journal_path, config.root_dir),
                 "header_line": req.headerLine,
                 "notes": req.notes,
+                "previous_notes": previous_notes,
             },
             journal_refs=[{
                 "path": rel_path(journal_path, config.root_dir),
@@ -1099,6 +1104,44 @@ _UNDO_STATUS_MAP = {
     UndoOutcome.UNSUPPORTED: 422,
     UndoOutcome.FAILED: 422,
 }
+
+
+_RECENT_EVENTS_LIMIT = 20
+
+
+@app.get("/api/events")
+def events_recent() -> dict:
+    """Return the most recent forward + compensating events, newest-first."""
+    config = _require_workspace_config()
+    events = _read_events_log(config.root_dir)
+    window = events[-_RECENT_EVENTS_LIMIT:]
+
+    # A forward event in the window can only be compensated by something that
+    # appears later in the log — and since the window is the contiguous tail,
+    # any compensator must also be inside the window.
+    compensated_by: dict[str, str] = {}
+    for ev in window:
+        target = ev.get("compensates")
+        eid = ev.get("id")
+        if target and isinstance(eid, str):
+            compensated_by[target] = eid
+
+    rows: list[dict] = []
+    for ev in reversed(window):
+        eid = ev.get("id", "")
+        etype = ev.get("type", "")
+        compensating_id = compensated_by.get(eid)
+        rows.append({
+            "id": eid,
+            "type": etype,
+            "summary": ev.get("summary", ""),
+            "timestamp": ev.get("ts", ""),
+            "undoable": is_undoable_type(etype),
+            "compensated": compensating_id is not None,
+            "compensatedBy": compensating_id,
+        })
+
+    return {"events": rows}
 
 
 @app.post("/api/events/undo/{event_id}")
