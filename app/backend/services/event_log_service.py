@@ -212,12 +212,17 @@ def emit_event(
     journal_refs: list[dict],
     actor: str = "user",
     compensates: str | None = None,
+    event_id: str | None = None,
 ) -> str:
     """Append one structured event to ``workspace/events.jsonl``.
 
-    Returns the event ``id`` (UUIDv7 string).
+    Returns the event ``id`` (UUIDv7 string). When *event_id* is supplied the
+    caller's id is used verbatim instead of generating a new one — this is how
+    callers that need to write the same id into journal metadata before the
+    event is emitted (e.g. reconciliation) keep the two references in sync.
     """
-    event_id = str(uuid7())
+    if event_id is None:
+        event_id = str(uuid7())
     event = {
         "id": event_id,
         "ts": datetime.now(timezone.utc).isoformat(),

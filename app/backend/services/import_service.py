@@ -401,6 +401,71 @@ def _classify_transaction(txn: dict, existing_map: dict[str, str | None]) -> str
     return "conflict"
 
 
+def _tracked_account_id_for_import_account(config: AppConfig, import_account_id: str) -> str | None:
+    """Return the tracked-account id linked to *import_account_id*, if any."""
+    if not import_account_id:
+        return None
+    import_cfg = config.import_accounts.get(import_account_id, {})
+    direct = str(import_cfg.get("tracked_account_id") or "").strip()
+    if direct:
+        return direct
+    # Fall back to scanning tracked_accounts for the back-link.
+    for tracked_id, tracked_cfg in config.tracked_accounts.items():
+        if str(tracked_cfg.get("import_account_id") or "").strip() == import_account_id:
+            return tracked_id
+    return None
+
+
+def apply_reconciliation_fence(
+    txns: list[dict],
+    *,
+    tracked_account_id: str | None,
+    latest_dates: dict[str, date],
+) -> None:
+    """In-place: flip rows on/before the per-account reconciled date to conflicts.
+
+    Adds two fields on every row to keep the response shape stable for the
+    frontend:
+    - ``conflictReason``: ``None`` for non-conflicts, ``"identity_collision"``
+      for existing conflicts, ``"reconciled_date_fence"`` for new
+      fence-triggered conflicts.
+    - ``reconciledThrough``: ``None`` unless the fence triggered, then the
+      iso-date string.
+
+    *tracked_account_id* — when ``None`` (orphan import), the fence is skipped
+    entirely and existing classifications are preserved.
+    """
+    fenced_through: date | None = (
+        latest_dates.get(tracked_account_id) if tracked_account_id else None
+    )
+
+    for txn in txns:
+        # Default: keep existing classification, no reason, no fence date.
+        existing_status = txn.get("matchStatus")
+        if existing_status == "conflict":
+            txn.setdefault("conflictReason", "identity_collision")
+            txn.setdefault("reconciledThrough", None)
+            continue
+
+        txn.setdefault("conflictReason", None)
+        txn.setdefault("reconciledThrough", None)
+
+        if fenced_through is None:
+            continue
+
+        raw_date = str(txn.get("date") or "").strip()
+        if not raw_date:
+            continue
+        try:
+            row_date = date.fromisoformat(raw_date.replace("/", "-"))
+        except ValueError:
+            continue
+        if row_date <= fenced_through:
+            txn["matchStatus"] = "conflict"
+            txn["conflictReason"] = "reconciled_date_fence"
+            txn["reconciledThrough"] = fenced_through.isoformat()
+
+
 def _annotated_raw_txn(
     txn: dict,
     source_file_sha256: str,
@@ -525,6 +590,15 @@ def preview_import(
         )
         txns.append(txn)
 
+    # Reconciled-date import fence — flip on-or-before-reconcile rows to
+    # conflicts, attach stable conflictReason / reconciledThrough fields.
+    from .reconciliation_service import latest_reconciliation_dates_by_tracked_id
+    apply_reconciliation_fence(
+        txns,
+        tracked_account_id=_tracked_account_id_for_import_account(config, import_account_id),
+        latest_dates=latest_reconciliation_dates_by_tracked_id(config),
+    )
+
     new_txns = [t for t in txns if t["matchStatus"] == "new"]
     duplicate_txns = [t for t in txns if t["matchStatus"] == "duplicate"]
     conflict_txns = [t for t in txns if t["matchStatus"] == "conflict"]
@@ -563,6 +637,8 @@ def apply_import(config: AppConfig, stage: dict) -> tuple[str, int, int, list[di
             "date": t.get("date"),
             "payee": t.get("payee"),
             "sourceIdentity": t.get("sourceIdentity"),
+            "conflictReason": t.get("conflictReason"),
+            "reconciledThrough": t.get("reconciledThrough"),
         }
         for t in all_txns
         if t.get("matchStatus") == "conflict"
