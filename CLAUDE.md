@@ -20,8 +20,7 @@ When the user asks to implement, build, ship, finish, or work on a task — or r
 
 **Reserve Bash for what built-ins cannot do:** running tests, build commands, git operations (`commit`, `add`, `status`, `log`, `diff`), dev servers, installing dependencies, linters.
 
-**Never chain commands with `&&`, `||`, `;`, or shell loops (`while read`, `for`).** Issue multiple tool calls instead — independent ones can run in parallel. The hook rejects chained commands to keep the trust boundary simple.
+**Never chain commands with `&&`, `||`, or `;`. No shell loops (`while read`, `for`).** This is a flat rule with no exceptions — even "inherently coupled" steps like `mkdir -p foo && touch foo/bar` must be two tool calls. Issue separate tool calls instead; independent ones can run in parallel. The pre-tool-use hook actively denies chained Bash and reports the offending operator. Pipes (`|`) and stderr redirects (`2>/dev/null`, `2>&1`) are still fine — they don't chain commands.
 
 - **Git**: _always_ use the /git-committer skill to commit to git.
-- **Multi-step work in one directory**: if you genuinely need several commands in the same place, `cd` once at the top and then run plain commands — don't re-prefix `cd` on each call.
-- **Only chain with `&&` when the steps are inherently coupled** (e.g., `mkdir -p foo && touch foo/bar`), not as a shortcut to set a working directory.
+- **Multi-step work in one directory**: prefer `git -C <path>` or pass absolute paths. If you genuinely need several commands in the same place, `cd` once at the top of a single call and then run plain commands — don't re-prefix `cd` on each call.
