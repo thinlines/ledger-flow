@@ -7,11 +7,11 @@ It is a planning document, not a strict delivery contract.
 
 ## Current Delivery Focus
 
-Dashboard direction: the dashboard answers "Where do I stand right now?" and "What changed recently?" well, and now the third question — **"Where should I go next?"** — has a real home. The direction panel (7b, shipped) surfaces derived health signals: runway gauge with liability minimum-payment obligations, 6-month net worth sparkline, recurring vs discretionary spending split, notable signals (largest transaction, category spikes, spending streaks), and a loose-ends aggregator. The transactions screen (7d, shipped through 7d-4b) is unified into one Monarch-shaped filter-driven page with running balance, N-1 posting rule, and inline category combobox. Two polish items from 7d-4c are shipped (live totals strip, search formula syntax). Shell and copy polish (7c) is shipped, closing Feature 7: finance-first sidebar copy, hero CTA fallthrough, /rules loading state, dashboard zero-row filtering, mobile nav drawer, accounts Edit demotion, and the good-change-plus sign convention with ArrowLeftRight transfer glyph. Remaining focus: transactions polish (7d-4c remaining items: day-group daily sums, mobile bottom sheet). Keyboard shortcuts are deferred until a proper design pass is greenlit. Semantic undo + toast (5e) is paused and resumes now that Feature 7 has shipped. See `DECISIONS.md` §13.
+Statement reconciliation (Feature 8) is now the active focus. Feature 7 is closed (direction panel, transactions screen rethink through 7d-4b, shell/copy polish). Feature 5 is closed: semantic undo + toast (5e) shipped in full — six undoable mutations (delete, recategorize, unmatch, manual-entry-create, notes-update, status-toggle), the 8s toast on the five destructive ones (status-toggle stays toast-less by design), and a `Recent activity` sheet listing the 20 newest events with per-row Undo / Undone controls, reached via a History trigger in the desktop sidebar and mobile top bar. Feature 8 begins with 8a (backend reconcile endpoint, assertion writer, import-merge fence, failure detection); 8b modal and 8c rendering follow in sequence. See `DECISIONS.md` §13 and `plans/statement-reconciliation.md`.
 
 ### Current Status
 
-- Event-sourced undo sub-features 5a–5d are shipped: archive journal for matched manual entries, append-only event log with drift detection, git snapshot commits, and the transaction actions menu (delete, re-categorize, unmatch). Semantic undo + toast (5e) is paused until after Feature 7.
+- Event-sourced undo (Feature 5) is fully shipped: 5a–5d plus 5e. Six undoable event types (delete, recategorize, unmatch, manual-entry-create, notes-update, status-toggle), the 8s `Undo` toast (Gmail/Simplifi pattern) on the five destructive ones, and a `Recent activity` sheet listing the 20 newest events with per-row Undo / Undone controls. The sheet's History trigger lives in the desktop sidebar brand card and the mobile top bar — one click from any route. Status-toggle has no toast by design (one-click cycle reverts it) but appears in the sheet so it remains reachable for asynchronous undo.
 - Dashboard drill-down infrastructure (Feature 6) is shipped: clickable category trends and cash flow rows, cross-account activity view with date-range and category filtering, URL-param filter state. The quality and depth of those drilldowns is the gap Feature 7 closes.
 - Dashboard direction panel (7b) is shipped: runway gauge (with liability minimum-payment obligations), 6-month net worth sparkline with y-axis labels, recurring vs discretionary spending split, notable signals, and loose-ends aggregator. Runway limits spendable cash to liquid assets (checking, savings, cash) and excludes fixed assets from stale-account alerts.
 - Transactions screen rethink (7d) through 7d-4b is shipped: unified filter-driven page, running balance, N-1 posting rule, inline category combobox, detail sheet, filter bar with dialog. Two 7d-4c polish items shipped: live totals strip and search formula syntax (amount, category, date, account, status, payee field prefixes with AND-combining).
@@ -27,12 +27,12 @@ Dashboard direction: the dashboard answers "Where do I stand right now?" and "Wh
 2. ~~**Transaction clearing status**~~ — shipped.
 3. ~~**Overview dashboard facelift**~~ — shipped.
 4. ~~**Dashboard polish**~~ — shipped (4a–4d: momentum line, day-grouped activity, per-account staleness, cash flow presets).
-5. **Event-sourced undo** — trust fix. Sub-features 5a–5d shipped. 5e paused until after Feature 7.
+5. ~~**Event-sourced undo**~~ — shipped (5a–5e). Trust fix complete.
    - ~~**5a. Archive journal for matched manual entries**~~ — shipped.
    - ~~**5b. Event log foundation**~~ — shipped.
    - ~~**5c. Git snapshot commits**~~ — shipped.
    - ~~**5d. Transaction actions menu**~~ — shipped.
-   - **5e. Semantic undo + toast** — paused. Resumes after Feature 7.
+   - ~~**5e. Semantic undo + toast**~~ — shipped. Endpoint `POST /api/events/undo/{event_id}` walks the log, dispatches on event type, checks per-file hash drift, applies the compensating action, and writes a compensating event. Six handlers: `transaction.deleted.v1`, `transaction.recategorized.v1`, `transaction.status_toggled.v1`, `manual_entry.created.v1`, `transaction.unmatched.v1`, `transaction.notes_updated.v1`. Toast UI (`UndoToast.svelte` + `undo-toast.ts`) shows after delete, recategorize, unmatch, manual-entry-create, and notes-update with 8s auto-dismiss; status-toggle has no toast by design. `GET /api/events` returns the 20 newest events with `undoable` and `compensated` flags. `RecentActivitySheet.svelte` (right-side `bits-ui` Sheet) lists them with per-row Undo / Undone, reachable via a History trigger in the desktop sidebar and mobile top bar.
 6. ~~**Dashboard drill-down and activity view**~~ — shipped. Drill-through links, cross-account activity view, and URL-param filters are live. Quality and depth addressed by Feature 7.
 7. **Dashboard insight loop and financial direction** — current focus. Four sub-features:
    - ~~**7a. Activity view explanation and hierarchy**~~ — shipped. Activity endpoint returns a `summary` block with prior-period and 6-month rolling baselines; the activity view leads with a context-aware hero and an explanation header; rows promote category to a leading pill and truncate raw bank payees.
@@ -42,14 +42,13 @@ Dashboard direction: the dashboard answers "Where do I stand right now?" and "Wh
      - **7d-4c. Polish** — two items shipped (~~live totals strip~~, ~~search formula syntax~~). Remaining: day-group daily sums, mobile bottom sheet. Keyboard shortcuts deferred until a design pass is greenlit.
    - ~~**7b. Dashboard direction panel and health signals**~~ — shipped. "Where should I go next?" section with runway gauge (including liability minimum-payment obligations), 6-month net worth sparkline with y-axis labels, recurring vs discretionary spending split, notable signals, and loose-ends aggregator. Runway scoped to liquid assets; fixed assets excluded from stale-account alerts.
    - ~~**7c. Shell and copy polish**~~ — shipped. Finance-first sidebar copy, hero CTA fallthrough, /rules loading state, dashboard zero-row filtering, mobile nav drawer, accounts Edit demotion, and good-change-plus sign convention with ArrowLeftRight transfer glyph. Closes Feature 7.
-8. **Semantic undo + toast (5e)** — next up. Feature 7 closed 2026-04-20.
-9. **Statement reconciliation (Feature 8)** — pulled forward from Deferred. Camp 1 (Quicken/YNAB-style explicit reconciliation) over a journal-native balance-assertion substrate. See [`plans/statement-reconciliation.md`](plans/statement-reconciliation.md). MVP sub-features:
+8. **Statement reconciliation (Feature 8)** — current focus. Pulled forward from Deferred. Camp 1 (Quicken/YNAB-style explicit reconciliation) over a journal-native balance-assertion substrate. See [`plans/statement-reconciliation.md`](plans/statement-reconciliation.md). MVP sub-features:
    - **8a. Backend** — reconcile endpoint, assertion writer, import-merge fence for reconciled dates, assertion-failure detection.
    - **8b. Reconciliation modal on `/accounts`** — period + closing balance, ticked transactions, live diff, finish.
    - **8c. Assertion rendering + failure surfacing** — subtle row style in transactions list; failure state on account card and loose-ends aggregator; translated error copy.
 
    Phased follow-ups (each independently shippable, sequenced after MVP): **8d** statement PDF attachment, **8e** reconciliation history view on the account page, **8f** subset-sum "find the difference" solver, **8g** adjustment-transaction button, **8h** confirmation modal for edits/deletes of pre-reconciliation transactions.
-10. **Transaction editing** — deferred. See Deferred for Now.
+9. **Transaction editing** — deferred. See Deferred for Now.
 
 ### Feature 1: Manual Entry + Import Matching ✓
 
@@ -83,13 +82,19 @@ Shipped. Periodic workspace snapshots on shutdown and stale startup (>24h). Mana
 
 Shipped. Three-dot overflow menu on register rows with delete, re-categorize, and unmatch actions. Each action emits a structured event to the event log following the established mutation pattern (drift check, backup, modify, emit). See git history for implementation details.
 
-### Feature 5e: Semantic Undo + Toast
+### Feature 5e: Semantic Undo + Toast ✓
 
-**Paused until after Feature 7.** Endpoint `POST /api/events/undo/<event_id>` walks the log backward, dispatches on forward-event type to compute the inverse, checks `hash_after` against current state per-transaction, applies the compensating action for unchanged transactions, skips drifted ones, and returns a partial-undo report. Writes a new compensating event.
+Shipped. Endpoint `POST /api/events/undo/{event_id}` dispatches on forward-event type, verifies per-file hash drift, applies the compensating action, and writes a `<event_type>.compensated.v1` event linked back via `compensates`. Idempotent — re-running undo on the same event returns the existing compensating-event id. Linearity ("most recent → earliest") is enforced implicitly by drift detection: an older event in the same file fails drift if a newer one ran after it.
 
-UX: toast with Undo button appears after each mutating action and persists ~8 seconds (Gmail/Simplifi pattern). A lightweight operation history list provides access to older events. Undo is linear from most recent to earliest.
+Handlers: `transaction.deleted.v1`, `transaction.recategorized.v1`, `transaction.status_toggled.v1`, `manual_entry.created.v1`, `transaction.unmatched.v1`, `transaction.notes_updated.v1`. The notes handler captures `previous_notes` on each save so the prior value can be restored (or removed); pre-migration events lacking `previous_notes` fail closed. Tests in `app/backend/tests/test_undo_service.py` cover not-found, unsupported, already-compensated, drift, round-trip restore for each handler, and compensating-event emission.
+
+`GET /api/events` returns the 20 newest events with `undoable` (event type is in the handler dispatch table) and `compensated` (later event has `compensates == this.id`) flags. The compensation lookup is bounded by the same window since any compensator must follow its forward in the log.
+
+UX: `UndoToast.svelte` shows after delete, recategorize, unmatch, manual-entry-create, and notes-update with 8s auto-dismiss (Gmail/Simplifi pattern), `Undoing…` → `Restored` confirmation, and an error state. Status-toggle has no toast by design — the status pill cycles in one click, so a toast would be unwelcome noise. `RecentActivitySheet.svelte` (right-side `bits-ui` Sheet) lists the 20 newest events with per-row Undo when `undoable && !compensated`, muted `Undone` when compensated, and nothing for non-undoable rows. Inline error on failure, refetch on open and after every successful undo, `ALREADY_COMPENSATED` treated as success-equivalent so concurrent undos collapse cleanly. The History trigger (lucide `History` icon) lives in the desktop sidebar brand card and the mobile top bar — one click from any route. Drift / failed errors surface the backend `message` instead of the JSON envelope.
 
 Depends on 5b (event log) and 5d (coherent per-transaction compensating semantics).
+
+The "partial-undo report" language in the original 5e blurb is N/A for the current handler set — every handler mutates exactly one transaction, so any drift fails the whole undo. If a future handler touches multiple transactions in a single event, partial-undo becomes relevant.
 
 ### Feature 6: Dashboard Drill-Down and Activity View ✓
 
