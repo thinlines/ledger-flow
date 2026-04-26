@@ -429,7 +429,7 @@
   </section>
 {/if}
 
-<TransactionDetailSheet row={selectedRow} {baseCurrency} accounts={allAccounts} accountKind={selectedRow ? rowAccountKind(selectedRow) : null} {actionError} onDelete={handleSheetDelete} onResetCategory={handleSheetResetCat} onRecategorize={handleSheetRecat} onUnmatch={handleSheetUnmatch} onClose={() => (selectedRow = null)} />
+<TransactionDetailSheet row={selectedRow} {baseCurrency} accounts={allAccounts} accountKind={selectedRow ? rowAccountKind(selectedRow) : null} {actionError} onDelete={handleSheetDelete} onResetCategory={handleSheetResetCat} onRecategorize={handleSheetRecat} onUnmatch={handleSheetUnmatch} onClose={() => (selectedRow = null)} reload={loadData} />
 <ManualResolutionDialog bind:entry={manualResolutionEntry} bind:baseCurrency onResolved={handleResolved} />
 <TransactionsFilterDialog bind:open={filterDialogOpen} {filters} {trackedAccounts} {allAccounts} onApply={handleFilterApply} onClose={() => (filterDialogOpen = false)} />
 

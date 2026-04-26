@@ -1,5 +1,4 @@
 import { writable, get } from 'svelte/store';
-import { apiPost } from '$lib/api';
 
 export type ToastStatus = 'idle' | 'undoing' | 'restored' | 'error';
 
@@ -43,6 +42,47 @@ export function dismissUndoToast() {
   refreshCallback = null;
 }
 
+export type UndoCallResult =
+  | { kind: 'success' }
+  | { kind: 'already_compensated' }
+  | { kind: 'error'; message: string };
+
+/** Invoke `POST /api/events/undo/{id}` and translate the response into a
+ *  small, UI-friendly union. Shared between the toast and the history sheet
+ *  so neither has to know the wire format. */
+export async function callUndoApi(eventId: string): Promise<UndoCallResult> {
+  let res: Response;
+  try {
+    res = await fetch(`/api/events/undo/${eventId}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{}'
+    });
+  } catch (e) {
+    return { kind: 'error', message: e instanceof Error ? e.message : 'Network error' };
+  }
+
+  let body: unknown = null;
+  try {
+    body = await res.json();
+  } catch {
+    /* leave body null */
+  }
+
+  if (res.ok) {
+    const outcome = (body as { outcome?: string } | null)?.outcome;
+    if (outcome === 'already_compensated') return { kind: 'already_compensated' };
+    return { kind: 'success' };
+  }
+
+  const detail = (body as { detail?: unknown } | null)?.detail;
+  if (detail && typeof detail === 'object' && 'message' in detail) {
+    const m = (detail as { message?: unknown }).message;
+    if (typeof m === 'string') return { kind: 'error', message: m };
+  }
+  return { kind: 'error', message: 'Undo failed' };
+}
+
 export async function triggerUndo() {
   const current = get(undoToast);
   if (!current || current.status === 'undoing') return;
@@ -50,17 +90,13 @@ export async function triggerUndo() {
   clearTimer();
   undoToast.set({ ...current, status: 'undoing' });
 
-  try {
-    await apiPost<{ outcome: string; message: string }>(
-      `/api/events/undo/${current.eventId}`,
-      {}
-    );
+  const result = await callUndoApi(current.eventId);
+  if (result.kind === 'success' || result.kind === 'already_compensated') {
     undoToast.set({ ...current, status: 'restored', message: 'Restored' });
     autoDismiss(2000);
     if (refreshCallback) await refreshCallback();
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : 'Undo failed';
-    undoToast.set({ ...current, status: 'error', message: msg });
+  } else {
+    undoToast.set({ ...current, status: 'error', message: result.message });
     // Error toasts do not auto-dismiss.
   }
 }

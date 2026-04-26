@@ -12,6 +12,7 @@
   import { formatCurrency, goodChangeTone, shortDate, type AccountKind } from '$lib/format';
   import { canDeleteRow, canRecategorizeRow, canUnmatchRow } from '$lib/transactions/helpers';
   import { apiPost } from '$lib/api';
+  import { showUndoToast } from '$lib/undo-toast';
   import { cn } from '$lib/utils.js';
 
   export let row: TransactionRow | null = null;
@@ -24,6 +25,7 @@
   export let onRecategorize: (row: TransactionRow, newCategory: string) => void = () => {};
   export let onUnmatch: (row: TransactionRow) => void = () => {};
   export let onClose: () => void = () => {};
+  export let reload: () => Promise<void> = async () => {};
 
   let menuOpen = false;
   let categoryOpen = false;
@@ -151,12 +153,16 @@
     if (notesSaveTimer) clearTimeout(notesSaveTimer);
 
     try {
-      await apiPost<{ success: boolean }>('/api/transactions/notes', {
-        journalPath: leg.journalPath,
-        headerLine: leg.headerLine,
-        lineNumber: leg.lineNumber,
-        notes: trimmed
-      });
+      const res = await apiPost<{ success: boolean; eventId: string | null }>(
+        '/api/transactions/notes',
+        {
+          journalPath: leg.journalPath,
+          headerLine: leg.headerLine,
+          lineNumber: leg.lineNumber,
+          notes: trimmed
+        }
+      );
+      if (res.eventId) showUndoToast(res.eventId, `Notes updated on ${row.payee}`, reload);
       notesSaveState = 'saved';
       notesSaveTimer = setTimeout(() => {
         notesSaveState = 'idle';
