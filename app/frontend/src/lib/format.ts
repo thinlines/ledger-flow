@@ -91,6 +91,45 @@ export function formatStoredAmount(
   return value;
 }
 
+/**
+ * Consumer-app relative time: `Just now`, `2 minutes ago`, `1 hour ago`,
+ * `Yesterday at 3:42 PM`, `Apr 18`. Tuned for the operation-history list, not
+ * for high-precision timestamps.
+ */
+export function relativeTime(iso: string | null | undefined, now: Date = new Date()): string {
+  if (!iso) return '';
+  const then = new Date(iso);
+  if (Number.isNaN(then.getTime())) return '';
+
+  const diffMs = now.getTime() - then.getTime();
+  if (diffMs < 0) return 'Just now';
+
+  const diffMin = Math.floor(diffMs / 60_000);
+  if (diffMin < 1) return 'Just now';
+  if (diffMin === 1) return '1 minute ago';
+  if (diffMin < 60) return `${diffMin} minutes ago`;
+
+  const diffHr = Math.floor(diffMin / 60);
+  if (diffHr === 1) return '1 hour ago';
+  if (diffHr < 24) return `${diffHr} hours ago`;
+
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const startOfYesterday = new Date(startOfToday);
+  startOfYesterday.setDate(startOfToday.getDate() - 1);
+  if (then >= startOfYesterday && then < startOfToday) {
+    const time = new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' }).format(then);
+    return `Yesterday at ${time}`;
+  }
+
+  // Older than yesterday: short month-day, year if it crosses a year.
+  const sameYear = then.getFullYear() === now.getFullYear();
+  return new Intl.DateTimeFormat(undefined, {
+    month: 'short',
+    day: 'numeric',
+    ...(sameYear ? {} : { year: 'numeric' })
+  }).format(then);
+}
+
 export function shortDate(value: string | null | undefined): string {
   if (!value) return 'No activity yet';
   return new Intl.DateTimeFormat(undefined, {

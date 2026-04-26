@@ -10,8 +10,8 @@ the change in the event log.  The event log is never rewritten.
 
 from __future__ import annotations
 
-import json
 import logging
+import re
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -19,7 +19,7 @@ from typing import Callable
 
 from services.archive_service import archive_manual_entry
 from services.backup_service import backup_file
-from services.event_log_service import emit_event, hash_file, rel_path
+from services.event_log_service import emit_event, hash_file, read_events, rel_path
 from services.header_parser import TransactionStatus, parse_header, set_header_status
 from services.journal_block_service import (
     AmbiguousHeaderError,
@@ -31,6 +31,9 @@ from services.journal_query_service import TXN_START_RE
 from services.transfer_service import ACCOUNT_LINE_RE, ACCOUNT_ONLY_RE, rewrite_posting_account
 
 logger = logging.getLogger(__name__)
+
+# Mirrors the regex in main.py; duplicated to keep services free of FastAPI deps.
+_NOTES_RE = re.compile(r"^(\s*;\s*)notes:\s*(.*)$")
 
 
 # ---------------------------------------------------------------------------
@@ -68,23 +71,6 @@ HandlerFn = Callable[[Path, dict], dict[str, str]]
 # ---------------------------------------------------------------------------
 
 
-def _read_events(workspace_path: Path) -> list[dict]:
-    events_file = workspace_path / "events.jsonl"
-    if not events_file.is_file():
-        return []
-    lines = events_file.read_text(encoding="utf-8").splitlines()
-    events: list[dict] = []
-    for line in lines:
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            events.append(json.loads(line))
-        except json.JSONDecodeError:
-            logger.warning("Corrupt JSONL line — skipping")
-    return events
-
-
 def _find_event(events: list[dict], event_id: str) -> dict | None:
     for event in events:
         if event.get("id") == event_id:
@@ -110,7 +96,7 @@ def undo_event(workspace_path: Path, event_id: str) -> UndoResult:
 
     Returns an :class:`UndoResult` describing the outcome.
     """
-    events = _read_events(workspace_path)
+    events = read_events(workspace_path)
 
     # 1. Locate the forward event.
     forward = _find_event(events, event_id)
@@ -488,10 +474,71 @@ def _undo_transaction_unmatched(workspace_path: Path, event: dict) -> dict[str, 
 # Handler dispatch table
 # ---------------------------------------------------------------------------
 
+def _undo_transaction_notes_updated(workspace_path: Path, event: dict) -> dict[str, str]:
+    """Restore the previous notes value (or absence) on a transaction."""
+    payload = event.get("payload", {})
+    journal_rel = payload.get("journal_path", "")
+    header_line = payload.get("header_line", "")
+
+    if "previous_notes" not in payload:
+        # Pre-migration event: no captured prior value, no safe inverse.
+        raise UndoFailedError(
+            "Pre-existing notes event lacks previous_notes — cannot undo"
+        )
+
+    previous_notes = payload.get("previous_notes", "") or ""
+
+    if not journal_rel or not header_line:
+        raise UndoFailedError("Incomplete event payload")
+
+    journal_path = workspace_path / journal_rel
+    text = journal_path.read_text(encoding="utf-8")
+    lines = text.splitlines()
+
+    try:
+        header_idx = locate_header(lines, header_line)
+    except (HeaderNotFoundError, AmbiguousHeaderError) as exc:
+        raise UndoFailedError(str(exc)) from exc
+
+    block_start, block_end = find_transaction_block(lines, header_idx)
+
+    backup_file(journal_path, "undo")
+
+    # Find the current notes line in the block (post-forward-write state).
+    notes_idx: int | None = None
+    for i in range(block_start + 1, block_end):
+        if _NOTES_RE.match(lines[i]):
+            notes_idx = i
+            break
+
+    if previous_notes:
+        restored_line = f"    ; notes: {previous_notes}"
+        if notes_idx is not None:
+            lines[notes_idx] = restored_line
+        else:
+            # Forward write deleted the line — re-insert at the same position
+            # the forward path would have used (immediately after the header).
+            lines.insert(block_start + 1, restored_line)
+    else:
+        # No prior notes line existed — remove the one the forward write added.
+        if notes_idx is not None:
+            del lines[notes_idx]
+
+    journal_path.write_text("\n".join(lines) + ("\n" if text.endswith("\n") else ""), encoding="utf-8")
+
+    return {journal_rel: hash_file(journal_path)}
+
+
 _HANDLERS: dict[str, HandlerFn] = {
     "transaction.deleted.v1": _undo_transaction_deleted,
     "transaction.recategorized.v1": _undo_transaction_recategorized,
     "transaction.status_toggled.v1": _undo_transaction_status_toggled,
     "manual_entry.created.v1": _undo_manual_entry_created,
     "transaction.unmatched.v1": _undo_transaction_unmatched,
+    "transaction.notes_updated.v1": _undo_transaction_notes_updated,
 }
+
+
+def is_undoable_type(event_type: str) -> bool:
+    """True iff a forward event of *event_type* has a registered undo handler."""
+    return event_type in _HANDLERS

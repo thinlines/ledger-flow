@@ -4,7 +4,9 @@
 	import { Dialog as DialogPrimitive } from 'bits-ui';
 	import MenuIcon from '@lucide/svelte/icons/menu';
 	import XIcon from '@lucide/svelte/icons/x';
+	import HistoryIcon from '@lucide/svelte/icons/history';
 	import UndoToast from '$lib/components/UndoToast.svelte';
+	import RecentActivitySheet from '$lib/components/RecentActivitySheet.svelte';
 
 	const navSections = [
 		{
@@ -33,6 +35,7 @@
 	];
 
 	let drawerOpen = false;
+	let recentActivityOpen = false;
 	let lastPathname = '';
 
 	function isActive(pathname: string, href: string): boolean {
@@ -78,16 +81,29 @@
 		<span class="font-display text-base font-bold leading-tight">Ledger Flow</span>
 	</a>
 
-	<button
-		type="button"
-		class="inline-flex h-10 w-10 items-center justify-center rounded-lg border border-card-edge bg-white/70 text-brand-strong hover:bg-white/95"
-		aria-label="Open navigation"
-		aria-haspopup="dialog"
-		aria-expanded={drawerOpen}
-		on:click={() => (drawerOpen = true)}
-	>
-		<MenuIcon class="size-5" />
-	</button>
+	<div class="flex items-center gap-2">
+		<button
+			type="button"
+			class="inline-flex h-10 w-10 items-center justify-center rounded-lg border border-card-edge bg-white/70 text-brand-strong hover:bg-white/95"
+			aria-label="Recent activity"
+			aria-haspopup="dialog"
+			aria-expanded={recentActivityOpen}
+			on:click={() => (recentActivityOpen = true)}
+		>
+			<HistoryIcon class="size-5" />
+		</button>
+
+		<button
+			type="button"
+			class="inline-flex h-10 w-10 items-center justify-center rounded-lg border border-card-edge bg-white/70 text-brand-strong hover:bg-white/95"
+			aria-label="Open navigation"
+			aria-haspopup="dialog"
+			aria-expanded={drawerOpen}
+			on:click={() => (drawerOpen = true)}
+		>
+			<MenuIcon class="size-5" />
+		</button>
+	</div>
 </header>
 
 <div
@@ -104,10 +120,21 @@
 					LF
 				</span>
 
-				<div>
+				<div class="grow">
 					<h1 class="m-0 font-display text-lg leading-tight">Ledger Flow</h1>
 					<p class="mt-1 mb-0 text-sm text-muted-foreground">Finance workspace</p>
 				</div>
+
+				<button
+					type="button"
+					class="inline-flex size-9 shrink-0 items-center justify-center rounded-lg border border-card-edge bg-white/80 text-muted-foreground hover:bg-white/95 hover:text-brand-strong"
+					aria-label="Recent activity"
+					aria-haspopup="dialog"
+					aria-expanded={recentActivityOpen}
+					on:click={() => (recentActivityOpen = true)}
+				>
+					<HistoryIcon class="size-4" />
+				</button>
 			</div>
 
 			<p class="mt-4 mb-0 text-sm leading-snug text-muted-foreground">
@@ -199,6 +226,8 @@
 		</DialogPrimitive.Content>
 	</DialogPrimitive.Portal>
 </DialogPrimitive.Root>
+
+<RecentActivitySheet bind:open={recentActivityOpen} />
 
 <UndoToast />
 
