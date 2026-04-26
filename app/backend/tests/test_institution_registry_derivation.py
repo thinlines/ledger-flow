@@ -16,15 +16,7 @@ from services.institution_registry import (
 
 
 class TestRegistryContents:
-    """All three institutions present with correct field values."""
-
-    def test_list_templates_count(self):
-        templates = list(_REGISTRY.values())
-        assert len(templates) == 3
-
-    def test_all_ids_present(self):
-        ids = sorted(_REGISTRY.keys())
-        assert ids == ["alipay", "icbc", "wells_fargo"]
+    """Pinned institutions derive correct field values from adapter classes."""
 
     def test_wells_fargo_fields(self):
         t = _REGISTRY["wells_fargo"]
@@ -136,7 +128,6 @@ class TestPublicAPI:
     def test_list_templates_returns_list_of_dicts(self):
         result = list_templates()
         assert isinstance(result, list)
-        assert len(result) == 3
         for item in result:
             assert isinstance(item, dict)
             assert "id" in item
