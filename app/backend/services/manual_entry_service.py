@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import re
 from datetime import date
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal
 from pathlib import Path
 
+from .currency_parser import parse_amount
 from .import_service import (
     _merge_transaction_blocks,
     _render_journal_text,
@@ -42,11 +43,7 @@ def _load_known_accounts(accounts_dat: Path) -> set[str]:
 
 
 def _parse_amount_str(raw: str) -> Decimal:
-    cleaned = raw.strip().lstrip("$").replace(",", "")
-    try:
-        return Decimal(cleaned)
-    except InvalidOperation as e:
-        raise ValueError(f"Invalid amount: {raw}") from e
+    return parse_amount(raw)
 
 
 def _format_currency_amount(amount: Decimal, currency: str) -> str:

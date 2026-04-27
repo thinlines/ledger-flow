@@ -24,6 +24,7 @@ from pathlib import Path
 from uuid import uuid7
 
 from .config_service import AppConfig
+from .currency_parser import parse_amount
 from .journal_query_service import TXN_START_RE
 from .ledger_runner import CommandError, run_cmd
 from .manual_entry_service import _format_currency_amount
@@ -92,16 +93,14 @@ class AssertionFailure:
 def parse_closing_balance(raw: str) -> Decimal:
     """Parse a user-supplied closing balance string into a Decimal.
 
-    Accepts the same shapes as the manual-entry currency parser: optional
-    leading ``$`` sign, comma group separators, optional minus sign.
+    Thin wrapper around :func:`services.currency_parser.parse_amount` — kept
+    for the call sites that still reference the original name and for the
+    unique error wording.
     """
-    cleaned = (raw or "").strip().lstrip("$").replace(",", "")
-    if not cleaned:
-        raise ValueError(f"Invalid closing balance: {raw!r}")
     try:
-        return Decimal(cleaned)
-    except InvalidOperation as e:
-        raise ValueError(f"Invalid closing balance: {raw!r}") from e
+        return parse_amount(raw)
+    except ValueError as exc:
+        raise ValueError(f"Invalid closing balance: {raw!r}") from exc
 
 
 # ---------------------------------------------------------------------------
