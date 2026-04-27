@@ -80,6 +80,7 @@ from services.import_profile_service import import_source_summary
 from services.institution_registry import canonical_template_id, display_name_for, list_templates
 from services.ledger_runner import CommandError, run_cmd
 from services.opening_balance_service import OPENING_BALANCES_EQUITY, opening_balance_index
+from services.reconciliation_context_service import build_reconciliation_context
 from services.reconciliation_service import (
     AssertionFailure,
     latest_reconciliation_date,
@@ -1490,6 +1491,71 @@ def accounts_reconcile(account_id: str, req: ReconcileRequest) -> dict:
             "lineNumber": write_result.line_number,
         },
         "eventId": event_id,
+    }
+
+
+@app.get("/api/accounts/{account_id}/reconciliation-context")
+def accounts_reconciliation_context(
+    account_id: str,
+    period_start: str,
+    period_end: str,
+) -> dict:
+    config = _require_workspace_config()
+
+    tracked_account_cfg = config.tracked_accounts.get(account_id)
+    if tracked_account_cfg is None:
+        raise HTTPException(status_code=404, detail=f"Tracked account not found: {account_id}")
+
+    ledger_account = str(tracked_account_cfg.get("ledger_account", "")).strip()
+    if not ledger_account:
+        raise HTTPException(status_code=400, detail="Tracked account is missing a ledger account.")
+
+    if _account_kind(ledger_account) not in {"asset", "liability"}:
+        raise HTTPException(
+            status_code=400,
+            detail="Reconciliation is only supported for asset and liability accounts.",
+        )
+
+    try:
+        start = date.fromisoformat(period_start)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid period_start: {exc}") from exc
+    try:
+        end = date.fromisoformat(period_end)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid period_end: {exc}") from exc
+    if start > end:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid period: period_start {period_start} is after period_end {period_end}",
+        )
+
+    try:
+        context = build_reconciliation_context(
+            config=config,
+            tracked_account_cfg=tracked_account_cfg,
+            period_start=start,
+            period_end=end,
+        )
+    except CommodityMismatchError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return {
+        "openingBalance": str(context.opening_balance),
+        "currency": context.currency,
+        "lastReconciliationDate": context.last_reconciliation_date.isoformat()
+            if context.last_reconciliation_date is not None
+            else None,
+        "transactions": [
+            {
+                "id": row.id,
+                "date": row.date,
+                "payee": row.payee,
+                "category": row.category,
+                "signedAmount": str(row.signed_amount),
+            }
+            for row in context.transactions
+        ],
     }
 
 
