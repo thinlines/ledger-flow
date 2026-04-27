@@ -1,5 +1,20 @@
 # Reconciliation Modal (8b) — Setup, Review, Finish
 
+**Status: COMPLETED — 2026-04-26**
+
+## Delivery Notes
+
+- QA verdict: PASS WITH FINDINGS. 659 tests pass (600 prior + 59 new across context endpoint and currency parser); `pnpm check` clean across 841 files; 28 Vitest cases for parser parity.
+- Code review verdict: SHIP. All 13 acceptance criteria mapped to real production code paths (not vacuous tests). Reviewer flagged two minor non-blocking observations (parser regex narrower than backend `Decimal()` accepts; `periodStart` initial seed is today rather than earliest journal posting on the account).
+- Findings worth follow-up:
+  1. **Setup-screen Continue gating doesn't enforce the `periodStart >= last_reconciliation_date + 1 day` floor on first open** — context fetches only on entering Review, so `minPeriodStart` is empty during Setup. The flow self-corrects (`periodStart` snaps after fetch and Reconcile only runs in Review), but a strict reading of AC #5 expected the floor enforced from Setup. Fix path: trigger an initial context fetch on modal open, or add a lighter probe for `lastReconciliationDate` alone.
+  2. **Server-side fence enforced on `period_end`, not `period_start`** — inherited from 8a (`main.py:1386-1404`). Combined with `period_start <= period_end`, the most-likely collision shapes are blocked, but a user could submit `period_start` earlier than the latest reconciliation; the assertion verifier would catch it but the journal write goes through first. Tighten in a small 8a follow-up by adding a `period_start <= existing_latest` 409 alongside the existing `period_end` checks.
+  3. **Frontend parser regex is stricter than backend `Decimal()`** — rejects `.5`, `+100`, scientific notation that backend would accept. Lower-risk than the inverse drift; documented in the plan note.
+- Spec ambiguities resolved during implementation (recorded in `plans/statement-reconciliation.md` "8b Implementation Notes"):
+  - `_resolve_tracked_account` doesn't exist; the new endpoint inlines `config.tracked_accounts.get(account_id)` + 404, matching the established pattern.
+  - The "refresh failure surfaces a toast" line in the spec lands as a fixed-position banner in this iteration because the repo's only general-purpose toast pipeline is undo-toast; a future general toast lands as a one-line swap.
+  - `parse_closing_balance` retains its custom error-message wrapper around the new shared `parse_amount` because downstream callers depend on the `Invalid closing balance: ...` wording.
+
 ## Objective
 
 A user clicks **Reconcile** on a tracked-account card in `/accounts`, enters the statement period and closing balance, ticks transactions until the difference is zero, and clicks **Reconcile** to finish. The flow calls 8a's `POST /api/accounts/{id}/reconcile`. The modal closes on success; on validation or assertion failure it stays open with a banner. No other UI lands here — assertion-row rendering, broken-status surfacing, history view, loose-ends entries, and pre-reconciliation edit confirmation are all 8c / 8e / 8h.
