@@ -5,6 +5,8 @@
   import { effectiveOpeningBalanceDate } from '$lib/account-defaults';
   import { describeBalanceTrust } from '$lib/account-trust';
   import { normalizeCurrencyCode } from '$lib/currency-format';
+  import ReconcileModal from '$lib/components/accounts/ReconcileModal.svelte';
+  import type { AccountKind } from '$lib/format';
 
   type AppState = {
     initialized: boolean;
@@ -87,6 +89,8 @@
   let baseCurrency = 'USD';
   let error = '';
   let loading = true;
+  let reconcileTarget: TrackedAccount | null = null;
+  let reconcileRefreshError = '';
   let accountQuery = '';
   let normalizedAccountQuery = '';
   let filteredTrackedAccounts: TrackedAccount[] = [];
@@ -239,6 +243,29 @@
     if (trust === 'warn') return 'attention';
     if (trust === 'ok') return 'ok';
     return 'manual';
+  }
+
+  function canReconcile(account: TrackedAccount): boolean {
+    return account.kind === 'asset' || account.kind === 'liability';
+  }
+
+  function reconcileAccountKind(account: TrackedAccount): AccountKind | null {
+    if (account.kind === 'asset') return 'asset';
+    if (account.kind === 'liability') return 'liability';
+    return null;
+  }
+
+  async function handleReconciled() {
+    reconcileRefreshError = '';
+    try {
+      await load();
+    } catch (e) {
+      reconcileRefreshError =
+        e instanceof Error
+          ? `Reconciled, but the accounts list did not refresh: ${e.message}`
+          : 'Reconciled, but the accounts list did not refresh — reload the page to see the new status.';
+      throw e;
+    }
   }
 
   function modeLabel(account: TrackedAccount): string {
@@ -656,7 +683,18 @@
                   <details class="advanced-details border-t border-card-edge pt-3.5">
                     <summary class="cursor-pointer font-bold text-brand-strong">Accounting details</summary>
                     <div class="mt-3 grid gap-2">
-                      <a class="btn w-fit" href={`/accounts/configure?accountId=${account.id}`}>Edit account</a>
+                      <div class="flex flex-wrap gap-2">
+                        <a class="btn w-fit" href={`/accounts/configure?accountId=${account.id}`}>Edit account</a>
+                        {#if canReconcile(account)}
+                          <button
+                            type="button"
+                            class="btn w-fit"
+                            on:click={() => (reconcileTarget = account)}
+                          >
+                            Reconcile
+                          </button>
+                        {/if}
+                      </div>
                       {#if account.ledgerAccount}
                         <p class="muted text-sm">Ledger account: {account.ledgerAccount}</p>
                       {/if}
@@ -677,6 +715,35 @@
       </div>
     {/if}
   </section>
+{/if}
+
+{#if reconcileRefreshError}
+  <div
+    role="alert"
+    class="fixed bottom-4 left-1/2 z-50 grid max-w-[min(36rem,calc(100vw-2rem))] -translate-x-1/2 grid-cols-[minmax(0,1fr)_auto] items-center gap-3 rounded-2xl border border-bad/30 bg-white px-4 py-3 shadow-card"
+  >
+    <p class="m-0 text-sm font-semibold text-bad">{reconcileRefreshError}</p>
+    <button
+      type="button"
+      class="cursor-pointer rounded-lg border border-card-edge bg-white px-3 py-1 text-xs font-bold text-brand-strong hover:bg-white/95"
+      on:click={() => (reconcileRefreshError = '')}
+    >
+      Dismiss
+    </button>
+  </div>
+{/if}
+
+{#if reconcileTarget}
+  <ReconcileModal
+    open={true}
+    accountId={reconcileTarget.id}
+    accountName={reconcileTarget.displayName}
+    accountKind={reconcileAccountKind(reconcileTarget)}
+    onOpenChange={(next) => {
+      if (!next) reconcileTarget = null;
+    }}
+    onReconciled={handleReconciled}
+  />
 {/if}
 
 <style>
