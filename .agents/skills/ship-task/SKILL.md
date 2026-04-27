@@ -46,7 +46,15 @@ Invoke the `senior-developer` skill in a worktree:
 - The developer reads TASK.md and all supporting docs
 - Implements following the proposed sequence
 - Runs verification checks per AGENT_RULES.md
-- Commits work on the worktree branch before returning
+- Commits work on the worktree branch before returning, **via the `/git-committer` skill** (see commit-message rules below)
+
+**Sub-agent prompt requirement:** when invoking the developer (or any sub-agent that will commit), the orchestrator's prompt MUST explicitly instruct it to:
+
+1. Invoke the `/git-committer` skill for every commit on the worktree branch — never raw `git commit`.
+2. For multi-line messages, write to a file under the worktree (e.g. `.commit-msg`) via the **Write** tool, then `git -C <worktree> commit -F .commit-msg`. Single-line subjects can use `-m "subject"` directly.
+3. Never use `$(cat <<EOF ... EOF)` or `git commit -m "subject\n\nbody"` (multi-line `-m`) — both are rejected by the project's pre-tool-use hooks and force a manual approval prompt that blocks the worktree agent.
+
+This isn't decorative — sub-agents that don't get this instruction explicitly default to multi-line `-m` and get blocked.
 
 **Gate:** The developer must report that implementation is complete and initial checks pass. If the developer reports blockers or ambiguity that requires user input, stop the pipeline and report the blocker to the user.
 
@@ -107,7 +115,7 @@ Invoke the `git-committer` skill:
 
 The pipeline is not complete until the work is on master and the worktree is released.
 
-1. **Merge into master.** From the main worktree (not the feature worktree), merge the implementation branch with `--no-ff` and a descriptive merge subject. Example: `git -C <main-repo> merge --no-ff <branch> -m "Merge branch '<branch>': <short summary>"`. Use `--no-ff` so the feature commits stay grouped under a merge commit, matching project history convention.
+1. **Merge into master.** From the main worktree (not the feature worktree), merge the implementation branch with `--no-ff` and a descriptive merge subject. Example: `git -C <main-repo> merge --no-ff <branch> -m "Merge branch '<branch>': <short summary>"`. Use `--no-ff` so the feature commits stay grouped under a merge commit, matching project history convention. Keep the `-m` value single-line and free of `` ` `` / `$(...)` so the permission system auto-approves; if you want a body, write the message via the **Write** tool and use `git merge --no-ff <branch> -F /tmp/<file>.txt`.
 2. **Stop on conflicts.** If the merge produces conflicts, abort it (`git merge --abort`) and report the conflicting files to the user. Do not attempt to auto-resolve. Conflicts mean either (a) master moved during the pipeline run, or (b) the task scope overlapped something the user changed locally — both require human judgment.
 3. **Stop if master has uncommitted changes** in files the merge would touch. Do not stash or discard the user's working tree. Report and let the user decide.
 4. **Remove the worktree.** Once the merge lands, run `git -C <main-repo> worktree remove <worktree-path>`. If the worktree was created via the Agent tool's `isolation: "worktree"`, it may be locked — `git worktree unlock <path>` first.

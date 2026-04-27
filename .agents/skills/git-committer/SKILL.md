@@ -1,6 +1,6 @@
 ---
 name: git-committer
-description: "Inspect local git changes, split them into coherent commits, and write clean conventional commit messages with short subjects and concise bodies. Use when the user asks to commit work, says `gc`, `GC`, `commit`, or `git commit`, wants help grouping changes into readable history, or wants a commit message drafted or improved."
+description: "Inspect local git changes, split them into coherent commits, and write clean conventional commit messages with short subjects and concise bodies. Use this skill before running ANY `git commit` invocation, in the main worktree or any sub-worktree, whether the user asked or an orchestrating skill (e.g. ship-task) instructed a sub-agent to commit. Triggers: user says `gc`, `GC`, `commit`, or `git commit`; an agent is about to invoke `git commit`; user wants help grouping changes into readable history or drafting/improving a commit message."
 ---
 
 # Git Committer
@@ -53,13 +53,21 @@ A pre-tool-use hook auto-approves `git -C <worktree-path>` commands that follow 
 
 #### Commit messages
 
-Do **not** use a heredoc or `$(cat <<'EOF' ...)` — the `$(` triggers the shell-operator guard.
+**Pick the path by message shape:**
 
-Instead, write the message to a file first, then commit with `-F`:
+- **Subject only** (one line, ≤50 chars, no `` ` `` or `$(...)`): `git -C <worktree-path> commit -m "subject"`. Auto-approved by the permission system.
+- **Subject + body** (anything multi-line, or any message containing backticks / `$(...)` / `>` / `<`): write the full message to a file, then commit with `-F`:
 
-1. Use the **Write** tool to create `<worktree-path>/.commit-msg` with the full commit message.
-2. Run `git -C <worktree-path> commit -F .commit-msg`.
-3. Do not clean up `.commit-msg` — the worktree is ephemeral and the file is overwritten on subsequent commits.
+  1. Use the **Write** tool to create `<worktree-path>/.commit-msg` with the full commit message.
+  2. Run `git -C <worktree-path> commit -F .commit-msg`.
+  3. Do not clean up `.commit-msg` — the worktree is ephemeral and the file is overwritten on subsequent commits.
+
+**Rejected forms (the pre-tool-use hook actively denies these — do not attempt):**
+
+- `git commit -m "$(cat <<'EOF' ... EOF)"` — heredoc-via-substitution. Obscures the message in the tool call.
+- `git commit -m "subject\n\nbody"` — multi-line `-m` value. Newlines defeat the permission auto-approve and force a manual prompt.
+
+Both rejections route you back to the `-F .commit-msg` path.
 
 #### Pipes
 
