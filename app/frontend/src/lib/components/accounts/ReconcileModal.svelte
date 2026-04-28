@@ -213,6 +213,13 @@
     }, 250);
   }
 
+  // Initial fetch on modal open so `lastReconciliationDate` is known before
+  // the user touches anything — the snap inside fetchContext then defaults
+  // periodStart to `lastReconciliationDate + 1 day`.
+  $: if (open && step === 'setup' && periodStart && periodEnd && !context && !contextLoading) {
+    void fetchContext();
+  }
+
   $: if (step === 'review') {
     // Refetch on date changes while in Review. The debounce keeps typing
     // responsive on slow journals.
