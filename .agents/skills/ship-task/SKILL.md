@@ -53,8 +53,10 @@ Invoke the `senior-developer` skill in a worktree:
 1. Invoke the `/git-committer` skill for every commit on the worktree branch — never raw `git commit`.
 2. For multi-line messages, write to a file under the worktree (e.g. `.commit-msg`) via the **Write** tool, then `git -C <worktree> commit -F .commit-msg`. Single-line subjects can use `-m "subject"` directly.
 3. Never use `$(cat <<EOF ... EOF)` or `git commit -m "subject\n\nbody"` (multi-line `-m`) — both are rejected by the project's pre-tool-use hooks and force a manual approval prompt that blocks the worktree agent.
+4. Never chain Bash commands with `&&`, `||`, `;`, or shell loops — issue separate tool calls instead. The pre-tool-use hook rejects chaining and forces a manual approval prompt.
+5. To run non-git commands in the worktree (e.g. `pnpm install`, `pnpm test`, `mise run check`), `cd <worktree>` in one Bash call and then run the plain command in a separate Bash call — the working directory persists between calls. Do **not** use arg-flag forms like `pnpm --dir <worktree> install` or `pytest --rootdir=<worktree>`; those aren't covered by the auto-approval patterns and force a manual approval prompt. Git commands are the exception — `git -C <worktree> ...` is pre-approved and preferred.
 
-This isn't decorative — sub-agents that don't get this instruction explicitly default to multi-line `-m` and get blocked.
+This isn't decorative — sub-agents that don't get these instructions explicitly default to chained commands, multi-line `-m`, or `--dir`-style flags and get blocked.
 
 **Gate:** The developer must report that implementation is complete and initial checks pass. If the developer reports blockers or ambiguity that requires user input, stop the pipeline and report the blocker to the user.
 
