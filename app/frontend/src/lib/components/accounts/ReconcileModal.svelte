@@ -186,15 +186,18 @@
     lastFetchedRange = rangeKey;
     contextLoading = true;
     contextError = '';
+    const isInitialFetch = context === null;
     try {
       const res = await apiGet<ContextResponse>(
         `/api/accounts/${encodeURIComponent(accountId)}/reconciliation-context?period_start=${periodStart}&period_end=${periodEnd}`
       );
       context = res;
-      // Snap periodStart up to the lock floor if the user hasn't already.
+      // First fetch on modal open: default periodStart to the day after
+      // the last reconciliation. Subsequent fetches only enforce the hard
+      // floor — they must not stomp on a user-picked periodStart.
       if (res.lastReconciliationDate) {
         const floor = addDays(res.lastReconciliationDate, 1);
-        if (periodStart < floor) periodStart = floor;
+        if (isInitialFetch || periodStart < floor) periodStart = floor;
       }
       // Drop tick state for rows that no longer exist on the new payload.
       const ids = new Set(res.transactions.map((row) => row.id));
