@@ -325,8 +325,8 @@ def _undo_manual_entry_created(workspace_path: Path, event: dict) -> dict[str, s
     if not date or not payee:
         raise UndoFailedError("Incomplete event payload — missing date or payee")
 
-    # Manual entries use "/" date separators in the header (see manual_entry_service).
-    date_formatted = date.replace("-", "/")
+    # Manual entries use ISO 8601 (YYYY-MM-DD) headers; see manual_entry_service.
+    date_formatted = date.replace("/", "-")
     expected_header = f"{date_formatted} {payee}"
 
     # Determine journal path from journal_refs.
