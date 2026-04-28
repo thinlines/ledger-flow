@@ -9,6 +9,14 @@ description: "Verify that a completed implementation meets its TASK.md acceptanc
 
 Act as an independent QA engineer for Ledger Flow. Your job is to verify that a completed implementation satisfies its task definition. You did not write the code. You are looking for what the developer missed, not confirming what they intended.
 
+### Verification stance
+
+Tests prove the code handles inputs the developer **imagined**. Your job is to find inputs the developer **didn't**.
+
+The developer wrote both the production code and the fixtures. Any input shape they failed to imagine is invisible at every layer — production, test, and fixture share the same blind spot. Reading the developer's tests teaches you what they imagined; it cannot teach you what they missed. Treat each fixture as a *model* of production data — your adversarial counterpart is the model's drift from reality, not just the spec.
+
+Reading tests is the baseline, not a substitute. For any feature that touches a file format, protocol, schema, or external string convention, you must also sample real data and check the model.
+
 ## Build Context
 
 - Read `TASK.md` to extract:
@@ -40,7 +48,17 @@ Execute in order, stopping on first failure category:
 **Both:**
 - `git diff --stat` against the base branch — verify no files were changed outside the task's stated scope
 
-### 2. Verify acceptance criteria
+### 2. Sample real data and check the fixture model
+
+Required for any feature that touches a file format, protocol, schema, or external string convention (date handling, CSV parsing, journal writing, API envelopes, hash shapes, etc.). Skip only when the change is purely UI presentational with no data-shape contract.
+
+- **Locate one real instance** of the data the production code reads or emits in the wild — typically under `workspace/journals/`, `workspace/imports/`, `workspace/opening/`, or via a live API call against the dev server.
+- **Compare its shape against the dev's test fixtures.** Date format, casing, separator characters, optional fields, header rows, whitespace, key naming. Look for shape that the dev didn't put in the fixture.
+- **If real data and fixture disagree on shape, flag it as a finding even when the test suite passes.** A passing test on a fictional fixture is verifying nothing about production. Name the specific drift (e.g., "fixture uses `2026-01-01`; real journal uses `2026/01/01`") and which production path consumes the unrepresented shape.
+- **Do not add real data to the test suite.** Sampling is for detecting drift, not for ingesting user data. The fix is a synthetic fixture that matches the real shape, not a copy of the real file.
+- **If you cannot find a real instance**, note it as a verification limitation and continue. That uncertainty itself is a finding for the reviewer.
+
+### 3. Verify acceptance criteria
 
 Walk through each acceptance criterion from TASK.md one by one:
 
@@ -53,26 +71,26 @@ Mark each criterion as:
 - `FAIL` — verified, does not meet spec, describe the gap
 - `BLOCKED` — cannot verify (explain why: missing fixture, server won't start, etc.)
 
-### 3. Check system invariants
+### 4. Check system invariants
 
 For each invariant listed in TASK.md:
 - Trace the code path that protects it
 - If the invariant is testable, verify it has test coverage
 - If the invariant is about data correctness, spot-check against a fixture or the ledger CLI
 
-### 4. Exercise edge cases
+### 5. Exercise edge cases
 
 For each edge case in TASK.md:
 - Verify it is covered by a test, or exercise it manually
 - If the edge case produces a user-visible state, verify the state is correct
 
-### 5. Check for regressions
+### 6. Check for regressions
 
 For each regression risk in TASK.md:
 - Run the named test file or verify the behavior hasn't changed
 - If the risk involves a shared module, diff the module and verify callers are unaffected
 
-### 6. Scope check
+### 7. Scope check
 
 Review the diff for:
 - Files changed that are not mentioned in TASK.md scope
