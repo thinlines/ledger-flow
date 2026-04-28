@@ -187,7 +187,7 @@ The transactions page (1442 lines) is the cleanest of the four — functional as
 These are valid ideas, but they are not current priorities:
 
 - Transaction editing — users can edit any transaction (imported or manual): payee, date, posting amounts, splits (add/remove/rebalance postings), and user metadata (tags, KV pairs, comments). System metadata stays hidden. Full split management from the first pass. `--strict`-style validation at the UI layer.
-- Settings interface for configurable parameters (e.g., match date window)
+- Settings interface for user-configurable parameters — match date window, journal date format, default currency, runway lookback window, etc. **Start gathering requirements.** Concrete prompts so far: 8a-fix landed ISO-only journal dates as a project-wide opinion (`LEDGER_DATE_FORMAT="%Y-%m-%d"` in the runner), but the right long-term shape is a user-controlled preference. Collect each "we hardcoded this opinion" decision as a requirement entry as future tasks make them.
 - Merchant management UI
 - Expanding the rule language beyond the current limited matching model
 - Debt-payment decomposition and richer liability servicing workflows such as principal-vs-interest splits, amortization guidance, and lender-specific debt management beyond pure transfer handling
