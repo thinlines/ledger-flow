@@ -1,213 +1,152 @@
-# Reconciliation Modal (8b) — Setup, Review, Finish
-
-**Status: COMPLETED — 2026-04-26**
-
-## Delivery Notes
-
-- QA verdict: PASS WITH FINDINGS. 659 tests pass (600 prior + 59 new across context endpoint and currency parser); `pnpm check` clean across 841 files; 28 Vitest cases for parser parity.
-- Code review verdict: SHIP. All 13 acceptance criteria mapped to real production code paths (not vacuous tests). Reviewer flagged two minor non-blocking observations (parser regex narrower than backend `Decimal()` accepts; `periodStart` initial seed is today rather than earliest journal posting on the account).
-- Findings worth follow-up:
-  1. **Setup-screen Continue gating doesn't enforce the `periodStart >= last_reconciliation_date + 1 day` floor on first open** — context fetches only on entering Review, so `minPeriodStart` is empty during Setup. The flow self-corrects (`periodStart` snaps after fetch and Reconcile only runs in Review), but a strict reading of AC #5 expected the floor enforced from Setup. Fix path: trigger an initial context fetch on modal open, or add a lighter probe for `lastReconciliationDate` alone.
-  2. **Server-side fence enforced on `period_end`, not `period_start`** — inherited from 8a (`main.py:1386-1404`). Combined with `period_start <= period_end`, the most-likely collision shapes are blocked, but a user could submit `period_start` earlier than the latest reconciliation; the assertion verifier would catch it but the journal write goes through first. Tighten in a small 8a follow-up by adding a `period_start <= existing_latest` 409 alongside the existing `period_end` checks.
-  3. **Frontend parser regex is stricter than backend `Decimal()`** — rejects `.5`, `+100`, scientific notation that backend would accept. Lower-risk than the inverse drift; documented in the plan note.
-- Spec ambiguities resolved during implementation (recorded in `plans/statement-reconciliation.md` "8b Implementation Notes"):
-  - `_resolve_tracked_account` doesn't exist; the new endpoint inlines `config.tracked_accounts.get(account_id)` + 404, matching the established pattern.
-  - The "refresh failure surfaces a toast" line in the spec lands as a fixed-position banner in this iteration because the repo's only general-purpose toast pipeline is undo-toast; a future general toast lands as a one-line swap.
-  - `parse_closing_balance` retains its custom error-message wrapper around the new shared `parse_amount` because downstream callers depend on the `Invalid closing balance: ...` wording.
+# Date Format Standardization — ISO 8601 (`YYYY-MM-DD`) (8a-fix)
 
 ## Objective
 
-A user clicks **Reconcile** on a tracked-account card in `/accounts`, enters the statement period and closing balance, ticks transactions until the difference is zero, and clicks **Reconcile** to finish. The flow calls 8a's `POST /api/accounts/{id}/reconcile`. The modal closes on success; on validation or assertion failure it stays open with a banner. No other UI lands here — assertion-row rendering, broken-status surfacing, history view, loose-ends entries, and pre-reconciliation edit confirmation are all 8c / 8e / 8h.
+Adopt ISO 8601 (`YYYY-MM-DD`) as the project's single canonical date format across journal files, ledger CLI invocations, and any code path that string-compares journal dates. Eliminate ledger's default `YYYY/MM/DD` rendering by setting `LEDGER_DATE_FORMAT` in the runner. Migrate the existing workspace journal files to ISO. Document the choice. This unblocks 8a's `_insertion_index_for_date` logic, which assumes ISO and silently mis-inserts assertions into journals using slash dates (the bug surfaced during 8b manual testing of credit-card reconciliation: assertion landed at the top of the file rather than after `periodEnd`'s last transaction).
 
 ## Scope
 
 ### Included
 
-1. New backend endpoint `GET /api/accounts/{accountId}/reconciliation-context?period_start=YYYY-MM-DD&period_end=YYYY-MM-DD` returning the openings, transactions, and currency the modal needs in one round-trip.
-2. **Reconcile** button on each tracked-account card on `/accounts` (`app/frontend/src/routes/accounts/+page.svelte`). Placement: secondary action alongside the demoted Edit affordance under the Accounting details disclosure (per `feedback_component_patterns.md` and the 7c shell-polish convention).
-3. New component `ReconcileModal.svelte` (desktop dialog) / bottom-sheet variant (<980px) with two steps: **Setup** and **Review**.
-4. Setup step: `periodStart` (date), `periodEnd` (date), `closingBalance` (text). Defaults: `periodStart` = day after the most recent reconciliation date for this account (or earliest journal posting on the account if none); `periodEnd` = today; `closingBalance` empty. Continue is disabled until all three parse.
-5. Review step: list of transactions on the asserted account in `[periodStart, periodEnd]`, each with a checkbox. A live diff strip at the top: `Opening · $X · Ticked · $Y · Closing · $Z · Difference · $W`. **Reconcile** button is disabled until `Difference == 0`.
-6. Finish handler: `POST /api/accounts/{accountId}/reconcile` with `{periodStart, periodEnd, closingBalance, currency}`. On 200 → close modal and re-fetch the accounts list. On 422 / 409 / 400 → stay open, render the structured error in a banner.
-7. Cancel: closes the modal, no network calls.
-8. Backend currency-parser consolidation: extract a single shared helper (e.g. `app/backend/services/currency_parser.py` exposing `parse_amount(raw: str) -> Decimal`) that both `manual_entry_service._parse_amount_str` and `reconciliation_service.parse_closing_balance` call. No new behavior — same accepted shapes (optional `$`, comma group separators, optional minus, optional whitespace), same `ValueError` on reject. Existing call sites switch to the shared helper; the two old wrappers can be deleted or reduced to thin re-exports if any external test imports them.
-9. Frontend currency parser used in the modal accepts the same shapes as the shared backend helper. A shared JSON fixture (e.g. `app/backend/tests/fixtures/currency_parser_cases.json`) drives both pytest and Vitest parity tests — every input either parses identically on both sides or rejects on both sides.
-10. Backend test for the context endpoint. Vitest unit tests for the diff math and the parser parity. One Playwright-or-equivalent end-to-end test is **not** required; manual verification covers the integration path.
+1. **`LEDGER_DATE_FORMAT="%Y-%m-%d"` set in the ledger runner's environment.** Modify `app/backend/services/ledger_runner.py:run_cmd` to merge `{"LEDGER_DATE_FORMAT": "%Y-%m-%d"}` into the subprocess env (preserving the inherited environment). Every existing call site (`reconciliation_service.verify_assertion`, `reconciliation_service.reconciliation_status`, `import_service`, anywhere else `run_cmd` is invoked) inherits the setting automatically.
+2. **Journal migration script** at `Scripts/migrate_journal_dates_to_iso.py`. Scans `workspace/journals/*.journal` and `workspace/opening/*.journal` (excluding `*.bak.*` files). Replaces transaction header dates `^(\d{4})/(\d{2})/(\d{2})\s` with `^\1-\2-\3\s`. Leaves metadata comments (lines starting with `;`) untouched — those carry verbatim CSV strings from banks, not ledger-significant dates. Idempotent: re-running on an already-ISO journal is a no-op. The script writes a backup file (`<name>.iso-migration.bak.<timestamp>`) for each modified journal before mutating, matching the repo's existing backup convention.
+3. **Run the migration** against the live workspace as part of this task. The journals at `workspace/journals/2026.journal` and `workspace/opening/*.journal` end the task in ISO format. Existing `*.bak.*` files stay slash-formatted as historical record.
+4. **Audit all journal-writer code paths** for date format consistency. The known writers and helpers:
+   - `reconciliation_service.write_assertion_transaction` (already uses `period_end.isoformat()` — verify).
+   - `manual_entry_service` (manual transaction creation).
+   - `import_service` (CSV import path that writes new transactions).
+   - `transactions_create` and any other endpoint in `main.py` that appends to a journal.
+   - Any helper in `transaction_helpers.py` or `journal_query_service.py` that formats a date.
+   Each must emit `date.isoformat()` (ISO) for transaction header lines, never `strftime('%Y/%m/%d')`. Add a unit test per writer that asserts the produced header line matches `^\d{4}-\d{2}-\d{2}\s`.
+5. **`DECISIONS.md` §20** — new section codifying the standard. Title: "Journal dates are ISO 8601." Body: ledger's default `YYYY/MM/DD` is overridden via `LEDGER_DATE_FORMAT="%Y-%m-%d"` in the runner; the writer emits ISO; the migration is a one-shot pass committed alongside this task. Future writers must emit ISO. Ledger's input parser tolerates both formats by default, so reading legacy slash dates still works if a user imports a journal from elsewhere — but our writers must not produce slash output.
+6. **Regression test** at `app/backend/tests/test_journal_date_format.py`. Scans test fixtures (not user data) for compliance: any `.journal` file under `app/backend/tests/fixtures/` whose transaction headers contain `^\d{4}/\d{2}/\d{2}` triggers a failing assertion. Also asserts that `run_cmd` invocations include `LEDGER_DATE_FORMAT="%Y-%m-%d"` in their env (mock-based or via a fixture that wraps `subprocess.run`).
+7. **Update existing test fixtures** that use slash-format dates (none found in the current test suite per the 8a/8b ISO bias, but the audit confirms it).
 
 ### Explicitly Excluded
 
-- Statement PDF upload (8d).
-- Subset-sum solver — "Find the difference" button (8f).
-- Adjustment-transaction button — "Post adjustment and finish" (8g). The MVP workaround stays documented inline (cancel → post a manual transaction to `Equity:Reconciliation Discrepancies` → reopen).
-- Pre-checked locked rows for transactions in prior reconciliations. Locking `periodStart >= last_reconciliation_date + 1 day` removes the need.
-- Transactions list rendering of the new assertion row (8c).
-- Account card "Last reconciled" line and broken-status copy (8c).
-- Loose-ends entry for broken reconciliation (8c).
-- Reconciliation history view (8e).
-- Edit/delete confirmation modal for pre-reconciliation transactions (8h).
-- Multi-currency reconciliation. The endpoint already rejects with 400.
-- Reconciliation of income / expense / equity accounts. The endpoint already rejects with 400; the modal hides the **Reconcile** button on non-balance-sheet accounts.
-- Success toast. Constructive action — modal closing is the confirmation. Saved feedback `feedback_undo_toast_scope.md` reserves toasts for destructive / non-obvious reversals.
+- Restoring slash-format support in any writer. The runner's `LEDGER_DATE_FORMAT` plus the migration make slash-format an external-only concern; we never produce it.
+- Setting `LEDGER_INPUT_DATE_FORMAT`. Ledger's default parser handles both formats and we want imported third-party journals to still parse without configuration.
+- Migrating `.bak.*` backup files. They're historical records.
+- Migrating CSV metadata comments inside transactions (`; CSV: 2026/01/01,...`). Those are verbatim from the bank and not ledger-significant.
+- Any change to user-facing date display in the frontend. Frontend dates are formatted via `formatCurrency`/locale-aware helpers and don't share the ledger journal's representation.
+- Smart-date offsets, multi-currency, or any other 8c/8d/8e/8h work.
+- Reopening 8a's wider design (the assertion writer, the event log, the import fence). Those stay shipped; this task only fixes the date-format assumption.
 
 ## System Behavior
 
-### Inputs
+### Inputs / Triggers
 
-- Click **Reconcile** on a tracked-account card → opens the modal scoped to that account.
-- User edits `periodStart` / `periodEnd` / `closingBalance` in Setup; clicks **Continue** to advance to Review.
-- User toggles row checkboxes in Review; live diff updates synchronously.
-- User clicks **Reconcile** (Finish) or **Cancel**.
+- Any code path that calls `ledger` via `run_cmd` runs with `LEDGER_DATE_FORMAT="%Y-%m-%d"` in its environment.
+- Any journal-writer code path emits transaction header dates in ISO format.
+- The migration script runs once during this task's delivery to bring existing journals to ISO.
 
 ### Logic
 
-- On open, the modal calls `GET /api/accounts/{id}/reconciliation-context` with the current Setup values. Refetches when `periodStart` or `periodEnd` changes (debounce 250ms).
-- Diff math: `difference = parsed(closingBalance) - (openingBalance + sum_signed(ticked_rows, asserted_account))`.
-- Diff comparison uses string-decimal equality after parsing (no floating point). Match 8a's parser exactly: strip leading `$`, strip commas, optional minus, then `Decimal()`. Empty string is invalid.
-- **Reconcile** disabled while `difference != 0`, while a fetch is in flight, or while `closingBalance` is invalid.
-- On click → `POST /api/accounts/{accountId}/reconcile` with body matching the 8a contract.
-- On 200, the modal calls the accounts list refresh hook and closes. (8c will render the now-populated `reconciliationStatus`.)
-- On 422 (assertion failed — defense-in-depth, should be unreachable when `difference == 0`), render `message`, `expected`, `actual` from the structured response in a banner. Keep modal open. Do not auto-clear; the user re-reads inputs.
-- On 409 (existing reconciliation collision), render the server `detail` and re-enable the date inputs.
-- On 400 (validation), render the `detail` and let the user edit.
-- On 5xx or network error, render a generic banner with the underlying message; user can retry.
+- `run_cmd` builds an `env` dict by copying `os.environ` and overlaying `{"LEDGER_DATE_FORMAT": "%Y-%m-%d"}`, then passes `env=env` to `subprocess.run`. Inheriting `os.environ` preserves `PATH`, `HOME`, etc.
+- The migration script iterates target files, reads each, applies `re.sub(r'^(\d{4})/(\d{2})/(\d{2})(\s)', r'\1-\2-\3\4', text, flags=re.MULTILINE)`, writes back if changed. Tracks modifications and prints a summary.
+- The regression test fails closed: any fixture or runtime call that drifts back to slash format breaks the build.
 
 ### Outputs
 
-- New endpoint response shape:
-  ```json
-  {
-    "openingBalance": "1240.50",
-    "currency": "USD",
-    "lastReconciliationDate": "2026-03-17",
-    "transactions": [
-      {
-        "id": "abc123",
-        "date": "2026-03-22",
-        "payee": "Coffee Shop",
-        "category": "Expenses:Food:Coffee",
-        "signedAmount": "-4.75"
-      }
-    ]
-  }
-  ```
-  `signedAmount` is the asserted account's posting amount (positive when the account balance increases). Transfer rows surface only their effect on the asserted account.
-- On finish-success: account list payload is re-fetched; the existing `reconciliationStatus` field (8a) reflects the new state.
+- Migrated journals: `workspace/journals/2026.journal` and `workspace/opening/*.journal` use ISO header dates. Their `*.bak` backups created by the migration script preserve the pre-migration state.
+- `DECISIONS.md` gains §20.
+- All ledger CLI invocations from this codebase emit ISO dates in their output.
+- 8a's `_insertion_index_for_date` now functions correctly: `block_date = line[:10]` matches `target_date = period_end.isoformat()` because both are ISO.
 
 ## System Invariants
 
-- Modal cannot finish with `difference != 0`. Defense-in-depth against 8a's assertion check.
-- `periodStart >= last_reconciliation_date + 1 day` when a previous reconciliation exists. Modal locks `periodStart` to that floor; the date input refuses lower values.
-- `periodStart <= periodEnd`. Backend already validates; modal disables Continue when violated.
-- Closing-balance parser is byte-equivalent to 8a's. Vitest test asserts a shared fixture of inputs returns the same Decimal on both sides (or symmetric reject).
-- Cancel never writes. Finish writes via 8a only. No client-side journal mutation.
-- The context endpoint is read-only. It does not emit events or backup anything.
+- Every journal file written by Ledger Flow uses ISO date format on transaction headers. No exceptions.
+- `run_cmd` always sets `LEDGER_DATE_FORMAT="%Y-%m-%d"` regardless of caller. Single chokepoint, no per-call overrides.
+- Ledger's input parser still tolerates slash format (so externally-sourced slash-formatted journals can be read), but our code never produces slash output.
+- `_insertion_index_for_date` and any future date-prefix string comparison in the codebase assume ISO and require it (enforced by writer invariant + migration).
+- The migration script is idempotent: running it twice produces the same output as running it once.
 
 ## States
 
-- **Closed:** modal not mounted.
-- **Setup:** period inputs and `closingBalance` editable. **Continue** enabled when all three parse and ranges are valid.
-- **Review (loading):** fetching context. Transaction list area shows a skeleton or spinner; **Reconcile** disabled.
-- **Review (loaded):** transaction list with checkboxes, live diff strip. **Reconcile** enabled iff `difference == 0`.
-- **Review (empty period):** "No transactions on this account between `<periodStart>` and `<periodEnd>`." Diff still computable from openings + closingBalance alone. **Reconcile** enabled iff `closingBalance == openingBalance`.
-- **Submitting:** **Reconcile** shows pending state, all inputs and checkboxes disabled.
-- **Success:** modal closes; accounts list refreshes.
-- **Error:** modal stays open, banner shows the structured error or fallback copy. User can edit and retry.
+- **Pre-migration:** journals contain slash-formatted headers; `_insertion_index_for_date` mis-inserts assertions; `LEDGER_DATE_FORMAT` unset; ledger renders `2026/01/18` in error messages.
+- **Post-migration:** journals are ISO-formatted; `LEDGER_DATE_FORMAT="%Y-%m-%d"` set in the runner env; ledger renders `2026-01-18` in error messages; the writer's matching logic works.
+- **Mid-migration (transient):** the migration script's atomicity is per-file. If interrupted mid-run, some journals are migrated and some are not. Either state is internally consistent (each file is well-formed); a re-run completes the rest.
 
 ## Edge Cases
 
-- **First reconciliation for an account.** `lastReconciliationDate` is `null`. `periodStart` defaults to the earliest journal posting on the asserted account, or the account's opening-balance date, whichever exists. `openingBalance` may be `0`.
-- **Account with no transactions in the period.** Empty list message. Reconcile still possible if `closingBalance == openingBalance` (catches the "I attest nothing happened" case).
-- **`periodEnd` in the past.** Allowed; reconciling a historical statement.
-- **Closing balance with `$` and commas (`$2,500.00`).** Parser strips both and accepts. Must match 8a server-side.
-- **Negative closing balance** (liability account, e.g., credit card statement of `$1,234.56` owed represented as a negative asset balance). Parser accepts leading `-`. Must match 8a's posting-side semantics — reuse the existing convention.
-- **Transfer row in the period.** Endpoint returns the transfer with `signedAmount` reflecting only the asserted account's posting. Two sides of a tracked-to-tracked transfer collapse to one row per the existing N-1 / transfer-pair rules; the modal does not need to dedupe.
-- **Two reconciliation modals open in two browser tabs.** No client locking. Whichever finishes first wins; the second sees 409 if the date collides, otherwise its own assertion check rules.
-- **Account renamed or deleted while modal is open.** On Finish, 8a returns 404; modal banner shows the message. User cancels.
-- **Mobile viewport (<980px).** Modal renders as a bottom sheet using the same `bits-ui` Sheet primitive `RecentActivitySheet.svelte` uses, with the same right-side / bottom variant switch keyed on the existing breakpoint store.
-- **Income / expense / equity account.** **Reconcile** button is hidden on these account cards. Defense-in-depth: 8a returns 400 if it ever gets called.
+- **A journal that is already fully ISO.** Migration script is a no-op for that file (no replacements applied → no backup created → no rewrite).
+- **A journal with mixed formats** (some slash, some ISO — possible if a user hand-edited or imported partially). The script normalizes all matching transaction headers to ISO; metadata comments untouched.
+- **A backup file that looks like a live journal** (`workspace/journals/2026.journal.import.bak.20260326225645`). Excluded by the script's `.bak.` filename filter.
+- **A journal entry whose date is mid-line** (e.g., `; CSV: 2026/01/01,...,...`). Anchored regex (`^(\d{4})/...`) only matches start of line, so metadata comments are safe.
+- **`LEDGER_DATE_FORMAT` is already set in the user's shell** to a non-ISO value. Our `env` overlay overrides it for our subprocess only — the user's shell env is unaffected after the call returns.
+- **External tools called by ledger that read `LEDGER_DATE_FORMAT`.** Ledger itself respects it; price databases or other helpers might too. Setting it project-wide for our subprocess is the safe behavior.
+- **An existing test fixture journal under `app/backend/tests/fixtures/` uses slash format.** Audit + correct as part of this task; the regression test prevents future drift.
 
 ## Failure Behavior
 
-- Context fetch fails: stay in Review with a retry button. **Reconcile** disabled until the fetch succeeds (without `openingBalance` the diff math is meaningless).
-- 8a 422 (assertion failed): render translated copy plus the disclosure of `rawError` for diagnosis. Modal stays open. Journal already rolled back by 8a; no client cleanup needed.
-- 8a 409: render `detail`, re-enable date inputs, leave checkboxes intact.
-- 8a 400: render `detail`, allow edit.
-- 8a 5xx or network: generic banner with retry. Journal state on the server is whatever 8a left it — for the 500 path 8a rolled back.
-- Accounts-list refresh failure after a successful reconcile: do not block the close. Show a non-blocking refresh-error toast (one of the few uses of toast here, and only because the data desync is a trust issue).
+- Migration script encounters a malformed journal (parser error): print the file name and the offending line, skip the file, exit non-zero. Do not write a partial migration. The user can fix the journal manually and re-run.
+- `run_cmd` env overlay fails (e.g., `os.environ` raises): propagate the exception. This is a fundamental failure that should not be silently swallowed.
+- Regression test discovers slash-formatted fixtures: fails the build with a list of offending files. The dev fixes the fixtures.
+- Ledger CLI doesn't respect `LEDGER_DATE_FORMAT` for some reason (very old version): manifests as ledger emitting slash dates in error messages, which our parser would still tolerate (the parser doesn't depend on format) — so the user-facing impact is limited to the cosmetic "found $X" string format. Document the minimum supported ledger version in DECISIONS §20.
 
 ## Regression Risks
 
-- **Account card layout shift on mobile.** Adding **Reconcile** alongside Edit must not push card content off-screen at 375px. Test by visually confirming the accounts page on a narrow viewport before and after.
-- **Currency-parser drift between client and server.** If the modal accepts `$2 500,00` (European format) but 8a rejects it, **Reconcile** could be enabled when the backend will 422. Vitest fixture asserts shared inputs round-trip identically.
-- **Transfer-row signed amount.** A transfer between two tracked accounts shows up as one row in the unified transactions endpoint. The modal must use the asserted-account posting amount, not the row's display amount, or the diff math is wrong. Backend test covers this on a fixture journal containing a tracked-to-tracked transfer.
-- **Sheet primitive z-index.** Opening Reconcile while the recent-activity sheet (5e) is open must not stack incorrectly. Reuse the existing dialog mutex.
-- **Refetch after success.** If the accounts list is cached client-side (likely via load function), the cache must invalidate after a successful reconcile or the new `reconciliationStatus` won't appear until the next navigation. Use the existing `invalidate()` hook used elsewhere on /accounts after Edit.
+- **Backup files filtered incorrectly.** The migration script must not touch any `*.bak.*` file. Verify by listing the directory before and after the migration: backup files unchanged, modification timestamps unchanged.
+- **Mid-line slash-formatted dates touched accidentally.** Anchor the regex with `^` and `re.MULTILINE`. Test with a journal containing `; CSV: 2026/01/01,...` — that line must be unchanged.
+- **Subprocess env override breaks `PATH` or other inherited variables.** `env` defaults to `os.environ` when not provided; we must build a copy and overlay, not pass only `{"LEDGER_DATE_FORMAT": ...}`. Test `run_cmd` with a subprocess that prints `os.environ.get("PATH")` and verify PATH is intact.
+- **`reconciliation_service.write_assertion_transaction` already uses `isoformat()`.** Confirm explicitly during the audit; if a regression found slash output anywhere, the writer's contract is broken.
+- **Existing 8a tests passing on synthetic ISO fixtures missed this bug entirely.** That's a fixture-realism gap caught by the recent skill updates; this task fixes the *symptom*, the skill edits prevent recurrence.
+- **The migration runs on the user's live workspace.** Backup-before-write is the safety net. Verify by inspecting the backup file content matches the pre-migration state.
 
 ## Acceptance Criteria
 
-- `manual_entry_service` and `reconciliation_service` both call a single `parse_amount` from a shared currency-parser module. The two old wrapper functions either delegate or are removed; no parser code is duplicated.
-- A `currency_parser_cases.json` fixture lives under `app/backend/tests/fixtures/` and is consumed by both pytest and Vitest. Every input in the fixture has the same accept/reject outcome on both sides.
-- A **Reconcile** button is visible on every tracked-account card on `/accounts` whose ledger account starts with `Assets:` or `Liabilities:`. Hidden on income / expense / equity accounts.
-- Clicking opens a modal titled `Reconcile statement · <accountName>` with two steps.
-- Setup step shows three inputs with the documented defaults; **Continue** is disabled until all three parse and `periodStart >= last_reconciliation_date + 1 day` (when one exists).
-- Review step shows a transaction list filtered to the asserted account in `[periodStart, periodEnd]`, with checkboxes per row and a live diff strip showing Opening, Ticked, Closing, Difference. **Reconcile** is disabled while `Difference != 0` or while a fetch is in flight.
-- On **Reconcile** with `Difference == 0`, the modal POSTs to `/api/accounts/{id}/reconcile` with the documented payload and closes on 200. On 422 / 409 / 400, the modal stays open with a banner reflecting the structured error.
-- The new `GET /api/accounts/{id}/reconciliation-context` endpoint returns `openingBalance`, `currency`, `lastReconciliationDate`, and a `transactions` array with `signedAmount` reflecting the asserted account's posting (transfers included).
-- **Cancel** closes the modal without any network call.
-- Mobile viewport (<980px) renders the modal as a bottom sheet using the existing `bits-ui` Sheet primitive.
-- After a successful reconciliation, the accounts list payload is invalidated and re-fetched so the existing `reconciliationStatus` field reflects the new state.
-- Currency parser used by the modal accepts the same shapes as 8a's `parse_closing_balance`. A Vitest fixture asserts parity.
-- `pnpm check` passes; `uv run pytest -q` passes including the new context-endpoint test.
+- `app/backend/services/ledger_runner.py:run_cmd` builds an env dict from `os.environ` overlaid with `{"LEDGER_DATE_FORMAT": "%Y-%m-%d"}` and passes it via `env=` to `subprocess.run`.
+- A unit test asserts that `run_cmd` calls `subprocess.run` with `env["LEDGER_DATE_FORMAT"] == "%Y-%m-%d"` and that other inherited variables (e.g., `PATH`) are preserved.
+- `Scripts/migrate_journal_dates_to_iso.py` exists, is idempotent, processes `workspace/journals/*.journal` and `workspace/opening/*.journal` excluding `*.bak.*`, writes per-file backups before mutating, and prints a summary.
+- After running the migration, every transaction header in `workspace/journals/2026.journal` and `workspace/opening/*.journal` matches `^\d{4}-\d{2}-\d{2}\s`. Backup files remain unchanged.
+- `DECISIONS.md §20` documents the ISO standard, the env-var mechanism, and the migration.
+- `app/backend/tests/test_journal_date_format.py` scans `app/backend/tests/fixtures/**/*.journal` for slash-formatted headers and fails if any are found.
+- All journal-writer code paths emit ISO dates. A unit test per writer asserts the produced header line matches `^\d{4}-\d{2}-\d{2}\s`.
+- Existing 8a/8b reconciliation tests continue to pass.
+- Manual end-to-end probe: against the migrated workspace, opening the reconcile modal on Wells Fargo Credit Card, picking a known closing balance for an actual statement period (e.g., the $-1,491.71 case from the 8b bug report), and clicking Reconcile produces a successful reconciliation. The assertion transaction inserts after the last transaction with date `periodEnd` in `2026.journal`. Ledger verifies it. The event is emitted.
+- `pnpm check` passes (no frontend changes expected, but the shape is unchanged so this is a free check).
+- `uv run pytest -q` passes.
 
 ## Proposed Sequence
 
-1. **Currency-parser consolidation.** Extract `parse_amount` to a shared module. Switch `manual_entry_service` and `reconciliation_service` to call it. Pytest fixture (`tests/fixtures/currency_parser_cases.json`) covers the accepted/rejected shapes. All existing tests continue to pass — no behavior change. **Verifiable in isolation: 600 backend tests still green.**
-2. **Backend context endpoint.** Add `GET /api/accounts/{accountId}/reconciliation-context` to `app/backend/main.py`. Use existing helpers (`_resolve_tracked_account`, `_account_kind`, the running-balance computation from `transaction_helpers.py`, `latest_reconciliation_date` from `reconciliation_service.py`). Tests: opening balance equals the running balance at `periodStart - 1 day`; transaction list contains only postings on the asserted account; transfer rows surface the asserted-account amount; income/expense accounts return 400.
-3. **Reconcile button on the account card.** Add the affordance under the Accounting details disclosure on `app/frontend/src/routes/accounts/+page.svelte`. No-op handler. Verify mobile layout.
-4. **ReconcileModal scaffolding (Setup step).** New component under `app/frontend/src/lib/components/accounts/ReconcileModal.svelte`. Three inputs with defaults computed from the account's `lastReconciliationDate`. Continue gating. Cancel.
-5. **Review step.** Fetch context on entering Review and on date-input changes (debounced 250ms). Render transaction list with checkboxes. Live diff strip with `formatCurrency` (use the existing helper). Finish gating.
-6. **Finish wiring.** POST to 8a, error banner on non-2xx, accounts-list invalidation on 200. Surface 422 with `expected` / `actual` translated; show `rawError` behind a disclosure.
-7. **Mobile sheet variant.** Switch primitive at <980px following `RecentActivitySheet.svelte`'s pattern. Verify on a 375px viewport.
-8. **Parser parity test.** Vitest reads the same `currency_parser_cases.json` fixture and asserts the frontend parser accepts/rejects identically.
+1. **Runner env overlay.** Modify `run_cmd` to set `LEDGER_DATE_FORMAT="%Y-%m-%d"`. Add the unit test. Verify the existing 8a/8b suite still passes — ledger error messages now arrive with ISO dates, but our parser doesn't depend on format. **Verifiable in isolation.**
+2. **Writer audit.** Read every journal-write site and verify it uses `isoformat()`. Add a per-writer test that asserts the produced header is ISO. Fix any drift found. **Verifiable in isolation.**
+3. **Migration script.** Write `Scripts/migrate_journal_dates_to_iso.py`. Test it against a temp copy of one slash-formatted journal. Verify idempotence by running twice. **Verifiable in isolation.**
+4. **Run the migration on the live workspace.** Commit the script's run output (the migrated journals + the backup files it creates) so the repo state matches what the user is running locally. The dev should NOT run this against unrelated state — confirm with the user before pushing if any backup file gets generated for a file the user didn't expect.
+5. **Regression test.** Add `test_journal_date_format.py` that scans test fixtures.
+6. **`DECISIONS.md §20`** entry.
+7. **Manual end-to-end probe** with the modal: trigger the reconciliation, confirm it succeeds. This is the QA-skill-mandated real-data probe.
 
 ## Definition of Done
 
-- All 13 acceptance criteria pass.
-- `uv run pytest -q` passes (new context-endpoint test plus the existing 600).
+- All acceptance criteria pass.
+- `uv run pytest -q` passes (existing suite + new tests).
 - `pnpm check` passes.
-- Manual end-to-end on a fixture workspace: reconcile a tracked account with the correct closing balance — modal closes, accounts list shows the updated `reconciliationStatus`. With a wrong balance: 422 banner appears with translated copy. With a colliding date: 409 banner.
-- ROADMAP.md: 8b marked shipped; 8c promoted to current focus.
-- A short follow-up note appended to `plans/statement-reconciliation.md` capturing any deviations encountered (matching the 8a precedent).
-
-## UX Notes
-
-- Modal title: `Reconcile statement · <accountName>`.
-- Setup layout: three inputs in a single column, labels above. Period inputs side-by-side at desktop, stacked at mobile. Closing-balance input is the visual anchor — slightly larger / a heavier weight, since it's the typed-in value the user is attesting to.
-- Diff strip layout: horizontal row of four labeled values. Difference auto-styles: red when non-zero, green/neutral when exactly zero. Use `formatCurrency` with `signMode: 'good-change-plus'` to stay consistent with 7c.
-- **Reconcile** button label is the verb, not "Submit" or "Finish". Cancel sits secondary in the footer.
-- Transaction row in the review list: date · payee (truncated, raw bank text demoted per 7a hierarchy) · signed amount · checkbox. No category pill — the modal isn't an editing surface, it's a verifying one.
-- Empty period copy: `No transactions on this account between <date> and <date>.`
-- Banner copy on 422: `Reconciliation rejected — expected $X, found $Y.` plus a `View details` disclosure showing the raw `ledger` error verbatim (per 8a's invariant on `rawError`).
+- Migration completed on the live workspace; backup files preserved.
+- `DECISIONS.md §20` lands.
+- The 8b reconciliation flow (Wells Fargo Credit Card scenario) works end-to-end against the migrated workspace.
+- A short follow-up note appended to `plans/statement-reconciliation.md` recording that 8a's "last on its date" invariant was always ISO-dependent, that this task makes the dependency explicit, and that the bug was caught during 8b's first real-data probe.
+- ROADMAP.md gains a one-line note that 8a-fix shipped (this task) — no roadmap reordering, 8c remains the active focus.
 
 ## Out of Scope
 
 - All items under "Explicitly Excluded" above.
-- Any change to the 8a endpoint contract.
-- Any change to `_tracked_account_ui` or the dashboard balance row builder (8a already wired the read-side).
+- Any change to the assertion writer's logic itself (`_insertion_index_for_date`, `_splice_block`, etc.). The bug is environmental; the code is correct given the ISO precondition.
+- Frontend display changes.
+- Other 8-series sub-features.
 
 ## Dependencies
 
-- 8a (backend) — shipped.
-- `bits-ui` Dialog and Sheet primitives — already in use (`RecentActivitySheet.svelte`, `TransactionDetailSheet.svelte`, `ManualResolutionDialog.svelte`).
-- The accounts page shell and tracked-account card layout from 7c — shipped.
-- `formatCurrency` with `signMode: 'good-change-plus'` from 7c — shipped.
+- 8a (backend) — shipped. The writer's correctness depends on ISO journals (now enforced).
+- 8b (modal) — shipped. The modal does not depend on date format directly; it uses ISO via the API contract.
+- The `ledger` CLI must respect `LEDGER_DATE_FORMAT`. All maintained ledger versions (≥3.x) do.
 
 ## Open Questions
 
 None. Decisions inline:
 
-- **Opening balance derivation.** New context endpoint returns it via the running-balance helper at `periodStart - 1 day`. Reuses existing infrastructure; avoids the modal computing it client-side from a transaction list (which is brittle on partial pages).
-- **No success toast.** Modal closing is sufficient; matches saved feedback `feedback_undo_toast_scope.md`.
-- **`periodStart` locked to `last_reconciliation_date + 1 day`.** Avoids the "pre-checked locked rows" UI complexity in MVP. Users who genuinely want to redo an earlier period delete the prior reconciliation first (8a's 409 path is the breadcrumb).
-- **Cancel does not warn.** No network calls have been made; nothing to lose. Saved feedback `feedback_undo_toast_scope.md` extends here: no friction on trivially reversible actions.
-- **Refetch failure surfaces a toast.** One of the rare toast uses — the data desync is a trust issue and the user needs to know to reload manually.
+- **Env var, not CLI flag.** One place to set, applies to every CLI invocation. No risk of forgetting to pass `--date-format` on a new call site.
+- **Don't set `LEDGER_INPUT_DATE_FORMAT`.** Default parser handles both, and forcing strict ISO input would break user-imported third-party journals.
+- **Migration script is a one-shot, not a continuously-running migration.** The writer-side invariant (always emit ISO) prevents regression; ad-hoc external journals that arrive via import would inherit whatever format their source used, but our import path normalizes them.
+- **Backup files stay slash-formatted.** They're historical records; mutating them defeats the point.
+- **Regression test scans test fixtures, not the user's workspace.** Live workspace varies; test fixtures are committed and stable.
