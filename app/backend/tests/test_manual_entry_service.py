@@ -61,7 +61,7 @@ def test_build_manual_transaction_block_has_manual_tag() -> None:
         destination_account="Expenses:Transportation:Rides",
         tracked_ledger_account="Assets:Bank:Checking",
     )
-    assert block[0] == "2026/03/28 Uber"
+    assert block[0] == "2026-03-28 Uber"
     assert block[1] == "    ; :manual:"
     assert "Expenses:Transportation:Rides" in block[2]
     assert "$45.95" in block[2]
@@ -88,7 +88,7 @@ def test_create_manual_transaction_writes_to_journal(tmp_path: Path) -> None:
     assert result["warning"] is None
 
     content = journal.read_text(encoding="utf-8")
-    assert "2026/03/28 Coffee Shop" in content
+    assert "2026-03-28 Coffee Shop" in content
     assert "; :manual:" in content
     assert "Expenses:Food" in content
     assert "$5.00" in content

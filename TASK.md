@@ -1,5 +1,19 @@
 # Date Format Standardization — ISO 8601 (`YYYY-MM-DD`) (8a-fix)
 
+**Status: COMPLETED — 2026-04-27**
+
+## Delivery Notes
+
+- QA verdict: **PASS**. 672 tests pass; `pnpm check` clean across 841 files. Live workspace migration verified: 196 ISO transaction headers in `2026.journal`, paired `iso-migration.bak.*` preserves slash-formatted pre-migration state. CSV-comment dates (`; CSV: 2026/01/01,...`) untouched as designed.
+- Code review verdict: **SHIP**. All 11 acceptance criteria mapped to real production code. Two non-blocking observations:
+  1. Test for the migration script lives at `app/backend/tests/test_migrate_journal_dates_to_iso.py` while the script lives at `Scripts/migrate_journal_dates_to_iso.py` — defensible (single pytest harness picks it up) but a one-line breadcrumb in DECISIONS or the test file would help future readers locate it.
+  2. `_undo_manual_entry_created`'s `date.replace("/", "-")` is now defensively idempotent for any pre-fix events still sitting in real workspaces. Worth a one-line comment confirming "kept defensive for legacy events" if pre-fix `manual_entry.created.v1` events exist.
+- Surprising findings worth surfacing:
+  1. **Two latent slash emitters, not one.** TASK.md framed the writer audit as routine, but `manual_entry_service.build_manual_transaction_block` was actively producing slash headers via `replace("-", "/")`, paired with `undo_service._undo_manual_entry_created` reading the same way. Both flipped to ISO in lock-step. The 8a/8b test suite never caught this because every fixture was synthesized in ISO from Python's natural `date.isoformat()` — exactly the fixture-vs-real-data gap the new senior-developer "Format and protocol calibration" rule is meant to prevent.
+  2. **Workspace is gitignored**, so the migrated journals + their `iso-migration.bak.*` siblings live on disk locally but are not committed. The migration is recorded in the `Scripts/` script and `DECISIONS.md §20`; users of the project run the script once locally to migrate their own journals.
+  3. **Reader-tolerance fixtures intentionally retain slash format.** Tests in `test_rule_reapply_service.py`, `test_unknown_stage_resume.py`, `test_manual_transfer_resolution_service.py`, `test_archive_service.py`, and `test_manual_entry_service.py` keep slash dates because they assert the parser tolerates both formats and emits ISO out — explicitly part of System Invariant: "Ledger's input parser still tolerates slash format (so externally-sourced journals can be read)."
+- **End-to-end real-data probe (mandated by the new qa-verifier rule):** Wells Fargo Credit Card, `periodEnd=2026-01-18`, `closingBalance=$-1,491.71`. Writer landed the assertion at the correct file position (after the `2026-01-18 UBER ... $-8.00` block where the running balance reaches `-1,491.71`), `verify_assertion()` returned None (ledger strict-balance accepted), rollback yielded byte-identical `2026.journal`. The 8b-reported bug is fixed.
+
 ## Objective
 
 Adopt ISO 8601 (`YYYY-MM-DD`) as the project's single canonical date format across journal files, ledger CLI invocations, and any code path that string-compares journal dates. Eliminate ledger's default `YYYY/MM/DD` rendering by setting `LEDGER_DATE_FORMAT` in the runner. Migrate the existing workspace journal files to ISO. Document the choice. This unblocks 8a's `_insertion_index_for_date` logic, which assumes ISO and silently mis-inserts assertions into journals using slash dates (the bug surfaced during 8b manual testing of credit-card reconciliation: assertion landed at the top of the file rather than after `periodEnd`'s last transaction).

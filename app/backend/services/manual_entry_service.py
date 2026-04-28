@@ -85,7 +85,7 @@ def build_manual_transaction_block(
     tracked_ledger_account: str,
     currency: str = "USD",
 ) -> list[str]:
-    date_formatted = txn_date.replace("-", "/")
+    date_formatted = txn_date.replace("/", "-")
     amount_str = _format_currency_amount(amount, currency)
     return [
         f"{date_formatted} {payee}",
