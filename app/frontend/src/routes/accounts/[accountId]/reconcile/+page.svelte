@@ -20,18 +20,17 @@
     isValidAmount,
     parseAmount
   } from '$lib/currency-parser';
+  import {
+    offByLabel,
+    signedExpectedActualLine,
+    type ReconcileErrorDetails
+  } from './reconcile-error-copy';
   import type { PageData } from './$types';
   import type { ReconcileContextResponse } from './+page';
 
   export let data: PageData;
 
-  type ReconcileError = {
-    outcome?: string;
-    message?: string;
-    expected?: string | null;
-    actual?: string | null;
-    rawError?: string;
-  };
+  type ReconcileError = ReconcileErrorDetails;
 
   const { account, accountKind } = data;
 
@@ -191,46 +190,6 @@
     });
   }
 
-  function diffMagnitudeLabel(decimalStr: string): string {
-    const numeric = Math.abs(Number.parseFloat(decimalStr));
-    return formatCurrency(numeric, currency, { signMode: 'negative-only' });
-  }
-
-  function offByLabel(details: ReconcileError): string {
-    if (details.expected != null && details.actual != null) {
-      try {
-        const expectedDecimal = parseAmount(details.expected);
-        const actualDecimal = parseAmount(details.actual);
-        const diff = decimalSub(expectedDecimal, actualDecimal);
-        return diffMagnitudeLabel(diff);
-      } catch {
-        // fall through to message-based fallback
-      }
-    }
-    return details.message || 'Reconciliation rejected.';
-  }
-
-  function signedExpectedActualLine(details: ReconcileError): string | null {
-    if (details.expected == null || details.actual == null) return null;
-    let expectedNum: number;
-    let actualNum: number;
-    try {
-      expectedNum = Number.parseFloat(parseAmount(details.expected));
-      actualNum = Number.parseFloat(parseAmount(details.actual));
-    } catch {
-      return null;
-    }
-    const expected = formatCurrency(expectedNum, currency, {
-      signMode: 'good-change-plus',
-      accountKind
-    });
-    const actual = formatCurrency(actualNum, currency, {
-      signMode: 'good-change-plus',
-      accountKind
-    });
-    return `Your statement: ${expected} · Journal: ${actual}`;
-  }
-
   async function handleFinish() {
     if (!canFinish || !context) return;
     submitting = true;
@@ -323,9 +282,9 @@
   >
     {#if assertionFailed && bannerDetails}
       <p class="eyebrow text-bad">Reconciliation rejected</p>
-      <h3 class="m-0 font-display text-3xl text-bad">Off by {offByLabel(bannerDetails)}</h3>
-      {#if signedExpectedActualLine(bannerDetails)}
-        <p class="m-0 text-muted-foreground">{signedExpectedActualLine(bannerDetails)}</p>
+      <h3 class="m-0 font-display text-3xl text-bad">Off by {offByLabel(bannerDetails, currency)}</h3>
+      {#if signedExpectedActualLine(bannerDetails, currency, accountKind)}
+        <p class="m-0 text-muted-foreground">{signedExpectedActualLine(bannerDetails, currency, accountKind)}</p>
       {/if}
       <p class="m-0 text-sm text-muted-foreground">
         Adjust the period or ticked rows below to scan for the missing $X, then try again.
