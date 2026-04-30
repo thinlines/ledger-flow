@@ -70,7 +70,9 @@ This is fail-closed in the spirit of [DECISIONS.md §4](../DECISIONS.md): the sy
 
 ## Sub-feature breakdown
 
-### MVP
+> **Re-sequenced 2026-04-28** after user testing of 8b. The modal worked for the simple case but cramped the work. The real recurring case is duplicate transactions in the journal causing zero-diff-but-assertion-fails — neither subset-sum nor adjustment buttons resolve that. The route conversion (8c) supersedes the modal; new 8d adds an attest-anyway recourse for the duplicate case; 8e (subset-sum) pulled forward; the rest renumbered. A sibling track (Feature 9) addresses the import-side concerns the duplicates surfaced (manual merge + match-ranking fix). See `ROADMAP.md` Feature 8 entry for the up-to-date sequence.
+
+### MVP (shipped)
 
 #### 8a. Backend — reconcile endpoint, assertion writer, fence, failure detection
 
@@ -91,66 +93,66 @@ This is fail-closed in the spirit of [DECISIONS.md §4](../DECISIONS.md): the sy
 
 **No PDF, no smart-date, no adjustment posting in 8a.**
 
-#### 8b. Reconciliation modal on `/accounts`
+#### 8b. Reconciliation modal on `/accounts` (SUPERSEDED by 8c)
 
-Triggered from each account card via a "Reconcile" affordance (placement: secondary action, alongside the existing demoted Edit). Modal flow:
+Shipped as the MVP UI. Two-step `bits-ui` Dialog (Setup → Review) on every tracked balance-sheet account card. Worked for the simple "no duplicates, single statement, immediate close" case. User testing (2026-04-28) found it cramped for multi-month reconciliation work and lacking recourse when the assertion fails despite a zero ticked-diff. 8c replaces the modal with a route; 8d adds the recourse path. The modal code is removed in 8c.
 
-1. **Setup.** Period start (default: day after the most recent reconciliation, or account creation date), period end (default: today), closing balance (free text, parsed). PDF upload deferred to 8d.
-2. **Review.** Filtered list of transactions on the asserted account in `[period_start, period_end]`. Each row has a checkbox; rows already cleared by previous reconciliations are pre-checked and locked. A live difference indicator at the top: `Closing balance · $X · Ticked total · $Y · Difference · $Z`. The interaction is "tick until the difference is zero."
-3. **Finish.** Disabled until difference is zero. On click, calls 8a. On success, modal closes and the account card shows the new reconciliation status. On assertion failure (which should be impossible if the diff is zero, but fail-closed), the modal stays open with an error banner.
+### Active and queued
 
-**Escape hatches in MVP:**
-- "Cancel" closes the modal without writes.
-- If the user has an unresolvable diff and wants to finish anyway, the documented workaround is: cancel, post a manual transaction to `Equity:Reconciliation Discrepancies` covering the diff, reopen the modal. 8g replaces this with a one-click button.
+#### 8c. Reconciliation route + diff-prominent error (active)
 
-#### 8c. Assertion rendering + failure surfacing
+**Replaces 8b's modal.** The reconciliation flow becomes a dedicated route at `/accounts/:accountId/reconcile` with proper breathing room. Two entry points: the existing Reconcile button on `/accounts` cards, plus a new top-right Reconcile button on `/transactions` when the active filter is a single tracked balance-sheet account.
 
-**Transactions list (`/transactions`):**
-- Assertion transactions render as a distinct, low-key row style — single-line, muted background, with a small reconciliation glyph and copy like `Reconciled · ending Apr 17, 2026 · balance verified $2,500.00`. They do not count toward filter totals or daily sums.
-- Day groups containing a reconciliation row show it last for the day, mirroring the journal-write invariant.
+The flow is the same Setup → Review → Finish, but laid out as page panels instead of a stacked modal. The Review panel can show more rows without scroll fatigue and leaves room for diagnostics (8d, 8e) to land later.
 
-**Account card (`/accounts`):**
-- "Last reconciled: Apr 17, 2026" line below balance for accounts with at least one reconciliation. Absent if none. If `reconciliation_status.broken`, replace with the failure copy (red, prominent).
+**Diff-prominent error copy** is the other half of this task. On 422 the panel leads with `Off by $X.XX` (the magnitude of the discrepancy — what the user needs to scan transactions for) instead of expected/found. Expected/found shown as supporting context; raw ledger error behind a `View details` disclosure. The ledger-perspective wording is preserved in raw error but never the headline.
 
-**Loose-ends aggregator (dashboard):**
-- A new entry kind: "Reconciliation broken on <account> as of <date>." Drills into the account's transactions list scrolled to the broken assertion.
+The modal code (`ReconcileModal.svelte` and its mounting) is removed.
 
-**Failure copy:**
-- Translated form: `Reconciliation broken on April 17, 2026 — expected $2,500.00, found $2,487.43.`
-- Raw `ledger` error available behind a "details" disclosure for the curious or for support diagnosis.
+#### 8d. Attest-anyway recourse (zero-diff-but-assertion-fails)
+
+When the user clicks Reconcile, the ticked-diff is zero (per the modal/route's math), but ledger rejects the assertion, the route shows: `Off by $X.XX. Unticked transactions in this period total $X.XX — they're causing the mismatch.`
+
+Recourse: "Remove unticked transactions and reconcile." Lists the unticked rows with payee, date, signed amount; confirms count and amount; deletes them via the existing event-sourced delete (one event per row, individually undoable via 5e); then writes the assertion. All deletions surface in `Recent activity` as undoable.
+
+The "remove unticked" action is structurally honest: when ticked-diff is zero but the assertion fails, the unticked rows ARE the discrepancy by arithmetic. The user has already attested (by ticking) which transactions belong; the unticked rows are either duplicates, foreign charges, or never-should-have-been-imported entries. Deleting them aligns the journal with the user's mental model.
+
+A future Feature 9 (manual merge) addresses the duplicate case more elegantly — merge two transactions into one preserving both source-identity hashes — but that's a journal-edit primitive, not a reconciliation feature. Until 9b ships, deletion is the primary recourse here.
+
+#### 8e. Subset-sum diagnostic — "Find the difference" (was 8f)
+
+For the *non-zero* ticked-diff case. Pulled forward from old 8f because once 8c lands the user has the room to host diagnostics inline. Button on the route's Review panel shown when ticked-diff ≠ 0. Bounded combinatoric search (≤ 5 transactions per combination, ≤ 1 s wall-clock) over unticked rows for sums equal to the missing diff; presents top N candidates as one-click "Tick these N to close the gap."
+
+Inspired by YNAB Toolkit's Reconciliation Assistance. Cheap to build, near-magical UX.
+
+#### 8f. Assertion rendering across surfaces (was 8c)
+
+The display work the original 8c covered, now sequenced after the route lands so the route sets the visual baseline first. Three surfaces:
+
+- **Transactions list (`/transactions`):** assertion rows render as a distinct, low-key style — muted background, single line, reconciliation glyph, `Reconciled · ending <date> · balance verified $X` copy. Excluded from filter totals and daily sums.
+- **Account card (`/accounts`):** `Last reconciled: <date>` line below balance when at least one reconciliation exists. Replaced with red failure copy when `reconciliationStatus.broken`.
+- **Loose-ends aggregator (dashboard):** a new entry kind, `Reconciliation broken on <account> as of <date>`, drilling into the affected account's transactions list scrolled to the broken assertion.
+
+#### 8g. Reconciliation history (was 8e)
+
+New section on each account page: a list of past reconciliations (date, closing balance, link to the assertion row, PDF link once 8h ships). Hand-written assertions are excluded from this view (no `reconciliation_event_id` metadata) but still trigger failure detection.
 
 ### Phased follow-ups
 
-#### 8d. Statement PDF attachment
+#### 8h. Statement PDF attachment (was 8d)
 
-- Optional PDF upload at the finish step of 8b.
-- Stored at `workspace/statements/<account-slug>/statement-ending-YYYY-MM-DD.pdf`. Filename uses the user-entered statement end date (statement boundaries rarely align with month end).
-- Metadata added to the assertion transaction: `; statement_pdf: statements/wells-fargo-checking/statement-ending-2026-04-17.pdf` and `; statement_pdf_sha256: <hash>`.
-- The reconciliation row in the transactions list and the account card both expose a "View statement" link.
+Optional PDF upload at the Finish step of the route. Stored at `workspace/statements/<account-slug>/statement-ending-YYYY-MM-DD.pdf`. Metadata added to the assertion transaction: `; statement_pdf:` and `; statement_pdf_sha256:`. The assertion row in the transactions list, the account card, and the history view (8g) all expose a "View statement" link.
 
-#### 8e. Reconciliation history view
+#### 8i. Adjustment-transaction button (was 8g)
 
-- New section on each account page: "Reconciliation history" — list of past reconciliations (date, closing balance, link to the assertion row, PDF link if 8d shipped).
-- Hand-written or imported assertions are excluded from this view (no `reconciliation_event_id` metadata) but remain functional for failure detection.
+When the user has a non-zero ticked-diff they can't resolve and don't want to use 8e to hunt for it, "Post adjustment and finish" writes a single transaction debiting/crediting `Equity:Reconciliation Discrepancies` (configurable; default path), then proceeds to write the assertion. The adjustment carries `; reconciliation_adjustment_for: <event_id>` so it's discoverable.
 
-#### 8f. Subset-sum solver — "Find the difference"
+#### 8j. Confirmation modal for edits/deletes of pre-reconciliation transactions (was 8h)
 
-- Button in the 8b review step shown when difference is non-zero.
-- Bounded combinatoric search over unticked transactions for combinations whose sum equals the diff. Cap at e.g. 5 transactions per combination, 1-second wall-clock budget, return top N candidates.
-- Each candidate is presented as "Tick these N transactions to close the gap" with one-click apply.
-- Cheap to build, near-magical UX. Inspired by YNAB Toolkit's "Reconciliation Assistance."
-- Also covers the case where a manual entry is recorded as a multi-posting split but the bank line is a single row (relevant once split transactions ship; today the existing N-1 posting collapse on the transactions screen handles display, not creation).
+When the user attempts to delete or re-categorize a transaction dated on or before the most recent reconciliation, prompt:
+> *This transaction is part of a reconciliation completed on <date>. Editing it may cause the reconciliation to fail. Continue?*
 
-#### 8g. Adjustment-transaction button
-
-- Replaces the manual workaround documented in 8b. When the diff is non-zero, "Post adjustment and finish" writes a single transaction debiting/crediting `Equity:Reconciliation Discrepancies` (configurable in workspace settings, defaulting to that path), then proceeds to finish.
-- The adjustment transaction carries `; reconciliation_adjustment_for: <event_id>` metadata so it's discoverable.
-
-#### 8h. Confirmation modal for edits/deletes of pre-reconciliation transactions
-
-- When a user attempts to delete or re-categorize a transaction whose date is on or before the most recent reconciliation for the affected account, prompt:
-  > *This transaction is part of a reconciliation completed on April 17, 2026. Editing it may cause the reconciliation to fail. Continue?*
-- "Don't ask again this session" and "Don't ask again ever" toggles. The "ever" preference is persisted to `workspace/settings/workspace.toml` (or a sibling preferences file).
+"Don't ask again this session" and "Don't ask again ever" toggles. The "ever" preference is persisted to `workspace/settings/workspace.toml` once that file accepts user preferences (or a sibling file).
 
 ## Decisions to land in DECISIONS.md when 8a ships
 

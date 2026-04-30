@@ -1,166 +1,176 @@
-# Date Format Standardization — ISO 8601 (`YYYY-MM-DD`) (8a-fix)
-
-**Status: COMPLETED — 2026-04-27**
-
-## Delivery Notes
-
-- QA verdict: **PASS**. 672 tests pass; `pnpm check` clean across 841 files. Live workspace migration verified: 196 ISO transaction headers in `2026.journal`, paired `iso-migration.bak.*` preserves slash-formatted pre-migration state. CSV-comment dates (`; CSV: 2026/01/01,...`) untouched as designed.
-- Code review verdict: **SHIP**. All 11 acceptance criteria mapped to real production code. Two non-blocking observations:
-  1. Test for the migration script lives at `app/backend/tests/test_migrate_journal_dates_to_iso.py` while the script lives at `Scripts/migrate_journal_dates_to_iso.py` — defensible (single pytest harness picks it up) but a one-line breadcrumb in DECISIONS or the test file would help future readers locate it.
-  2. `_undo_manual_entry_created`'s `date.replace("/", "-")` is now defensively idempotent for any pre-fix events still sitting in real workspaces. Worth a one-line comment confirming "kept defensive for legacy events" if pre-fix `manual_entry.created.v1` events exist.
-- Surprising findings worth surfacing:
-  1. **Two latent slash emitters, not one.** TASK.md framed the writer audit as routine, but `manual_entry_service.build_manual_transaction_block` was actively producing slash headers via `replace("-", "/")`, paired with `undo_service._undo_manual_entry_created` reading the same way. Both flipped to ISO in lock-step. The 8a/8b test suite never caught this because every fixture was synthesized in ISO from Python's natural `date.isoformat()` — exactly the fixture-vs-real-data gap the new senior-developer "Format and protocol calibration" rule is meant to prevent.
-  2. **Workspace is gitignored**, so the migrated journals + their `iso-migration.bak.*` siblings live on disk locally but are not committed. The migration is recorded in the `Scripts/` script and `DECISIONS.md §20`; users of the project run the script once locally to migrate their own journals.
-  3. **Reader-tolerance fixtures intentionally retain slash format.** Tests in `test_rule_reapply_service.py`, `test_unknown_stage_resume.py`, `test_manual_transfer_resolution_service.py`, `test_archive_service.py`, and `test_manual_entry_service.py` keep slash dates because they assert the parser tolerates both formats and emits ISO out — explicitly part of System Invariant: "Ledger's input parser still tolerates slash format (so externally-sourced journals can be read)."
-- **End-to-end real-data probe (mandated by the new qa-verifier rule):** Wells Fargo Credit Card, `periodEnd=2026-01-18`, `closingBalance=$-1,491.71`. Writer landed the assertion at the correct file position (after the `2026-01-18 UBER ... $-8.00` block where the running balance reaches `-1,491.71`), `verify_assertion()` returned None (ledger strict-balance accepted), rollback yielded byte-identical `2026.journal`. The 8b-reported bug is fixed.
+# Reconciliation Route + Diff-Prominent Error (8c)
 
 ## Objective
 
-Adopt ISO 8601 (`YYYY-MM-DD`) as the project's single canonical date format across journal files, ledger CLI invocations, and any code path that string-compares journal dates. Eliminate ledger's default `YYYY/MM/DD` rendering by setting `LEDGER_DATE_FORMAT` in the runner. Migrate the existing workspace journal files to ISO. Document the choice. This unblocks 8a's `_insertion_index_for_date` logic, which assumes ISO and silently mis-inserts assertions into journals using slash dates (the bug surfaced during 8b manual testing of credit-card reconciliation: assertion landed at the top of the file rather than after `periodEnd`'s last transaction).
+Replace the 8b modal with a dedicated route at `/accounts/:accountId/reconcile`. Add a top-right Reconcile button on `/transactions` when filtered to a single tracked balance-sheet account. On assertion failure (422), the rejection panel leads with `Off by $X.XX` (the magnitude the user needs to scan transactions for) instead of expected/found. The `ReconcileModal.svelte` code is removed.
+
+This is a UI re-architecture, not a feature addition. Behavior parity with 8b is the floor; the route gives subsequent sub-features (8d attest-anyway, 8e subset-sum) somewhere to land that doesn't fight a modal's vertical budget.
 
 ## Scope
 
 ### Included
 
-1. **`LEDGER_DATE_FORMAT="%Y-%m-%d"` set in the ledger runner's environment.** Modify `app/backend/services/ledger_runner.py:run_cmd` to merge `{"LEDGER_DATE_FORMAT": "%Y-%m-%d"}` into the subprocess env (preserving the inherited environment). Every existing call site (`reconciliation_service.verify_assertion`, `reconciliation_service.reconciliation_status`, `import_service`, anywhere else `run_cmd` is invoked) inherits the setting automatically.
-2. **Journal migration script** at `Scripts/migrate_journal_dates_to_iso.py`. Scans `workspace/journals/*.journal` and `workspace/opening/*.journal` (excluding `*.bak.*` files). Replaces transaction header dates `^(\d{4})/(\d{2})/(\d{2})\s` with `^\1-\2-\3\s`. Leaves metadata comments (lines starting with `;`) untouched — those carry verbatim CSV strings from banks, not ledger-significant dates. Idempotent: re-running on an already-ISO journal is a no-op. The script writes a backup file (`<name>.iso-migration.bak.<timestamp>`) for each modified journal before mutating, matching the repo's existing backup convention.
-3. **Run the migration** against the live workspace as part of this task. The journals at `workspace/journals/2026.journal` and `workspace/opening/*.journal` end the task in ISO format. Existing `*.bak.*` files stay slash-formatted as historical record.
-4. **Audit all journal-writer code paths** for date format consistency. The known writers and helpers:
-   - `reconciliation_service.write_assertion_transaction` (already uses `period_end.isoformat()` — verify).
-   - `manual_entry_service` (manual transaction creation).
-   - `import_service` (CSV import path that writes new transactions).
-   - `transactions_create` and any other endpoint in `main.py` that appends to a journal.
-   - Any helper in `transaction_helpers.py` or `journal_query_service.py` that formats a date.
-   Each must emit `date.isoformat()` (ISO) for transaction header lines, never `strftime('%Y/%m/%d')`. Add a unit test per writer that asserts the produced header line matches `^\d{4}-\d{2}-\d{2}\s`.
-5. **`DECISIONS.md` §20** — new section codifying the standard. Title: "Journal dates are ISO 8601." Body: ledger's default `YYYY/MM/DD` is overridden via `LEDGER_DATE_FORMAT="%Y-%m-%d"` in the runner; the writer emits ISO; the migration is a one-shot pass committed alongside this task. Future writers must emit ISO. Ledger's input parser tolerates both formats by default, so reading legacy slash dates still works if a user imports a journal from elsewhere — but our writers must not produce slash output.
-6. **Regression test** at `app/backend/tests/test_journal_date_format.py`. Scans test fixtures (not user data) for compliance: any `.journal` file under `app/backend/tests/fixtures/` whose transaction headers contain `^\d{4}/\d{2}/\d{2}` triggers a failing assertion. Also asserts that `run_cmd` invocations include `LEDGER_DATE_FORMAT="%Y-%m-%d"` in their env (mock-based or via a fixture that wraps `subprocess.run`).
-7. **Update existing test fixtures** that use slash-format dates (none found in the current test suite per the 8a/8b ISO bias, but the audit confirms it).
+1. **New route `/accounts/:accountId/reconcile`** under `app/frontend/src/routes/accounts/[accountId]/reconcile/+page.svelte` (or equivalent SvelteKit shape). Two-step flow as page panels: Setup at top, Review below. The Review panel is disabled (or hidden) until Setup is valid; after Continue, Review becomes interactive.
+2. **Reconcile entry point on `/accounts`** (existing button) routes to the new page instead of opening a modal. Button position and label unchanged.
+3. **Reconcile entry point on `/transactions`** — new top-right primary-action button, visible only when the active filter resolves to a single tracked balance-sheet account. Hidden otherwise. Clicking navigates to `/accounts/:id/reconcile` with the resolved account id.
+4. **Diff-prominent error copy** on 422. The rejection panel headline is `Off by $X.XX` (absolute magnitude of `closing − actual`, rendered with `formatCurrency` and no sign). A subtitle line says `Your statement: $X · Journal: $Y` (signed, uses the existing `signMode: 'good-change-plus'` for liability accounts). A `View details` disclosure shows the raw ledger error verbatim (preserving 8a's `rawError` invariant). The 422 response shape from 8a is unchanged; only the frontend copy changes.
+5. **Modal removal** — delete `app/frontend/src/lib/components/accounts/ReconcileModal.svelte`, the import in `app/frontend/src/routes/accounts/+page.svelte`, the modal's mounting state, and any imports left dangling. The bottom-sheet variant code paths go away with it; the route is responsive on its own.
+6. **Responsive layout** — the route stacks Setup and Review vertically at `<980px` with full-width inputs and a sticky bottom Reconcile/Cancel bar. No special mobile primitive — the page IS the surface.
+7. **Manual end-to-end probe** as part of Definition of Done: reconcile a tracked account through both entry points (accounts card and transactions header) on a real workspace; trigger a 422 by entering an obviously-wrong closing balance and verify the diff-prominent error copy.
 
 ### Explicitly Excluded
 
-- Restoring slash-format support in any writer. The runner's `LEDGER_DATE_FORMAT` plus the migration make slash-format an external-only concern; we never produce it.
-- Setting `LEDGER_INPUT_DATE_FORMAT`. Ledger's default parser handles both formats and we want imported third-party journals to still parse without configuration.
-- Migrating `.bak.*` backup files. They're historical records.
-- Migrating CSV metadata comments inside transactions (`; CSV: 2026/01/01,...`). Those are verbatim from the bank and not ledger-significant.
-- Any change to user-facing date display in the frontend. Frontend dates are formatted via `formatCurrency`/locale-aware helpers and don't share the ledger journal's representation.
-- Smart-date offsets, multi-currency, or any other 8c/8d/8e/8h work.
-- Reopening 8a's wider design (the assertion writer, the event log, the import fence). Those stay shipped; this task only fixes the date-format assumption.
+- Attest-anyway recourse (8d). The 422 panel still has no "Reconcile anyway" action in this task — that's 8d.
+- Subset-sum diagnostic (8e).
+- Assertion-row rendering on `/transactions` (8f).
+- Account-card "Last reconciled" line and broken-status copy (8f).
+- Loose-ends dashboard entry (8f).
+- Reconciliation history view (8g).
+- PDF attachment (8h).
+- Adjustment-transaction button (8i).
+- Pre-reconciliation edit confirmation (8j).
+- Manual merge / match-ranking fixes (Feature 9).
+- Any backend change. The 8a endpoint contract and the `GET /api/accounts/:id/reconciliation-context` endpoint are unchanged.
 
 ## System Behavior
 
-### Inputs / Triggers
+### Inputs
 
-- Any code path that calls `ledger` via `run_cmd` runs with `LEDGER_DATE_FORMAT="%Y-%m-%d"` in its environment.
-- Any journal-writer code path emits transaction header dates in ISO format.
-- The migration script runs once during this task's delivery to bring existing journals to ISO.
+- Click Reconcile on an `/accounts` tracked-account card → navigate to `/accounts/:id/reconcile`.
+- Click Reconcile on the `/transactions` header (single-account scope) → same route, with the account id resolved from the active filter.
+- Browser direct-load of `/accounts/:id/reconcile` for a valid balance-sheet account → renders the page.
+- Direct-load for an unknown account → SvelteKit 404 page.
+- Direct-load for an income/expense/equity account → redirect to `/accounts` with a one-shot error (URL flash or page banner; pick the existing pattern).
 
 ### Logic
 
-- `run_cmd` builds an `env` dict by copying `os.environ` and overlaying `{"LEDGER_DATE_FORMAT": "%Y-%m-%d"}`, then passes `env=env` to `subprocess.run`. Inheriting `os.environ` preserves `PATH`, `HOME`, etc.
-- The migration script iterates target files, reads each, applies `re.sub(r'^(\d{4})/(\d{2})/(\d{2})(\s)', r'\1-\2-\3\4', text, flags=re.MULTILINE)`, writes back if changed. Tracks modifications and prints a summary.
-- The regression test fails closed: any fixture or runtime call that drifts back to slash format breaks the build.
+- The route's `+page.ts` load fetches the tracked-account metadata (name, ledger account, currency, kind) and the initial reconciliation context with default dates: `periodStart = lastReconciliationDate + 1 day` if known, else the earliest journal posting on the account; `periodEnd = today`. Falls back to `today/today` only when nothing is known (the existing 8b fallback).
+- Setup section: `periodStart`, `periodEnd`, `closingBalance` inputs. Same validation as 8b — the parser parity fixture and decimal-string math come over from the modal verbatim.
+- Continue (or auto-progression on Setup-valid) reveals/enables the Review section.
+- Review section: transaction list, diff strip (Opening · Ticked · Closing · Difference), Reconcile button gated on `differenceStr === '0'`.
+- Finish posts to `/api/accounts/:id/reconcile`. On 200, navigate to `/transactions?account=<id>` (the natural follow-up surface) with the accounts list invalidated. On 422/409/400, render the rejection panel inline; form remains editable.
+- 422 rejection panel: lead with `Off by $|closing − actual|` (compute on the frontend from the 422 body's `expected`/`actual` fields). Subtitle: `Your statement: <expected> · Journal: <actual>`. Disclosure: `View details` toggles `rawError` verbatim.
+- Cancel returns to the previous route (browser back) or to `/accounts` if no referrer.
 
 ### Outputs
 
-- Migrated journals: `workspace/journals/2026.journal` and `workspace/opening/*.journal` use ISO header dates. Their `*.bak` backups created by the migration script preserve the pre-migration state.
-- `DECISIONS.md` gains §20.
-- All ledger CLI invocations from this codebase emit ISO dates in their output.
-- 8a's `_insertion_index_for_date` now functions correctly: `block_date = line[:10]` matches `target_date = period_end.isoformat()` because both are ISO.
+- A new SvelteKit route renders the reconciliation surface.
+- Two new entry-point buttons (one on `/accounts` cards re-purposed; one new on `/transactions`).
+- 422 error panel uses diff-prominent copy.
+- `ReconcileModal.svelte` no longer exists in the tree.
 
 ## System Invariants
 
-- Every journal file written by Ledger Flow uses ISO date format on transaction headers. No exceptions.
-- `run_cmd` always sets `LEDGER_DATE_FORMAT="%Y-%m-%d"` regardless of caller. Single chokepoint, no per-call overrides.
-- Ledger's input parser still tolerates slash format (so externally-sourced slash-formatted journals can be read), but our code never produces slash output.
-- `_insertion_index_for_date` and any future date-prefix string comparison in the codebase assume ISO and require it (enforced by writer invariant + migration).
-- The migration script is idempotent: running it twice produces the same output as running it once.
+- The route only renders for tracked balance-sheet accounts (`kind === 'asset' || 'liability'`). Non-balance-sheet accounts redirect.
+- Client-side parser parity with the backend (the `currency_parser_cases.json` fixture) is preserved — the route imports the same `currency-parser.ts` module the modal used.
+- Cancel never writes. Finish writes only via 8a.
+- All client-side validation matches 8a's server-side ladder (404 → 400 kind → 400 currency → 400 dates → 400 balance → 409 collision).
+- Modal code is fully removed — `git grep "ReconcileModal"` returns nothing after this task.
 
 ## States
 
-- **Pre-migration:** journals contain slash-formatted headers; `_insertion_index_for_date` mis-inserts assertions; `LEDGER_DATE_FORMAT` unset; ledger renders `2026/01/18` in error messages.
-- **Post-migration:** journals are ISO-formatted; `LEDGER_DATE_FORMAT="%Y-%m-%d"` set in the runner env; ledger renders `2026-01-18` in error messages; the writer's matching logic works.
-- **Mid-migration (transient):** the migration script's atomicity is per-file. If interrupted mid-run, some journals are migrated and some are not. Either state is internally consistent (each file is well-formed); a re-run completes the rest.
+- **Setup loading:** route just loaded, fetching default-date context.
+- **Setup ready:** form interactive; Continue gated by `setupValid`.
+- **Setup valid + Review collapsed/inactive:** Continue prompts the user to advance.
+- **Review loading:** fetching context for new dates (debounced).
+- **Review ready:** transaction list visible, ticking enabled, diff strip live.
+- **Review empty:** "No transactions on this account between `<periodStart>` and `<periodEnd>`." Reconcile possible iff `closingBalance === openingBalance`.
+- **Submitting:** Reconcile button shows pending state, all inputs and checkboxes disabled.
+- **Success:** navigate to `/transactions?account=<id>`, accounts data invalidated.
+- **Error:** rejection panel inline, form editable.
 
 ## Edge Cases
 
-- **A journal that is already fully ISO.** Migration script is a no-op for that file (no replacements applied → no backup created → no rewrite).
-- **A journal with mixed formats** (some slash, some ISO — possible if a user hand-edited or imported partially). The script normalizes all matching transaction headers to ISO; metadata comments untouched.
-- **A backup file that looks like a live journal** (`workspace/journals/2026.journal.import.bak.20260326225645`). Excluded by the script's `.bak.` filename filter.
-- **A journal entry whose date is mid-line** (e.g., `; CSV: 2026/01/01,...,...`). Anchored regex (`^(\d{4})/...`) only matches start of line, so metadata comments are safe.
-- **`LEDGER_DATE_FORMAT` is already set in the user's shell** to a non-ISO value. Our `env` overlay overrides it for our subprocess only — the user's shell env is unaffected after the call returns.
-- **External tools called by ledger that read `LEDGER_DATE_FORMAT`.** Ledger itself respects it; price databases or other helpers might too. Setting it project-wide for our subprocess is the safe behavior.
-- **An existing test fixture journal under `app/backend/tests/fixtures/` uses slash format.** Audit + correct as part of this task; the regression test prevents future drift.
+- **Direct-load for unknown account.** 404.
+- **Direct-load for income/expense/equity account.** Redirect to `/accounts`.
+- **`/transactions` filter resolves to two or more tracked accounts.** Reconcile button hidden — single-account scope is the gate.
+- **`/transactions` filter is a category or untracked account.** Reconcile button hidden.
+- **Mobile viewport.** Page stacks vertically. Reconcile/Cancel anchor to a sticky footer bar.
+- **User opens two reconcile routes in two tabs for the same account.** No client locking; whichever finishes first wins, the second sees a 409.
+- **422 with no `expected`/`actual` fields** (defensive — should not happen). Fall back to the raw error message in the headline.
+- **User navigates away mid-flow via browser back.** No writes happened; nothing to clean up. Returning later starts fresh (no draft state persisted).
+- **Concurrent assertion failure where 8a rolls back the journal.** Already covered by 8a; route surfaces the structured error and lets the user try again.
 
 ## Failure Behavior
 
-- Migration script encounters a malformed journal (parser error): print the file name and the offending line, skip the file, exit non-zero. Do not write a partial migration. The user can fix the journal manually and re-run.
-- `run_cmd` env overlay fails (e.g., `os.environ` raises): propagate the exception. This is a fundamental failure that should not be silently swallowed.
-- Regression test discovers slash-formatted fixtures: fails the build with a list of offending files. The dev fixes the fixtures.
-- Ledger CLI doesn't respect `LEDGER_DATE_FORMAT` for some reason (very old version): manifests as ledger emitting slash dates in error messages, which our parser would still tolerate (the parser doesn't depend on format) — so the user-facing impact is limited to the cosmetic "found $X" string format. Document the minimum supported ledger version in DECISIONS §20.
+- **422 (assertion failed):** rejection panel with diff-prominent copy. Form editable. Journal already rolled back by 8a.
+- **409 (existing reconciliation):** rejection panel with the server `detail` and the date inputs editable.
+- **400 (validation):** rejection panel with the server `detail`.
+- **404 (account not found):** page renders a 404 state with a link back to `/accounts`. Unlikely on direct-load, possible if the user deleted the account in another tab.
+- **5xx / network:** generic error panel with retry. Form preserved.
+- **Context-fetch failure on initial load:** route falls back to a `today/today` Setup with a non-blocking warning; the user can still adjust dates and proceed (which will refetch).
 
 ## Regression Risks
 
-- **Backup files filtered incorrectly.** The migration script must not touch any `*.bak.*` file. Verify by listing the directory before and after the migration: backup files unchanged, modification timestamps unchanged.
-- **Mid-line slash-formatted dates touched accidentally.** Anchor the regex with `^` and `re.MULTILINE`. Test with a journal containing `; CSV: 2026/01/01,...` — that line must be unchanged.
-- **Subprocess env override breaks `PATH` or other inherited variables.** `env` defaults to `os.environ` when not provided; we must build a copy and overlay, not pass only `{"LEDGER_DATE_FORMAT": ...}`. Test `run_cmd` with a subprocess that prints `os.environ.get("PATH")` and verify PATH is intact.
-- **`reconciliation_service.write_assertion_transaction` already uses `isoformat()`.** Confirm explicitly during the audit; if a regression found slash output anywhere, the writer's contract is broken.
-- **Existing 8a tests passing on synthetic ISO fixtures missed this bug entirely.** That's a fixture-realism gap caught by the recent skill updates; this task fixes the *symptom*, the skill edits prevent recurrence.
-- **The migration runs on the user's live workspace.** Backup-before-write is the safety net. Verify by inspecting the backup file content matches the pre-migration state.
+- **Modal-removal incompleteness.** Stale imports of `ReconcileModal` would compile-fail under `pnpm check`; that's the primary guard. Also delete the modal's test fixtures if any (Vitest tests import the modal — port to route-level tests).
+- **Reconcile button on `/transactions` crowds the header.** The header already hosts filter chips and a totals strip from 7d-4c. Verify on a 375px viewport that the new button doesn't overflow; place behind the existing actions or in a kebab if it does.
+- **Reconcile-via-`/accounts` navigation regression.** The card layout doesn't change; only the click handler does. Verify Edit, Reconcile, and any other actions all still work.
+- **`/transactions` single-account detection.** The button is gated on the active filter resolving to one tracked balance-sheet account. The detection logic must match the existing `single-account-mode` detection used by other 7d-4 features (the totals strip activates similarly). Reuse the existing helper rather than reinventing.
+- **422 panel for a user who entered the *correct* balance.** The user's case (zero diff, assertion fails) is currently a 422 with confusing copy. After this task it's a 422 with a clear `Off by $X` headline — but no recourse. 8d adds the recourse; 8c just makes the message readable.
+- **Accounts list invalidation on success.** The modal already used `invalidate()`; the route must do the same so the (8f-rendered, future) `Last reconciled` line refreshes when it lands.
 
 ## Acceptance Criteria
 
-- `app/backend/services/ledger_runner.py:run_cmd` builds an env dict from `os.environ` overlaid with `{"LEDGER_DATE_FORMAT": "%Y-%m-%d"}` and passes it via `env=` to `subprocess.run`.
-- A unit test asserts that `run_cmd` calls `subprocess.run` with `env["LEDGER_DATE_FORMAT"] == "%Y-%m-%d"` and that other inherited variables (e.g., `PATH`) are preserved.
-- `Scripts/migrate_journal_dates_to_iso.py` exists, is idempotent, processes `workspace/journals/*.journal` and `workspace/opening/*.journal` excluding `*.bak.*`, writes per-file backups before mutating, and prints a summary.
-- After running the migration, every transaction header in `workspace/journals/2026.journal` and `workspace/opening/*.journal` matches `^\d{4}-\d{2}-\d{2}\s`. Backup files remain unchanged.
-- `DECISIONS.md §20` documents the ISO standard, the env-var mechanism, and the migration.
-- `app/backend/tests/test_journal_date_format.py` scans `app/backend/tests/fixtures/**/*.journal` for slash-formatted headers and fails if any are found.
-- All journal-writer code paths emit ISO dates. A unit test per writer asserts the produced header line matches `^\d{4}-\d{2}-\d{2}\s`.
-- Existing 8a/8b reconciliation tests continue to pass.
-- Manual end-to-end probe: against the migrated workspace, opening the reconcile modal on Wells Fargo Credit Card, picking a known closing balance for an actual statement period (e.g., the $-1,491.71 case from the 8b bug report), and clicking Reconcile produces a successful reconciliation. The assertion transaction inserts after the last transaction with date `periodEnd` in `2026.journal`. Ledger verifies it. The event is emitted.
-- `pnpm check` passes (no frontend changes expected, but the shape is unchanged so this is a free check).
-- `uv run pytest -q` passes.
+- A `/accounts/:accountId/reconcile` route exists and renders the two-step flow for valid balance-sheet accounts.
+- Direct-load with an unknown `accountId` returns a 404 page.
+- Direct-load with an income/expense/equity account redirects to `/accounts`.
+- The `/accounts` Reconcile button navigates to the new route (the modal does not open).
+- The `/transactions` page header shows a Reconcile button when the active filter resolves to a single tracked balance-sheet account; clicking it navigates to the route with the correct account id.
+- The Reconcile button on `/transactions` is hidden when the filter resolves to multiple accounts, a non-tracked account, or a non-balance-sheet account.
+- On 422, the rejection panel headline shows `Off by $X.XX` using the absolute magnitude of `closing − actual`. A subtitle line shows `Your statement: <expected> · Journal: <actual>`. A `View details` disclosure shows the raw ledger error.
+- `ReconcileModal.svelte` is deleted; `git grep "ReconcileModal"` returns no matches.
+- Mobile viewport (<980px) stacks Setup and Review vertically with a sticky footer for Reconcile/Cancel.
+- After a successful reconciliation, the route navigates to `/transactions?account=<id>` and the accounts list is invalidated.
+- `pnpm check` passes; `uv run pytest -q` passes (no backend changes expected; existing tests stay green).
 
 ## Proposed Sequence
 
-1. **Runner env overlay.** Modify `run_cmd` to set `LEDGER_DATE_FORMAT="%Y-%m-%d"`. Add the unit test. Verify the existing 8a/8b suite still passes — ledger error messages now arrive with ISO dates, but our parser doesn't depend on format. **Verifiable in isolation.**
-2. **Writer audit.** Read every journal-write site and verify it uses `isoformat()`. Add a per-writer test that asserts the produced header is ISO. Fix any drift found. **Verifiable in isolation.**
-3. **Migration script.** Write `Scripts/migrate_journal_dates_to_iso.py`. Test it against a temp copy of one slash-formatted journal. Verify idempotence by running twice. **Verifiable in isolation.**
-4. **Run the migration on the live workspace.** Commit the script's run output (the migrated journals + the backup files it creates) so the repo state matches what the user is running locally. The dev should NOT run this against unrelated state — confirm with the user before pushing if any backup file gets generated for a file the user didn't expect.
-5. **Regression test.** Add `test_journal_date_format.py` that scans test fixtures.
-6. **`DECISIONS.md §20`** entry.
-7. **Manual end-to-end probe** with the modal: trigger the reconciliation, confirm it succeeds. This is the QA-skill-mandated real-data probe.
+1. **Route shell.** Create `app/frontend/src/routes/accounts/[accountId]/reconcile/+page.ts` and `+page.svelte`. Load function fetches account metadata + default-date reconciliation context. 404 on unknown account; redirect on non-balance-sheet. **Verifiable in isolation: navigating to the URL renders the shell.**
+2. **Port Setup + Review.** Move the form sections out of `ReconcileModal.svelte` into the route. Keep the diff math, parser, and finish-handler logic identical. The bottom-sheet primitive is dropped — page layout handles responsiveness.
+3. **Re-wire `/accounts` Reconcile button.** Replace `onClick={openModal}` with `goto('/accounts/<id>/reconcile')`. Verify card layout unchanged.
+4. **Add `/transactions` Reconcile button.** Single-account-scope detection reuses the existing helper. Top-right placement matching the page header convention. Hidden otherwise.
+5. **Diff-prominent 422 panel.** Headline copy + subtitle + disclosure. Use `formatCurrency` for the magnitude and signed values.
+6. **Remove `ReconcileModal.svelte`** and clean up dangling imports.
+7. **Manual probe:** Reconcile via `/accounts` entry, reconcile via `/transactions` entry, force a 422, verify the new error copy.
 
 ## Definition of Done
 
 - All acceptance criteria pass.
-- `uv run pytest -q` passes (existing suite + new tests).
-- `pnpm check` passes.
-- Migration completed on the live workspace; backup files preserved.
-- `DECISIONS.md §20` lands.
-- The 8b reconciliation flow (Wells Fargo Credit Card scenario) works end-to-end against the migrated workspace.
-- A short follow-up note appended to `plans/statement-reconciliation.md` recording that 8a's "last on its date" invariant was always ISO-dependent, that this task makes the dependency explicit, and that the bug was caught during 8b's first real-data probe.
-- ROADMAP.md gains a one-line note that 8a-fix shipped (this task) — no roadmap reordering, 8c remains the active focus.
+- `pnpm check` passes; `uv run pytest -q` passes.
+- Manual probe completed: both entry points reconcile a tracked account end-to-end on the live workspace; an intentional wrong-balance triggers the diff-prominent 422 panel.
+- ROADMAP.md updated: 8c shipped, 8d active.
+- A short Implementation Notes block appended to `plans/statement-reconciliation.md` matching the 8a/8b/8a-fix precedent.
+
+## UX Notes
+
+- Page title: `Reconcile statement · <accountName>`.
+- Setup layout: three inputs in a single column at desktop; period inputs side-by-side at desktop, stacked at mobile. Closing balance input is the visual anchor (slightly larger / heavier weight).
+- Review layout: diff strip at the top (sticky on mobile when scrolling the transaction list), then transaction list, then a sticky footer with Reconcile (primary) and Cancel (secondary) at desktop and mobile alike.
+- The 422 panel: red-tinted background with a `text-error` headline, supporting copy in `text-muted-foreground`, the `View details` disclosure rendered with the existing disclosure styling.
+- Empty period copy: `No transactions on this account between <date> and <date>.`
+- Cancel placement: footer secondary; clicking returns via browser back.
 
 ## Out of Scope
 
 - All items under "Explicitly Excluded" above.
-- Any change to the assertion writer's logic itself (`_insertion_index_for_date`, `_splice_block`, etc.). The bug is environmental; the code is correct given the ISO precondition.
-- Frontend display changes.
-- Other 8-series sub-features.
+- Any change to 8a's endpoint contract or response shape.
+- Any change to the `GET /api/accounts/:id/reconciliation-context` endpoint.
+- Any change to the existing parser parity fixture or its consumers.
 
 ## Dependencies
 
-- 8a (backend) — shipped. The writer's correctness depends on ISO journals (now enforced).
-- 8b (modal) — shipped. The modal does not depend on date format directly; it uses ISO via the API contract.
-- The `ledger` CLI must respect `LEDGER_DATE_FORMAT`. All maintained ledger versions (≥3.x) do.
+- 8a backend, 8b modal MVP, 8a-fix ISO — all shipped.
+- SvelteKit nested-route conventions (already in use elsewhere in the app).
+- `formatCurrency` with `signMode: 'good-change-plus'` (shipped in 7c).
+- `currency-parser.ts` (shipped in 8b).
 
 ## Open Questions
 
 None. Decisions inline:
 
-- **Env var, not CLI flag.** One place to set, applies to every CLI invocation. No risk of forgetting to pass `--date-format` on a new call site.
-- **Don't set `LEDGER_INPUT_DATE_FORMAT`.** Default parser handles both, and forcing strict ISO input would break user-imported third-party journals.
-- **Migration script is a one-shot, not a continuously-running migration.** The writer-side invariant (always emit ISO) prevents regression; ad-hoc external journals that arrive via import would inherit whatever format their source used, but our import path normalizes them.
-- **Backup files stay slash-formatted.** They're historical records; mutating them defeats the point.
-- **Regression test scans test fixtures, not the user's workspace.** Live workspace varies; test fixtures are committed and stable.
+- **Route, not nested-modal.** The user's testing was explicit: the modal cramped the work. The route gives 8d/8e/8f future room.
+- **Modal code removed, not preserved as fallback.** Two parallel UIs would double maintenance for no gain. Deletion is the correct move.
+- **Diff-prominent headline uses absolute magnitude.** The user's natural action is "scan transactions for $X." A signed value (`+$10.49` vs `-$10.49`) is supporting context, not the headline. Sign appears in the subtitle's signed values.
+- **Successful reconcile navigates to `/transactions?account=<id>`.** Natural follow-up: the user just confirmed their balance, the next thing they want to see is the activity that justifies it. Closing back to `/accounts` lands them on a less-useful page.
+- **No success toast.** Modal closing was the success signal in 8b; navigating away is the route equivalent. Constructive action; matches `feedback_undo_toast_scope.md`.
+- **Reconcile button on `/transactions` hidden when not single-account.** Avoids ambiguity about which account is being reconciled. The `/accounts` cards remain the universal entry point for any tracked balance-sheet account.
