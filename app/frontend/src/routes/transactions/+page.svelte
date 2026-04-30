@@ -291,6 +291,15 @@
     {#if isSingleAccount}
       <div class="hero-side">
         <div class="flex flex-wrap gap-3">
+          {#if filteredAccountKind && selectedAccount}
+            <button
+              class="btn btn-primary"
+              type="button"
+              on:click={() => void goto(`/accounts/${selectedAccount.id}/reconcile`)}
+            >
+              Reconcile
+            </button>
+          {/if}
           <button class="btn" type="button" on:click={() => { addSuccess = ''; showAddForm = true; }}>Add transaction</button>
           <a class="text-link" href="/accounts">Back to accounts</a>
         </div>
