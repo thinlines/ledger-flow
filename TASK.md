@@ -1,5 +1,18 @@
 # Reconciliation Route + Diff-Prominent Error (8c)
 
+**Status: COMPLETED — 2026-04-28**
+
+## Delivery Notes
+
+- QA verdict: **PASS** (after one fix-loop cycle). 672 backend tests, 0 errors / 0 warnings on `pnpm check`, 48 Vitest cases (33 prior + 15 new for `reconcile-error-copy.test.ts`).
+- Review verdict: **SHIP WITH NOTES**. One defense-in-depth observation only (see below).
+- **One fix-loop cycle.** Initial QA caught a real bug: the diff-prominent 422 panel silently regressed to the legacy fallback message for any negative-balance reconciliation (liability accounts, over-asserted assets) because the shared `parseAmount` rejected the backend's `-$X,XXX.XX` shape. Fix landed in three commits: a new `reconcile-error-copy.ts` module with a `parseBackendCurrency` helper that accepts the backend's signed-currency format (without widening the strict user-input parser), `offByLabel` and `signedExpectedActualLine` extracted into the same module, and a Vitest suite (15 cases) covering the canonical bug shape directly.
+- Non-blocking observation from re-review:
+  1. The route's `hasSnappedPeriodStart` latch (`+page.svelte:130-136`) snaps `periodStart` only on the first fetch and drops the per-fetch hard-floor guard the modal had. In practice the route is defended by `setupValid` and the date input's `min=` attribute, so a sub-floor `periodStart` can't reach the server. Suggested mirror form: `if (!hasSnappedPeriodStart || periodStart < floor) periodStart = floor`. Trivial follow-up if user reports an issue.
+- Surprising findings worth surfacing:
+  1. **The bug pattern matches exactly the lesson the new senior-developer "Format and protocol calibration" rule is meant to prevent.** The dev's first-pass test fixtures were synthesized from the dev's mental model of "what currency strings look like"; the backend actually emits a *specific* shape (`-$X` sign-then-dollar). No live UI re-probe in the original implementation — only test-fixture matching. The fix loop and the new helper exist precisely because the unit-test net wasn't laid before the bug. Reinforces the calibration rule's value.
+  2. **Live UI re-probe substituted with unit-test coverage in the fix loop.** The dev's sub-agent context didn't have the backend running and starting it against the canonical workspace was risky. Instead, the new Vitest suite exercises the exact bug case at the helper layer. Acceptable substrate when the helper contract is a pure function and the route's binding is a single expression.
+
 ## Objective
 
 Replace the 8b modal with a dedicated route at `/accounts/:accountId/reconcile`. Add a top-right Reconcile button on `/transactions` when filtered to a single tracked balance-sheet account. On assertion failure (422), the rejection panel leads with `Off by $X.XX` (the magnitude the user needs to scan transactions for) instead of expected/found. The `ReconcileModal.svelte` code is removed.
