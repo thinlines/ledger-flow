@@ -62,6 +62,7 @@
     lineNo: number;
     transactionStartLine?: number;
     transactionEndLine?: number;
+    headerLine: string;
     amount: string;
     counterpartyAccount: string;
     line: string;
@@ -203,7 +204,11 @@
   let newAccountDescription = '';
   let createAccountError = '';
   let ruleNameInputEl: HTMLInputElement | null = null;
-  let createAccountContext: { mode: 'rule' | 'category'; groupKey: string | null } = { mode: 'rule', groupKey: null };
+  let createAccountContext: { mode: 'rule' | 'category'; groupKey: string | null; txnId: string | null } = {
+    mode: 'rule',
+    groupKey: null,
+    txnId: null
+  };
   let statusFilter: 'all' | 'ready' | 'needs' = 'all';
   let lastApplyResult: UnknownStage['result'] = null;
   let lastAppliedGroups: UnknownGroup[] = [];
@@ -491,7 +496,7 @@
   $: totalReviewTransactions = reviewRowsData.length;
   $: readyReviewTransactions = reviewRowsData.filter((row) => row.status === 'ready').length;
   $: needsReviewTransactions = reviewRowsData.filter((row) => row.status === 'needs').length;
-  $: selectedGroupCount = (stage?.groups ?? []).filter((group) => groupStatus(group, selections) === 'ready').length;
+  $: selectedGroupCount = reviewRowsData.filter((row) => row.status === 'ready').length;
   $: historySelectedCount = historySelectedCandidateIds.length;
 
   function trackedAccountById(
@@ -506,36 +511,11 @@
     return ['expenses', 'expense', 'income', 'revenue'].includes(prefix);
   }
 
-  function groupTransferSuggestion(group: UnknownGroup): TransferSuggestion | null {
-    const suggestions = group.txns
-      .map((txn) => txn.transferSuggestion ?? null)
-      .filter((suggestion): suggestion is TransferSuggestion => suggestion !== null);
-    if (!suggestions.length || suggestions.length !== group.txns.length) return null;
-    const [firstSuggestion] = suggestions;
-    if (!firstSuggestion) return null;
-    return suggestions.every(
-      (suggestion) => suggestion.targetTrackedAccountId === firstSuggestion.targetTrackedAccountId
-    )
-      ? firstSuggestion
-      : null;
-  }
-
-  function groupMatchCandidates(group: UnknownGroup): MatchCandidate[] {
-    for (const txn of group.txns) {
-      if (txn.matchCandidates?.length) return txn.matchCandidates;
-    }
-    return [];
-  }
-
-  function groupSuggestedMatchId(group: UnknownGroup): string | null {
-    for (const txn of group.txns) {
-      if (txn.suggestedMatchId) return txn.suggestedMatchId;
-    }
-    return null;
-  }
-
-  function buildDefaultSelection(group: UnknownGroup): GroupSelection {
-    const transferSuggestion = groupTransferSuggestion(group);
+  // Selections are keyed by ``txn.txnId``: each transaction in a group owns
+  // its own choice (category / transfer / match). Two imports of the same
+  // payee can be categorized independently.
+  function buildDefaultSelection(txn: TxnRow, group: UnknownGroup): GroupSelection {
+    const transferSuggestion = txn.transferSuggestion ?? null;
     if (transferSuggestion) {
       return {
         selectionType: 'transfer',
@@ -544,9 +524,8 @@
       };
     }
 
-    // Auto-select match mode if there's a strong match suggestion.
-    const candidates = groupMatchCandidates(group);
-    const suggestedId = groupSuggestedMatchId(group);
+    const candidates = txn.matchCandidates ?? [];
+    const suggestedId = txn.suggestedMatchId ?? null;
     if (suggestedId && candidates.length) {
       const suggested = candidates.find((c) => c.manualTxnId === suggestedId);
       if (suggested) {
@@ -565,40 +544,45 @@
   }
 
   function selectionFor(
+    txn: TxnRow,
     group: UnknownGroup,
     currentSelections: Record<string, GroupSelection> = selections
   ): GroupSelection {
-    return currentSelections[group.groupKey] ?? buildDefaultSelection(group);
+    return currentSelections[txn.txnId] ?? buildDefaultSelection(txn, group);
   }
 
-  function groupMode(
+  function rowMode(
+    txn: TxnRow,
     group: UnknownGroup,
     currentSelections: Record<string, GroupSelection> = selections
   ): 'category' | 'transfer' | 'match' {
-    return selectionFor(group, currentSelections).selectionType;
+    return selectionFor(txn, group, currentSelections).selectionType;
   }
 
-  function categoryAccountFor(
+  function rowCategoryAccount(
+    txn: TxnRow,
     group: UnknownGroup,
     currentSelections: Record<string, GroupSelection> = selections
   ): string {
-    const selection = selectionFor(group, currentSelections);
+    const selection = selectionFor(txn, group, currentSelections);
     return selection.selectionType === 'category' ? (selection.categoryAccount ?? '').trim() : '';
   }
 
-  function transferTargetAccountIdFor(
+  function rowTransferTargetAccountId(
+    txn: TxnRow,
     group: UnknownGroup,
     currentSelections: Record<string, GroupSelection> = selections
   ): string {
-    const selection = selectionFor(group, currentSelections);
+    const selection = selectionFor(txn, group, currentSelections);
     return selection.selectionType === 'transfer' ? (selection.targetTrackedAccountId ?? '').trim() : '';
   }
 
-  function groupStatus(
+  function rowStatus(
+    txn: TxnRow,
     group: UnknownGroup,
     currentSelections: Record<string, GroupSelection> = selections
   ): 'ready' | 'needs' {
-    const selection = selectionFor(group, currentSelections);
+    const selection = selectionFor(txn, group, currentSelections);
     if (selection.selectionType === 'match') {
       return selection.matchedManualTxnId?.trim() ? 'ready' : 'needs';
     }
@@ -608,12 +592,13 @@
     return selection.categoryAccount?.trim() ? 'ready' : 'needs';
   }
 
-  function groupStatusLabel(
+  function rowStatusLabel(
+    txn: TxnRow,
     group: UnknownGroup,
     currentSelections: Record<string, GroupSelection> = selections
   ): string {
-    if (groupStatus(group, currentSelections) === 'ready') return 'Ready';
-    const mode = groupMode(group, currentSelections);
+    if (rowStatus(txn, group, currentSelections) === 'ready') return 'Ready';
+    const mode = rowMode(txn, group, currentSelections);
     if (mode === 'match') return 'Needs match';
     return mode === 'transfer' ? 'Needs transfer' : 'Needs category';
   }
@@ -626,20 +611,20 @@
     const rows: ReviewRow[] = [];
 
     for (const group of groups) {
-      const selection = selectionFor(group, currentSelections);
-      const selectionType = selection.selectionType;
-      const status = groupStatus(group, currentSelections);
-      const transferTargetAccountId =
-        selectionType === 'transfer' ? (selection.targetTrackedAccountId ?? '').trim() : '';
-      const categoryAccount = selectionType === 'category' ? (selection.categoryAccount ?? '').trim() : '';
       const destinationAccounts = transferDestinationAccounts(group, currentTrackedAccounts);
 
-      const candidates = groupMatchCandidates(group);
-      const selectedMatchId =
-        selectionType === 'match' ? (selection.matchedManualTxnId ?? '').trim() : '';
-      const selectedCandidate = candidates.find((c) => c.manualTxnId === selectedMatchId) ?? null;
-
       for (const txn of group.txns) {
+        const selection = selectionFor(txn, group, currentSelections);
+        const selectionType = selection.selectionType;
+        const status = rowStatus(txn, group, currentSelections);
+        const transferTargetAccountId =
+          selectionType === 'transfer' ? (selection.targetTrackedAccountId ?? '').trim() : '';
+        const categoryAccount = selectionType === 'category' ? (selection.categoryAccount ?? '').trim() : '';
+        const candidates = txn.matchCandidates ?? [];
+        const selectedMatchId =
+          selectionType === 'match' ? (selection.matchedManualTxnId ?? '').trim() : '';
+        const selectedCandidate = candidates.find((c) => c.manualTxnId === selectedMatchId) ?? null;
+
         let matchAmountDelta: ReviewRow['matchAmountDelta'] = null;
         if (selectionType === 'match' && selectedCandidate && txn.amount) {
           const importNum = parseFloat(txn.amount.replace(/[$,]/g, ''));
@@ -658,7 +643,7 @@
           group,
           txn,
           status,
-          statusLabel: groupStatusLabel(group, currentSelections),
+          statusLabel: rowStatusLabel(txn, group, currentSelections),
           matchedRuleId: group.matchedRuleId || null,
           selectionType,
           categoryAccount,
@@ -676,60 +661,73 @@
   }
 
   function stageSelectionPayload(currentSelections: Record<string, GroupSelection>) {
-    return Object.entries(currentSelections).reduce<
-      Array<
-        | {
-            groupKey: string;
-            selectionType: 'category';
-            categoryAccount: string;
-          }
-        | {
-            groupKey: string;
-            selectionType: 'transfer';
-            targetTrackedAccountId: string;
-            matchedCandidateId?: string;
-          }
-        | {
-            groupKey: string;
-            selectionType: 'match';
-            matchedManualTxnId: string;
-            matchedManualLineRange: [number, number];
-          }
-      >
-    >((payload, [groupKey, selection]) => {
-      if (selection.selectionType === 'match') {
-        const matchedManualTxnId = (selection.matchedManualTxnId ?? '').trim();
-        if (!matchedManualTxnId || !selection.matchedManualLineRange) return payload;
+    type CategoryEntry = { txnId: string; headerLine: string; selectionType: 'category'; categoryAccount: string };
+    type TransferEntry = {
+      txnId: string;
+      headerLine: string;
+      selectionType: 'transfer';
+      targetTrackedAccountId: string;
+      matchedCandidateId?: string;
+    };
+    type MatchEntry = {
+      txnId: string;
+      headerLine: string;
+      selectionType: 'match';
+      matchedManualTxnId: string;
+      matchedManualLineRange: [number, number];
+    };
+
+    const txnIndex = new Map<string, TxnRow>();
+    for (const group of stage?.groups ?? []) {
+      for (const txn of group.txns) {
+        txnIndex.set(txn.txnId, txn);
+      }
+    }
+
+    return Object.entries(currentSelections).reduce<Array<CategoryEntry | TransferEntry | MatchEntry>>(
+      (payload, [txnId, selection]) => {
+        const txn = txnIndex.get(txnId);
+        if (!txn) return payload;
+        const headerLine = txn.headerLine ?? '';
+
+        if (selection.selectionType === 'match') {
+          const matchedManualTxnId = (selection.matchedManualTxnId ?? '').trim();
+          if (!matchedManualTxnId || !selection.matchedManualLineRange) return payload;
+          payload.push({
+            txnId,
+            headerLine,
+            selectionType: 'match',
+            matchedManualTxnId,
+            matchedManualLineRange: selection.matchedManualLineRange
+          });
+          return payload;
+        }
+
+        if (selection.selectionType === 'transfer') {
+          const targetTrackedAccountId = (selection.targetTrackedAccountId ?? '').trim();
+          if (!targetTrackedAccountId) return payload;
+          payload.push({
+            txnId,
+            headerLine,
+            selectionType: 'transfer',
+            targetTrackedAccountId,
+            matchedCandidateId: selection.matchedCandidateId?.trim() || undefined
+          });
+          return payload;
+        }
+
+        const categoryAccount = (selection.categoryAccount ?? '').trim();
+        if (!categoryAccount) return payload;
         payload.push({
-          groupKey,
-          selectionType: 'match',
-          matchedManualTxnId,
-          matchedManualLineRange: selection.matchedManualLineRange
+          txnId,
+          headerLine,
+          selectionType: 'category',
+          categoryAccount
         });
         return payload;
-      }
-
-      if (selection.selectionType === 'transfer') {
-        const targetTrackedAccountId = (selection.targetTrackedAccountId ?? '').trim();
-        if (!targetTrackedAccountId) return payload;
-        payload.push({
-          groupKey,
-          selectionType: 'transfer',
-          targetTrackedAccountId,
-          matchedCandidateId: selection.matchedCandidateId?.trim() || undefined
-        });
-        return payload;
-      }
-
-      const categoryAccount = (selection.categoryAccount ?? '').trim();
-      if (!categoryAccount) return payload;
-      payload.push({
-        groupKey,
-        selectionType: 'category',
-        categoryAccount
-      });
-      return payload;
-    }, []);
+      },
+      []
+    );
   }
 
   function clearApplyFeedback() {
@@ -747,8 +745,10 @@
     stageAutosavePaused = false;
     selections = {};
     for (const group of nextStage.groups ?? []) {
-      const stagedSelection = stagedSelections[group.groupKey];
-      selections[group.groupKey] = stagedSelection ?? buildDefaultSelection(group);
+      for (const txn of group.txns ?? []) {
+        const stagedSelection = stagedSelections[txn.txnId];
+        selections[txn.txnId] = stagedSelection ?? buildDefaultSelection(txn, group);
+      }
     }
     rememberUnknownStage(nextStage);
     void syncUnknownStageRoute(nextStage.stageId);
@@ -887,28 +887,26 @@
     const nextSelections = { ...selections };
     for (const group of stage.groups ?? []) {
       const previousSuggested = (group.suggestedAccount ?? '').trim();
-      const currentSelection = nextSelections[group.groupKey] ?? buildDefaultSelection(group);
       const match = resolveGroupRuleMatch(group, nextRules);
       const suggestedAccount = match.suggestedAccount;
       group.suggestedAccount = suggestedAccount;
       group.matchedRuleId = match.ruleId;
       group.matchedRulePattern = match.matchedPattern;
 
-      if (currentSelection.selectionType === 'transfer') {
-        nextSelections[group.groupKey] = currentSelection;
-        continue;
-      }
+      // Per-txn refresh: only rows that were following the previous suggestion
+      // adopt the new one. Manually-overridden rows are left alone.
+      for (const txn of group.txns) {
+        const currentSelection = nextSelections[txn.txnId] ?? buildDefaultSelection(txn, group);
+        if (currentSelection.selectionType !== 'category') {
+          nextSelections[txn.txnId] = currentSelection;
+          continue;
+        }
 
-      const currentSelected = (currentSelection.categoryAccount ?? '').trim();
-      const shouldFollowSuggestion = !currentSelected || currentSelected === previousSuggested;
-      nextSelections[group.groupKey] = {
-        selectionType: 'category',
-        categoryAccount: shouldFollowSuggestion ? (suggestedAccount ?? '') : currentSelected
-      };
-      if (!shouldFollowSuggestion && !currentSelected) {
-        nextSelections[group.groupKey] = {
+        const currentSelected = (currentSelection.categoryAccount ?? '').trim();
+        const shouldFollowSuggestion = !currentSelected || currentSelected === previousSuggested;
+        nextSelections[txn.txnId] = {
           selectionType: 'category',
-          categoryAccount: ''
+          categoryAccount: shouldFollowSuggestion ? (suggestedAccount ?? '') : currentSelected
         };
       }
     }
@@ -1099,10 +1097,7 @@
     ruleNameInputEl?.focus();
   }
 
-  async function openRuleModal(groupKey: string) {
-    const group = stage?.groups.find((candidate) => candidate.groupKey === groupKey);
-    if (!group) return;
-
+  async function openRuleModal(group: UnknownGroup, txn: TxnRow) {
     let matchedRule = group.matchedRuleId ? rules.find((candidate) => candidate.id === group.matchedRuleId) ?? null : null;
     if (group.matchedRuleId && !matchedRule) {
       try {
@@ -1114,7 +1109,7 @@
       }
     }
 
-    const fallbackAccount = categoryAccountFor(group) || group.suggestedAccount || '';
+    const fallbackAccount = rowCategoryAccount(txn, group) || group.suggestedAccount || '';
 
     ruleGroupKey = group.groupKey;
     ruleSourcePayee = group.payeeDisplay;
@@ -1147,7 +1142,7 @@
 
     if (allowCreateAccountModal && !accounts.includes(selectedAccount)) {
       showRuleModal = false;
-      await openCreateAccountModal(selectedAccount, { mode: 'rule', groupKey: ruleGroupKey });
+      await openCreateAccountModal(selectedAccount, { mode: 'rule', groupKey: ruleGroupKey, txnId: null });
       return false;
     }
 
@@ -1185,14 +1180,10 @@
       ruleMode = 'edit';
       syncGroupsFromRules(nextRules);
       if (ruleGroupKey) {
-        selections = {
-          ...selections,
-          [ruleGroupKey]: {
-            selectionType: 'category',
-            categoryAccount: selectedAccount
-          }
-        };
-        queueStageAutosave();
+        // A new/updated rule maps the whole payee group to the chosen account.
+        // Apply that account to every txn in the group, so manual one-off
+        // overrides on individual rows are intentionally replaced.
+        setCategoryForAllTxnsInGroup(ruleGroupKey, selectedAccount);
       }
       showRuleModal = false;
       return true;
@@ -1209,14 +1200,14 @@
     await persistRule({ allowCreateAccountModal: true });
   }
 
-  function setGroupMode(group: UnknownGroup, selectionType: 'category' | 'transfer' | 'match') {
-    const current = selectionFor(group);
-    const transferSuggestion = groupTransferSuggestion(group);
+  function setRowMode(group: UnknownGroup, txn: TxnRow, selectionType: 'category' | 'transfer' | 'match') {
+    const current = selectionFor(txn, group);
+    const transferSuggestion = txn.transferSuggestion ?? null;
     let nextSelection: GroupSelection;
 
     if (selectionType === 'match') {
-      const candidates = groupMatchCandidates(group);
-      const suggestedId = groupSuggestedMatchId(group);
+      const candidates = txn.matchCandidates ?? [];
+      const suggestedId = txn.suggestedMatchId ?? null;
       const suggested = suggestedId ? candidates.find((c) => c.manualTxnId === suggestedId) : candidates[0];
       nextSelection = {
         selectionType: 'match',
@@ -1244,17 +1235,17 @@
     }
 
     clearApplyFeedback();
-    selections = { ...selections, [group.groupKey]: nextSelection };
+    selections = { ...selections, [txn.txnId]: nextSelection };
     queueStageAutosave();
   }
 
-  function setCategoryForGroup(groupKey: string, account: string) {
-    const current = selections[groupKey];
+  function setCategoryForTxn(txnId: string, account: string) {
+    const current = selections[txnId];
     if (current?.selectionType === 'category' && (current.categoryAccount ?? '') === account) return;
     clearApplyFeedback();
     selections = {
       ...selections,
-      [groupKey]: {
+      [txnId]: {
         selectionType: 'category',
         categoryAccount: account
       }
@@ -1262,14 +1253,26 @@
     queueStageAutosave();
   }
 
-  function setTransferTargetForGroup(group: UnknownGroup, targetTrackedAccountId: string) {
-    const transferSuggestion = groupTransferSuggestion(group);
+  function setCategoryForAllTxnsInGroup(groupKey: string, account: string) {
+    const group = stage?.groups.find((candidate) => candidate.groupKey === groupKey);
+    if (!group) return;
+    clearApplyFeedback();
+    const next = { ...selections };
+    for (const txn of group.txns) {
+      next[txn.txnId] = { selectionType: 'category', categoryAccount: account };
+    }
+    selections = next;
+    queueStageAutosave();
+  }
+
+  function setTransferTargetForTxn(txn: TxnRow, targetTrackedAccountId: string) {
+    const transferSuggestion = txn.transferSuggestion ?? null;
     const matchedCandidateId =
       transferSuggestion?.targetTrackedAccountId === targetTrackedAccountId ? transferSuggestion.candidateTxnId : undefined;
     clearApplyFeedback();
     selections = {
       ...selections,
-      [group.groupKey]: {
+      [txn.txnId]: {
         selectionType: 'transfer',
         targetTrackedAccountId,
         matchedCandidateId
@@ -1278,13 +1281,13 @@
     queueStageAutosave();
   }
 
-  function setMatchForGroup(group: UnknownGroup, manualTxnId: string) {
-    const candidates = groupMatchCandidates(group);
+  function setMatchForTxn(txn: TxnRow, manualTxnId: string) {
+    const candidates = txn.matchCandidates ?? [];
     const candidate = candidates.find((c) => c.manualTxnId === manualTxnId);
     clearApplyFeedback();
     selections = {
       ...selections,
-      [group.groupKey]: {
+      [txn.txnId]: {
         selectionType: 'match',
         matchedManualTxnId: manualTxnId,
         matchedManualLineRange: candidate ? [candidate.lineStart, candidate.lineEnd] : undefined
@@ -1316,9 +1319,9 @@
     currentSelections: Record<string, GroupSelection> = selections,
     currentTrackedAccounts: TrackedAccount[] = trackedAccounts
   ): { tone: 'muted' | 'warn'; text: string } | null {
-    if (groupMode(group, currentSelections) !== 'transfer') return null;
+    if (rowMode(txn, group, currentSelections) !== 'transfer') return null;
 
-    const targetTrackedAccountId = transferTargetAccountIdFor(group, currentSelections);
+    const targetTrackedAccountId = rowTransferTargetAccountId(txn, group, currentSelections);
     if (!targetTrackedAccountId) {
       return { tone: 'muted', text: 'Choose the destination tracked account.' };
     }
@@ -1357,7 +1360,10 @@
     return txn.transferSuggestion?.targetTrackedAccountName?.trim() || 'suggested counterpart';
   }
 
-  function openCreateAccountModal(initialName = '', context: { mode: 'rule' | 'category'; groupKey: string | null }) {
+  function openCreateAccountModal(
+    initialName = '',
+    context: { mode: 'rule' | 'category'; groupKey: string | null; txnId: string | null }
+  ) {
     createAccountContext = context;
     newAccountName = initialName;
     newAccountDescription = '';
@@ -1374,13 +1380,13 @@
     }
   }
 
-  function openCreateAccountForGroup(groupKey: string, initialName = '') {
-    openCreateAccountModal(initialName, { mode: 'category', groupKey });
+  function openCreateAccountForRow(group: UnknownGroup, txn: TxnRow, initialName = '') {
+    openCreateAccountModal(initialName, { mode: 'category', groupKey: group.groupKey, txnId: txn.txnId });
   }
 
   function openCreateAccountForRule(initialName = '') {
     showRuleModal = false;
-    openCreateAccountModal(initialName, { mode: 'rule', groupKey: ruleGroupKey });
+    openCreateAccountModal(initialName, { mode: 'rule', groupKey: ruleGroupKey, txnId: null });
   }
 
   async function createAccountAndContinue() {
@@ -1406,8 +1412,8 @@
       accounts = refreshed.categoryAccounts ?? refreshed.accounts;
 
       if (createAccountContext.mode === 'category') {
-        if (createAccountContext.groupKey) {
-          setCategoryForGroup(createAccountContext.groupKey, newAccountName);
+        if (createAccountContext.txnId) {
+          setCategoryForTxn(createAccountContext.txnId, newAccountName);
         }
         showCreateAccountModal = false;
         return;
@@ -1777,7 +1783,7 @@
                     class="btn btn-small"
                     type="button"
                     class:active-filter={row.selectionType === 'category'}
-                    on:click={() => setGroupMode(row.group, 'category')}
+                    on:click={() => setRowMode(row.group, row.txn, 'category')}
                   >
                     Category
                   </button>
@@ -1785,7 +1791,7 @@
                     class="btn btn-small"
                     type="button"
                     class:active-filter={row.selectionType === 'transfer'}
-                    on:click={() => setGroupMode(row.group, 'transfer')}
+                    on:click={() => setRowMode(row.group, row.txn, 'transfer')}
                   >
                     Transfer
                   </button>
@@ -1795,7 +1801,7 @@
                     class:active-filter={row.selectionType === 'match'}
                     disabled={row.matchCandidates.length === 0}
                     title={row.matchCandidates.length === 0 ? 'No manual entries found for this account.' : ''}
-                    on:click={() => setGroupMode(row.group, 'match')}
+                    on:click={() => setRowMode(row.group, row.txn, 'match')}
                   >
                     Match
                   </button>
@@ -1809,7 +1815,7 @@
                         id={`match-${row.rowId}`}
                         value={row.selectedMatchId}
                         on:change={(event) =>
-                          setMatchForGroup(row.group, (event.currentTarget as HTMLSelectElement).value)}
+                          setMatchForTxn(row.txn, (event.currentTarget as HTMLSelectElement).value)}
                       >
                         <option value="">Choose manual entry...</option>
                         {#each row.matchCandidates as candidate}
@@ -1843,7 +1849,7 @@
                         id={`transfer-${row.rowId}`}
                         value={row.transferTargetAccountId}
                         on:change={(event) =>
-                          setTransferTargetForGroup(row.group, (event.currentTarget as HTMLSelectElement).value)}
+                          setTransferTargetForTxn(row.txn, (event.currentTarget as HTMLSelectElement).value)}
                       >
                         <option value="">Choose destination account...</option>
                         {#each row.transferDestinationAccounts as account}
@@ -1867,15 +1873,15 @@
                     accounts={accounts}
                     value={row.categoryAccount}
                     placeholder="Choose category..."
-                    onChange={(account) => setCategoryForGroup(row.group.groupKey, account)}
-                    onCreate={(seed) => void openCreateAccountForGroup(row.group.groupKey, seed)}
+                    onChange={(account) => setCategoryForTxn(row.txn.txnId, account)}
+                    onCreate={(seed) => void openCreateAccountForRow(row.group, row.txn, seed)}
                   />
                 {/if}
               </div>
 
               <div class="min-w-0 grid gap-2 justify-items-start content-center">
                 {#if row.selectionType === 'category'}
-                  <button class="btn" type="button" on:click={() => openRuleModal(row.group.groupKey)}>
+                  <button class="btn" type="button" on:click={() => openRuleModal(row.group, row.txn)}>
                     {row.matchedRuleId ? 'Edit rule' : 'Save rule'}
                   </button>
                 {:else if row.selectionType === 'match'}

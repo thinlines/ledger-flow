@@ -345,18 +345,31 @@ def _raise_import_preview_blocked(error: ImportPreviewBlockedError) -> None:
 
 
 def _unknown_stage_summary(groups: list[dict], selections: dict[str, dict]) -> dict:
+    selected_group_keys = {
+        sel.get("groupKey")
+        for sel in selections.values()
+        if sel.get("groupKey")
+    }
     return {
-        "groupCount": len(selections),
-        "txnUpdates": sum(len(group["txns"]) for group in groups if group["groupKey"] in selections),
+        "groupCount": len(selected_group_keys),
+        "txnUpdates": len(selections),
     }
 
 
+def _group_key_for_txn(groups: list[dict], txn_id: str) -> str:
+    for group in groups:
+        for txn in group.get("txns", []):
+            if txn.get("txnId") == txn_id:
+                return group.get("groupKey", "")
+    return ""
+
+
 def _filtered_unknown_selections(groups: list[dict], selections: dict[str, dict] | None) -> dict[str, dict]:
-    group_keys = {group["groupKey"] for group in groups}
+    valid_txn_ids = {txn["txnId"] for group in groups for txn in group["txns"]}
     return {
-        group_key: selection
-        for group_key, selection in (selections or {}).items()
-        if group_key in group_keys
+        txn_id: selection
+        for txn_id, selection in (selections or {}).items()
+        if txn_id in valid_txn_ids
     }
 
 
@@ -1942,9 +1955,13 @@ def unknown_stage_mappings(req: UnknownStageRequest) -> dict:
         raise HTTPException(status_code=400, detail="stage kind mismatch")
 
     selections = {
-        selection.groupKey: selection.model_dump(exclude_none=True)
+        selection.txnId: {
+            **selection.model_dump(exclude_none=True),
+            "groupKey": _group_key_for_txn(stage.get("groups") or [], selection.txnId),
+        }
         for selection in req.selections
     }
+    selections = _filtered_unknown_selections(stage.get("groups") or [], selections)
     stage["selections"] = selections
     stage["summary"] = _unknown_stage_summary(stage["groups"], selections)
     stages.save(req.stageId, stage)

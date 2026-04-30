@@ -399,7 +399,9 @@ account Assets:Bank:Checking
         journal_path=journal,
         accounts_dat=accounts,
         selections={
-            groups[0]["groupKey"]: {
+            txn["txnId"]: {
+                "groupKey": groups[0]["groupKey"],
+                "headerLine": txn["headerLine"],
                 "selectionType": "match",
                 "matchedManualTxnId": candidate["manualTxnId"],
                 "matchedManualLineRange": [candidate["lineStart"], candidate["lineEnd"]],
@@ -452,13 +454,16 @@ account Assets:Bank:Checking
     )
 
     groups = scan_unknowns(journal, [], _import_accounts(), _tracked_accounts())["groups"]
-    candidate = groups[0]["txns"][0]["matchCandidates"][0]
+    txn = groups[0]["txns"][0]
+    candidate = txn["matchCandidates"][0]
 
     apply_unknown_mappings(
         journal_path=journal,
         accounts_dat=accounts,
         selections={
-            groups[0]["groupKey"]: {
+            txn["txnId"]: {
+                "groupKey": groups[0]["groupKey"],
+                "headerLine": txn["headerLine"],
                 "selectionType": "match",
                 "matchedManualTxnId": candidate["manualTxnId"],
                 "matchedManualLineRange": [candidate["lineStart"], candidate["lineEnd"]],
@@ -498,11 +503,14 @@ def test_apply_match_warns_on_stale_manual_entry(tmp_path: Path) -> None:
     )
 
     groups = scan_unknowns(journal, [], _import_accounts(), _tracked_accounts())["groups"]
+    txn = groups[0]["txns"][0]
     _, warnings = apply_unknown_mappings(
         journal_path=journal,
         accounts_dat=accounts,
         selections={
-            groups[0]["groupKey"]: {
+            txn["txnId"]: {
+                "groupKey": groups[0]["groupKey"],
+                "headerLine": txn["headerLine"],
                 "selectionType": "match",
                 "matchedManualTxnId": "manual:999",
                 "matchedManualLineRange": [999, 1002],
@@ -546,13 +554,16 @@ account Assets:Bank:Checking
     )
 
     groups = scan_unknowns(journal, [], _import_accounts(), _tracked_accounts())["groups"]
-    candidate = groups[0]["txns"][0]["matchCandidates"][0]
+    txn = groups[0]["txns"][0]
+    candidate = txn["matchCandidates"][0]
 
     apply_unknown_mappings(
         journal_path=journal,
         accounts_dat=accounts,
         selections={
-            groups[0]["groupKey"]: {
+            txn["txnId"]: {
+                "groupKey": groups[0]["groupKey"],
+                "headerLine": txn["headerLine"],
                 "selectionType": "match",
                 "matchedManualTxnId": candidate["manualTxnId"],
                 "matchedManualLineRange": [candidate["lineStart"], candidate["lineEnd"]],
@@ -593,11 +604,14 @@ account Assets:Bank:Checking
     )
 
     groups = scan_unknowns(journal, [], _import_accounts(), _tracked_accounts())["groups"]
+    txn = groups[0]["txns"][0]
     txn_updates, warnings = apply_unknown_mappings(
         journal_path=journal,
         accounts_dat=accounts,
         selections={
-            groups[0]["groupKey"]: {
+            txn["txnId"]: {
+                "groupKey": groups[0]["groupKey"],
+                "headerLine": txn["headerLine"],
                 "selectionType": "category",
                 "categoryAccount": "Expenses:Food",
             }

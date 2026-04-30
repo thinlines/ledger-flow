@@ -74,12 +74,15 @@ account Assets:Bank:Checking
 
 def _apply_first_match(journal: Path, accounts: Path) -> tuple[int, list[dict]]:
     groups = scan_unknowns(journal, [], _import_accounts(), _tracked_accounts())["groups"]
-    candidate = groups[0]["txns"][0]["matchCandidates"][0]
+    txn = groups[0]["txns"][0]
+    candidate = txn["matchCandidates"][0]
     return apply_unknown_mappings(
         journal_path=journal,
         accounts_dat=accounts,
         selections={
-            groups[0]["groupKey"]: {
+            txn["txnId"]: {
+                "groupKey": groups[0]["groupKey"],
+                "headerLine": txn["headerLine"],
                 "selectionType": "match",
                 "matchedManualTxnId": candidate["manualTxnId"],
                 "matchedManualLineRange": [candidate["lineStart"], candidate["lineEnd"]],

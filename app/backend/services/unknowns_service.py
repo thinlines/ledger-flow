@@ -33,6 +33,7 @@ from .transfer_service import (
 )
 
 from .header_parser import HEADER_RE
+from .journal_block_service import HeaderNotFoundError, locate_header_at
 
 ACCOUNT_LINE_RE = re.compile(r"^(\s+)([^\s].*?)(\s{2,}|\t+)(.*)$")
 ACCOUNT_ONLY_RE = re.compile(r"^(\s+)([^\s].*?)\s*$")
@@ -294,6 +295,7 @@ def _build_transaction_records(
                 "lineNo": posting["lineNo"],
                 "transactionStartLine": start + 1,
                 "transactionEndLine": end,
+                "headerLine": header_line,
                 "currentAccount": posting["account"],
                 "amount": posting["amount"],
                 "counterpartyAccount": counterparty,
@@ -424,9 +426,18 @@ def scan_unknowns(
 
 def _stage_category_selections(selections: dict[str, dict]) -> dict[str, str]:
     return {
-        group_key: str(selection.get("categoryAccount", "")).strip()
-        for group_key, selection in selections.items()
+        txn_id: str(selection.get("categoryAccount", "")).strip()
+        for txn_id, selection in selections.items()
         if selection.get("selectionType") == "category"
+    }
+
+
+def _index_txns_by_id(scanned_groups: list[dict]) -> dict[str, tuple[dict, dict]]:
+    """Map ``txnId`` to ``(group, txn)`` for selection lookup."""
+    return {
+        txn["txnId"]: (group, txn)
+        for group in scanned_groups
+        for txn in group["txns"]
     }
 
 
@@ -530,18 +541,49 @@ def apply_unknown_mappings(
     original_lines = journal_path.read_text(encoding="utf-8").splitlines()
     operations_by_start: dict[int, dict] = {}
     processed_line_nos: set[int] = set()
+    txn_index = _index_txns_by_id(scanned_groups)
 
-    # Transfer selections win because one accepted transfer may resolve its counterpart automatically.
-    for group in scanned_groups:
-        selection = selections.get(group["groupKey"])
-        if not selection or selection.get("selectionType") != "transfer":
+    # Resolve each selection to its (group, txn) and verify the journal has not
+    # drifted under us — reusing the locate_header_at helper introduced in
+    # bea0f296 to identify transactions by (lineNumber, headerLine) rather than
+    # by header text alone.
+    resolved_selections: list[tuple[str, dict, dict, dict]] = []
+    for txn_id, selection in selections.items():
+        entry = txn_index.get(txn_id)
+        if entry is None:
+            warnings.append({"txnId": txn_id, "warning": "Transaction is no longer in this stage"})
+            continue
+        group, txn = entry
+        expected_header = str(selection.get("headerLine") or txn.get("headerLine") or "")
+        if expected_header:
+            try:
+                locate_header_at(original_lines, int(txn["transactionStartLine"]) - 1, expected_header)
+            except HeaderNotFoundError:
+                warnings.append(
+                    {
+                        "txnId": txn_id,
+                        "groupKey": group["groupKey"],
+                        "warning": f"Transaction at line {txn['transactionStartLine']} has shifted (stale data — try refreshing)",
+                    }
+                )
+                continue
+        resolved_selections.append((txn_id, selection, group, txn))
+
+    # Pass 1: transfers. Accepted transfers may resolve their counterpart, so
+    # they run before category and match selections.
+    for txn_id, selection, group, txn in resolved_selections:
+        if selection.get("selectionType") != "transfer":
+            continue
+        if txn["lineNo"] in processed_line_nos:
             continue
 
         target_tracked_account_id = str(selection.get("targetTrackedAccountId", "")).strip()
         if not target_tracked_account_id:
             continue
         if target_tracked_account_id not in tracked_accounts:
-            warnings.append({"groupKey": group["groupKey"], "warning": f"Unknown tracked account: {target_tracked_account_id}"})
+            warnings.append(
+                {"txnId": txn_id, "groupKey": group["groupKey"], "warning": f"Unknown tracked account: {target_tracked_account_id}"}
+            )
             continue
 
         target_ledger_account = _target_ledger_account(tracked_accounts, target_tracked_account_id)
@@ -549,164 +591,162 @@ def apply_unknown_mappings(
         if not target_ledger_account:
             warnings.append(
                 {
+                    "txnId": txn_id,
                     "groupKey": group["groupKey"],
                     "warning": f"Tracked account {target_tracked_account_id} is missing a ledger account",
                 }
             )
             continue
 
-        for txn in group["txns"]:
-            if txn["lineNo"] in processed_line_nos:
-                continue
-
-            source_tracked_account_id = str(txn.get("sourceTrackedAccountId") or "").strip()
-            if not source_tracked_account_id:
-                warnings.append(
-                    {"groupKey": group["groupKey"], "warning": f"Transaction on line {txn['lineNo']} does not have a tracked source account"}
-                )
-                continue
-            if source_tracked_account_id == target_tracked_account_id:
-                warnings.append(
-                    {"groupKey": group["groupKey"], "warning": f"Transfer on line {txn['lineNo']} cannot target the same tracked account"}
-                )
-                continue
-
-            suggestion = txn.get("transferSuggestion") or {}
-            matched_suggestion = (
-                suggestion
-                if str(suggestion.get("targetTrackedAccountId") or "").strip() == target_tracked_account_id
-                else None
+        source_tracked_account_id = str(txn.get("sourceTrackedAccountId") or "").strip()
+        if not source_tracked_account_id:
+            warnings.append(
+                {"txnId": txn_id, "groupKey": group["groupKey"], "warning": f"Transaction on line {txn['lineNo']} does not have a tracked source account"}
             )
+            continue
+        if source_tracked_account_id == target_tracked_account_id:
+            warnings.append(
+                {"txnId": txn_id, "groupKey": group["groupKey"], "warning": f"Transfer on line {txn['lineNo']} cannot target the same tracked account"}
+            )
+            continue
 
-            if not target_requires_import_match:
-                transfer_id = str(txn.get("transferId") or "").strip() or str(uuid4().hex)
+        suggestion = txn.get("transferSuggestion") or {}
+        matched_suggestion = (
+            suggestion
+            if str(suggestion.get("targetTrackedAccountId") or "").strip() == target_tracked_account_id
+            else None
+        )
+
+        if not target_requires_import_match:
+            transfer_id = str(txn.get("transferId") or "").strip() or str(uuid4().hex)
+            _queue_operation(
+                operations_by_start,
+                _build_operation(
+                    group_key=group["groupKey"],
+                    transaction_start_line=int(txn["transactionStartLine"]),
+                    transaction_end_line=int(txn["transactionEndLine"]),
+                    posting_line_no=int(txn["lineNo"]),
+                    target_account=target_ledger_account,
+                    expected_unknown=True,
+                    metadata_updates=build_direct_transfer_metadata_updates(
+                        transfer_id=transfer_id,
+                        peer_account_id=target_tracked_account_id,
+                    ),
+                ),
+            )
+            processed_line_nos.add(int(txn["lineNo"]))
+            continue
+
+        transfer_account = ensure_transfer_account(accounts_dat, source_tracked_account_id, target_tracked_account_id)
+        transfer_id = str(txn.get("transferId") or "").strip() or str(uuid4().hex)
+        current_state = TRANSFER_MATCH_STATE_PENDING
+
+        if matched_suggestion:
+            current_state = TRANSFER_MATCH_STATE_MATCHED
+            if matched_suggestion.get("candidateState") == "pending":
+                transfer_id = str(matched_suggestion.get("candidateTransferId") or transfer_id)
+                transfer_metadata = build_import_match_transfer_metadata_updates(
+                    transfer_id=transfer_id,
+                    peer_account_id=source_tracked_account_id,
+                    transfer_match_state=TRANSFER_MATCH_STATE_MATCHED,
+                )
                 _queue_operation(
                     operations_by_start,
                     _build_operation(
                         group_key=group["groupKey"],
-                        transaction_start_line=int(txn["transactionStartLine"]),
-                        transaction_end_line=int(txn["transactionEndLine"]),
-                        posting_line_no=int(txn["lineNo"]),
-                        target_account=target_ledger_account,
+                        transaction_start_line=int(matched_suggestion["candidateTransactionStartLine"]),
+                        transaction_end_line=int(matched_suggestion["candidateTransactionEndLine"]),
+                        posting_line_no=None,
+                        target_account=None,
+                        expected_unknown=False,
+                        metadata_updates=transfer_metadata,
+                    ),
+                )
+            else:
+                candidate_group_key = str(matched_suggestion.get("candidateGroupKey") or "")
+                candidate_group = _find_group_by_key(scanned_groups, candidate_group_key) if candidate_group_key else None
+                candidate_txn = next(
+                    (
+                        item
+                        for item in (candidate_group.get("txns", []) if candidate_group else [])
+                        if item["txnId"] == matched_suggestion.get("candidateTxnId")
+                    ),
+                    None,
+                )
+                if candidate_txn is None:
+                    warnings.append(
+                        {
+                            "txnId": txn_id,
+                            "groupKey": group["groupKey"],
+                            "warning": f"Suggested transfer counterpart for line {txn['lineNo']} is no longer available",
+                        }
+                    )
+                    continue
+                _queue_operation(
+                    operations_by_start,
+                    _build_operation(
+                        group_key=group["groupKey"],
+                        transaction_start_line=int(candidate_txn["transactionStartLine"]),
+                        transaction_end_line=int(candidate_txn["transactionEndLine"]),
+                        posting_line_no=int(candidate_txn["lineNo"]),
+                        target_account=transfer_account,
                         expected_unknown=True,
-                        metadata_updates=build_direct_transfer_metadata_updates(
+                        metadata_updates=build_import_match_transfer_metadata_updates(
                             transfer_id=transfer_id,
-                            peer_account_id=target_tracked_account_id,
+                            peer_account_id=source_tracked_account_id,
+                            transfer_match_state=TRANSFER_MATCH_STATE_MATCHED,
                         ),
                     ),
                 )
-                processed_line_nos.add(int(txn["lineNo"]))
-                continue
+                processed_line_nos.add(int(candidate_txn["lineNo"]))
 
-            transfer_account = ensure_transfer_account(accounts_dat, source_tracked_account_id, target_tracked_account_id)
-            transfer_id = str(txn.get("transferId") or "").strip() or str(uuid4().hex)
-            current_state = TRANSFER_MATCH_STATE_PENDING
-
-            if matched_suggestion:
-                current_state = TRANSFER_MATCH_STATE_MATCHED
-                if matched_suggestion.get("candidateState") == "pending":
-                    transfer_id = str(matched_suggestion.get("candidateTransferId") or transfer_id)
-                    transfer_metadata = build_import_match_transfer_metadata_updates(
-                        transfer_id=transfer_id,
-                        peer_account_id=source_tracked_account_id,
-                        transfer_match_state=TRANSFER_MATCH_STATE_MATCHED,
-                    )
-                    _queue_operation(
-                        operations_by_start,
-                        _build_operation(
-                            group_key=group["groupKey"],
-                            transaction_start_line=int(matched_suggestion["candidateTransactionStartLine"]),
-                            transaction_end_line=int(matched_suggestion["candidateTransactionEndLine"]),
-                            posting_line_no=None,
-                            target_account=None,
-                            expected_unknown=False,
-                            metadata_updates=transfer_metadata,
-                        ),
-                    )
-                else:
-                    candidate_group_key = str(matched_suggestion.get("candidateGroupKey") or "")
-                    candidate_group = _find_group_by_key(scanned_groups, candidate_group_key) if candidate_group_key else None
-                    candidate_txn = next(
-                        (
-                            item
-                            for item in (candidate_group.get("txns", []) if candidate_group else [])
-                            if item["txnId"] == matched_suggestion.get("candidateTxnId")
-                        ),
-                        None,
-                    )
-                    if candidate_txn is None:
-                        warnings.append(
-                            {
-                                "groupKey": group["groupKey"],
-                                "warning": f"Suggested transfer counterpart for line {txn['lineNo']} is no longer available",
-                            }
-                        )
-                        continue
-                    _queue_operation(
-                        operations_by_start,
-                        _build_operation(
-                            group_key=group["groupKey"],
-                            transaction_start_line=int(candidate_txn["transactionStartLine"]),
-                            transaction_end_line=int(candidate_txn["transactionEndLine"]),
-                            posting_line_no=int(candidate_txn["lineNo"]),
-                            target_account=transfer_account,
-                            expected_unknown=True,
-                            metadata_updates=build_import_match_transfer_metadata_updates(
-                                transfer_id=transfer_id,
-                                peer_account_id=source_tracked_account_id,
-                                transfer_match_state=TRANSFER_MATCH_STATE_MATCHED,
-                            ),
-                        ),
-                    )
-                    processed_line_nos.add(int(candidate_txn["lineNo"]))
-
-            _queue_operation(
-                operations_by_start,
-                _build_operation(
-                    group_key=group["groupKey"],
-                    transaction_start_line=int(txn["transactionStartLine"]),
-                    transaction_end_line=int(txn["transactionEndLine"]),
-                    posting_line_no=int(txn["lineNo"]),
-                    target_account=transfer_account,
-                    expected_unknown=True,
-                    metadata_updates=build_import_match_transfer_metadata_updates(
-                        transfer_id=transfer_id,
-                        peer_account_id=target_tracked_account_id,
-                        transfer_match_state=current_state,
-                    ),
+        _queue_operation(
+            operations_by_start,
+            _build_operation(
+                group_key=group["groupKey"],
+                transaction_start_line=int(txn["transactionStartLine"]),
+                transaction_end_line=int(txn["transactionEndLine"]),
+                posting_line_no=int(txn["lineNo"]),
+                target_account=transfer_account,
+                expected_unknown=True,
+                metadata_updates=build_import_match_transfer_metadata_updates(
+                    transfer_id=transfer_id,
+                    peer_account_id=target_tracked_account_id,
+                    transfer_match_state=current_state,
                 ),
-            )
-            processed_line_nos.add(int(txn["lineNo"]))
+            ),
+        )
+        processed_line_nos.add(int(txn["lineNo"]))
 
-    for group in scanned_groups:
-        selection = selections.get(group["groupKey"])
-        if not selection or selection.get("selectionType") != "category":
+    # Pass 2: per-txn category assignments.
+    for txn_id, selection, group, txn in resolved_selections:
+        if selection.get("selectionType") != "category":
             continue
         category_account = str(selection.get("categoryAccount", "")).strip()
         if not category_account:
             continue
-        for txn in group["txns"]:
-            if txn["lineNo"] in processed_line_nos:
-                warnings.append(
-                    {
-                        "groupKey": group["groupKey"],
-                        "warning": f"Line {txn['lineNo']} was already resolved as the matched side of a transfer",
-                    }
-                )
-                continue
-            _queue_operation(
-                operations_by_start,
-                _build_operation(
-                    group_key=group["groupKey"],
-                    transaction_start_line=int(txn["transactionStartLine"]),
-                    transaction_end_line=int(txn["transactionEndLine"]),
-                    posting_line_no=int(txn["lineNo"]),
-                    target_account=category_account,
-                    expected_unknown=True,
-                    metadata_updates=clear_transfer_metadata_updates(),
-                ),
+        if txn["lineNo"] in processed_line_nos:
+            warnings.append(
+                {
+                    "txnId": txn_id,
+                    "groupKey": group["groupKey"],
+                    "warning": f"Line {txn['lineNo']} was already resolved as the matched side of a transfer",
+                }
             )
-            processed_line_nos.add(int(txn["lineNo"]))
+            continue
+        _queue_operation(
+            operations_by_start,
+            _build_operation(
+                group_key=group["groupKey"],
+                transaction_start_line=int(txn["transactionStartLine"]),
+                transaction_end_line=int(txn["transactionEndLine"]),
+                posting_line_no=int(txn["lineNo"]),
+                target_account=category_account,
+                expected_unknown=True,
+                metadata_updates=clear_transfer_metadata_updates(),
+            ),
+        )
+        processed_line_nos.add(int(txn["lineNo"]))
 
     # --- Match-apply section ---------------------------------------------
     # Matched manual entries are archived (not deleted) so a future unmatch can
@@ -718,36 +758,37 @@ def apply_unknown_mappings(
     archive_size_before = archived_path.stat().st_size if archived_path.exists() else None
 
     try:
-        # Collect match selections. One match-id per group, shared between the
-        # main-journal stamp and the archived manual entry.
+        # Collect match selections per-txn. Multiple selections that point at
+        # the same manual entry (same ``matchedManualLineRange``) share one
+        # match-id and one archive write — the manual entry is removed once.
         manual_removal_ranges: list[tuple[int, int, str, str]] = []  # (start_idx, end_idx, group_key, match_id)
         match_tag_entries: list[tuple[int, str]] = []  # (0-indexed txn start line, match_id)
-        for group in scanned_groups:
-            selection = selections.get(group["groupKey"])
-            if not selection or selection.get("selectionType") != "match":
+        match_ids_by_range: dict[tuple[int, int], str] = {}
+        for txn_id, selection, group, txn in resolved_selections:
+            if selection.get("selectionType") != "match":
                 continue
 
             matched_manual_line_range = selection.get("matchedManualLineRange")
             if not matched_manual_line_range or len(matched_manual_line_range) < 2:
-                warnings.append({"groupKey": group["groupKey"], "warning": "Match selection is missing manual entry line range"})
+                warnings.append({"txnId": txn_id, "groupKey": group["groupKey"], "warning": "Match selection is missing manual entry line range"})
                 continue
 
             manual_start = int(matched_manual_line_range[0])
             manual_end = int(matched_manual_line_range[1])
 
             if manual_start < 1 or manual_end > len(original_lines):
-                warnings.append({"groupKey": group["groupKey"], "warning": "Manual entry is no longer available (line range out of bounds)"})
+                warnings.append({"txnId": txn_id, "groupKey": group["groupKey"], "warning": "Manual entry is no longer available (line range out of bounds)"})
                 continue
 
             manual_lines = original_lines[manual_start - 1 : manual_end]
             if not has_manual_tag(manual_lines):
-                warnings.append({"groupKey": group["groupKey"], "warning": "Manual entry is no longer available (missing :manual: tag)"})
+                warnings.append({"txnId": txn_id, "groupKey": group["groupKey"], "warning": "Manual entry is no longer available (missing :manual: tag)"})
                 continue
 
             source_ledger = group.get("sourceLedgerAccount", "")
             destination = _parse_manual_entry_destination(manual_lines, source_ledger)
             if not destination:
-                warnings.append({"groupKey": group["groupKey"], "warning": "Manual entry does not have a usable destination account"})
+                warnings.append({"txnId": txn_id, "groupKey": group["groupKey"], "warning": "Manual entry does not have a usable destination account"})
                 continue
 
             user_metadata_lines = _extract_user_metadata_lines(manual_lines)
@@ -757,31 +798,33 @@ def apply_unknown_mappings(
                 if mm:
                     metadata_updates[mm.group(1).strip().lower()] = mm.group(2).strip()
 
-            match_id = str(uuid4())
+            range_key = (manual_start, manual_end)
+            match_id = match_ids_by_range.get(range_key)
+            if match_id is None:
+                match_id = str(uuid4())
+                match_ids_by_range[range_key] = match_id
+                manual_removal_ranges.append((manual_start - 1, manual_end, group["groupKey"], match_id))
 
-            for txn in group["txns"]:
-                if txn["lineNo"] in processed_line_nos:
-                    warnings.append(
-                        {"groupKey": group["groupKey"], "warning": f"Line {txn['lineNo']} was already resolved"}
-                    )
-                    continue
-
-                _queue_operation(
-                    operations_by_start,
-                    _build_operation(
-                        group_key=group["groupKey"],
-                        transaction_start_line=int(txn["transactionStartLine"]),
-                        transaction_end_line=int(txn["transactionEndLine"]),
-                        posting_line_no=int(txn["lineNo"]),
-                        target_account=destination,
-                        expected_unknown=True,
-                        metadata_updates=metadata_updates,
-                    ),
+            if txn["lineNo"] in processed_line_nos:
+                warnings.append(
+                    {"txnId": txn_id, "groupKey": group["groupKey"], "warning": f"Line {txn['lineNo']} was already resolved"}
                 )
-                match_tag_entries.append((int(txn["transactionStartLine"]) - 1, match_id))
-                processed_line_nos.add(int(txn["lineNo"]))
+                continue
 
-            manual_removal_ranges.append((manual_start - 1, manual_end, group["groupKey"], match_id))
+            _queue_operation(
+                operations_by_start,
+                _build_operation(
+                    group_key=group["groupKey"],
+                    transaction_start_line=int(txn["transactionStartLine"]),
+                    transaction_end_line=int(txn["transactionEndLine"]),
+                    posting_line_no=int(txn["lineNo"]),
+                    target_account=destination,
+                    expected_unknown=True,
+                    metadata_updates=metadata_updates,
+                ),
+            )
+            match_tag_entries.append((int(txn["transactionStartLine"]) - 1, match_id))
+            processed_line_nos.add(int(txn["lineNo"]))
 
         lines = list(original_lines)
         applied_count = 0

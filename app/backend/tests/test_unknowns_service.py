@@ -4,6 +4,26 @@ from services.unknowns_service import add_payee_rule, apply_unknown_mappings, cr
 from services.transfer_service import transfer_pair_account
 
 
+def _selections(groups: list[dict], by_group_key: dict[str, dict]) -> dict[str, dict]:
+    """Expand a ``{groupKey: selection}`` mapping to ``{txnId: selection}``.
+
+    Each txn in the group inherits the selection plus its ``headerLine``
+    (required by the post-bea0f296 drift check).
+    """
+    out: dict[str, dict] = {}
+    for group in groups:
+        selection = by_group_key.get(group["groupKey"])
+        if selection is None:
+            continue
+        for txn in group["txns"]:
+            out[txn["txnId"]] = {
+                **selection,
+                "groupKey": group["groupKey"],
+                "headerLine": txn["headerLine"],
+            }
+    return out
+
+
 def _import_accounts() -> dict[str, dict]:
     return {
         "checking_import": {
@@ -212,12 +232,12 @@ account Assets:Wells Fargo Checking
     txn_updates, warnings = apply_unknown_mappings(
         journal_path=journal,
         accounts_dat=accounts,
-        selections={
+        selections=_selections(groups, {
             "coffee shop": {
                 "selectionType": "category",
                 "categoryAccount": "Expenses:Eating Out",
             }
-        },
+        }),
         scanned_groups=groups,
         tracked_accounts={},
     )
@@ -225,6 +245,135 @@ account Assets:Wells Fargo Checking
     assert txn_updates == 1
     assert warnings == []
     assert "Expenses:Eating Out" in journal.read_text(encoding="utf-8")
+
+
+def test_apply_unknown_mappings_categorizes_only_selected_txn_in_group(tmp_path: Path) -> None:
+    """Selections are per-txn: changing one Costco's category leaves siblings alone.
+
+    Regression for the bug where the unknowns page applied a single
+    group-keyed selection to every txn sharing the same payee + import
+    account.
+    """
+    journal = tmp_path / "sample.journal"
+    accounts = tmp_path / "10-accounts.dat"
+
+    journal.write_text(
+        """
+2026/03/01 COSTCO #0761
+    Expenses:Unknown  $42.00
+    Assets:Bank:Checking
+
+2026/03/05 COSTCO #0761
+    Expenses:Unknown  $19.00
+    Assets:Bank:Checking
+
+2026/03/08 COSTCO #0761
+    Expenses:Unknown  $87.00
+    Assets:Bank:Checking
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    accounts.write_text(
+        """
+account Expenses:Groceries
+    ; type: Expense
+
+account Assets:Bank:Checking
+    ; type: Cash
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    groups = scan_unknowns(journal, [])["groups"]
+    assert len(groups) == 1
+    assert len(groups[0]["txns"]) == 3
+
+    # User picks a category for the second Costco only.
+    second_txn = groups[0]["txns"][1]
+    txn_updates, warnings = apply_unknown_mappings(
+        journal_path=journal,
+        accounts_dat=accounts,
+        selections={
+            second_txn["txnId"]: {
+                "groupKey": groups[0]["groupKey"],
+                "headerLine": second_txn["headerLine"],
+                "selectionType": "category",
+                "categoryAccount": "Expenses:Groceries",
+            }
+        },
+        scanned_groups=groups,
+        tracked_accounts={},
+    )
+
+    assert warnings == []
+    assert txn_updates == 1
+    content = journal.read_text(encoding="utf-8")
+    # Only one of the three Unknown postings was rewritten.
+    assert content.count("Expenses:Unknown") == 2
+    assert content.count("Expenses:Groceries") == 1
+
+
+def test_apply_unknown_mappings_drift_check_skips_shifted_header(tmp_path: Path) -> None:
+    """If the journal's header line at the staged position changed, refuse to mutate."""
+    journal = tmp_path / "sample.journal"
+    accounts = tmp_path / "10-accounts.dat"
+
+    journal.write_text(
+        """
+2026/03/01 COSTCO #0761
+    Expenses:Unknown  $42.00
+    Assets:Bank:Checking
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    accounts.write_text(
+        """
+account Expenses:Groceries
+    ; type: Expense
+
+account Assets:Bank:Checking
+    ; type: Cash
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    groups = scan_unknowns(journal, [])["groups"]
+    txn = groups[0]["txns"][0]
+
+    # Simulate an external edit between scan and apply: the header at the
+    # staged position no longer matches the staged header_line.
+    journal.write_text(
+        """
+2026/03/01 SOMETHING ELSE
+    Expenses:Unknown  $42.00
+    Assets:Bank:Checking
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    txn_updates, warnings = apply_unknown_mappings(
+        journal_path=journal,
+        accounts_dat=accounts,
+        selections={
+            txn["txnId"]: {
+                "groupKey": groups[0]["groupKey"],
+                "headerLine": txn["headerLine"],
+                "selectionType": "category",
+                "categoryAccount": "Expenses:Groceries",
+            }
+        },
+        scanned_groups=groups,
+        tracked_accounts={},
+    )
+
+    assert txn_updates == 0
+    assert any("stale data" in w["warning"] for w in warnings)
+    assert "Expenses:Groceries" not in journal.read_text(encoding="utf-8")
 
 
 def test_scan_unknowns_suggests_unique_transfer_match(tmp_path: Path) -> None:
@@ -315,12 +464,12 @@ account Assets:Bank:Savings
     txn_updates, warnings = apply_unknown_mappings(
         journal_path=journal,
         accounts_dat=accounts,
-        selections={
+        selections=_selections(groups, {
             "transfer to savings::checking_import": {
                 "selectionType": "transfer",
                 "targetTrackedAccountId": "savings",
             }
-        },
+        }),
         scanned_groups=groups,
         tracked_accounts=_tracked_accounts(),
     )
@@ -374,12 +523,12 @@ account Assets:Bank:Savings
     txn_updates, warnings = apply_unknown_mappings(
         journal_path=journal,
         accounts_dat=accounts,
-        selections={
+        selections=_selections(groups, {
             "transfer::checking_import": {
                 "selectionType": "transfer",
                 "targetTrackedAccountId": "savings",
             }
-        },
+        }),
         scanned_groups=groups,
         tracked_accounts=_tracked_accounts(),
     )
@@ -434,12 +583,12 @@ account Liabilities:Cards:Visa
     txn_updates, warnings = apply_unknown_mappings(
         journal_path=journal,
         accounts_dat=accounts,
-        selections={
+        selections=_selections(groups, {
             "credit card payment::checking_import": {
                 "selectionType": "transfer",
                 "targetTrackedAccountId": "visa",
             }
-        },
+        }),
         scanned_groups=groups,
         tracked_accounts=_tracked_accounts(),
     )
@@ -486,12 +635,12 @@ account Assets:Vehicle:Subaru
     txn_updates, warnings = apply_unknown_mappings(
         journal_path=journal,
         accounts_dat=accounts,
-        selections={
+        selections=_selections(groups, {
             "vehicle purchase::checking_import": {
                 "selectionType": "transfer",
                 "targetTrackedAccountId": "vehicle",
             }
-        },
+        }),
         scanned_groups=groups,
         tracked_accounts=_tracked_accounts(),
     )
@@ -541,12 +690,12 @@ account Liabilities:Loans:Auto
     txn_updates, warnings = apply_unknown_mappings(
         journal_path=journal,
         accounts_dat=accounts,
-        selections={
+        selections=_selections(groups, {
             "auto loan payment::checking_import": {
                 "selectionType": "transfer",
                 "targetTrackedAccountId": "auto_loan",
             }
-        },
+        }),
         scanned_groups=groups,
         tracked_accounts=_tracked_accounts(),
     )
@@ -616,12 +765,12 @@ account {transfer_account}
     txn_updates, warnings = apply_unknown_mappings(
         journal_path=journal,
         accounts_dat=accounts,
-        selections={
+        selections=_selections(groups, {
             "transfer::savings_import": {
                 "selectionType": "transfer",
                 "targetTrackedAccountId": "checking",
             }
-        },
+        }),
         scanned_groups=groups,
         tracked_accounts=_tracked_accounts(),
     )

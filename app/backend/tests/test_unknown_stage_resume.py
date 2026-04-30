@@ -61,12 +61,17 @@ def test_unknown_scan_reuses_existing_stage_and_preserves_selections(tmp_path: P
     assert scanned["stageId"]
     assert scanned["selections"] == {}
 
+    txn = scanned["groups"][0]["txns"][0]
+    txn_id = txn["txnId"]
+    header_line = txn["headerLine"]
+
     updated = main.unknown_stage_mappings(
         UnknownStageRequest(
             stageId=scanned["stageId"],
             selections=[
                 UnknownSelection(
-                    groupKey="coffee shop::checking_import",
+                    txnId=txn_id,
+                    headerLine=header_line,
                     selectionType="category",
                     categoryAccount="Expenses:Food:Coffee",
                 )
@@ -78,7 +83,9 @@ def test_unknown_scan_reuses_existing_stage_and_preserves_selections(tmp_path: P
     rescanned = main.unknown_scan(UnknownScanRequest(journalPath=str(journal)))
     assert rescanned["stageId"] == scanned["stageId"]
     assert rescanned["selections"] == {
-        "coffee shop::checking_import": {
+        txn_id: {
+            "txnId": txn_id,
+            "headerLine": header_line,
             "groupKey": "coffee shop::checking_import",
             "selectionType": "category",
             "categoryAccount": "Expenses:Food:Coffee",
@@ -105,12 +112,14 @@ def test_unknown_scan_refreshes_groups_and_drops_stale_selections(tmp_path: Path
     monkeypatch.setattr(main, "_require_workspace_config", lambda: config)
 
     scanned = main.unknown_scan(UnknownScanRequest(journalPath=str(journal)))
+    txn = scanned["groups"][0]["txns"][0]
     main.unknown_stage_mappings(
         UnknownStageRequest(
             stageId=scanned["stageId"],
             selections=[
                 UnknownSelection(
-                    groupKey="coffee shop::checking_import",
+                    txnId=txn["txnId"],
+                    headerLine=txn["headerLine"],
                     selectionType="category",
                     categoryAccount="Expenses:Food:Coffee",
                 )

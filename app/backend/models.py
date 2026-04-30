@@ -56,7 +56,8 @@ class UnknownScanRequest(BaseModel):
 
 
 class UnknownSelection(BaseModel):
-    groupKey: str
+    txnId: str
+    headerLine: str
     selectionType: Literal["category", "transfer", "match"]
     categoryAccount: str | None = None
     targetTrackedAccountId: str | None = None
