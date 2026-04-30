@@ -42,6 +42,7 @@
   let contextLoading = false;
   let contextError = data.initialContextError ?? '';
   let lastFetchedRange = context ? `${periodStart}::${periodEnd}` : '';
+  let hasSnappedPeriodStart = false;
 
   let setupCommitted = false;
   let ticked = new Set<string>();
@@ -126,9 +127,12 @@
         `/api/accounts/${encodeURIComponent(account.id)}/reconciliation-context?period_start=${periodStart}&period_end=${periodEnd}`
       );
       context = res;
-      if (res.lastReconciliationDate) {
+      // Snap on the initial fetch only — matches the 8b modal precedent and
+      // avoids surprising the user if they Edit→change→Continue past the floor.
+      if (!hasSnappedPeriodStart && res.lastReconciliationDate) {
         const floor = addDays(res.lastReconciliationDate, 1);
         if (periodStart < floor) periodStart = floor;
+        hasSnappedPeriodStart = true;
       }
       const ids = new Set(res.transactions.map((row) => row.id));
       ticked = new Set([...ticked].filter((id) => ids.has(id)));

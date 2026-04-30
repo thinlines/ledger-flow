@@ -667,7 +667,7 @@
                           <button
                             type="button"
                             class="btn w-fit"
-                            on:click={() => void goto(`/accounts/${account.id}/reconcile`)}
+                            on:click={() => void goto(`/accounts/${encodeURIComponent(account.id)}/reconcile`)}
                           >
                             Reconcile
                           </button>

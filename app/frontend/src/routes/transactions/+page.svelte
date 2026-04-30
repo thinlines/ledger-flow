@@ -295,7 +295,7 @@
             <button
               class="btn btn-primary"
               type="button"
-              on:click={() => void goto(`/accounts/${selectedAccount.id}/reconcile`)}
+              on:click={() => void goto(`/accounts/${encodeURIComponent(selectedAccount.id)}/reconcile`)}
             >
               Reconcile
             </button>
