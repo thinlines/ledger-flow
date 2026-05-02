@@ -286,3 +286,70 @@ class TestContextLastReconciliationDate:
             "checking", period_start="2026-03-01", period_end="2026-03-31"
         )
         assert result["lastReconciliationDate"] == "2026-02-28"
+
+
+class TestContextEarliestPostingDate:
+    def test_returns_earliest_account_posting_across_periods(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """Earliest-posting fallback is the earliest non-assertion-only posting on
+        the account — the route uses it as the suggested ``periodStart`` when the
+        account has never been reconciled. Postings outside the queried period
+        still count."""
+        config = _make_config(tmp_path / "workspace")
+        _seed_accounts_dat(config)
+        body = (
+            "2026-01-12 * Opening Balance\n"
+            "    ; tracked_account_id: checking\n"
+            "    Assets:Checking:Wells Fargo  $1000.00\n"
+            "    Equity:Opening-Balances\n"
+            "\n"
+            "2026-03-15 Coffee\n"
+            "    Assets:Checking:Wells Fargo  $-4.50\n"
+            "    Expenses:Food:Coffee\n"
+        )
+        _seed_journal(config, body)
+        monkeypatch.setattr(main, "_require_workspace_config", lambda: config)
+
+        result = main.accounts_reconciliation_context(
+            "checking", period_start="2026-04-01", period_end="2026-04-30"
+        )
+        assert result["earliestPostingDate"] == "2026-01-12"
+
+    def test_returns_none_when_account_has_no_postings(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        config = _make_config(tmp_path / "workspace")
+        _seed_accounts_dat(config)
+        _seed_journal(config, "")
+        monkeypatch.setattr(main, "_require_workspace_config", lambda: config)
+
+        result = main.accounts_reconciliation_context(
+            "checking", period_start="2026-01-01", period_end="2026-12-31"
+        )
+        assert result["earliestPostingDate"] is None
+
+    def test_excludes_reconciliation_assertion_transactions(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """Reconciliation-assertion transactions are zero-amount markers; they
+        must not pose as the earliest data point on the account."""
+        config = _make_config(tmp_path / "workspace")
+        _seed_accounts_dat(config)
+        body = (
+            "2026-01-31 * Statement reconciliation · Wells Fargo Checking · ending 2026-01-31\n"
+            "    ; reconciliation_event_id: aaaaaaaa-1\n"
+            "    ; statement_period: 2026-01-01..2026-01-31\n"
+            "    Assets:Checking:Wells Fargo  $0 = $0.00\n"
+            "\n"
+            "2026-02-14 Coffee\n"
+            "    Assets:Checking:Wells Fargo  $-4.50\n"
+            "    Expenses:Food:Coffee\n"
+        )
+        _seed_journal(config, body)
+        monkeypatch.setattr(main, "_require_workspace_config", lambda: config)
+
+        result = main.accounts_reconciliation_context(
+            "checking", period_start="2026-03-01", period_end="2026-03-31"
+        )
+        assert result["earliestPostingDate"] == "2026-02-14"

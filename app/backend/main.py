@@ -1559,6 +1559,9 @@ def accounts_reconciliation_context(
         "lastReconciliationDate": context.last_reconciliation_date.isoformat()
             if context.last_reconciliation_date is not None
             else None,
+        "earliestPostingDate": context.earliest_posting_date.isoformat()
+            if context.earliest_posting_date is not None
+            else None,
         "transactions": [
             {
                 "id": row.id,

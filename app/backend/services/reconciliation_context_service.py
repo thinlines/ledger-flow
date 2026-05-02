@@ -1,11 +1,12 @@
-"""Builds the read-only payload the reconciliation modal needs in one round-trip.
+"""Builds the read-only payload the reconciliation route needs in one round-trip.
 
-The modal asks for ``openingBalance`` (running balance at ``periodStart - 1
+The route asks for ``openingBalance`` (running balance at ``periodStart - 1
 day``), the asserted-account currency, the most recent reconciliation date,
-and the per-row transactions in ``[periodStart, periodEnd]`` from the asserted
-account's perspective. Transfer rows surface only the asserted-account
-posting amount — the modal never has to worry about which side it's looking
-at.
+the earliest journal posting date for the account (used as the suggested
+``periodStart`` when the account has never been reconciled), and the per-row
+transactions in ``[periodStart, periodEnd]`` from the asserted account's
+perspective. Transfer rows surface only the asserted-account posting amount —
+the route never has to worry about which side it's looking at.
 """
 
 from __future__ import annotations
@@ -42,6 +43,7 @@ class ReconciliationContext:
     opening_balance: Decimal
     currency: str
     last_reconciliation_date: date | None
+    earliest_posting_date: date | None
     transactions: list[ReconciliationContextRow]
 
 
@@ -113,6 +115,7 @@ def build_reconciliation_context(
     transactions = load_transactions(config)
 
     opening_balance = Decimal("0")
+    earliest_posting: date | None = None
     rows: list[ReconciliationContextRow] = []
 
     for index, transaction in enumerate(transactions):
@@ -123,6 +126,9 @@ def build_reconciliation_context(
             continue
 
         posted = transaction.posted_on
+        if earliest_posting is None or posted < earliest_posting:
+            earliest_posting = posted
+
         if posted < period_start:
             opening_balance += amount
             continue
@@ -150,5 +156,6 @@ def build_reconciliation_context(
         opening_balance=opening_balance,
         currency=base_currency,
         last_reconciliation_date=last_recon,
+        earliest_posting_date=earliest_posting,
         transactions=rows,
     )

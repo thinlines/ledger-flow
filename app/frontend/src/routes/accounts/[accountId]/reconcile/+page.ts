@@ -21,6 +21,7 @@ export type ReconcileContextResponse = {
   openingBalance: string;
   currency: string;
   lastReconciliationDate: string | null;
+  earliestPostingDate: string | null;
   transactions: ReconcileContextRow[];
 };
 
@@ -97,6 +98,8 @@ export const load: PageLoad = async ({ params, fetch }) => {
     if (initialContext.lastReconciliationDate) {
       const floor = addDays(initialContext.lastReconciliationDate, 1);
       if (initialPeriodStart < floor) initialPeriodStart = floor;
+    } else if (initialContext.earliestPostingDate) {
+      initialPeriodStart = initialContext.earliestPostingDate;
     }
   } catch (e) {
     initialContextError =
