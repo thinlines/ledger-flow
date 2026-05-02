@@ -54,21 +54,37 @@ class WellsFargoAdapter:
 
     _REF_RE = re.compile(r"REF #([A-Z0-9]+)")
     _CHECK_RE = re.compile(r"CHECK # ?(\d+)")
+    _EXPECTED_COLUMNS = ("DATE", "DESCRIPTION", "AMOUNT", "CHECK #", "STATUS")
 
     def parse(self, text: str) -> Iterator[Record]:
-        reader = csv.reader(io.StringIO(text))
+        reader = csv.DictReader(io.StringIO(text))
+        if reader.fieldnames is None:
+            raise ValueError("Wells Fargo CSV is empty or missing header row")
+        missing = [c for c in self._EXPECTED_COLUMNS if c not in reader.fieldnames]
+        if missing:
+            raise ValueError(
+                f"Wells Fargo CSV header missing expected columns: {missing!r}; "
+                f"got {reader.fieldnames!r}"
+            )
+
         for row in reader:
-            # Headerless WF format: date, amount, cleared, note, description
-            code = self._extract_code(row[3], row[4])
+            description = (row.get("DESCRIPTION") or "").strip()
+            amount_raw = (row.get("AMOUNT") or "").strip()
+            check_number = (row.get("CHECK #") or "").strip()
+            status = (row.get("STATUS") or "").strip()
+            if not description and not amount_raw:
+                continue
+
+            code = self._extract_code(check_number, description)
             yield Record(
-                date=datetime.strptime(row[0], "%m/%d/%Y").date(),
-                description=row[4],
-                amount=Decimal(row[1]),
+                date=datetime.strptime(row["DATE"].strip(), self.csv_date_format).date(),
+                description=description,
+                amount=Decimal(amount_raw),
                 currency="$",
                 code=code,
                 note=None,
                 balance=None,  # WF CSV has no running-balance column
-                raw={"cleared": row[2]},
+                raw={"status": status},
             )
 
     def _extract_code(self, note: str, description: str) -> str | None:

@@ -76,7 +76,8 @@ class TestWellsFargoAdapterParse:
         return WellsFargoAdapter()
 
     def test_basic_row(self, adapter):
-        text = '"03/19/2026","827.31","*","","DEPOSIT FROM PAYEE_001"\n'
+        text = '"DATE","DESCRIPTION","AMOUNT","CHECK #","STATUS"\n'
+        text += '"03/19/2026","DEPOSIT FROM PAYEE_001","827.31","","Posted"\n'
         records = list(adapter.parse(text))
         assert len(records) == 1
         r = records[0]
@@ -87,18 +88,22 @@ class TestWellsFargoAdapterParse:
         assert r.note is None
         assert r.balance is None
         assert r.currency == "$"
-        assert r.raw == {"cleared": "*"}
+        assert r.raw == {"status": "Posted"}
 
     def test_ref_code_extraction(self, adapter):
         text = (
-            '"03/16/2026","-25.00","*","","RECURRING TRANSFER TO SAVINGS '
-            'REF #OP0X8Q6GPB XXXXXX0000"\n'
+            '"DATE","DESCRIPTION","AMOUNT","CHECK #","STATUS"\n'
+            '"03/16/2026","RECURRING TRANSFER TO SAVINGS REF #OP0X8Q6GPB '
+            'XXXXXX0000","-25.00","","Posted"\n'
         )
         records = list(adapter.parse(text))
         assert records[0].code == "OP0X8Q6GPB"
 
     def test_check_code_with_note(self, adapter):
-        text = '"02/18/2026","-1000.00","*","283","CHECK # 283"\n'
+        text = (
+            '"DATE","DESCRIPTION","AMOUNT","CHECK #","STATUS"\n'
+            '"02/18/2026","CHECK # 283","-1000.00","283","Posted"\n'
+        )
         records = list(adapter.parse(text))
         r = records[0]
         assert r.code == "283"
@@ -106,8 +111,9 @@ class TestWellsFargoAdapterParse:
 
     def test_multiple_rows(self, adapter):
         text = (
-            '"03/19/2026","827.31","*","","DEPOSIT FROM PAYEE_001"\n'
-            '"03/17/2026","-41.01","*","","PURCHASE AUTHORIZED ON 03/16 PAYEE_002"\n'
+            '"DATE","DESCRIPTION","AMOUNT","CHECK #","STATUS"\n'
+            '"03/19/2026","DEPOSIT FROM PAYEE_001","827.31","","Posted"\n'
+            '"03/17/2026","PURCHASE AUTHORIZED ON 03/16 PAYEE_002","-41.01","","Posted"\n'
         )
         records = list(adapter.parse(text))
         assert len(records) == 2
