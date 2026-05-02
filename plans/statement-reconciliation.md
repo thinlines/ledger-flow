@@ -109,15 +109,31 @@ The flow is the same Setup → Review → Finish, but laid out as page panels in
 
 The modal code (`ReconcileModal.svelte` and its mounting) is removed.
 
-#### 8d. Attest-anyway recourse (zero-diff-but-assertion-fails)
+#### 8d. Duplicate review + durable resolution (zero-diff-but-assertion-fails)
 
-When the user clicks Reconcile, the ticked-diff is zero (per the modal/route's math), but ledger rejects the assertion, the route shows: `Off by $X.XX. Unticked transactions in this period total $X.XX — they're causing the mismatch.`
+When the user clicks Reconcile, the ticked-diff is zero, but ledger still rejects the assertion, the route should treat that as a *possible duplicate* workflow, not a bulk-delete workflow.
 
-Recourse: "Remove unticked transactions and reconcile." Lists the unticked rows with payee, date, signed amount; confirms count and amount; deletes them via the existing event-sourced delete (one event per row, individually undoable via 5e); then writes the assertion. All deletions surface in `Recent activity` as undoable.
+The route keeps lightweight review controls (`Remaining`, `Checked`, `All`) and, in the zero-diff 422 state, surfaces likely duplicate groups by comparing checked rows against unchecked rows with a tightened heuristic slice from the unknowns/manual-match flow:
 
-The "remove unticked" action is structurally honest: when ticked-diff is zero but the assertion fails, the unticked rows ARE the discrepancy by arithmetic. The user has already attested (by ticking) which transactions belong; the unticked rows are either duplicates, foreign charges, or never-should-have-been-imported entries. Deleting them aligns the journal with the user's mental model.
+- exact absolute amount match required
+- narrow date window
+- payee similarity only as a ranking signal
+- no `close amount`-only candidate tier
 
-A future Feature 9 (manual merge) addresses the duplicate case more elegantly — merge two transactions into one preserving both source-identity hashes — but that's a journal-edit primitive, not a reconciliation feature. Until 9b ships, deletion is the primary recourse here.
+The duplicate-review view shows each checked transaction with matching unchecked transactions, source badges (`Imported`, `Manual`), and a plain-language reason the pair was suggested.
+
+Resolution is source-aware:
+
+- **Checked imported + unchecked manual:** `Remove manual duplicate`
+- **Checked manual + unchecked imported:** `Use imported transaction`
+- **Checked imported + unchecked imported:** `Merge imported duplicates`
+- **Checked manual + unchecked manual:** `Remove manual duplicate`
+
+`Use imported transaction` follows the same durability principle as the unknowns/manual-match flow: the imported row survives, the manual duplicate is archived/removed, user-authored categorization or notes carry over as appropriate, and the imported survivor becomes the checked row in the reconciliation view.
+
+`Merge imported duplicates` pulls forward the minimum durable merge substrate from Feature 9: one imported survivor keeps both transactions’ import identity metadata so either bank-row variant is recognized on future imports. This task does **not** include the full transactions-page multi-select merge UI; that remains 9b.
+
+If no sufficiently strong duplicate candidates exist, the route falls back to the 8c rejection copy and ordinary transaction review. A generic “delete all remaining” shortcut is intentionally absent, and generic adjustment posting remains 8i.
 
 #### 8e. Subset-sum diagnostic — "Find the difference" (was 8f)
 
