@@ -12,6 +12,7 @@ from models import (
 from services.config_service import AppConfig
 from services.event_log_service import read_events
 from services.import_service import _build_existing_map, _classify_transaction
+from services import reconciliation_duplicate_service
 
 
 def _make_config(workspace: Path) -> AppConfig:
@@ -148,6 +149,42 @@ class TestDuplicateReviewHeuristic:
         assert review["hasGroups"] is False
         assert review["groups"] == []
 
+    def test_review_endpoint_rejects_opposite_sign_same_day_pairs(self, tmp_path: Path, monkeypatch) -> None:
+        config = _make_config(tmp_path / "workspace")
+        _seed_accounts_dat(config)
+        _seed_journal(
+            config,
+            (
+                "2026-03-05 ACH Deposit WELLS FARGO IFI - ACCTVERIFY\n"
+                "    ; import_account_id: checking\n"
+                "    ; source_identity: acctverify-in\n"
+                "    ; source_payload_hash: payload-in\n"
+                "    Assets:Checking:Wells Fargo  $0.12\n"
+                "    Expenses:Food:Dining\n"
+                "\n"
+                "2026-03-05 ACH Withdrawal WELLS FARGO IFI - ACCTVERIFY\n"
+                "    ; import_account_id: checking\n"
+                "    ; source_identity: acctverify-out\n"
+                "    ; source_payload_hash: payload-out\n"
+                "    Assets:Checking:Wells Fargo  $-0.12\n"
+                "    Expenses:Food:Dining\n"
+            ),
+        )
+        rows = _context_rows(config, monkeypatch)
+        checked = _row_by_payee(rows, "ACH Deposit WELLS FARGO IFI - ACCTVERIFY")
+
+        review = main.accounts_reconciliation_duplicate_review(
+            "checking",
+            ReconciliationDuplicateReviewRequest(
+                periodStart="2026-03-01",
+                periodEnd="2026-03-31",
+                checkedSelectionKeys=[checked["selectionKey"]],
+            ),
+        )
+
+        assert review["hasGroups"] is False
+        assert review["groups"] == []
+
 
 class TestDuplicateResolution:
     def test_use_imported_transaction_archives_manual_and_carries_category(
@@ -255,6 +292,48 @@ class TestDuplicateResolution:
         assert "Imported rent" in updated
         assert events[-1]["type"] == "reconciliation.duplicate_manual_removed.v1"
 
+    def test_duplicate_resolution_rolls_back_when_event_write_fails(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        config = _make_config(tmp_path / "workspace")
+        _seed_accounts_dat(config)
+        journal = _seed_journal(
+            config,
+            (
+                "2026-03-04 Imported rent\n"
+                "    ; import_account_id: checking\n"
+                "    ; source_identity: rent-1\n"
+                "    ; source_payload_hash: payload-rent-1\n"
+                "    Assets:Checking:Wells Fargo  $-900.00\n"
+                "    Expenses:Food:Dining\n"
+                "\n"
+                "2026-03-05 Manual rent copy\n"
+                "    ; :manual:\n"
+                "    Assets:Checking:Wells Fargo  $-900.00\n"
+                "    Expenses:Food:Dining\n"
+            ),
+        )
+        original = journal.read_text(encoding="utf-8")
+        rows = _context_rows(config, monkeypatch)
+        imported = _row_by_payee(rows, "Imported rent")
+        manual = _row_by_payee(rows, "Manual rent copy")
+
+        monkeypatch.setattr(reconciliation_duplicate_service, "emit_event", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("event failed")))
+
+        with pytest.raises(RuntimeError):
+            main.accounts_reconciliation_duplicate_resolution(
+                "checking",
+                ReconciliationDuplicateResolutionRequest(
+                    periodStart="2026-03-01",
+                    periodEnd="2026-03-31",
+                    checkedSelectionKey=imported["selectionKey"],
+                    uncheckedSelectionKey=manual["selectionKey"],
+                    action="remove_manual_duplicate",
+                ),
+            )
+
+        assert journal.read_text(encoding="utf-8") == original
+
     def test_merge_imported_duplicates_preserves_alternate_identity_for_future_dedupe(
         self, tmp_path: Path, monkeypatch
     ) -> None:
@@ -317,6 +396,48 @@ class TestDuplicateResolution:
         refreshed_rows = _context_rows(config, monkeypatch)
         refreshed_survivor = _row_by_payee(refreshed_rows, "Utility bill")
         assert refreshed_survivor["selectionKey"] == survivor["selectionKey"]
+
+    def test_use_imported_transaction_rejects_split_manual_duplicate(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        config = _make_config(tmp_path / "workspace")
+        _seed_accounts_dat(config)
+        _seed_journal(
+            config,
+            (
+                "2026-03-01 Manual groceries split\n"
+                "    ; :manual:\n"
+                "    Assets:Checking:Wells Fargo  $-25.00\n"
+                "    Expenses:Food:Groceries  $-20.00\n"
+                "    Expenses:Food:Dining  $-5.00\n"
+                "\n"
+                "2026-03-02 Grocery Store\n"
+                "    ; import_account_id: checking\n"
+                "    ; source_identity: import-1\n"
+                "    ; source_payload_hash: payload-1\n"
+                "    Assets:Checking:Wells Fargo  $-25.00\n"
+                "    Expenses:Unknown\n"
+            ),
+        )
+
+        rows = _context_rows(config, monkeypatch)
+        manual = _row_by_payee(rows, "Manual groceries split")
+        imported = _row_by_payee(rows, "Grocery Store")
+
+        with pytest.raises(main.HTTPException) as exc_info:
+            main.accounts_reconciliation_duplicate_resolution(
+                "checking",
+                ReconciliationDuplicateResolutionRequest(
+                    periodStart="2026-03-01",
+                    periodEnd="2026-03-31",
+                    checkedSelectionKey=manual["selectionKey"],
+                    uncheckedSelectionKey=imported["selectionKey"],
+                    action="use_imported_transaction",
+                ),
+            )
+
+        assert exc_info.value.status_code == 422
+        assert "Split manual duplicates" in exc_info.value.detail
 
     def test_cross_journal_imported_candidates_show_without_merge_action(
         self, tmp_path: Path, monkeypatch

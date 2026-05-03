@@ -46,9 +46,21 @@ class DuplicateCandidate:
     action_blocked_reason: str | None
 
 
+def _normalize_payee_token(token: str) -> str:
+    if token.endswith("ies") and len(token) > 4:
+        return token[:-3] + "y"
+    if token.endswith("s") and len(token) > 4:
+        return token[:-1]
+    return token
+
+
 def _normalize_payee(value: str) -> str:
     normalized = re.sub(r"[^a-z0-9]+", " ", value.lower()).strip()
-    tokens = [token for token in normalized.split() if token not in PAYEE_NOISE_WORDS]
+    tokens = [
+        _normalize_payee_token(token)
+        for token in normalized.split()
+        if token not in PAYEE_NOISE_WORDS
+    ]
     return " ".join(tokens)
 
 
@@ -57,9 +69,21 @@ def _payee_similarity(left: str, right: str) -> float:
     right_norm = _normalize_payee(right)
     if not left_norm or not right_norm:
         return 0.0
-    if left_norm in right_norm or right_norm in left_norm:
+    if left_norm == right_norm:
         return 1.0
-    return SequenceMatcher(None, left_norm, right_norm).ratio()
+    left_tokens = set(left_norm.split())
+    right_tokens = set(right_norm.split())
+    common = left_tokens & right_tokens
+    if common:
+        subset_ratio = len(common) / min(len(left_tokens), len(right_tokens))
+        coverage_ratio = len(common) / max(len(left_tokens), len(right_tokens))
+        if subset_ratio == 1.0:
+            return 0.9 + (0.05 * coverage_ratio)
+        return 0.7 + (0.2 * coverage_ratio)
+    if len(left_tokens) == 1 and len(right_tokens) == 1:
+        ratio = SequenceMatcher(None, left_norm, right_norm).ratio()
+        return ratio if ratio >= 0.92 else 0.0
+    return 0.0
 
 
 def _candidate_reason(date_diff: int, payee_score: float) -> tuple[str, int]:
@@ -106,7 +130,7 @@ def build_duplicate_groups(
         for unchecked in unchecked_rows:
             if checked.selection_key == unchecked.selection_key:
                 continue
-            if abs(checked.signed_amount) != abs(unchecked.signed_amount):
+            if checked.signed_amount != unchecked.signed_amount:
                 continue
 
             unchecked_date = date.fromisoformat(unchecked.date)
@@ -174,6 +198,20 @@ def _find_other_posting(block_lines: list[str], ledger_account: str) -> tuple[in
         if account != ledger_account:
             return idx, account
     return None, None
+
+
+def _find_other_postings(block_lines: list[str], ledger_account: str) -> list[tuple[int, str]]:
+    postings: list[tuple[int, str]] = []
+    for idx, line in enumerate(block_lines[1:], start=1):
+        if line.strip().startswith(";"):
+            continue
+        match = ACCOUNT_LINE_RE.match(line) or ACCOUNT_ONLY_RE.match(line)
+        if not match:
+            continue
+        account = match.group(2).strip()
+        if account != ledger_account:
+            postings.append((idx, account))
+    return postings
 
 
 def _rewrite_posting_account(line: str, target_account: str) -> str:
@@ -357,7 +395,7 @@ def _emit_resolution_event(
     summary: str,
     payload: dict,
     hash_before_by_path: dict[Path, str],
-) -> str | None:
+) -> str:
     journal_refs = []
     for path, before in sorted(hash_before_by_path.items(), key=lambda item: str(item[0])):
         journal_refs.append(
@@ -367,17 +405,13 @@ def _emit_resolution_event(
                 "hash_after": hash_file(path),
             }
         )
-    try:
-        return emit_event(
-            config.root_dir,
-            event_type=event_type,
-            summary=summary,
-            payload=payload,
-            journal_refs=journal_refs,
-        )
-    except Exception:
-        _LOG.error("Event emission failed for duplicate resolution", exc_info=True)
-        return None
+    return emit_event(
+        config.root_dir,
+        event_type=event_type,
+        summary=summary,
+        payload=payload,
+        journal_refs=journal_refs,
+    )
 
 
 def resolve_duplicate_candidate(
@@ -406,21 +440,26 @@ def resolve_duplicate_candidate(
         if remove_start > 0 and lines[remove_start - 1].strip() == "":
             remove_start -= 1
         deleted_block = "\n".join(lines[remove_start:block_end])
+        original_text = journal_path.read_text(encoding="utf-8")
         del lines[remove_start:block_end]
-        _write_journal(journal_path, lines)
-        event_id = _emit_resolution_event(
-            config=config,
-            event_type="reconciliation.duplicate_manual_removed.v1",
-            summary=f"Removed manual duplicate: {target.payee[:60]} on {target.date}",
-            payload={
-                "tracked_account_id": tracked_account_id,
-                "journal_path": rel_path(journal_path, config.root_dir),
-                "removed_selection_key": target.selection_key,
-                "removed_header_line": target.header_line,
-                "deleted_block": deleted_block,
-            },
-            hash_before_by_path=hash_before_by_path,
-        )
+        try:
+            _write_journal(journal_path, lines)
+            event_id = _emit_resolution_event(
+                config=config,
+                event_type="reconciliation.duplicate_manual_removed.v1",
+                summary=f"Removed manual duplicate: {target.payee[:60]} on {target.date}",
+                payload={
+                    "tracked_account_id": tracked_account_id,
+                    "journal_path": rel_path(journal_path, config.root_dir),
+                    "removed_selection_key": target.selection_key,
+                    "removed_header_line": target.header_line,
+                    "deleted_block": deleted_block,
+                },
+                hash_before_by_path=hash_before_by_path,
+            )
+        except Exception:
+            journal_path.write_text(original_text, encoding="utf-8")
+            raise
         return {
             "removedSelectionKeys": [target.selection_key],
             "addedCheckedSelectionKeys": [],
@@ -448,12 +487,17 @@ def resolve_duplicate_candidate(
             manual_block = manual_lines[manual_start:manual_end]
             imported_block = imported_lines[imported_start:imported_end]
 
-        _, destination_account = _find_other_posting(manual_block, ledger_account)
-        if not destination_account:
-            raise HTTPException(status_code=422, detail="Manual duplicate is missing a category to carry over.")
-        imported_posting_idx, imported_other_account = _find_other_posting(imported_block, ledger_account)
-        if imported_posting_idx is None or imported_other_account is None:
+        manual_postings = _find_other_postings(manual_block, ledger_account)
+        if len(manual_postings) != 1:
+            raise HTTPException(
+                status_code=422,
+                detail="Split manual duplicates need a fuller merge flow before they can replace an imported transaction.",
+            )
+        imported_postings = _find_other_postings(imported_block, ledger_account)
+        if len(imported_postings) != 1:
             raise HTTPException(status_code=422, detail="Imported duplicate does not have a usable category posting.")
+        _, destination_account = manual_postings[0]
+        imported_posting_idx, imported_other_account = imported_postings[0]
 
         updated_imported = list(imported_block)
         if imported_other_account != destination_account:
@@ -469,6 +513,8 @@ def resolve_duplicate_candidate(
         archive_size_before = archive_path.stat().st_size if archive_path.exists() else None
         _capture_hash_before(config, archive_path, hash_before_by_path)
         _backup_once(archive_path, "reconcile-duplicate", backups)
+        manual_original_text = manual_journal.read_text(encoding="utf-8")
+        imported_original_text = imported_journal.read_text(encoding="utf-8")
         try:
             archive_manual_entry(archive_path, match_id, manual_block)
             if manual_journal == imported_journal:
@@ -489,23 +535,26 @@ def resolve_duplicate_candidate(
                 del manual_lines[manual_start:manual_remove_end]
                 _write_journal(imported_journal, imported_lines)
                 _write_journal(manual_journal, manual_lines)
+            event_id = _emit_resolution_event(
+                config=config,
+                event_type="reconciliation.imported_transaction_used.v1",
+                summary=f"Used imported transaction for {imported_row.payee[:60]} on {imported_row.date}",
+                payload={
+                    "tracked_account_id": tracked_account_id,
+                    "manual_selection_key": manual_row.selection_key,
+                    "manual_header_line": manual_row.header_line,
+                    "imported_selection_key": imported_row.selection_key,
+                    "imported_header_line": imported_row.header_line,
+                    "match_id": match_id,
+                },
+                hash_before_by_path=hash_before_by_path,
+            )
         except Exception:
+            manual_journal.write_text(manual_original_text, encoding="utf-8")
+            if imported_journal != manual_journal:
+                imported_journal.write_text(imported_original_text, encoding="utf-8")
             rollback_archive(archive_path, archive_size_before)
             raise
-        event_id = _emit_resolution_event(
-            config=config,
-            event_type="reconciliation.imported_transaction_used.v1",
-            summary=f"Used imported transaction for {imported_row.payee[:60]} on {imported_row.date}",
-            payload={
-                "tracked_account_id": tracked_account_id,
-                "manual_selection_key": manual_row.selection_key,
-                "manual_header_line": manual_row.header_line,
-                "imported_selection_key": imported_row.selection_key,
-                "imported_header_line": imported_row.header_line,
-                "match_id": match_id,
-            },
-            hash_before_by_path=hash_before_by_path,
-        )
 
         return {
             "removedSelectionKeys": [manual_row.selection_key],
@@ -528,40 +577,45 @@ def resolve_duplicate_candidate(
         merged_metadata = _extract_metadata(merged_block)
         updated_survivor = _upsert_import_identity_metadata(survivor_block, merged_metadata)
 
+        original_text = journal_path.read_text(encoding="utf-8")
         lines[survivor_start:survivor_end] = updated_survivor
         merge_end_adjusted = merge_end + (len(updated_survivor) - len(survivor_block)) if merge_start > survivor_start else merge_end
         remove_start = merge_start
         if remove_start > 0 and lines[remove_start - 1].strip() == "":
             remove_start -= 1
         del lines[remove_start:merge_end_adjusted]
-        _write_journal(journal_path, lines)
+        try:
+            _write_journal(journal_path, lines)
 
-        import_account_id = str(merged_row.import_account_id or survivor_row.import_account_id or "").strip()
-        if import_account_id:
-            year = Path(journal_path).stem
-            txns = _import_identity_variants(_extract_metadata(updated_survivor))
-            if txns:
-                ImportIndex(config.root_dir / ".workflow" / "state.db").upsert_transactions(
-                    import_account_id,
-                    year,
-                    journal_path,
-                    str(txns[0].get("sourceFileSha256") or ""),
-                    txns,
-                )
+            import_account_id = str(merged_row.import_account_id or survivor_row.import_account_id or "").strip()
+            if import_account_id:
+                year = Path(journal_path).stem
+                txns = _import_identity_variants(_extract_metadata(updated_survivor))
+                if txns:
+                    ImportIndex(config.root_dir / ".workflow" / "state.db").upsert_transactions(
+                        import_account_id,
+                        year,
+                        journal_path,
+                        str(txns[0].get("sourceFileSha256") or ""),
+                        txns,
+                    )
 
-        event_id = _emit_resolution_event(
-            config=config,
-            event_type="reconciliation.imported_duplicates_merged.v1",
-            summary=f"Merged imported duplicates for {survivor_row.payee[:60]} on {survivor_row.date}",
-            payload={
-                "tracked_account_id": tracked_account_id,
-                "survivor_selection_key": survivor_row.selection_key,
-                "survivor_header_line": survivor_row.header_line,
-                "merged_selection_key": merged_row.selection_key,
-                "merged_header_line": merged_row.header_line,
-            },
-            hash_before_by_path=hash_before_by_path,
-        )
+            event_id = _emit_resolution_event(
+                config=config,
+                event_type="reconciliation.imported_duplicates_merged.v1",
+                summary=f"Merged imported duplicates for {survivor_row.payee[:60]} on {survivor_row.date}",
+                payload={
+                    "tracked_account_id": tracked_account_id,
+                    "survivor_selection_key": survivor_row.selection_key,
+                    "survivor_header_line": survivor_row.header_line,
+                    "merged_selection_key": merged_row.selection_key,
+                    "merged_header_line": merged_row.header_line,
+                },
+                hash_before_by_path=hash_before_by_path,
+            )
+        except Exception:
+            journal_path.write_text(original_text, encoding="utf-8")
+            raise
         return {
             "removedSelectionKeys": [merged_row.selection_key],
             "addedCheckedSelectionKeys": [],
