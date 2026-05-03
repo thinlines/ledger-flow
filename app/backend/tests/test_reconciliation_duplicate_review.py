@@ -1,0 +1,263 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+
+import main
+from models import (
+    ReconciliationDuplicateResolutionRequest,
+    ReconciliationDuplicateReviewRequest,
+)
+from services.config_service import AppConfig
+from services.import_service import _build_existing_map
+
+
+def _make_config(workspace: Path) -> AppConfig:
+    for rel in ["settings", "journals", "inbox", "rules", "opening", "imports"]:
+        (workspace / rel).mkdir(parents=True, exist_ok=True)
+
+    return AppConfig(
+        root_dir=workspace,
+        config_toml=workspace / "settings" / "workspace.toml",
+        workspace={"name": "Test Books", "start_year": 2026, "base_currency": "USD"},
+        dirs={
+            "csv_dir": "inbox",
+            "journal_dir": "journals",
+            "init_dir": "rules",
+            "opening_bal_dir": "opening",
+            "imports_dir": "imports",
+        },
+        institution_templates={},
+        import_accounts={
+            "checking": {
+                "display_name": "Checking Import",
+                "ledger_account": "Assets:Checking:Wells Fargo",
+                "tracked_account_id": "checking",
+            },
+        },
+        tracked_accounts={
+            "checking": {
+                "display_name": "Wells Fargo Checking",
+                "ledger_account": "Assets:Checking:Wells Fargo",
+                "import_account_id": "checking",
+            },
+        },
+        payee_aliases="payee_aliases.csv",
+    )
+
+
+def _seed_accounts_dat(config: AppConfig) -> None:
+    (config.init_dir / "10-accounts.dat").write_text(
+        "\n".join(
+            [
+                "account Assets:Checking:Wells Fargo",
+                "account Expenses:Food:Groceries",
+                "account Expenses:Food:Dining",
+                "account Equity:Opening-Balances",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+
+def _seed_journal(config: AppConfig, body: str) -> Path:
+    journal = config.journal_dir / "2026.journal"
+    journal.write_text(body, encoding="utf-8")
+    return journal
+
+
+def _context_rows(config: AppConfig, monkeypatch, *, start: str = "2026-03-01", end: str = "2026-03-31") -> list[dict]:
+    monkeypatch.setattr(main, "_require_workspace_config", lambda: config)
+    context = main.accounts_reconciliation_context("checking", period_start=start, period_end=end)
+    return context["transactions"]
+
+
+def _row_by_payee(rows: list[dict], payee: str) -> dict:
+    return next(row for row in rows if row["payee"] == payee)
+
+
+class TestDuplicateReviewHeuristic:
+    def test_review_endpoint_requires_exact_amount_match(self, tmp_path: Path, monkeypatch) -> None:
+        config = _make_config(tmp_path / "workspace")
+        _seed_accounts_dat(config)
+        _seed_journal(
+            config,
+            (
+                "2026-03-05 Manual coffee\n"
+                "    ; :manual:\n"
+                "    Assets:Checking:Wells Fargo  $-25.00\n"
+                "    Expenses:Food:Dining\n"
+                "\n"
+                "2026-03-06 Imported coffee\n"
+                "    ; import_account_id: checking\n"
+                "    ; source_identity: import-coffee\n"
+                "    ; source_payload_hash: payload-coffee\n"
+                "    Assets:Checking:Wells Fargo  $-24.00\n"
+                "    Expenses:Unknown\n"
+            ),
+        )
+        rows = _context_rows(config, monkeypatch)
+        manual = _row_by_payee(rows, "Manual coffee")
+
+        review = main.accounts_reconciliation_duplicate_review(
+            "checking",
+            ReconciliationDuplicateReviewRequest(
+                periodStart="2026-03-01",
+                periodEnd="2026-03-31",
+                checkedSelectionKeys=[manual["selectionKey"]],
+            ),
+        )
+
+        assert review["hasGroups"] is False
+        assert review["groups"] == []
+
+
+class TestDuplicateResolution:
+    def test_use_imported_transaction_archives_manual_and_carries_category(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        config = _make_config(tmp_path / "workspace")
+        _seed_accounts_dat(config)
+        journal = _seed_journal(
+            config,
+            (
+                "2026-03-01 Manual groceries\n"
+                "    ; :manual:\n"
+                "    ; notes: remembered later\n"
+                "    Assets:Checking:Wells Fargo  $-25.00\n"
+                "    Expenses:Food:Groceries\n"
+                "\n"
+                "2026-03-02 Grocery Store\n"
+                "    ; import_account_id: checking\n"
+                "    ; source_identity: import-1\n"
+                "    ; source_payload_hash: payload-1\n"
+                "    Assets:Checking:Wells Fargo  $-25.00\n"
+                "    Expenses:Unknown\n"
+            ),
+        )
+        rows = _context_rows(config, monkeypatch)
+        manual = _row_by_payee(rows, "Manual groceries")
+        imported = _row_by_payee(rows, "Grocery Store")
+
+        review = main.accounts_reconciliation_duplicate_review(
+            "checking",
+            ReconciliationDuplicateReviewRequest(
+                periodStart="2026-03-01",
+                periodEnd="2026-03-31",
+                checkedSelectionKeys=[manual["selectionKey"]],
+            ),
+        )
+        assert review["hasGroups"] is True
+        assert review["groups"][0]["matches"][0]["action"] == "use_imported_transaction"
+
+        result = main.accounts_reconciliation_duplicate_resolution(
+            "checking",
+            ReconciliationDuplicateResolutionRequest(
+                periodStart="2026-03-01",
+                periodEnd="2026-03-31",
+                checkedSelectionKey=manual["selectionKey"],
+                uncheckedSelectionKey=imported["selectionKey"],
+                action="use_imported_transaction",
+            ),
+        )
+
+        updated = journal.read_text(encoding="utf-8")
+        archive = (config.journal_dir / "archived-manual.journal").read_text(encoding="utf-8")
+        assert result["removedSelectionKeys"] == [manual["selectionKey"]]
+        assert result["addedCheckedSelectionKeys"] == [imported["selectionKey"]]
+        assert "Manual groceries" not in updated
+        assert "Expenses:Food:Groceries" in updated
+        assert "; notes: remembered later" in updated
+        assert "; match-id:" in updated
+        assert "Manual groceries" in archive
+
+    def test_remove_manual_duplicate_deletes_unchecked_manual_row(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        config = _make_config(tmp_path / "workspace")
+        _seed_accounts_dat(config)
+        journal = _seed_journal(
+            config,
+            (
+                "2026-03-04 Imported rent\n"
+                "    ; import_account_id: checking\n"
+                "    ; source_identity: rent-1\n"
+                "    ; source_payload_hash: payload-rent-1\n"
+                "    Assets:Checking:Wells Fargo  $-900.00\n"
+                "    Expenses:Food:Dining\n"
+                "\n"
+                "2026-03-05 Manual rent copy\n"
+                "    ; :manual:\n"
+                "    Assets:Checking:Wells Fargo  $-900.00\n"
+                "    Expenses:Food:Dining\n"
+            ),
+        )
+        rows = _context_rows(config, monkeypatch)
+        imported = _row_by_payee(rows, "Imported rent")
+        manual = _row_by_payee(rows, "Manual rent copy")
+
+        result = main.accounts_reconciliation_duplicate_resolution(
+            "checking",
+            ReconciliationDuplicateResolutionRequest(
+                periodStart="2026-03-01",
+                periodEnd="2026-03-31",
+                checkedSelectionKey=imported["selectionKey"],
+                uncheckedSelectionKey=manual["selectionKey"],
+                action="remove_manual_duplicate",
+            ),
+        )
+
+        updated = journal.read_text(encoding="utf-8")
+        assert result["removedSelectionKeys"] == [manual["selectionKey"]]
+        assert "Manual rent copy" not in updated
+        assert "Imported rent" in updated
+
+    def test_merge_imported_duplicates_preserves_alternate_identity_for_future_dedupe(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        config = _make_config(tmp_path / "workspace")
+        _seed_accounts_dat(config)
+        journal = _seed_journal(
+            config,
+            (
+                "2026-03-07 Utility bill\n"
+                "    ; import_account_id: checking\n"
+                "    ; source_identity: util-a\n"
+                "    ; source_payload_hash: payload-a\n"
+                "    Assets:Checking:Wells Fargo  $-120.00\n"
+                "    Expenses:Food:Dining\n"
+                "\n"
+                "2026-03-08 Utility bill online\n"
+                "    ; import_account_id: checking\n"
+                "    ; source_identity: util-b\n"
+                "    ; source_payload_hash: payload-b\n"
+                "    Assets:Checking:Wells Fargo  $-120.00\n"
+                "    Expenses:Food:Dining\n"
+            ),
+        )
+        rows = _context_rows(config, monkeypatch)
+        survivor = _row_by_payee(rows, "Utility bill")
+        merged = _row_by_payee(rows, "Utility bill online")
+
+        result = main.accounts_reconciliation_duplicate_resolution(
+            "checking",
+            ReconciliationDuplicateResolutionRequest(
+                periodStart="2026-03-01",
+                periodEnd="2026-03-31",
+                checkedSelectionKey=survivor["selectionKey"],
+                uncheckedSelectionKey=merged["selectionKey"],
+                action="merge_imported_duplicates",
+            ),
+        )
+
+        updated = journal.read_text(encoding="utf-8")
+        existing_map = _build_existing_map(config, "checking", journal)
+
+        assert result["removedSelectionKeys"] == [merged["selectionKey"]]
+        assert "Utility bill online" not in updated
+        assert "; source_identity_2: util-b" in updated
+        assert "; source_payload_hash_2: payload-b" in updated
+        assert existing_map["util-a"] is not None
+        assert existing_map["util-b"] is not None

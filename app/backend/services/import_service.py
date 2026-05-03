@@ -25,6 +25,8 @@ from .header_parser import HEADER_RE
 TXN_START_RE = re.compile(r"^\d{4}[-/]\d{2}[-/]\d{2}")
 POSTING_RE = re.compile(r"^(\s+)([^\s].*?)(\s{2,}|\t+)(.*)$")
 META_RE = re.compile(r"^\s*;\s*([^:]+):\s*(.*)$")
+SOURCE_IDENTITY_KEY_RE = re.compile(r"^source_identity(?:_(?P<suffix>\d+))?$")
+SOURCE_PAYLOAD_KEY_RE = re.compile(r"^source_payload_hash(?:_(?P<suffix>\d+))?$")
 IMPORTER_VERSION = "mvp2"
 
 
@@ -361,8 +363,8 @@ def _existing_identity_map_from_journal(config: AppConfig, target_journal: Path)
     text = target_journal.read_text(encoding="utf-8")
     out: dict[str, str | None] = {}
     for lines in _split_transactions(text):
-        source_identity = None
-        source_payload_hash = None
+        identities_by_suffix: dict[str, str] = {}
+        payloads_by_suffix: dict[str, str | None] = {}
         import_account_id = None
         for line in lines[1:]:
             mm = META_RE.match(line)
@@ -370,23 +372,31 @@ def _existing_identity_map_from_journal(config: AppConfig, target_journal: Path)
                 continue
             key = mm.group(1).strip().lower()
             value = mm.group(2).strip()
-            if key == "source_identity":
-                source_identity = value
-            elif key == "source_payload_hash":
-                source_payload_hash = value
+            identity_match = SOURCE_IDENTITY_KEY_RE.match(key)
+            payload_match = SOURCE_PAYLOAD_KEY_RE.match(key)
+            if identity_match:
+                suffix = identity_match.group("suffix") or "1"
+                identities_by_suffix[suffix] = value
+            elif payload_match:
+                suffix = payload_match.group("suffix") or "1"
+                payloads_by_suffix[suffix] = value or None
             elif key == "import_account_id":
                 import_account_id = value
-        if source_identity:
+        if identities_by_suffix:
             ledger_account = None
             if import_account_id:
                 ledger_account = str(config.import_accounts.get(import_account_id, {}).get("ledger_account", "")).strip() or None
+            computed_payload_hash = None
             if ledger_account:
-                source_payload_hash = source_payload_hash_for_lines(
+                computed_payload_hash = source_payload_hash_for_lines(
                     lines,
                     ledger_account,
                     base_currency=str(config.workspace.get("base_currency", "USD")),
                 )
-            out[source_identity] = source_payload_hash
+            for suffix, source_identity in identities_by_suffix.items():
+                out[source_identity] = (
+                    computed_payload_hash if computed_payload_hash is not None else payloads_by_suffix.get(suffix)
+                )
     return out
 
 
