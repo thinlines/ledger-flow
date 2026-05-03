@@ -394,9 +394,12 @@ def _existing_identity_map_from_journal(config: AppConfig, target_journal: Path)
                     base_currency=str(config.workspace.get("base_currency", "USD")),
                 )
             for suffix, source_identity in identities_by_suffix.items():
-                out[source_identity] = (
-                    computed_payload_hash if computed_payload_hash is not None else payloads_by_suffix.get(suffix)
-                )
+                if suffix == "1":
+                    out[source_identity] = (
+                        computed_payload_hash if computed_payload_hash is not None else payloads_by_suffix.get(suffix)
+                    )
+                else:
+                    out[source_identity] = payloads_by_suffix.get(suffix)
     return out
 
 

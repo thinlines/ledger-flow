@@ -10,7 +10,7 @@ from models import (
     ReconciliationDuplicateReviewRequest,
 )
 from services.config_service import AppConfig
-from services.import_service import _build_existing_map
+from services.import_service import _build_existing_map, _classify_transaction
 
 
 def _make_config(workspace: Path) -> AppConfig:
@@ -260,4 +260,64 @@ class TestDuplicateResolution:
         assert "; source_identity_2: util-b" in updated
         assert "; source_payload_hash_2: payload-b" in updated
         assert existing_map["util-a"] is not None
-        assert existing_map["util-b"] is not None
+        assert existing_map["util-a"] != "payload-b"
+        assert existing_map["util-b"] == "payload-b"
+        assert _classify_transaction(
+            {
+                "sourceIdentity": "util-b",
+                "sourcePayloadHash": "payload-b",
+            },
+            existing_map,
+        ) == "duplicate"
+
+        refreshed_rows = _context_rows(config, monkeypatch)
+        refreshed_survivor = _row_by_payee(refreshed_rows, "Utility bill")
+        assert refreshed_survivor["selectionKey"] == survivor["selectionKey"]
+
+    def test_cross_journal_imported_candidates_show_without_merge_action(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        config = _make_config(tmp_path / "workspace")
+        _seed_accounts_dat(config)
+        march = config.journal_dir / "2026.journal"
+        april = config.journal_dir / "2027.journal"
+        march.write_text(
+            (
+                "2026-03-07 Utility bill\n"
+                "    ; import_account_id: checking\n"
+                "    ; source_identity: util-a\n"
+                "    ; source_payload_hash: payload-a\n"
+                "    Assets:Checking:Wells Fargo  $-120.00\n"
+                "    Expenses:Food:Dining\n"
+            ),
+            encoding="utf-8",
+        )
+        april.write_text(
+            (
+                "2026-03-08 Utility bill online\n"
+                "    ; import_account_id: checking\n"
+                "    ; source_identity: util-b\n"
+                "    ; source_payload_hash: payload-b\n"
+                "    Assets:Checking:Wells Fargo  $-120.00\n"
+                "    Expenses:Food:Dining\n"
+            ),
+            encoding="utf-8",
+        )
+
+        rows = _context_rows(config, monkeypatch)
+        survivor = _row_by_payee(rows, "Utility bill")
+
+        review = main.accounts_reconciliation_duplicate_review(
+            "checking",
+            ReconciliationDuplicateReviewRequest(
+                periodStart="2026-03-01",
+                periodEnd="2026-03-31",
+                checkedSelectionKeys=[survivor["selectionKey"]],
+            ),
+        )
+
+        assert review["hasGroups"] is True
+        match = review["groups"][0]["matches"][0]
+        assert match["action"] is None
+        assert match["actionLabel"] is None
+        assert "different journals" in match["actionBlockedReason"]

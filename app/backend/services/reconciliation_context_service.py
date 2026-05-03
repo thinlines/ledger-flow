@@ -135,6 +135,27 @@ def _selection_fingerprint(transaction, ledger_account: str, signed_amount: Deci
     return hashlib.sha1(base.encode("utf-8")).hexdigest()
 
 
+def _preferred_source_identity(metadata: dict[str, str]) -> str | None:
+    exact = str(metadata.get("source_identity") or "").strip()
+    if exact:
+        return exact
+
+    keyed_suffixes: list[tuple[int, str]] = []
+    for key, value in metadata.items():
+        match = re.match(r"^source_identity_(\d+)$", key)
+        if not match:
+            continue
+        candidate = str(value or "").strip()
+        if not candidate:
+            continue
+        keyed_suffixes.append((int(match.group(1)), candidate))
+
+    if not keyed_suffixes:
+        return None
+    keyed_suffixes.sort(key=lambda item: item[0])
+    return keyed_suffixes[0][1]
+
+
 def build_reconciliation_context(
     *,
     config: AppConfig,
@@ -194,11 +215,7 @@ def build_reconciliation_context(
         manual = bool(str(transaction.metadata.get(":manual:") or "").strip()) or any(
             ":manual:" in f"{key}: {value}" for key, value in transaction.metadata.items()
         )
-        source_identity = None
-        for key, value in transaction.metadata.items():
-            if IMPORT_IDENTITY_KEY_RE.match(key) and str(value or "").strip():
-                source_identity = str(value).strip()
-                break
+        source_identity = _preferred_source_identity(transaction.metadata)
 
         if imported and source_identity:
             selection_key = f"import:{source_identity}"

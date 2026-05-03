@@ -55,17 +55,25 @@ class WellsFargoAdapter:
     _REF_RE = re.compile(r"REF #([A-Z0-9]+)")
     _CHECK_RE = re.compile(r"CHECK # ?(\d+)")
     _EXPECTED_COLUMNS = ("DATE", "DESCRIPTION", "AMOUNT", "CHECK #", "STATUS")
+    _BODY_ONLY_COLUMNS = ("DATE", "AMOUNT", "STATUS", "CHECK #", "DESCRIPTION")
 
     def parse(self, text: str) -> Iterator[Record]:
-        reader = csv.DictReader(io.StringIO(text))
+        normalized_text = text
+        reader = csv.DictReader(io.StringIO(normalized_text))
         if reader.fieldnames is None:
             raise ValueError("Wells Fargo CSV is empty or missing header row")
         missing = [c for c in self._EXPECTED_COLUMNS if c not in reader.fieldnames]
         if missing:
-            raise ValueError(
-                f"Wells Fargo CSV header missing expected columns: {missing!r}; "
-                f"got {reader.fieldnames!r}"
-            )
+            raw_rows = list(csv.reader(io.StringIO(text)))
+            body_only = all(len(row) == len(self._EXPECTED_COLUMNS) for row in raw_rows)
+            if body_only:
+                normalized_text = ",".join(self._BODY_ONLY_COLUMNS) + "\n" + text
+                reader = csv.DictReader(io.StringIO(normalized_text))
+            else:
+                raise ValueError(
+                    f"Wells Fargo CSV header missing expected columns: {missing!r}; "
+                    f"got {reader.fieldnames!r}"
+                )
 
         for row in reader:
             description = (row.get("DESCRIPTION") or "").strip()

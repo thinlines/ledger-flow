@@ -11,9 +11,7 @@ from uuid import uuid4
 from fastapi import HTTPException
 
 from .archive_service import archive_manual_entry, rollback_archive
-from .backup_service import backup_file
 from .config_service import AppConfig
-from .header_parser import parse_header
 from .import_index import ImportIndex
 from .journal_block_service import find_transaction_block, locate_header_at
 from .reconciliation_context_service import (
@@ -69,6 +67,8 @@ def _action_for_pair(checked: ReconciliationContextRow, unchecked: Reconciliatio
     if unchecked.line_number < 0:
         return None, None, "This transaction cannot be changed from this journal view."
     if checked.is_imported and unchecked.is_imported:
+        if checked.journal_path != unchecked.journal_path:
+            return None, None, "These imported transactions live in different journals, so they cannot be merged here."
         return "merge_imported_duplicates", "Merge imported duplicates", None
     if checked.is_imported and unchecked.is_manual:
         return "remove_manual_duplicate", "Remove manual duplicate", None if unchecked.can_delete else "This manual transaction cannot be removed safely."
