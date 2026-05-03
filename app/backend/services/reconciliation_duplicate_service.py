@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass
 from datetime import date
@@ -11,7 +12,9 @@ from uuid import uuid4
 from fastapi import HTTPException
 
 from .archive_service import archive_manual_entry, rollback_archive
+from .backup_service import backup_file
 from .config_service import AppConfig
+from .event_log_service import check_drift, emit_event, hash_file, rel_path
 from .import_index import ImportIndex
 from .journal_block_service import find_transaction_block, locate_header_at
 from .reconciliation_context_service import (
@@ -27,6 +30,10 @@ META_RE = re.compile(r"^\s*;\s*([^:]+):\s*(.*)$")
 TXN_START_RE = re.compile(r"^\d{4}[-/]\d{2}[-/]\d{2}")
 
 MATCH_WINDOW_DAYS = 3
+SIMILAR_PAYEE_MIN = 0.72
+NEAR_PAYEE_MIN = 0.55
+PAYEE_NOISE_WORDS = {"manual", "imported", "copy", "online", "mobile"}
+_LOG = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -40,7 +47,9 @@ class DuplicateCandidate:
 
 
 def _normalize_payee(value: str) -> str:
-    return re.sub(r"[^a-z0-9]+", " ", value.lower()).strip()
+    normalized = re.sub(r"[^a-z0-9]+", " ", value.lower()).strip()
+    tokens = [token for token in normalized.split() if token not in PAYEE_NOISE_WORDS]
+    return " ".join(tokens)
 
 
 def _payee_similarity(left: str, right: str) -> float:
@@ -56,10 +65,14 @@ def _payee_similarity(left: str, right: str) -> float:
 def _candidate_reason(date_diff: int, payee_score: float) -> tuple[str, int]:
     if payee_score >= 0.92 and date_diff == 0:
         return "Same amount, same day, and nearly the same payee.", 300
-    if payee_score >= 0.72:
+    if payee_score >= SIMILAR_PAYEE_MIN:
         return f"Same amount and a similar payee within {date_diff} day{'s' if date_diff != 1 else ''}.", 220 - date_diff
-    if date_diff <= 1:
-        return f"Same amount and posted within {date_diff} day{'s' if date_diff != 1 else ''}.", 160 - date_diff
+    if payee_score >= NEAR_PAYEE_MIN and date_diff <= 1:
+        return (
+            f"Same amount, close posting date, and overlapping payee wording within {date_diff} day"
+            f"{'s' if date_diff != 1 else ''}.",
+            180 - date_diff,
+        )
     return "", 0
 
 
@@ -323,6 +336,50 @@ def _write_journal(path: Path, lines: list[str], trailing_newline: bool = True) 
     path.write_text(text, encoding="utf-8")
 
 
+def _capture_hash_before(config: AppConfig, path: Path, hashes: dict[Path, str]) -> None:
+    if path not in hashes:
+        hashes[path] = check_drift(config.root_dir, path)
+
+
+def _backup_once(path: Path, tag: str, backups: set[Path]) -> None:
+    if path in backups:
+        return
+    if not path.exists():
+        return
+    backup_file(path, tag)
+    backups.add(path)
+
+
+def _emit_resolution_event(
+    *,
+    config: AppConfig,
+    event_type: str,
+    summary: str,
+    payload: dict,
+    hash_before_by_path: dict[Path, str],
+) -> str | None:
+    journal_refs = []
+    for path, before in sorted(hash_before_by_path.items(), key=lambda item: str(item[0])):
+        journal_refs.append(
+            {
+                "path": rel_path(path, config.root_dir),
+                "hash_before": before,
+                "hash_after": hash_file(path),
+            }
+        )
+    try:
+        return emit_event(
+            config.root_dir,
+            event_type=event_type,
+            summary=summary,
+            payload=payload,
+            journal_refs=journal_refs,
+        )
+    except Exception:
+        _LOG.error("Event emission failed for duplicate resolution", exc_info=True)
+        return None
+
+
 def resolve_duplicate_candidate(
     *,
     config: AppConfig,
@@ -337,18 +394,37 @@ def resolve_duplicate_candidate(
     ledger_account = str(tracked_account_cfg.get("ledger_account") or "").strip()
     if not ledger_account:
         raise HTTPException(status_code=400, detail="Tracked account is missing a ledger account.")
+    hash_before_by_path: dict[Path, str] = {}
+    backups: set[Path] = set()
 
     if action == "remove_manual_duplicate":
         target = unchecked_row
         journal_path, lines, block_start, block_end = _read_block(target)
+        _capture_hash_before(config, journal_path, hash_before_by_path)
+        _backup_once(journal_path, "reconcile-duplicate", backups)
         remove_start = block_start
         if remove_start > 0 and lines[remove_start - 1].strip() == "":
             remove_start -= 1
+        deleted_block = "\n".join(lines[remove_start:block_end])
         del lines[remove_start:block_end]
         _write_journal(journal_path, lines)
+        event_id = _emit_resolution_event(
+            config=config,
+            event_type="reconciliation.duplicate_manual_removed.v1",
+            summary=f"Removed manual duplicate: {target.payee[:60]} on {target.date}",
+            payload={
+                "tracked_account_id": tracked_account_id,
+                "journal_path": rel_path(journal_path, config.root_dir),
+                "removed_selection_key": target.selection_key,
+                "removed_header_line": target.header_line,
+                "deleted_block": deleted_block,
+            },
+            hash_before_by_path=hash_before_by_path,
+        )
         return {
             "removedSelectionKeys": [target.selection_key],
             "addedCheckedSelectionKeys": [],
+            "eventId": event_id,
         }
 
     if action == "use_imported_transaction":
@@ -356,6 +432,10 @@ def resolve_duplicate_candidate(
         imported_row = unchecked_row
         manual_journal, manual_lines, manual_start, manual_end = _read_block(manual_row)
         imported_journal, imported_lines, imported_start, imported_end = _read_block(imported_row)
+        _capture_hash_before(config, manual_journal, hash_before_by_path)
+        _backup_once(manual_journal, "reconcile-duplicate", backups)
+        _capture_hash_before(config, imported_journal, hash_before_by_path)
+        _backup_once(imported_journal, "reconcile-duplicate", backups)
         if manual_journal == imported_journal:
             shared_lines = manual_journal.read_text(encoding="utf-8").splitlines()
             manual_header_idx = locate_header_at(shared_lines, manual_row.line_number, manual_row.header_line)
@@ -387,6 +467,8 @@ def resolve_duplicate_candidate(
 
         archive_path = config.journal_dir / "archived-manual.journal"
         archive_size_before = archive_path.stat().st_size if archive_path.exists() else None
+        _capture_hash_before(config, archive_path, hash_before_by_path)
+        _backup_once(archive_path, "reconcile-duplicate", backups)
         try:
             archive_manual_entry(archive_path, match_id, manual_block)
             if manual_journal == imported_journal:
@@ -410,10 +492,25 @@ def resolve_duplicate_candidate(
         except Exception:
             rollback_archive(archive_path, archive_size_before)
             raise
+        event_id = _emit_resolution_event(
+            config=config,
+            event_type="reconciliation.imported_transaction_used.v1",
+            summary=f"Used imported transaction for {imported_row.payee[:60]} on {imported_row.date}",
+            payload={
+                "tracked_account_id": tracked_account_id,
+                "manual_selection_key": manual_row.selection_key,
+                "manual_header_line": manual_row.header_line,
+                "imported_selection_key": imported_row.selection_key,
+                "imported_header_line": imported_row.header_line,
+                "match_id": match_id,
+            },
+            hash_before_by_path=hash_before_by_path,
+        )
 
         return {
             "removedSelectionKeys": [manual_row.selection_key],
             "addedCheckedSelectionKeys": [imported_row.selection_key],
+            "eventId": event_id,
         }
 
     if action == "merge_imported_duplicates":
@@ -423,6 +520,8 @@ def resolve_duplicate_candidate(
         merge_journal_path, merge_lines, merge_start, merge_end = _read_block(merged_row)
         if journal_path != merge_journal_path:
             raise HTTPException(status_code=422, detail="Imported duplicates must live in the same journal file to merge.")
+        _capture_hash_before(config, journal_path, hash_before_by_path)
+        _backup_once(journal_path, "reconcile-duplicate", backups)
 
         survivor_block = lines[survivor_start:survivor_end]
         merged_block = merge_lines[merge_start:merge_end]
@@ -450,9 +549,23 @@ def resolve_duplicate_candidate(
                     txns,
                 )
 
+        event_id = _emit_resolution_event(
+            config=config,
+            event_type="reconciliation.imported_duplicates_merged.v1",
+            summary=f"Merged imported duplicates for {survivor_row.payee[:60]} on {survivor_row.date}",
+            payload={
+                "tracked_account_id": tracked_account_id,
+                "survivor_selection_key": survivor_row.selection_key,
+                "survivor_header_line": survivor_row.header_line,
+                "merged_selection_key": merged_row.selection_key,
+                "merged_header_line": merged_row.header_line,
+            },
+            hash_before_by_path=hash_before_by_path,
+        )
         return {
             "removedSelectionKeys": [merged_row.selection_key],
             "addedCheckedSelectionKeys": [],
+            "eventId": event_id,
         }
 
     raise HTTPException(status_code=422, detail="Unsupported duplicate resolution action.")

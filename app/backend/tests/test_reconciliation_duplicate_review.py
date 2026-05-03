@@ -10,6 +10,7 @@ from models import (
     ReconciliationDuplicateReviewRequest,
 )
 from services.config_service import AppConfig
+from services.event_log_service import read_events
 from services.import_service import _build_existing_map, _classify_transaction
 
 
@@ -113,6 +114,40 @@ class TestDuplicateReviewHeuristic:
         assert review["hasGroups"] is False
         assert review["groups"] == []
 
+    def test_review_endpoint_rejects_dissimilar_same_day_same_amount_pairs(self, tmp_path: Path, monkeypatch) -> None:
+        config = _make_config(tmp_path / "workspace")
+        _seed_accounts_dat(config)
+        _seed_journal(
+            config,
+            (
+                "2026-03-05 Starbucks\n"
+                "    ; :manual:\n"
+                "    Assets:Checking:Wells Fargo  $-15.00\n"
+                "    Expenses:Food:Dining\n"
+                "\n"
+                "2026-03-05 LANDLORD LLC\n"
+                "    ; import_account_id: checking\n"
+                "    ; source_identity: rent-1\n"
+                "    ; source_payload_hash: payload-rent-1\n"
+                "    Assets:Checking:Wells Fargo  $-15.00\n"
+                "    Expenses:Unknown\n"
+            ),
+        )
+        rows = _context_rows(config, monkeypatch)
+        checked = _row_by_payee(rows, "Starbucks")
+
+        review = main.accounts_reconciliation_duplicate_review(
+            "checking",
+            ReconciliationDuplicateReviewRequest(
+                periodStart="2026-03-01",
+                periodEnd="2026-03-31",
+                checkedSelectionKeys=[checked["selectionKey"]],
+            ),
+        )
+
+        assert review["hasGroups"] is False
+        assert review["groups"] == []
+
 
 class TestDuplicateResolution:
     def test_use_imported_transaction_archives_manual_and_carries_category(
@@ -165,13 +200,16 @@ class TestDuplicateResolution:
 
         updated = journal.read_text(encoding="utf-8")
         archive = (config.journal_dir / "archived-manual.journal").read_text(encoding="utf-8")
+        events = read_events(config.root_dir)
         assert result["removedSelectionKeys"] == [manual["selectionKey"]]
         assert result["addedCheckedSelectionKeys"] == [imported["selectionKey"]]
+        assert result["eventId"]
         assert "Manual groceries" not in updated
         assert "Expenses:Food:Groceries" in updated
         assert "; notes: remembered later" in updated
         assert "; match-id:" in updated
         assert "Manual groceries" in archive
+        assert events[-1]["type"] == "reconciliation.imported_transaction_used.v1"
 
     def test_remove_manual_duplicate_deletes_unchecked_manual_row(
         self, tmp_path: Path, monkeypatch
@@ -210,9 +248,12 @@ class TestDuplicateResolution:
         )
 
         updated = journal.read_text(encoding="utf-8")
+        events = read_events(config.root_dir)
         assert result["removedSelectionKeys"] == [manual["selectionKey"]]
+        assert result["eventId"]
         assert "Manual rent copy" not in updated
         assert "Imported rent" in updated
+        assert events[-1]["type"] == "reconciliation.duplicate_manual_removed.v1"
 
     def test_merge_imported_duplicates_preserves_alternate_identity_for_future_dedupe(
         self, tmp_path: Path, monkeypatch
@@ -254,11 +295,14 @@ class TestDuplicateResolution:
 
         updated = journal.read_text(encoding="utf-8")
         existing_map = _build_existing_map(config, "checking", journal)
+        events = read_events(config.root_dir)
 
         assert result["removedSelectionKeys"] == [merged["selectionKey"]]
+        assert result["eventId"]
         assert "Utility bill online" not in updated
         assert "; source_identity_2: util-b" in updated
         assert "; source_payload_hash_2: payload-b" in updated
+        assert events[-1]["type"] == "reconciliation.imported_duplicates_merged.v1"
         assert existing_map["util-a"] is not None
         assert existing_map["util-a"] != "payload-b"
         assert existing_map["util-b"] == "payload-b"

@@ -1699,6 +1699,7 @@ def accounts_reconciliation_duplicate_resolution(
         "ok": True,
         "removedSelectionKeys": result["removedSelectionKeys"],
         "addedCheckedSelectionKeys": result["addedCheckedSelectionKeys"],
+        "eventId": result.get("eventId"),
     }
 
 
