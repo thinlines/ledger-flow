@@ -321,3 +321,92 @@ class TestDuplicateResolution:
         assert match["action"] is None
         assert match["actionLabel"] is None
         assert "different journals" in match["actionBlockedReason"]
+
+    def test_chained_imported_merge_preserves_all_carried_identities(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        config = _make_config(tmp_path / "workspace")
+        _seed_accounts_dat(config)
+        journal = _seed_journal(
+            config,
+            (
+                "2026-03-07 Utility bill\n"
+                "    ; import_account_id: checking\n"
+                "    ; source_identity: util-a\n"
+                "    ; source_payload_hash: payload-a\n"
+                "    Assets:Checking:Wells Fargo  $-120.00\n"
+                "    Expenses:Food:Dining\n"
+                "\n"
+                "2026-03-08 Utility bill online\n"
+                "    ; import_account_id: checking\n"
+                "    ; source_identity: util-b\n"
+                "    ; source_payload_hash: payload-b\n"
+                "    Assets:Checking:Wells Fargo  $-120.00\n"
+                "    Expenses:Food:Dining\n"
+                "\n"
+                "2026-03-09 Utility bill mobile\n"
+                "    ; import_account_id: checking\n"
+                "    ; source_identity: util-c\n"
+                "    ; source_payload_hash: payload-c\n"
+                "    ; source_identity_2: util-d\n"
+                "    ; source_payload_hash_2: payload-d\n"
+                "    Assets:Checking:Wells Fargo  $-120.00\n"
+                "    Expenses:Food:Dining\n"
+            ),
+        )
+
+        rows = _context_rows(config, monkeypatch)
+        survivor = _row_by_payee(rows, "Utility bill")
+        first_merge = _row_by_payee(rows, "Utility bill online")
+        second_merge = _row_by_payee(rows, "Utility bill mobile")
+
+        main.accounts_reconciliation_duplicate_resolution(
+            "checking",
+            ReconciliationDuplicateResolutionRequest(
+                periodStart="2026-03-01",
+                periodEnd="2026-03-31",
+                checkedSelectionKey=survivor["selectionKey"],
+                uncheckedSelectionKey=first_merge["selectionKey"],
+                action="merge_imported_duplicates",
+            ),
+        )
+
+        refreshed_rows = _context_rows(config, monkeypatch)
+        refreshed_survivor = _row_by_payee(refreshed_rows, "Utility bill")
+        refreshed_second_merge = _row_by_payee(refreshed_rows, "Utility bill mobile")
+
+        main.accounts_reconciliation_duplicate_resolution(
+            "checking",
+            ReconciliationDuplicateResolutionRequest(
+                periodStart="2026-03-01",
+                periodEnd="2026-03-31",
+                checkedSelectionKey=refreshed_survivor["selectionKey"],
+                uncheckedSelectionKey=refreshed_second_merge["selectionKey"],
+                action="merge_imported_duplicates",
+            ),
+        )
+
+        updated = journal.read_text(encoding="utf-8")
+        existing_map = _build_existing_map(config, "checking", journal)
+
+        assert "Utility bill online" not in updated
+        assert "Utility bill mobile" not in updated
+        assert "; source_identity_2: util-b" in updated
+        assert "; source_identity_3: util-c" in updated
+        assert "; source_identity_4: util-d" in updated
+
+        expected_payloads = {
+            "util-a": existing_map["util-a"],
+            "util-b": "payload-b",
+            "util-c": "payload-c",
+            "util-d": "payload-d",
+        }
+        assert expected_payloads["util-a"] is not None
+        for identity, payload in expected_payloads.items():
+            assert _classify_transaction(
+                {
+                    "sourceIdentity": identity,
+                    "sourcePayloadHash": payload,
+                },
+                existing_map,
+            ) == "duplicate"

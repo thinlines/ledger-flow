@@ -247,35 +247,72 @@ def _upsert_match_tags(block_lines: list[str], match_id: str) -> list[str]:
     return out
 
 
+def _import_identity_variants(metadata: dict[str, str]) -> list[dict[str, str | None]]:
+    variants: list[tuple[int, dict[str, str | None]]] = []
+
+    def add_variant(suffix: int | None) -> None:
+        suffix_part = "" if suffix is None else f"_{suffix}"
+        identity = str(metadata.get(f"source_identity{suffix_part}") or "").strip()
+        if not identity:
+            return
+        variants.append(
+            (
+                1 if suffix is None else suffix,
+                {
+                    "sourceIdentity": identity,
+                    "sourcePayloadHash": str(metadata.get(f"source_payload_hash{suffix_part}") or "").strip() or None,
+                    "sourceFileSha256": str(metadata.get(f"source_file_sha256{suffix_part}") or "").strip() or None,
+                    "importerVersion": str(metadata.get(f"importer_version{suffix_part}") or "").strip() or None,
+                },
+            )
+        )
+
+    add_variant(None)
+    suffixes: list[int] = []
+    for key in metadata:
+        match = re.match(r"^source_identity_(\d+)$", key)
+        if match:
+            suffixes.append(int(match.group(1)))
+    for suffix in sorted(set(suffixes)):
+        add_variant(suffix)
+
+    return [variant for _, variant in sorted(variants, key=lambda item: item[0])]
+
+
 def _upsert_import_identity_metadata(
     survivor_lines: list[str],
     imported_metadata: dict[str, str],
 ) -> list[str]:
-    identity = str(imported_metadata.get("source_identity") or "").strip()
-    payload = str(imported_metadata.get("source_payload_hash") or "").strip()
-    file_sha = str(imported_metadata.get("source_file_sha256") or "").strip()
-    importer_version = str(imported_metadata.get("importer_version") or "").strip()
-    if not identity:
+    variants = _import_identity_variants(imported_metadata)
+    if not variants:
         raise HTTPException(status_code=422, detail="Imported duplicate is missing import identity metadata.")
 
     existing = _extract_metadata(survivor_lines)
     existing_identities = {value for key, value in existing.items() if IMPORT_IDENTITY_KEY_RE.match(key)}
-    if identity in existing_identities:
+    metadata_lines: list[str] = []
+    next_suffix = 2
+    while f"source_identity_{next_suffix}" in existing:
+        next_suffix += 1
+
+    for variant in variants:
+        identity = str(variant["sourceIdentity"] or "").strip()
+        if not identity or identity in existing_identities:
+            continue
+        metadata_lines.append(f"    ; source_identity_{next_suffix}: {identity}")
+        payload = str(variant["sourcePayloadHash"] or "").strip()
+        if payload:
+            metadata_lines.append(f"    ; source_payload_hash_{next_suffix}: {payload}")
+        file_sha = str(variant["sourceFileSha256"] or "").strip()
+        if file_sha:
+            metadata_lines.append(f"    ; source_file_sha256_{next_suffix}: {file_sha}")
+        importer_version = str(variant["importerVersion"] or "").strip()
+        if importer_version:
+            metadata_lines.append(f"    ; importer_version_{next_suffix}: {importer_version}")
+        existing_identities.add(identity)
+        next_suffix += 1
+
+    if not metadata_lines:
         return survivor_lines
-
-    suffix = 2
-    while f"source_identity_{suffix}" in existing:
-        suffix += 1
-
-    metadata_lines = [
-        f"    ; source_identity_{suffix}: {identity}",
-    ]
-    if payload:
-        metadata_lines.append(f"    ; source_payload_hash_{suffix}: {payload}")
-    if file_sha:
-        metadata_lines.append(f"    ; source_file_sha256_{suffix}: {file_sha}")
-    if importer_version:
-        metadata_lines.append(f"    ; importer_version_{suffix}: {importer_version}")
     return [survivor_lines[0], *metadata_lines, *survivor_lines[1:]]
 
 
@@ -403,24 +440,13 @@ def resolve_duplicate_candidate(
         import_account_id = str(merged_row.import_account_id or survivor_row.import_account_id or "").strip()
         if import_account_id:
             year = Path(journal_path).stem
-            txns: list[dict] = []
-            for block in (updated_survivor, merged_block):
-                metadata = _extract_metadata(block)
-                identity = str(metadata.get("source_identity") or "").strip()
-                if not identity:
-                    continue
-                txns.append(
-                    {
-                        "sourceIdentity": identity,
-                        "sourcePayloadHash": str(metadata.get("source_payload_hash") or "").strip() or None,
-                    }
-                )
+            txns = _import_identity_variants(_extract_metadata(updated_survivor))
             if txns:
                 ImportIndex(config.root_dir / ".workflow" / "state.db").upsert_transactions(
                     import_account_id,
                     year,
                     journal_path,
-                    str(merged_metadata.get("source_file_sha256") or ""),
+                    str(txns[0].get("sourceFileSha256") or ""),
                     txns,
                 )
 
