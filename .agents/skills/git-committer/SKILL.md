@@ -47,41 +47,9 @@ Turn working tree changes into readable history. Inspect the diff, choose the sm
 - Create the commit, then re-check `git status --short` before deciding whether another commit is needed.
 - If the repo state is ambiguous, summarize the proposed split before committing.
 
-### 5. Worktree git commands
+### 5. Multi-line commit messages
 
-A pre-tool-use hook auto-approves `git -C <worktree-path>` commands that follow specific patterns. Deviating from these patterns forces a manual approval prompt, which blocks agents.
-
-#### Commit messages
-
-**Pick the path by message shape:**
-
-- **Subject only** (one line, ≤50 chars, no `` ` `` or `$(...)`): `git -C <worktree-path> commit -m "subject"`. Auto-approved by the permission system.
-- **Subject + body** (anything multi-line, or any message containing backticks / `$(...)` / `>` / `<`): write the full message to a file, then commit with `-F`:
-
-  1. Use the **Write** tool to create `<worktree-path>/.commit-msg` with the full commit message.
-  2. Run `git -C <worktree-path> commit -F .commit-msg`.
-  3. Do not clean up `.commit-msg` — the worktree is ephemeral and the file is overwritten on subsequent commits.
-
-**Rejected forms (the pre-tool-use hook actively denies these — do not attempt):**
-
-- `git commit -m "$(cat <<'EOF' ... EOF)"` — heredoc-via-substitution. Obscures the message in the tool call.
-- `git commit -m "subject\n\nbody"` — multi-line `-m` value. Newlines defeat the permission auto-approve and force a manual prompt.
-
-Both rejections route you back to the `-F .commit-msg` path.
-
-#### Pipes
-
-The hook allows piping git output to these commands only: `wc`, `head`, `tail`, `sort`, `uniq`, `grep`, `cat`, `less`, `cut`, `awk`, `sed`, `tr`, `column`, `fmt`, `nl`. Note: `sed -i` is blocked (in-place edit). You may prefix any of these with `xargs` (e.g. `| xargs wc -l`). Multiple pipes are fine as long as every segment follows these rules.
-
-Do **not** use shell loops (`while read`, `for`, `do`, etc.), subshells, or process substitution after a pipe — they will be rejected. Use `xargs <safe-command>` instead when you need to apply a command per line. If you need more complex post-processing, use the **Read** or **Grep** tools instead of shell constructs.
-
-#### Stderr redirects
-
-`2>&1` and `2>/dev/null` are stripped before checking. Other redirects (`>`, `<`) are rejected.
-
-#### Chaining
-
-Do **not** chain commands with `&&`, `||`, or `;` after a git command. Run separate `git -C` calls instead.
+For multi-line messages or any message containing `` ` ``, `$(...)`, `>`, or `<`, write the message to `<worktree-path>/.commit-msg` with the **Write** tool, then commit with `git -C <worktree-path> commit -F .commit-msg`. Single-line subjects can use `-m "subject"` directly. The pre-tool-use hook will tell you if a form isn't allowed — adapt then.
 
 ## Message Heuristics
 

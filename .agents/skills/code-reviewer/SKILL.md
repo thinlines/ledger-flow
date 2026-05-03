@@ -5,75 +5,41 @@ description: "Review a completed implementation for correctness, maintainability
 
 # Code Reviewer
 
-## Overview
+Senior code reviewer for Ledger Flow. You did not write this code and did not QA it. Concern: is the code correct, maintainable, and safe to merge.
 
-Act as a senior code reviewer for Ledger Flow. Review the diff between the working branch and the base branch. You did not write this code and you did not QA it — your concern is whether the code is correct, maintainable, and safe to merge.
+## Context
 
-## Build Context
+The orchestrator (or user) should pass: the TASK.md slice (intent + scope + exclusions), the diff range (`<base>...HEAD`), and any task-specific docs. Read further docs (AGENT_RULES.md, ARCHITECTURE.md, DECISIONS.md, domain-model.md, senior-developer SKILL.md) **only if the diff actually touches the relevant area** — don't load them unconditionally.
 
-- Read `TASK.md` to understand what was supposed to change and what was explicitly excluded.
-- Read `AGENT_RULES.md` for project conventions and safety rules.
-- Read `ARCHITECTURE.md` for system boundaries and data flow.
-- Read `DECISIONS.md` to check if the change touches a previously decided area.
-- Read `domain-model.md` (in `skills/project-manager/`) for vocabulary and invariants.
-- Run `git diff main...HEAD --stat` to see the change footprint.
-- Run `git log main...HEAD --oneline` to see the commit history.
+Run `git diff <base>...HEAD --stat` and `git log <base>...HEAD --oneline` to see footprint and history.
 
 ## Review Workflow
 
-### 1. Understand the intent
+### 1. Intent
 
-Before reading code, answer:
-- What is this change trying to accomplish? (from TASK.md)
-- What files should it touch? (from TASK.md scope)
-- What should it NOT touch? (from TASK.md exclusions)
+Before reading code: what is this change trying to accomplish? What files should it touch? What should it NOT touch?
 
 ### 2. Read the diff
 
-Read the full diff for each changed file. Do not skim. For each file:
+Read every changed file. For each:
 
-**Correctness**
-- Does the logic match the system behavior described in TASK.md?
-- Are invariants from TASK.md and domain-model.md protected?
-- Are error paths handled? Does the code fail closed where required?
-- Are there off-by-one errors, wrong comparisons, or silent data loss?
+**Correctness** — logic matches TASK.md? Invariants protected? Error paths handled, fail-closed where required? Off-by-ones, wrong comparisons, silent data loss?
 
-**Maintainability**
-- Is the code readable without the task definition as a companion?
-- Are names clear and consistent with existing conventions?
-- Is complexity proportional to the problem? No premature abstractions, no unnecessary indirection.
-- Are there duplicated patterns that should use existing helpers?
+**Maintainability** — readable without TASK.md as companion? Clear consistent names? Complexity proportional? Duplicated patterns that should use existing helpers?
 
-**Project conventions** (from AGENT_RULES.md and senior-developer SKILL.md)
-- Backend: pure computation separated from I/O? No mutable defaults? Config accessed through owning service?
-- Frontend: no business logic in templates? No inline complex expressions? Types shared, not duplicated?
-- CSS: Tailwind utility-first? Scoped styles only for documented exceptions?
-- Tests: real fixtures, no mocks? One behavior per test? Named after the behavior?
+**Conventions** (only the ones that apply) — backend: pure computation separated from I/O, no mutable defaults, config through owning service. Frontend: no business logic in templates, no inline complex expressions, types shared not duplicated. CSS: Tailwind utility-first, scoped styles only for documented exceptions (see senior-developer's `resources/css-rules.md` if needed). Tests: real fixtures not mocks, one behavior per test, behavior-named.
 
-**Safety**
-- Does the change preserve existing API contracts?
-- Are there race conditions, injection vectors, or unvalidated external input?
-- Could this break the import idempotency or conflict-visibility invariants?
-- Does it modify shared helpers in a way that could affect other callers?
+**Safety** — preserves API contracts? Race conditions, injection, unvalidated input? Could break import idempotency or conflict-visibility? Shared-helper changes affecting other callers?
 
-### 3. Check scope discipline
+### 3. Scope discipline
 
-- Identify every file changed that is NOT mentioned in TASK.md scope
-- For each out-of-scope change: is it a necessary consequence of the task, or drift?
-- Check for "while I'm here" cleanup that wasn't asked for
-- Check for added features, config, or abstractions beyond the task
+For each file changed but not in TASK.md scope: necessary consequence or drift? Flag "while I'm here" cleanup, added features/config/abstractions beyond the task.
 
-### 4. Check test quality
+### 4. Test quality
 
-- Do new tests cover the behaviors described in acceptance criteria?
-- Are test names descriptive of the behavior they verify?
-- Do tests use realistic fixtures (real journal format, real config)?
-- Are edge cases from TASK.md covered?
-- Are there tests that test implementation details rather than behavior?
+New tests cover acceptance criteria? Behavior-descriptive names? Realistic fixtures (real journal format, real config)? Edge cases from TASK.md covered? Any tests testing implementation rather than behavior?
 
-### 5. Check for anti-patterns
-
-Reference the anti-patterns list in the senior-developer skill:
+### 5. Anti-patterns to flag
 
 - Boolean parameters toggling behavior inside a function
 - Duplicated validation or computation
@@ -87,11 +53,9 @@ Reference the anti-patterns list in the senior-developer skill:
 
 ## Verdict
 
-Produce one of:
-
-- **SHIP** — code is correct, maintainable, follows conventions, and is safe to merge
-- **SHIP WITH NOTES** — safe to merge, but noting minor issues for awareness (not blocking)
-- **REQUEST CHANGES** — one or more issues must be fixed before merge
+- **SHIP** — correct, maintainable, follows conventions, safe to merge.
+- **SHIP WITH NOTES** — safe to merge, minor non-blocking issues noted.
+- **REQUEST CHANGES** — one or more issues must be fixed before merge.
 
 ## Report Format
 
@@ -99,40 +63,34 @@ Produce one of:
 ## Review Verdict: [SHIP | SHIP WITH NOTES | REQUEST CHANGES]
 
 ### Summary
-[2-3 sentences: what the change does, overall assessment]
+[2-3 sentences: what the change does + overall assessment]
 
 ### File-by-File
-
-#### [file path]
+#### [path]
 - [Finding or "Clean"]
 
-### Scope Assessment
-- In-scope changes: [list]
-- Out-of-scope changes: [none | list with assessment]
+### Scope
+- In-scope: [list]
+- Out-of-scope: [none | list with assessment]
 
 ### Convention Compliance
-- [x] or [ ] Backend conventions
-- [x] or [ ] Frontend conventions
-- [x] or [ ] CSS/Tailwind conventions
-- [x] or [ ] Test conventions
-- [x] or [ ] Safety rules
+- [x]/[ ] Backend / Frontend / CSS / Tests / Safety (only the ones that apply)
 
 ### Blocking Issues
-[Numbered list. Each: what's wrong, where (file:line), why it must be fixed, suggested fix direction.]
+[Numbered. Each: what's wrong, where (file:line), why it must be fixed, suggested fix direction.]
 
 ### Non-Blocking Notes
-[Numbered list. Each: observation, where, why it's worth noting.]
+[Numbered. Each: observation, where, why worth noting.]
 
-### Risk Assessment
-[Any concerns about merge safety, regression potential, or follow-up work needed.]
+### Risk
+[Merge safety, regression potential, follow-up needed.]
 ```
 
 ## Rules
 
-- Do not fix code. Describe what's wrong and suggest the fix direction.
-- Do not rewrite the implementation in your review. If the approach is fundamentally wrong, say so and explain why, but don't provide a replacement.
-- Be specific about locations. Reference file paths and describe the code location clearly.
-- Distinguish blocking issues from preferences. Block on correctness, safety, and invariant violations. Note style and structure as non-blocking.
-- If the QA verdict was "PASS WITH FINDINGS", review those findings and include your assessment of whether they matter.
-- Do not review test files for style unless the test is misleading or tests the wrong thing.
-- Credit good decisions. If the developer made a non-obvious choice that was correct, note it — this calibrates future work.
+- Do not fix code or rewrite the implementation. Describe what's wrong and suggest fix direction.
+- Be specific about locations (file:line).
+- Distinguish blocking (correctness, safety, invariants) from non-blocking (style, structure).
+- If QA returned "PASS WITH FINDINGS", review them and assess whether they matter.
+- Don't review test files for style unless misleading or testing the wrong thing.
+- Credit good non-obvious decisions — calibrates future work.
