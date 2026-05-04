@@ -16,6 +16,11 @@
     signedExpectedActualLine,
     type ReconcileErrorDetails
   } from './reconcile-error-copy';
+  import {
+    findSubsetSumCandidates,
+    type SubsetSumCandidate,
+    type SubsetSumRow
+  } from './subset-sum';
   import type { PageData } from './$types';
   import type { ReconcileContextResponse, ReconcileContextRow } from './+page';
 
@@ -64,6 +69,12 @@
   let duplicateActionsDisabled = false;
   let resolvingCandidateKey = '';
 
+  let subsetSumCandidates: SubsetSumCandidate[] = [];
+  let subsetSumSearched = false;
+  let subsetSumSearching = false;
+  let subsetSumSkippedTooMany = false;
+  let subsetSumTimedOut = false;
+
   let contextDebounceTimer: ReturnType<typeof setTimeout> | null = null;
   let duplicateDebounceTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -77,6 +88,14 @@
   function refreshTickedRows(rows: ReconcileContextRow[]) {
     const validKeys = new Set(rows.map((row) => row.selectionKey));
     checkedSelectionKeys = new Set([...checkedSelectionKeys].filter((key) => validKeys.has(key)));
+  }
+
+  function clearSubsetSum() {
+    subsetSumCandidates = [];
+    subsetSumSearched = false;
+    subsetSumSearching = false;
+    subsetSumSkippedTooMany = false;
+    subsetSumTimedOut = false;
   }
 
   function clearDuplicateReview() {
@@ -244,6 +263,7 @@
     bannerError = '';
     bannerDetails = null;
     clearDuplicateReview();
+    clearSubsetSum();
     setupCommitted = true;
     await fetchContext(true);
   }
@@ -253,6 +273,7 @@
     bannerError = '';
     bannerDetails = null;
     clearDuplicateReview();
+    clearSubsetSum();
   }
 
   function toggleRow(selectionKey: string) {
@@ -260,6 +281,38 @@
     if (next.has(selectionKey)) next.delete(selectionKey);
     else next.add(selectionKey);
     checkedSelectionKeys = next;
+    clearSubsetSum();
+  }
+
+  function handleFindDifference() {
+    if (!context || differenceStr === null || diffIsZero) return;
+    clearSubsetSum();
+    subsetSumSearching = true;
+
+    const unticked: SubsetSumRow[] = context.transactions
+      .filter((row) => !checkedSelectionKeys.has(row.selectionKey))
+      .map((row) => ({
+        selectionKey: row.selectionKey,
+        signedAmount: row.signedAmount,
+        date: row.date,
+        payee: row.payee
+      }));
+
+    const result = findSubsetSumCandidates(unticked, differenceStr);
+    subsetSumCandidates = result.candidates;
+    subsetSumSkippedTooMany = result.skippedTooManyRows;
+    subsetSumTimedOut = result.timedOut;
+    subsetSumSearched = true;
+    subsetSumSearching = false;
+  }
+
+  function handleTickCandidate(candidate: SubsetSumCandidate) {
+    const next = new Set(checkedSelectionKeys);
+    for (const row of candidate.rows) {
+      next.add(row.selectionKey);
+    }
+    checkedSelectionKeys = next;
+    clearSubsetSum();
   }
 
   function tickedAmountLabel(amount: string): string {
@@ -282,6 +335,7 @@
     bannerError = '';
     bannerDetails = null;
     clearDuplicateReview();
+    clearSubsetSum();
 
     let res: Response;
     try {
@@ -455,6 +509,17 @@
           ? duplicateReviewMessage
           : 'Adjust the period or the checked rows below, then try again.'}
       </p>
+      {#if differenceStr !== null && !diffIsZero && !subsetSumSearched && !subsetSumSearching}
+        <button
+          type="button"
+          class="w-fit cursor-pointer text-sm font-semibold text-bad underline-offset-2 hover:underline"
+          on:click={handleFindDifference}
+        >
+          Find the difference
+        </button>
+      {:else if subsetSumSearching}
+        <p class="m-0 text-sm text-muted-foreground">Searching…</p>
+      {/if}
       {#if bannerDetails.rawError}
         <button
           type="button"
@@ -470,6 +535,78 @@
     {:else}
       <p class="eyebrow text-bad">Reconciliation rejected</p>
       <h3 class="m-0 font-display text-xl text-bad">{bannerError}</h3>
+      {#if differenceStr !== null && !diffIsZero && !subsetSumSearched && !subsetSumSearching}
+        <button
+          type="button"
+          class="w-fit cursor-pointer text-sm font-semibold text-bad underline-offset-2 hover:underline"
+          on:click={handleFindDifference}
+        >
+          Find the difference
+        </button>
+      {:else if subsetSumSearching}
+        <p class="m-0 text-sm text-muted-foreground">Searching…</p>
+      {/if}
+    {/if}
+  </section>
+{/if}
+
+{#if subsetSumSearched}
+  <section class="view-card grid gap-4 border-brand/20 bg-[linear-gradient(165deg,rgba(232,248,255,0.95),rgba(255,255,255,0.94))]">
+    <div>
+      <p class="eyebrow text-brand-strong">Subset-sum diagnostic</p>
+      <h3 class="m-0 font-display text-xl">
+        {#if subsetSumSkippedTooMany}
+          Too many unticked transactions to search
+        {:else if subsetSumCandidates.length > 0}
+          These unticked transactions may close the gap
+        {:else if subsetSumTimedOut}
+          No combination found within the search limit
+        {:else}
+          No matching combination found
+        {/if}
+      </h3>
+    </div>
+
+    {#if subsetSumSkippedTooMany}
+      <p class="m-0 text-sm text-muted-foreground">
+        There are more than 200 unticked transactions in this period. Narrow the period or tick more rows manually before searching.
+      </p>
+    {:else if subsetSumCandidates.length > 0}
+      <div class="grid gap-3">
+        {#each subsetSumCandidates as candidate, i (i)}
+          <article class="grid gap-3 rounded-3xl border border-card-edge bg-white/82 p-4 shadow-sm">
+            <p class="m-0 text-sm font-semibold text-muted-foreground">
+              Tick {candidate.rows.length} transaction{candidate.rows.length === 1 ? '' : 's'} to close the gap
+            </p>
+            <ul class="m-0 grid list-none gap-1 p-0">
+              {#each candidate.rows as row (row.selectionKey)}
+                <li class="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-line/30 bg-white/72 px-3 py-2">
+                  <div class="min-w-0">
+                    <p class="m-0 truncate text-sm font-semibold text-foreground">{row.payee}</p>
+                    <p class="m-0 text-xs text-muted-foreground">{row.date}</p>
+                  </div>
+                  <span class="shrink-0 font-display text-sm">{tickedAmountLabel(row.signedAmount)}</span>
+                </li>
+              {/each}
+            </ul>
+            <button
+              type="button"
+              class="btn w-fit"
+              on:click={() => handleTickCandidate(candidate)}
+            >
+              Tick these
+            </button>
+          </article>
+        {/each}
+      </div>
+    {:else if subsetSumTimedOut}
+      <p class="m-0 text-sm text-muted-foreground">
+        No combination found within the search limit. Try adjusting the period or reviewing rows manually.
+      </p>
+    {:else}
+      <p class="m-0 text-sm text-muted-foreground">
+        No combination of up to 5 unticked transactions sums to the difference.
+      </p>
     {/if}
   </section>
 {/if}
@@ -665,6 +802,17 @@
         <p class="m-0 mt-1 font-display text-base" class:diff-zero={diffIsZero} class:diff-nonzero={differenceStr !== null && !diffIsZero}>
           {differenceStr !== null ? diffStripValue(differenceStr) : '—'}
         </p>
+        {#if differenceStr !== null && !diffIsZero && !subsetSumSearched && !subsetSumSearching}
+          <button
+            type="button"
+            class="mt-1 w-fit cursor-pointer text-xs font-semibold text-brand-strong underline-offset-2 hover:underline"
+            on:click={handleFindDifference}
+          >
+            Find the difference
+          </button>
+        {:else if subsetSumSearching}
+          <p class="m-0 mt-1 text-xs text-muted-foreground">Searching…</p>
+        {/if}
       </div>
     </div>
 
