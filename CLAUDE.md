@@ -7,7 +7,7 @@ When the user asks to implement, build, ship, finish, or work on a task — or r
 ## Worktrees
 
 - **Main worktree:** the project root (`/home/randy/Desktop/tmp-books`). Orchestrators run here; merges land here.
-- **Feat worktree:** pre-built at `.claude/worktrees/feat`, dependencies pre-warmed (`pnpm install`, `uv sync`). Single-task `ship-task` pipelines run implementation here. The pre-tool-use hooks already auto-approve commands inside `.claude/worktrees/*`. Ship-task creates a per-task branch with `git -C <feat> checkout -b <branch> master` at Phase 0 and resets it back to detached master at Phase 5.
+- **Feat worktree:** pre-built at `.claude/worktrees/feat`, dependencies pre-warmed (`pnpm install`, `uv sync`). Single-task `ship-task` pipelines run implementation here. Sandbox mode auto-approves Bash inside `.claude/worktrees/*` (the directory sits under `.claude/`, which is in the sandbox writable allowlist via `additionalDirectories`). Ship-task creates a per-task branch with `git -C <feat> checkout -b <branch> master` at Phase 0 and resets it back to detached master at Phase 5.
 - **Ad-hoc worktrees:** multi-task concurrent mode creates worktrees under `.claude/worktrees/agent-*` per task and removes them after merge.
 
 ## Pipeline scope enforcement
@@ -16,7 +16,7 @@ When a `<worktree>/.pipeline-context` file exists (created by `ship-task` Phase 
 
 ## Shell command style
 
-**Prefer built-in tools over Bash.** Built-in tools are fast, cached, and don't trigger permission prompts. Every shell command passes through a pre-tool-use hook with strict pattern rules — deviations force a manual approval that blocks worktree agents.
+**Prefer built-in tools over Bash.** Built-in tools are faster than spawning a subprocess and produce cleaner tool-call streams (precise diffs from `Edit` vs `sed`, structured `Grep`/`Glob` results vs raw shell output).
 
 | Instead of...                         | Use...                                      |
 |---------------------------------------|---------------------------------------------|
@@ -30,9 +30,9 @@ When a `<worktree>/.pipeline-context` file exists (created by `ship-task` Phase 
 
 **Reserve Bash for what built-ins cannot do:** running tests, build commands, git operations (`commit`, `add`, `status`, `log`, `diff`), dev servers, installing dependencies, linters.
 
-**Never chain commands with `&&`, `||`, or `;`. No shell loops (`while read`, `for`).** This is a flat rule with no exceptions — even "inherently coupled" steps like `mkdir -p foo && touch foo/bar` must be two tool calls. Issue separate tool calls instead; independent ones can run in parallel. The pre-tool-use hook actively denies chained Bash and reports the offending operator. Pipes (`|`) and stderr redirects (`2>/dev/null`, `2>&1`) are still fine — they don't chain commands.
+**Prefer parallel tool calls over chained shell.** Independent commands should run as separate Bash calls in the same response — they execute in parallel. Chains (`&&`, `||`, `;`) and shell loops force serial execution and obscure per-step exit codes, so reach for them only when steps are genuinely coupled (e.g. setting an env var the next command reads). Pipes (`|`) and stderr redirects (`2>/dev/null`, `2>&1`) are not chains — use them freely.
 
 - **Git**: _always_ use the /git-committer skill to commit to git.
 - **Working in another directory** (e.g. a worktree):
-  - For git, use `git -C <path> <subcommand>` — these patterns are pre-approved by the hook.
-  - For everything else (`pnpm`, `npm`, `mise`, `pytest`, etc.), prefer two separate Bash calls — `cd <path>` in one call, then the plain command in another — over arg-flag forms like `pnpm --dir <path> install` or `pytest --rootdir=<path>`. The working directory persists between Bash calls, so `cd` once and subsequent calls run in that directory until you `cd` again. The `--dir`/`--cwd`/`--rootdir`-style flags are **not** covered by the auto-approval patterns and force a manual permission prompt that halts worktree agents. Example preferred pattern: `cd my/worktree/dir\npnpm install`. Disallowed: `pnpm --dir my/worktree/dir install`.
+  - For git, prefer `git -C <path> <subcommand>` — keeps the working directory unambiguous in the tool-call stream.
+  - For everything else (`pnpm`, `npm`, `mise`, `pytest`, etc.), `cd <path>` in one call, then run the plain command in subsequent calls. The working directory persists between Bash calls, so one `cd` covers a sequence.

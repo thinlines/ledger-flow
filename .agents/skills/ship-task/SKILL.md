@@ -7,12 +7,12 @@ description: "End-to-end task execution pipeline: implement the active TASK.md (
 
 You are an orchestrator. You do not write code, run tests, or review diffs yourself. You coordinate specialized skills to take approved tasks from "ready" to "merged into master and worktree released," then report.
 
-Sub-agents inherit CLAUDE.md and the project hooks — do not re-state bash, commit-message, or worktree-flag rules in their prompts. Pass task context, not project conventions.
+Sub-agents inherit CLAUDE.md — do not re-state bash, commit-message, or worktree-flag rules in their prompts. Pass task context, not project conventions.
 
 ## Worktree pool
 
 - **Main worktree** (the project root, e.g. `/home/randy/Desktop/tmp-books`): orchestrator runs here; merges land here.
-- **Feat worktree**: pre-built at `<repo>/.claude/worktrees/feat`, dependencies pre-warmed (`pnpm install`, `uv sync`). Single-task pipelines use this fixed path. The pre-tool-use hooks already auto-approve commands inside it.
+- **Feat worktree**: pre-built at `<repo>/.claude/worktrees/feat`, dependencies pre-warmed (`pnpm install`, `uv sync`). Single-task pipelines use this fixed path. Sandbox mode auto-approves Bash inside it (the worktree sits under `.claude/`, which is in the sandbox writable allowlist).
 
 Phase 0 (per single-task run) prepares the feat worktree:
 1. `git -C <feat> status --porcelain` — must be empty. If not, stop and report; do not auto-clean.

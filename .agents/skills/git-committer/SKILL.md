@@ -49,7 +49,7 @@ Turn working tree changes into readable history. Inspect the diff, choose the sm
 
 ### 5. Multi-line commit messages
 
-For multi-line messages or any message containing `` ` ``, `$(...)`, `>`, or `<`, write the message to `<worktree-path>/.commit-msg` with the **Write** tool, then commit with `git -C <worktree-path> commit -F .commit-msg`. Single-line subjects can use `-m "subject"` directly. The pre-tool-use hook will tell you if a form isn't allowed — adapt then.
+For multi-line messages or any message containing `` ` ``, `$(...)`, `>`, or `<`, write the message to `<worktree-path>/.commit-msg` with the **Write** tool, then commit with `git -C <worktree-path> commit -F .commit-msg`. Single-line subjects can use `-m "subject"` directly. Using `-F` keeps the message visible in the tool-call stream rather than buried in shell quoting.
 
 ## Message Heuristics
 
