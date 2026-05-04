@@ -381,6 +381,7 @@ class TestDuplicateResolution:
         assert "Utility bill online" not in updated
         assert "; source_identity_2: util-b" in updated
         assert "; source_payload_hash_2: payload-b" in updated
+        assert "Expenses:Food:Dining" in updated
         assert events[-1]["type"] == "reconciliation.imported_duplicates_merged.v1"
         assert existing_map["util-a"] is not None
         assert existing_map["util-a"] != "payload-b"

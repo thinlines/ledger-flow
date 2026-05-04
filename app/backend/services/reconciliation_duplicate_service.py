@@ -579,7 +579,11 @@ def resolve_duplicate_candidate(
 
         original_text = journal_path.read_text(encoding="utf-8")
         lines[survivor_start:survivor_end] = updated_survivor
-        merge_end_adjusted = merge_end + (len(updated_survivor) - len(survivor_block)) if merge_start > survivor_start else merge_end
+        delta = len(updated_survivor) - len(survivor_block)
+        if merge_start > survivor_start:
+            merge_start += delta
+            merge_end += delta
+        merge_end_adjusted = merge_end
         remove_start = merge_start
         if remove_start > 0 and lines[remove_start - 1].strip() == "":
             remove_start -= 1

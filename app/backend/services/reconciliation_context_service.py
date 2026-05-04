@@ -212,9 +212,6 @@ def build_reconciliation_context(
 
         category = _category_label(config, transaction, ledger_account)
         imported = _is_imported_transaction(transaction)
-        manual = bool(str(transaction.metadata.get(":manual:") or "").strip()) or any(
-            ":manual:" in f"{key}: {value}" for key, value in transaction.metadata.items()
-        )
         source_identity = _preferred_source_identity(transaction.metadata)
 
         if imported and source_identity:
