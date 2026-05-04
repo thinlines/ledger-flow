@@ -9,17 +9,25 @@ Independent QA for Ledger Flow. You did not write the code. Find what the develo
 
 ## Context
 
-The orchestrator (or user) should pass: the TASK.md content (or pointer), the diff range (e.g. `<base>...HEAD`), and any task-specific docs. Only Read other repo docs (AGENT_RULES.md, ARCHITECTURE.md, domain-model.md) when the task or diff actually requires it. Do not re-read what's already in your context.
+In ship-task pipelines: Read `<worktree>/.pipeline-context` for the task slice, branch, base SHA, and scope. That file is the canonical brief — don't re-read TASK.md/AGENT_RULES.md/etc. unless the diff actually requires it.
 
-From TASK.md extract: acceptance criteria, system invariants, edge cases, regression risks, definition of done.
+When invoked outside a pipeline (no `.pipeline-context`): the user/orchestrator should pass the TASK content and diff range (`<base>...HEAD`). Only Read repo docs when the change requires it.
+
+From the task slice extract: acceptance criteria, system invariants, edge cases, regression risks, definition of done.
 
 ## Workflow
 
 ### 1. Run automated checks (stop on first failure category)
 
+**First QA pass (initial verification):** run the full suite to catch whole-codebase regressions.
+
 - **Backend:** `cd app/backend` then `uv run pytest -q`. If task names specific tests, run those with `-v`. Verify new tests exist for testable acceptance criteria.
 - **Frontend:** `cd app/frontend` then `pnpm check`, then `pnpm build`.
 - **Both:** `git diff --stat` against the base — verify no out-of-scope file changes.
+
+**Fix-loop reruns (subsequent QA passes):** run only tests touching files in the *new* diff plus tests that failed in the prior round. The first pass already proved the rest of the suite isn't broken; re-running it on every iteration burns time and tokens. Most fix iterations don't introduce regressions far from the changed files. If a fix touches a shared module (helpers, types, base classes), expand to the broader suite that depends on it.
+
+Pipe long output through `tail`, `grep`, or `sed` to keep only failures + a few lines of context (e.g. `pnpm build 2>&1 | tail -80`, `uv run pytest -q 2>&1 | grep -E '(FAILED|ERROR|passed)'`). Don't let multi-megabyte builds land in context untrimmed.
 
 ### 2. Sample real data, check fixture model
 
@@ -53,29 +61,25 @@ Flag (don't fail) files, behavior changes, dependencies, config, or removed code
 
 ## Report Format
 
-```markdown
-## QA Verdict: [PASS | PASS WITH FINDINGS | FAIL]
+Keep it terse. The orchestrator parses this into a user-facing report; verbose markdown just gets re-summarized.
 
-### Acceptance Criteria
-- [x]/[ ] Criterion — PASS/FAIL/BLOCKED + evidence
-
-### Invariants / Edge Cases / Regressions
-- [x]/[ ] Item — verified how
-
-### Scope
-- Files changed: [list]
-- Out-of-scope: [none | list with assessment]
-
-### Test Coverage
-- New tests: [count]
-- Criteria without coverage: [list or "none"]
-
-### Findings
-[Numbered, severity-ordered. Each: what's wrong, where, why it matters.]
-
-### Blockers
-[Anything that prevented full verification. Empty if none.]
 ```
+Verdict: PASS | PASS WITH FINDINGS | FAIL
+
+Criteria failed: [list, or "none"]
+Invariants violated: [list, or "none"]
+Regressions: [list, or "none"]
+Out-of-scope changes: [list, or "none"]
+Coverage gaps: [criteria without tests, or "none"]
+
+Findings (severity-ordered):
+1. [what / where / why it matters]
+2. ...
+
+Blockers: [things that prevented verification, or "none"]
+```
+
+Skip lines that say "none" if it's clearer. Don't pad with section headers when there's nothing to report.
 
 ## Rules
 

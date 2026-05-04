@@ -4,6 +4,16 @@
 
 When the user asks to implement, build, ship, finish, or work on a task — or references TASK.md, ROADMAP.md, or similar planning artifacts — invoke the `senior-developer` skill before starting work. That skill owns the end-to-end workflow for engineering tasks in this repo.
 
+## Worktrees
+
+- **Main worktree:** the project root (`/home/randy/Desktop/tmp-books`). Orchestrators run here; merges land here.
+- **Feat worktree:** pre-built at `.claude/worktrees/feat`, dependencies pre-warmed (`pnpm install`, `uv sync`). Single-task `ship-task` pipelines run implementation here. The pre-tool-use hooks already auto-approve commands inside `.claude/worktrees/*`. Ship-task creates a per-task branch with `git -C <feat> checkout -b <branch> master` at Phase 0 and resets it back to detached master at Phase 5.
+- **Ad-hoc worktrees:** multi-task concurrent mode creates worktrees under `.claude/worktrees/agent-*` per task and removes them after merge.
+
+## Pipeline scope enforcement
+
+When a `<worktree>/.pipeline-context` file exists (created by `ship-task` Phase 0), the `enforce-task-scope.py` PreToolUse hook checks every Edit/Write against that task's `SCOPE_INCLUDED` / `SCOPE_EXCLUDED`. Out-of-scope edits are **allowed but warned** — the warning is surfaced back to the agent so it can self-correct or note the necessary collateral. Scope drift is the most common cause of fix-loop iterations; treat warnings as a signal to pause, not a green light to continue blindly.
+
 ## Shell command style
 
 **Prefer built-in tools over Bash.** Built-in tools are fast, cached, and don't trigger permission prompts. Every shell command passes through a pre-tool-use hook with strict pattern rules — deviations force a manual approval that blocks worktree agents.
