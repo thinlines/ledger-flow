@@ -247,3 +247,21 @@ class ReconcileRequest(BaseModel):
     periodEnd: str = Field(pattern=DATE_PATTERN)
     closingBalance: str = Field(min_length=1)
     currency: str = Field(min_length=1)
+
+
+class ReconciliationDuplicateReviewRequest(BaseModel):
+    periodStart: str = Field(pattern=DATE_PATTERN)
+    periodEnd: str = Field(pattern=DATE_PATTERN)
+    checkedSelectionKeys: list[str] = []
+
+
+class ReconciliationDuplicateResolutionRequest(BaseModel):
+    periodStart: str = Field(pattern=DATE_PATTERN)
+    periodEnd: str = Field(pattern=DATE_PATTERN)
+    checkedSelectionKey: str = Field(min_length=1)
+    uncheckedSelectionKey: str = Field(min_length=1)
+    action: Literal[
+        "remove_manual_duplicate",
+        "use_imported_transaction",
+        "merge_imported_duplicates",
+    ]

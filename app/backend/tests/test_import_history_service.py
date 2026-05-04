@@ -120,6 +120,30 @@ def _journal_transaction(stage_id: str, source_identity: str) -> str:
     )
 
 
+def _journal_transaction_with_carried_identity(
+    stage_id: str,
+    *,
+    primary_identity: str,
+    primary_payload: str,
+    carried_identity: str,
+    carried_payload: str,
+) -> str:
+    return "\n".join(
+        [
+            f"2026/03/01 Merchant {stage_id}",
+            "    ; import_account_id: wf_checking",
+            f"    ; source_identity: {primary_identity}",
+            f"    ; source_payload_hash: {primary_payload}",
+            "    ; source_file_sha256: sha-merged",
+            f"    ; source_identity_2: {carried_identity}",
+            f"    ; source_payload_hash_2: {carried_payload}",
+            "    ; source_file_sha256_2: sha-carried",
+            "    Assets:Bank:Checking  $10.00",
+            "    Expenses:Unknown       $-10.00",
+        ]
+    )
+
+
 def _write_journal(path: Path, *transactions: str) -> None:
     text = "\n\n".join(transactions)
     path.write_text(f"{text}\n" if text else "", encoding="utf-8")
@@ -223,6 +247,62 @@ def test_undo_import_removes_transactions_restores_source_csv_and_import_index(t
     assert Path(undone["undo"]["undoBackupPath"]).exists()
     assert "txn-undo" in Path(undone["undo"]["undoBackupPath"]).read_text(encoding="utf-8")
     assert undone["undo"]["removedTxnCount"] == 1
+    assert index.get_identity_map("wf_checking") == {}
+
+
+def test_undo_import_strips_carried_identity_without_deleting_survivor(tmp_path: Path) -> None:
+    config = _make_config(tmp_path / "workspace")
+    journal_path = config.journal_dir / "2026.journal"
+    _write_journal(
+        journal_path,
+        _journal_transaction_with_carried_identity(
+            "merged",
+            primary_identity="txn-keep",
+            primary_payload="payload-keep",
+            carried_identity="txn-carried",
+            carried_payload="payload-carried",
+        ),
+    )
+
+    original_csv = config.csv_dir / "2026__wf_checking__carried.csv"
+    backup_path = config.imports_dir / "2026.carried.import.bak"
+    backup_path.write_text("snapshot\n", encoding="utf-8")
+
+    index = ImportIndex(config.root_dir / ".workflow" / "state.db")
+    index.upsert_transactions(
+        import_account_id="wf_checking",
+        year="2026",
+        journal_path=journal_path,
+        source_file_sha256="sha-carried",
+        txns=[{"sourceIdentity": "txn-carried", "sourcePayloadHash": "payload-carried"}],
+    )
+
+    recorded = record_applied_import(
+        config,
+        _stage(
+            config,
+            stage_id="carried",
+            csv_path=original_csv,
+            backup_path=backup_path,
+            archived_csv_path=None,
+            journal_path=journal_path,
+            source_identity="txn-carried",
+        ),
+    )
+
+    history = list_import_history(config)
+    carried_entry = next(entry for entry in history if entry["id"] == recorded["id"])
+    assert carried_entry["canUndo"] is True
+
+    undone = undo_import(config, recorded["id"])
+    updated = journal_path.read_text(encoding="utf-8")
+
+    assert "Merchant merged" in updated
+    assert "; source_identity: txn-keep" in updated
+    assert "; source_identity_2: txn-carried" not in updated
+    assert "; source_payload_hash_2: payload-carried" not in updated
+    assert undone["undo"]["removedTxnCount"] == 0
+    assert undone["undo"]["strippedCarriedIdentityCount"] == 1
     assert index.get_identity_map("wf_checking") == {}
 
 

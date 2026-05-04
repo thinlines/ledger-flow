@@ -11,10 +11,18 @@ export type ReconcileTrackedAccount = {
 
 export type ReconcileContextRow = {
   id: string;
+  selectionKey: string;
   date: string;
   payee: string;
   category: string;
   signedAmount: string;
+  sourceLabel: 'Imported' | 'Manual';
+  isImported: boolean;
+  isManual: boolean;
+  journalPath: string;
+  headerLine: string;
+  lineNumber: number;
+  canDelete: boolean;
 };
 
 export type ReconcileContextResponse = {

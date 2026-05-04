@@ -14,6 +14,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
+import hashlib
+import re
 
 from .config_service import AppConfig
 from .journal_query_service import (
@@ -28,14 +30,26 @@ from .transaction_helpers import (
 )
 from .transfer_service import is_transfer_account, parse_transfer_metadata
 
+IMPORT_IDENTITY_KEY_RE = re.compile(r"^source_identity(?:_\d+)?$")
+
 
 @dataclass(frozen=True)
 class ReconciliationContextRow:
     id: str
+    selection_key: str
     date: str
     payee: str
     category: str
     signed_amount: Decimal
+    source_label: str
+    is_imported: bool
+    is_manual: bool
+    journal_path: str
+    header_line: str
+    line_number: int
+    can_delete: bool
+    import_account_id: str | None
+    source_identity: str | None
 
 
 @dataclass(frozen=True)
@@ -87,6 +101,61 @@ def _is_assertion_only_transaction(transaction) -> bool:
     return bool(str(transaction.metadata.get("reconciliation_event_id") or "").strip())
 
 
+def _is_imported_transaction(transaction) -> bool:
+    metadata = transaction.metadata
+    if str(metadata.get("import_account_id") or "").strip():
+        return True
+    for key, value in metadata.items():
+        if IMPORT_IDENTITY_KEY_RE.match(key) and str(value or "").strip():
+            return True
+    return False
+
+
+def _selection_fingerprint(transaction, ledger_account: str, signed_amount: Decimal) -> str:
+    postings = "|".join(
+        f"{posting.account}:{posting.amount if posting.amount is not None else ''}:{posting.commodity or ''}"
+        for posting in transaction.postings
+    )
+    user_metadata = "|".join(
+        f"{key}:{value}"
+        for key, value in sorted(transaction.metadata.items())
+        if key not in {"reconciliation_event_id", "statement_period"}
+    )
+    base = "\n".join(
+        [
+            transaction.source_journal,
+            transaction.posted_on.isoformat(),
+            transaction.payee,
+            ledger_account,
+            str(signed_amount),
+            postings,
+            user_metadata,
+        ]
+    )
+    return hashlib.sha1(base.encode("utf-8")).hexdigest()
+
+
+def _preferred_source_identity(metadata: dict[str, str]) -> str | None:
+    exact = str(metadata.get("source_identity") or "").strip()
+    if exact:
+        return exact
+
+    keyed_suffixes: list[tuple[int, str]] = []
+    for key, value in metadata.items():
+        match = re.match(r"^source_identity_(\d+)$", key)
+        if not match:
+            continue
+        candidate = str(value or "").strip()
+        if not candidate:
+            continue
+        keyed_suffixes.append((int(match.group(1)), candidate))
+
+    if not keyed_suffixes:
+        return None
+    keyed_suffixes.sort(key=lambda item: item[0])
+    return keyed_suffixes[0][1]
+
+
 def build_reconciliation_context(
     *,
     config: AppConfig,
@@ -117,6 +186,7 @@ def build_reconciliation_context(
     opening_balance = Decimal("0")
     earliest_posting: date | None = None
     rows: list[ReconciliationContextRow] = []
+    seen_selection_fingerprints: dict[str, int] = {}
 
     for index, transaction in enumerate(transactions):
         amount, _ = account_amount(transaction, ledger_account)
@@ -140,13 +210,35 @@ def build_reconciliation_context(
         else:
             payee = transaction.payee
 
+        category = _category_label(config, transaction, ledger_account)
+        imported = _is_imported_transaction(transaction)
+        source_identity = _preferred_source_identity(transaction.metadata)
+
+        if imported and source_identity:
+            selection_key = f"import:{source_identity}"
+        else:
+            fingerprint = _selection_fingerprint(transaction, ledger_account, amount)
+            ordinal = seen_selection_fingerprints.get(fingerprint, 0) + 1
+            seen_selection_fingerprints[fingerprint] = ordinal
+            selection_key = f"local:{fingerprint}:{ordinal}"
+
         rows.append(
             ReconciliationContextRow(
-                id=f"{posted.isoformat()}-{index}",
+                id=f"{selection_key}:{index}",
+                selection_key=selection_key,
                 date=posted.isoformat(),
                 payee=payee,
-                category=_category_label(config, transaction, ledger_account),
+                category=category,
                 signed_amount=amount,
+                source_label="Imported" if imported else "Manual",
+                is_imported=imported,
+                is_manual=not imported,
+                journal_path=transaction.source_journal,
+                header_line=transaction.header_line,
+                line_number=transaction.header_line_number,
+                can_delete=(not imported and transaction.header_line_number >= 0),
+                import_account_id=str(transaction.metadata.get("import_account_id") or "").strip() or None,
+                source_identity=source_identity,
             )
         )
 

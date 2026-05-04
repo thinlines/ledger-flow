@@ -22,6 +22,8 @@ from models import (
     PayeeRuleRequest,
     RecategorizeTransactionRequest,
     ReconcileRequest,
+    ReconciliationDuplicateResolutionRequest,
+    ReconciliationDuplicateReviewRequest,
     RuleHistoryApplyRequest,
     RuleHistoryScanRequest,
     RuleCreateRequest,
@@ -81,6 +83,10 @@ from services.institution_registry import canonical_template_id, display_name_fo
 from services.ledger_runner import CommandError, run_cmd
 from services.opening_balance_service import OPENING_BALANCES_EQUITY, opening_balance_index
 from services.reconciliation_context_service import build_reconciliation_context
+from services.reconciliation_duplicate_service import (
+    build_duplicate_review_payload,
+    resolve_duplicate_candidate,
+)
 from services.reconciliation_service import (
     AssertionFailure,
     latest_reconciliation_date,
@@ -1565,13 +1571,135 @@ def accounts_reconciliation_context(
         "transactions": [
             {
                 "id": row.id,
+                "selectionKey": row.selection_key,
                 "date": row.date,
                 "payee": row.payee,
                 "category": row.category,
                 "signedAmount": str(row.signed_amount),
+                "sourceLabel": row.source_label,
+                "isImported": row.is_imported,
+                "isManual": row.is_manual,
+                "journalPath": row.journal_path,
+                "headerLine": row.header_line,
+                "lineNumber": row.line_number,
+                "canDelete": row.can_delete,
             }
             for row in context.transactions
         ],
+    }
+
+
+@app.post("/api/accounts/{account_id}/reconciliation-duplicate-review")
+def accounts_reconciliation_duplicate_review(
+    account_id: str,
+    req: ReconciliationDuplicateReviewRequest,
+) -> dict:
+    config = _require_workspace_config()
+    try:
+        start = date.fromisoformat(req.periodStart)
+        end = date.fromisoformat(req.periodEnd)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid reconciliation review period: {exc}") from exc
+    if start > end:
+        raise HTTPException(status_code=400, detail="Invalid reconciliation review period.")
+
+    context, groups = build_duplicate_review_payload(
+        config=config,
+        tracked_account_id=account_id,
+        period_start=start,
+        period_end=end,
+        checked_selection_keys=set(req.checkedSelectionKeys),
+    )
+
+    def serialize_row(row) -> dict:
+        return {
+            "id": row.id,
+            "selectionKey": row.selection_key,
+            "date": row.date,
+            "payee": row.payee,
+            "category": row.category,
+            "signedAmount": str(row.signed_amount),
+            "sourceLabel": row.source_label,
+            "isImported": row.is_imported,
+            "isManual": row.is_manual,
+            "journalPath": row.journal_path,
+            "headerLine": row.header_line,
+            "lineNumber": row.line_number,
+            "canDelete": row.can_delete,
+        }
+
+    return {
+        "hasGroups": bool(groups),
+        "groups": [
+            {
+                "checked": serialize_row(group["checked"]),
+                "matches": [
+                    {
+                        "row": serialize_row(candidate.row),
+                        "reason": candidate.reason,
+                        "confidence": candidate.confidence,
+                        "action": candidate.action,
+                        "actionLabel": candidate.action_label,
+                        "actionBlockedReason": candidate.action_blocked_reason,
+                    }
+                    for candidate in group["matches"]
+                ],
+            }
+            for group in groups
+        ],
+        "transactionCount": len(context.transactions),
+    }
+
+
+@app.post("/api/accounts/{account_id}/reconciliation-duplicate-resolution")
+def accounts_reconciliation_duplicate_resolution(
+    account_id: str,
+    req: ReconciliationDuplicateResolutionRequest,
+) -> dict:
+    config = _require_workspace_config()
+    try:
+        start = date.fromisoformat(req.periodStart)
+        end = date.fromisoformat(req.periodEnd)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid reconciliation resolution period: {exc}") from exc
+    if start > end:
+        raise HTTPException(status_code=400, detail="Invalid reconciliation resolution period.")
+
+    context, groups = build_duplicate_review_payload(
+        config=config,
+        tracked_account_id=account_id,
+        period_start=start,
+        period_end=end,
+        checked_selection_keys={req.checkedSelectionKey},
+    )
+    checked_row = next((row for row in context.transactions if row.selection_key == req.checkedSelectionKey), None)
+    unchecked_row = next((row for row in context.transactions if row.selection_key == req.uncheckedSelectionKey), None)
+    if checked_row is None or unchecked_row is None:
+        raise HTTPException(status_code=404, detail="Duplicate review selection is no longer available.")
+
+    match_allowed = False
+    for group in groups:
+        if group["checked"].selection_key != checked_row.selection_key:
+            continue
+        for candidate in group["matches"]:
+            if candidate.row.selection_key == unchecked_row.selection_key and candidate.action == req.action:
+                match_allowed = True
+                break
+    if not match_allowed:
+        raise HTTPException(status_code=422, detail="This duplicate action is no longer available.")
+
+    result = resolve_duplicate_candidate(
+        config=config,
+        tracked_account_id=account_id,
+        checked_row=checked_row,
+        unchecked_row=unchecked_row,
+        action=req.action,
+    )
+    return {
+        "ok": True,
+        "removedSelectionKeys": result["removedSelectionKeys"],
+        "addedCheckedSelectionKeys": result["addedCheckedSelectionKeys"],
+        "eventId": result.get("eventId"),
     }
 
 

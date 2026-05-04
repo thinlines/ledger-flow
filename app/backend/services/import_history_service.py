@@ -31,6 +31,7 @@ class JournalTransaction:
     end: int
     source_identity: str | None
     source_payload_hash: str | None
+    identity_variants: tuple[tuple[str, str | None], ...]
     metadata: dict[str, str]
 
 
@@ -83,6 +84,8 @@ def _scan_journal_transactions(lines: list[str]) -> list[JournalTransaction]:
         source_identity = None
         source_payload_hash = None
         metadata: dict[str, str] = {}
+        identities_by_suffix: dict[str, str] = {}
+        payloads_by_suffix: dict[str, str | None] = {}
         for line in lines[start + 1:end]:
             match = META_RE.match(line)
             if not match:
@@ -93,14 +96,28 @@ def _scan_journal_transactions(lines: list[str]) -> list[JournalTransaction]:
                 metadata[key] = value
             if key == "source_identity":
                 source_identity = value
+                identities_by_suffix["1"] = value
             elif key == "source_payload_hash":
                 source_payload_hash = value
+                payloads_by_suffix["1"] = value
+            else:
+                identity_match = re.match(r"^source_identity_(\d+)$", key)
+                if identity_match and value is not None:
+                    identities_by_suffix[identity_match.group(1)] = value
+                    continue
+                payload_match = re.match(r"^source_payload_hash_(\d+)$", key)
+                if payload_match:
+                    payloads_by_suffix[payload_match.group(1)] = value
+        identity_variants: list[tuple[str, str | None]] = []
+        for suffix, identity in sorted(identities_by_suffix.items(), key=lambda item: int(item[0])):
+            identity_variants.append((identity, payloads_by_suffix.get(suffix)))
         transactions.append(
             JournalTransaction(
                 start=start,
                 end=end,
                 source_identity=source_identity,
                 source_payload_hash=source_payload_hash,
+                identity_variants=tuple(identity_variants),
                 metadata=metadata,
             )
         )
@@ -186,37 +203,97 @@ def _required_imported_transactions(entry: dict) -> list[tuple[str, str | None]]
     return required
 
 
+@dataclass(frozen=True)
+class UndoMatch:
+    transaction: JournalTransaction
+    identity: str
+    payload_hash: str | None
+    is_primary: bool
+
+
 def _match_transactions_for_undo(
     entry: dict,
     journal_transactions: list[JournalTransaction],
-) -> tuple[list[JournalTransaction] | None, str | None]:
+) -> tuple[list[UndoMatch] | None, str | None]:
     required = _required_imported_transactions(entry)
     if not required:
         return [], None
 
-    by_identity: dict[str, list[JournalTransaction]] = {}
-    by_identity_and_payload: dict[tuple[str, str | None], list[JournalTransaction]] = {}
+    by_identity: dict[str, list[UndoMatch]] = {}
+    by_identity_and_payload: dict[tuple[str, str | None], list[UndoMatch]] = {}
     for transaction in journal_transactions:
-        if not transaction.source_identity:
-            continue
-        by_identity.setdefault(transaction.source_identity, []).append(transaction)
-        key = (transaction.source_identity, transaction.source_payload_hash)
-        by_identity_and_payload.setdefault(key, []).append(transaction)
+        for identity, payload_hash in transaction.identity_variants:
+            match = UndoMatch(
+                transaction=transaction,
+                identity=identity,
+                payload_hash=payload_hash,
+                is_primary=identity == transaction.source_identity,
+            )
+            by_identity.setdefault(identity, []).append(match)
+            by_identity_and_payload.setdefault((identity, payload_hash), []).append(match)
 
-    used_starts: set[int] = set()
-    matches: list[JournalTransaction] = []
+    used_keys: set[tuple[int, str]] = set()
+    matches: list[UndoMatch] = []
     for source_identity, source_payload_hash in required:
         candidates = (
             by_identity_and_payload.get((source_identity, source_payload_hash), [])
             if source_payload_hash is not None
             else by_identity.get(source_identity, [])
         )
-        match = next((candidate for candidate in candidates if candidate.start not in used_starts), None)
+        match = next(
+            (
+                candidate
+                for candidate in sorted(candidates, key=lambda item: (not item.is_primary, item.transaction.start))
+                if (candidate.transaction.start, candidate.identity) not in used_keys
+            ),
+            None,
+        )
         if match is None:
             return None, "Some transactions from this import can no longer be identified in the journal."
-        used_starts.add(match.start)
+        used_keys.add((match.transaction.start, match.identity))
         matches.append(match)
     return matches, None
+
+
+def _remove_metadata_variant(
+    lines: list[str],
+    transaction: JournalTransaction,
+    source_identity: str,
+) -> list[str]:
+    if source_identity == transaction.source_identity:
+        raise ValueError("Primary identities must be removed by deleting the owning transaction.")
+
+    updated_lines = list(lines)
+    txn_lines = list(updated_lines[transaction.start:transaction.end])
+    metadata = transaction.metadata
+    suffix_to_remove: str | None = None
+    for key, value in metadata.items():
+        match = re.match(r"^source_identity_(\d+)$", key)
+        if match and value == source_identity:
+            suffix_to_remove = match.group(1)
+            break
+    if suffix_to_remove is None:
+        raise ValueError("Carried import identity could not be found on the surviving transaction.")
+
+    stripped_lines: list[str] = []
+    blocked_keys = {
+        f"source_identity_{suffix_to_remove}",
+        f"source_payload_hash_{suffix_to_remove}",
+        f"source_file_sha256_{suffix_to_remove}",
+        f"importer_version_{suffix_to_remove}",
+    }
+    for line in txn_lines:
+        match = META_RE.match(line)
+        if not match:
+            stripped_lines.append(line)
+            continue
+        key = match.group(1).strip().lower()
+        if key in blocked_keys:
+            continue
+        stripped_lines.append(line)
+
+    updated_lines[transaction.start:transaction.end] = stripped_lines
+    return updated_lines
 
 
 def _undo_state_by_id(config: AppConfig, entries: list[dict]) -> dict[str, tuple[bool, str | None]]:
@@ -346,20 +423,31 @@ def undo_import(config: AppConfig, history_id: str) -> dict:
 
     journal_path = Path(str(entry["targetJournalPath"]))
     lines, journal_transactions = _load_journal_transactions(journal_path)
-    matched_transactions, reason = _match_transactions_for_undo(entry, journal_transactions)
-    if matched_transactions is None:
+    matched_results, reason = _match_transactions_for_undo(entry, journal_transactions)
+    if matched_results is None:
         raise ValueError(reason or "This import cannot be undone.")
 
     journal_path.parent.mkdir(parents=True, exist_ok=True)
     undo_backup = backup_file(journal_path, "undo") if journal_path.exists() else None
-    ranges = sorted((transaction.start, transaction.end) for transaction in matched_transactions)
+    removed_transactions = [match.transaction for match in matched_results if match.is_primary]
+    strip_only_matches = [match for match in matched_results if not match.is_primary]
+    ranges = sorted((transaction.start, transaction.end) for transaction in removed_transactions)
     kept_lines: list[str] = []
     cursor = 0
     for start, end in ranges:
         kept_lines.extend(lines[cursor:start])
         cursor = end
     kept_lines.extend(lines[cursor:])
-    kept_lines = _downgrade_remaining_transfer_peers(config, kept_lines, matched_transactions)
+    kept_lines = _downgrade_remaining_transfer_peers(config, kept_lines, removed_transactions)
+    stripped_transactions = _scan_journal_transactions(kept_lines)
+    by_start = {transaction.start: transaction for transaction in stripped_transactions}
+    for match in strip_only_matches:
+        surviving = by_start.get(match.transaction.start)
+        if surviving is None:
+            continue
+        kept_lines = _remove_metadata_variant(kept_lines, surviving, match.identity)
+        stripped_transactions = _scan_journal_transactions(kept_lines)
+        by_start = {transaction.start: transaction for transaction in stripped_transactions}
     if kept_lines:
         journal_path.write_text("\n".join(kept_lines).rstrip() + "\n", encoding="utf-8")
     else:
@@ -381,7 +469,8 @@ def undo_import(config: AppConfig, history_id: str) -> dict:
         "undoneAt": datetime.now(UTC).isoformat(),
         "undoBackupPath": str(undo_backup.resolve(strict=False)) if undo_backup is not None else None,
         "restoredInboxCsvPath": restored_csv_path,
-        "removedTxnCount": len(matched_transactions),
+        "removedTxnCount": len(removed_transactions),
+        "strippedCarriedIdentityCount": len(strip_only_matches),
         "sourceCsvWarning": source_csv_warning,
     }
 
