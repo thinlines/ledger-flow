@@ -1,4 +1,0 @@
-interface:
-  display_name: "Ledger Flow UI Designer"
-  short_description: "Inventive, consistent finance UI design"
-  default_prompt: "Use $ledger-flow-ui-designer to design or refine this Ledger Flow UI with bold but familiar interactions and consistent visual direction."

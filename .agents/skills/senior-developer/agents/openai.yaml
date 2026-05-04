@@ -1,4 +1,0 @@
-interface:
-  display_name: "Senior Developer"
-  short_description: "Implement clean, maintainable solutions"
-  default_prompt: "Use $senior-developer to follow the active plan, implement this task cleanly, and delegate large parallel work when it helps."

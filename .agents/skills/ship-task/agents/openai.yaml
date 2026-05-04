@@ -1,4 +1,0 @@
-interface:
-  display_name: "Ship Task"
-  short_description: "Execute the full implement → QA → review → commit pipeline"
-  default_prompt: "Use $ship-task to implement the active TASK.md end to end: develop in a worktree, verify with QA, review the code, update task status, commit, and report results."

@@ -1,4 +1,0 @@
-interface:
-  display_name: "Git Committer"
-  short_description: "Create clear, granular git commits"
-  default_prompt: "Use $git-committer to inspect my changes, split them into logical commits, and write conventional commit messages."

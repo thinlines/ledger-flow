@@ -1,4 +1,0 @@
-interface:
-  display_name: "UI Reviewer"
-  short_description: "Inspect the UI and report improvement gaps"
-  default_prompt: "Use $review-ui to inspect the local Ledger Flow UI, find improvement opportunities, and report the key findings for me and the PM."
