@@ -90,6 +90,7 @@ from services.reconciliation_duplicate_service import (
 from services.reconciliation_service import (
     AssertionFailure,
     latest_reconciliation_date,
+    latest_reconciliation_dates_by_tracked_id,
     parse_closing_balance,
     reconciliation_status as compute_reconciliation_status,
     restore_from_backup,
@@ -191,6 +192,7 @@ def _tracked_account_ui(
     opening_by_id: dict,
     opening_by_ledger: dict,
     reconciliation_status_by_id: dict[str, dict] | None = None,
+    last_reconciled_by_id: dict[str, "date"] | None = None,
 ) -> dict:
     import_account_id = str(account_cfg.get("import_account_id") or "").strip() or None
     linked_import_cfg = config.import_accounts.get(import_account_id or "", {}) if import_account_id else {}
@@ -222,6 +224,12 @@ def _tracked_account_ui(
     else:
         reconciliation_status = reconciliation_status_by_id.get(account_id, {"ok": True})
 
+    last_reconciled_date = None
+    if last_reconciled_by_id is not None:
+        d = last_reconciled_by_id.get(account_id)
+        if d is not None:
+            last_reconciled_date = d.isoformat()
+
     return {
         "id": account_id,
         "displayName": account_cfg.get("display_name", account_id),
@@ -241,6 +249,7 @@ def _tracked_account_ui(
         "openingBalanceOffsetAccountId": opening_balance_offset_account_id,
         "minimumPayment": str(opening_entry.minimum_payment) if opening_entry and opening_entry.minimum_payment is not None else None,
         "reconciliationStatus": reconciliation_status,
+        "lastReconciledDate": last_reconciled_date,
     }
 
 
@@ -445,8 +454,9 @@ def app_state() -> dict:
             }
     opening_by_id, opening_by_ledger = opening_balance_index(config)
     reconciliation_status_map = compute_reconciliation_status(config)
+    last_reconciled_map = latest_reconciliation_dates_by_tracked_id(config)
     tracked_accounts = [
-        _tracked_account_ui(config, account_id, account_cfg, opening_by_id, opening_by_ledger, reconciliation_status_map)
+        _tracked_account_ui(config, account_id, account_cfg, opening_by_id, opening_by_ledger, reconciliation_status_map, last_reconciled_map)
         for account_id, account_cfg in sorted(config.tracked_accounts.items(), key=lambda x: x[0])
     ]
     return {
@@ -1312,8 +1322,9 @@ def tracked_accounts_list() -> dict:
     config = _require_workspace_config()
     opening_by_id, opening_by_ledger = opening_balance_index(config)
     reconciliation_status_map = compute_reconciliation_status(config)
+    last_reconciled_map = latest_reconciliation_dates_by_tracked_id(config)
     rows = [
-        _tracked_account_ui(config, account_id, account_cfg, opening_by_id, opening_by_ledger, reconciliation_status_map)
+        _tracked_account_ui(config, account_id, account_cfg, opening_by_id, opening_by_ledger, reconciliation_status_map, last_reconciled_map)
         for account_id, account_cfg in sorted(
             config.tracked_accounts.items(),
             key=lambda item: str(item[1].get("display_name", item[0])),

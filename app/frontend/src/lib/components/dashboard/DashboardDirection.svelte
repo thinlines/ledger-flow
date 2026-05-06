@@ -80,7 +80,8 @@
     (direction.looseEnds.reviewQueueCount > 0 ||
       direction.looseEnds.statementInboxCount > 0 ||
       direction.looseEnds.staleAccounts.length > 0 ||
-      direction.looseEnds.missingOpeningBalances.length > 0);
+      direction.looseEnds.missingOpeningBalances.length > 0 ||
+      (direction.looseEnds.brokenReconciliations?.length ?? 0) > 0);
 
   $: recurringPercent = (() => {
     if (!direction || direction.recurringVsDiscretionary.total <= 0) return 0;
@@ -280,6 +281,14 @@
                   {missing.displayName}
                 </a>
                 — needs an opening balance
+              </li>
+            {/each}
+            {#each direction.looseEnds.brokenReconciliations ?? [] as broken}
+              <li class="m-0 text-sm text-muted-foreground">
+                <a class="text-link" href={`/accounts/${encodeURIComponent(broken.id)}/reconcile`}>
+                  {broken.displayName}
+                </a>
+                — reconciliation failed
               </li>
             {/each}
           </ul>

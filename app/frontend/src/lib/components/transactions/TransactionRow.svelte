@@ -15,9 +15,10 @@
   export let onToggleClearing: ((row: TransactionRow, event: MouseEvent) => void) | null = null;
   export let onRowClick: (() => void) | null = null;
 
+  $: isAssertion = row.isAssertion ?? false;
   $: clearingStatus = row.status ?? 'unmarked';
-  $: clearingInteractive = isSingleAccount && onToggleClearing !== null;
-  $: categoryLabel = row.categories.length > 0
+  $: clearingInteractive = isSingleAccount && onToggleClearing !== null && !isAssertion;
+  $: categoryLabel = isAssertion ? '' : row.categories.length > 0
     ? row.categories.map((c) => c.label).join(' \u00B7 ')
     : row.isTransfer ? 'Transfer' : '';
   $: secondaryText = showAccountLabel && !isSingleAccount ? row.account.label : '';
@@ -33,7 +34,7 @@
       });
 </script>
 
-<div class="tx-row" class:opening-row={row.isOpeningBalance}>
+<div class="tx-row" class:opening-row={row.isOpeningBalance} class:assertion-row={isAssertion}>
   <div class="tx-row-inner">
     {#if clearingInteractive}
       <button
@@ -54,7 +55,11 @@
         {#if showCategory && categoryLabel}
           <span class="tx-category-pill">{categoryLabel}</span>
         {/if}
-        <span class="font-bold truncate min-w-0" title={row.payee}>{truncatePayee(row.payee)}</span>
+        {#if isAssertion}
+          <span class="truncate min-w-0 text-muted-foreground/60 font-medium">Statement reconciliation</span>
+        {:else}
+          <span class="font-bold truncate min-w-0" title={row.payee}>{truncatePayee(row.payee)}</span>
+        {/if}
       </div>
       <p class="text-muted-foreground text-sm mt-0.5 min-h-[1.1em]">
         {secondaryText}
@@ -71,12 +76,18 @@
     </div>
 
     <div class="tx-amount shrink-0 text-right">
-      <p class:positive={amountTone === 'positive'} class="font-bold whitespace-nowrap inline-flex items-center justify-end gap-1">
-        {#if row.isTransfer}
-          <ArrowLeftRightIcon class="h-4 w-4 text-muted-foreground shrink-0" />
-        {/if}
-        <span>{formattedAmount}</span>
-      </p>
+      {#if isAssertion}
+        <p class="font-bold whitespace-nowrap text-muted-foreground/40">
+          <span>{formatCurrency(0, baseCurrency)}</span>
+        </p>
+      {:else}
+        <p class:positive={amountTone === 'positive'} class="font-bold whitespace-nowrap inline-flex items-center justify-end gap-1">
+          {#if row.isTransfer}
+            <ArrowLeftRightIcon class="h-4 w-4 text-muted-foreground shrink-0" />
+          {/if}
+          <span>{formattedAmount}</span>
+        </p>
+      {/if}
     </div>
 
     {#if showRunningBalance && row.runningBalance !== null}
@@ -87,9 +98,13 @@
       </div>
     {/if}
 
-    <button class="row-chevron" type="button" on:click|stopPropagation={() => onRowClick?.()} aria-label="View details">
-      <ChevronRightIcon class="size-4" />
-    </button>
+    {#if !isAssertion}
+      <button class="row-chevron" type="button" on:click|stopPropagation={() => onRowClick?.()} aria-label="View details">
+        <ChevronRightIcon class="size-4" />
+      </button>
+    {:else}
+      <span class="row-chevron-spacer"></span>
+    {/if}
   </div>
 </div>
 
@@ -105,6 +120,10 @@
 
   .opening-row {
     background: rgba(247, 249, 245, 0.78);
+  }
+
+  .assertion-row {
+    opacity: 0.55;
   }
 
   .tx-row-inner {
@@ -196,6 +215,12 @@
   .row-chevron:hover {
     color: var(--foreground);
     background: rgba(10, 61, 89, 0.06);
+  }
+
+  .row-chevron-spacer {
+    display: inline-block;
+    width: 1.5rem;
+    flex-shrink: 0;
   }
 
   @media (max-width: 720px) {

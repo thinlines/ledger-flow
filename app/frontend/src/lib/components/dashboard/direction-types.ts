@@ -46,6 +46,11 @@ export type MissingOB = {
   displayName: string;
 };
 
+export type BrokenReconciliation = {
+  id: string;
+  displayName: string;
+};
+
 export type DirectionData = {
   runway: RunwayData | null;
   netWorthTrend: NetWorthPoint[] | null;
@@ -60,6 +65,7 @@ export type DirectionData = {
     statementInboxCount: number;
     staleAccounts: StaleAccount[];
     missingOpeningBalances: MissingOB[];
+    brokenReconciliations: BrokenReconciliation[];
   };
   baseCurrency: string;
 };
