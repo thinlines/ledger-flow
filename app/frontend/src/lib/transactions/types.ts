@@ -24,6 +24,7 @@ export type TrackedAccount = {
   openingBalance?: string | null;
   openingBalanceDate?: string | null;
   reconciliationStatus?: ReconciliationStatus;
+  lastReconciledDate?: string | null;
 };
 
 /** @deprecated Used by ManualResolutionDialog during transition to TransactionRow */
@@ -133,6 +134,7 @@ export type TransactionRow = {
   isUnknown: boolean;
   isManual: boolean;
   isOpeningBalance: boolean;
+  isAssertion: boolean;
   legs: Array<{ journalPath: string; headerLine: string; lineNumber: number }>;
   matchId?: string | null;
   transferState?: string | null;

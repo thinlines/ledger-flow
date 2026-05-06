@@ -69,6 +69,7 @@ class _UnifiedRow:
     categories: list[dict]
     is_transfer: bool
     is_manual: bool
+    is_assertion: bool = False
 
 
 def _resolve_date_range(
@@ -223,6 +224,10 @@ def build_unified_transactions(
                 and not is_generated_opening
             )
 
+            is_assertion = bool(
+                str(transaction.metadata.get("reconciliation_event_id") or "").strip()
+            )
+
             event = RegisterEvent(
                 posted_on=transaction.posted_on,
                 order=order,
@@ -253,6 +258,7 @@ def build_unified_transactions(
                 categories=categories,
                 is_transfer=is_transfer,
                 is_manual=is_manual,
+                is_assertion=is_assertion,
             ))
             break  # Only count once per transaction
 
@@ -528,6 +534,7 @@ def _compute_rows_with_balance(
             "isUnknown": ev.is_unknown,
             "isManual": urow.is_manual,
             "isOpeningBalance": ev.is_opening_balance,
+            "isAssertion": urow.is_assertion,
             "legs": [{
                 "journalPath": ev.journal_path,
                 "headerLine": ev.header_line,

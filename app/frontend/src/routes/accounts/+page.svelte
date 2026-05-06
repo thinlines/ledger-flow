@@ -48,6 +48,8 @@
     importProfile?: CustomImportProfile | null;
     openingBalance?: string | null;
     openingBalanceDate?: string | null;
+    reconciliationStatus?: { ok: boolean; broken?: { date?: string | null; expected?: string | null; actual?: string | null; rawError?: string } };
+    lastReconciledDate?: string | null;
   };
 
   type DashboardOverview = {
@@ -600,6 +602,15 @@
                           Opening balance not set yet.
                         {/if}
                       </p>
+                      {#if account.reconciliationStatus && !account.reconciliationStatus.ok}
+                        <p class="m-0 text-sm font-semibold text-bad">
+                          <a class="text-bad no-underline hover:underline" href={`/accounts/${encodeURIComponent(account.id)}/reconcile`}>Reconciliation failed</a>
+                        </p>
+                      {:else if account.lastReconciledDate}
+                        <p class="m-0 text-xs text-muted-foreground">
+                          Last reconciled: {shortDate(account.lastReconciledDate)}
+                        </p>
+                      {/if}
                     </div>
 
                     <div class="grid min-w-0 gap-3.5">

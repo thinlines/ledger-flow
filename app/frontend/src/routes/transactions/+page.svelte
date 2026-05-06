@@ -419,7 +419,7 @@
         {#each dayGroups as group, gi}
           <TransactionDayGroup header={group.header} isFirst={gi === 0} dailySum={group.dailySum} {baseCurrency} accountKind={filteredAccountKind}>
             {#each group.rows as row}
-              <TransactionRow {row} {baseCurrency} accountKind={rowAccountKind(row)} showRunningBalance={showRunBal} showCategory={!filters.category} showAccountLabel={!isSingleAccount} {isSingleAccount} onToggleClearing={isSingleAccount ? handleToggleClearing : null} onRowClick={() => (selectedRow = row)} />
+              <TransactionRow {row} {baseCurrency} accountKind={rowAccountKind(row)} showRunningBalance={showRunBal} showCategory={!filters.category} showAccountLabel={!isSingleAccount} {isSingleAccount} onToggleClearing={isSingleAccount ? handleToggleClearing : null} onRowClick={row.isAssertion ? null : () => (selectedRow = row)} />
             {/each}
           </TransactionDayGroup>
         {/each}

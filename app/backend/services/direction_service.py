@@ -15,6 +15,7 @@ from .journal_query_service import (
     pretty_account_name,
 )
 from .opening_balance_service import opening_balance_index
+from .reconciliation_service import reconciliation_status as compute_reconciliation_status
 
 
 def _month_key(d: date) -> str:
@@ -350,6 +351,22 @@ def build_dashboard_direction(config: AppConfig, *, today: date | None = None) -
                 "displayName": str(account_cfg.get("display_name", account_id)),
             })
 
+    # Broken reconciliations
+    broken_reconciliations: list[dict] = []
+    try:
+        recon_status = compute_reconciliation_status(config)
+        for account_id, status in recon_status.items():
+            if not status.get("ok", True):
+                display_name = str(
+                    config.tracked_accounts.get(account_id, {}).get("display_name", account_id)
+                )
+                broken_reconciliations.append({
+                    "id": account_id,
+                    "displayName": display_name,
+                })
+    except Exception:
+        pass  # Fail open: omit broken-reconciliation items if detection errors
+
     # -----------------------------------------------------------------------
     # Assemble response
     # -----------------------------------------------------------------------
@@ -367,6 +384,7 @@ def build_dashboard_direction(config: AppConfig, *, today: date | None = None) -
             "statementInboxCount": statement_inbox_count,
             "staleAccounts": stale_accounts,
             "missingOpeningBalances": missing_opening_balances,
+            "brokenReconciliations": broken_reconciliations,
         },
         "baseCurrency": base_currency,
     }
