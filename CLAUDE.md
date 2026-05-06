@@ -7,8 +7,15 @@ When the user asks to implement, build, ship, finish, or work on a task — or r
 ## Worktrees
 
 - **Main worktree:** the project root (`/home/randy/Desktop/tmp-books`). Orchestrators run here; merges land here.
-- **Feat worktree:** pre-built at `.claude/worktrees/feat`, dependencies pre-warmed (`pnpm install`, `uv sync`). Single-task `ship-task` pipelines run implementation here. Sandbox mode auto-approves Bash inside `.claude/worktrees/*` (the directory sits under `.claude/`, which is in the sandbox writable allowlist via `additionalDirectories`). Ship-task creates a per-task branch with `git -C <feat> checkout -b <branch> master` at Phase 0 and resets it back to detached master at Phase 5.
-- **Ad-hoc worktrees:** multi-task concurrent mode creates worktrees under `.claude/worktrees/agent-*` per task and removes them after merge.
+- **Pool worktrees** (pre-warmed, fixed): three named slots at `.claude/worktrees/`, each with dependencies pre-installed. Sandbox mode auto-approves Bash inside `.claude/worktrees/*` (the directory sits under `.claude/`, which is in the sandbox writable allowlist via `additionalDirectories`).
+
+| Slot | Path |
+|------|------|
+| `aristotle` | `.claude/worktrees/aristotle` |
+| `hypatia` | `.claude/worktrees/hypatia` |
+| `spinoza` | `.claude/worktrees/spinoza` |
+
+Ship-task picks an available slot, creates a per-task branch with `git -C <slot> checkout -b <branch> master` at Phase 0, and resets it back to detached master at Phase 5. **Never create new worktrees** — use only these pool slots. If all slots are occupied, wait for one to free up.
 
 ## Pipeline scope enforcement
 
