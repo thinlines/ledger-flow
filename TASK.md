@@ -1,179 +1,131 @@
-# Reconciliation Duplicate Review + Durable Resolution (8d)
-
-**Status: COMPLETED — 2026-05-04**
+# Match-Suggestion Ranking Fix (9a)
 
 ## Objective
 
-When reconciliation reaches a zero ticked diff but the backend still rejects the assertion, the route should help the user review likely duplicate transactions and resolve them durably. Manual-only duplicates may be removed. Imported duplicates must be resolved in a way that prevents the same bank rows from reappearing on the next import.
+Fix the unknowns review queue's match-suggestion heuristic so it stops surfacing implausible candidates — e.g., a manual entry with a >$400 amount delta and an unrelated payee appearing as a "Close amount" match.
 
 ## Scope
 
 ### Included
 
-1. **General review filters on `/accounts/:accountId/reconcile`.** Keep route-level review controls for `Remaining`, `Checked`, and `All` so the user can inspect what was included versus left out before and after an assertion failure.
-2. **Zero-diff 422 duplicate-review mode.** On `assertion_failed` when the review diff was zero at submit time, the route computes and surfaces *possible duplicate* groups instead of jumping straight to a delete suggestion.
-3. **Shared duplicate-candidate heuristic slice.** Reuse and tighten the existing unknowns/manual-match logic for reconciliation review:
-   - same account only
-   - exact absolute amount match required
-   - narrow date window
-   - payee similarity as a supporting signal
-   - no `close amount`-only candidate tier in this flow
-   This heuristic slice must be strict enough that the route never suggests an obviously unrelated pair.
-4. **Duplicate groups anchored on checked rows.** The duplicate-review view shows each checked transaction alongside matching unchecked transactions, sorted by confidence. Each row shows:
-   - date
-   - payee
-   - signed amount
-   - source badge: `Imported` or `Manual`
-   - why it was paired, in plain language
-5. **Source-aware resolution actions.** The route offers different actions depending on the source mix:
-   - **Checked imported + unchecked manual:** `Remove manual duplicate`
-   - **Checked manual + unchecked imported:** `Use imported transaction`
-   - **Checked imported + unchecked imported:** `Merge imported duplicates`
-   - **Checked manual + unchecked manual:** `Remove manual duplicate`
-6. **Manual-to-import replacement path.** `Use imported transaction` reuses the existing unknowns-style match semantics where practical: the imported transaction survives, user-authored categorization/metadata carries over as appropriate, the manual duplicate is archived/removed through the established match substrate, and the imported survivor becomes the checked row in the reconciliation view.
-7. **Minimal imported-duplicate merge path.** `Merge imported duplicates` lands the core durable merge substrate now, but only for reconciliation duplicate-review groups in this task. The surviving imported transaction preserves both transactions’ import identity metadata so either bank-row variant is recognized in future imports. The generic transactions-page multi-select merge UI remains Feature 9b.
-8. **Route refresh and tick preservation after resolution.** After a delete, replace, or merge action, the route refetches context and preserves the user’s reconciliation intent:
-   - surviving checked rows remain checked
-   - when a checked manual row is replaced by an unchecked imported row, the imported survivor is checked automatically
-   - removed rows disappear from the tick set
-9. **Single-row delete from the general list.** Outside duplicate-review mode, a deletable row can still be removed from its row menu, but the route does not offer a bulk “delete all remaining” shortcut.
+1. **Replace the 4-tier system in `find_match_candidates()` with continuous scoring.** The current tier model (`date_exact_amount` / `date_close_amount` / `date_payee` / `payee_only`) has two broken tiers:
+   - **Tier 2 (`date_close_amount`):** accepts *any* amount delta as long as both amounts are non-null and the dates are within 3 days. A $50 manual entry matches a $500 import.
+   - **Tier 4 (`payee_only`):** accepts case-insensitive substring matches with no date or amount constraint. "AT&T" matches "AT&T Payment" but also "BATTERY PLUS" via substring.
+   Replace with a scored model where each signal contributes a weighted score and candidates below a minimum threshold are rejected.
+
+2. **Upgrade payee matching from substring containment to normalized token-set similarity.** Reuse or extract the `_normalize_payee()` and `_payee_similarity()` functions from `reconciliation_duplicate_service.py` into a shared module. The reconciliation flow already demonstrates the correct approach: noise-word removal, plural normalization, token-set ratio, and a single-token `SequenceMatcher` fallback.
+
+3. **Add amount-proximity scoring with tolerances.** Replace the binary `exact_amount` / `close_amount` split with a continuous score:
+   - Exact match (delta = 0): full score.
+   - Within tolerance (delta ≤ 5% of the smaller absolute value, capped at $5.00): partial score, decaying with delta size.
+   - Outside tolerance: zero score — candidate rejected on amount alone.
+   This prevents the $50-vs-$500 case while still allowing small rounding differences (e.g., $49.95 vs $50.00).
+
+4. **Apply a minimum combined score threshold.** Candidates must clear a floor to appear in the list. The floor rejects low-confidence noise (weak payee + moderate date + no amount signal) without requiring every signal to be strong.
+
+5. **Preserve auto-suggestion behavior.** When exactly one candidate scores above a high-confidence threshold (equivalent to today's tier-1: exact amount + close date + strong payee), auto-populate `suggestedMatchId`. The threshold must be strict enough that auto-suggestion never fires on a dubious candidate.
+
+6. **Update the frontend quality labels.** The unknowns page renders `matchQualityLabel()` with labels like "Exact match", "Close amount", "Payee match", "Payee only". Replace with score-derived labels: `"Strong match"`, `"Likely match"`, `"Possible match"`. Show a human-readable reason string (similar to 8d's `_candidate_reason()`) in the candidate row.
+
+7. **Update or add backend tests.** Cover: exact-match scoring, amount-tolerance boundary (just inside and just outside 5%), payee-similarity edge cases (substring that should *not* match, token-set match that should), minimum-threshold rejection, auto-suggestion gating.
 
 ### Explicitly Excluded
 
-- A blanket `Delete remaining unreconciled transactions` action.
-- A generic non-zero-diff completion dialog with `Add adjustment`. Adjustment posting remains **8i**.
-- Full generic transactions-page merge UI or multi-select merge workflow. That remains **9b** after the reconciliation-scoped merge substrate lands.
-- Subset-sum assistance (**8e**).
-- Assertion rendering across surfaces (**8f**).
-- Root-cause analytics or blame-oriented UI explaining *why* a duplicate exists. This task resolves the bookkeeping problem; it does not diagnose whether the cause was bank CSV drift, missed review matching, or user error.
+- Changes to the reconciliation duplicate heuristic in `reconciliation_duplicate_service.py`. That code is already correct; this task backports its quality to the unknowns flow.
+- Changes to the unknowns apply/stage flow. Only the candidate-finding and ranking logic changes.
+- Multi-select or merge UI on the unknowns page.
 
 ## System Behavior
 
 ### Inputs
 
-- User filters the reconciliation list by `Remaining`, `Checked`, or `All`.
-- User clicks `Reconcile` with a zero diff.
-- Backend returns 422 `assertion_failed`.
-- User opens duplicate-review mode from the rejection state.
-- User chooses one of the source-aware resolution actions on a duplicate candidate.
-- User confirms the destructive or merge action.
+- User scans unknowns via `POST /api/unknowns/scan`.
+- Backend calls `populate_match_candidates()` → `find_match_candidates()` for each unknown transaction.
+- Each candidate is scored against the import transaction's date, amount, and payee.
 
 ### Logic
 
-- The primary `Reconcile` button remains gated on the same backend-safe condition as 8c: setup valid, context loaded, not submitting, and diff exactly zero.
-- After a zero-diff 422, the route computes possible duplicate groups by comparing **checked** rows against **unchecked** rows in the current period using the tightened heuristic slice.
-- A duplicate candidate requires an exact absolute amount match. Payee similarity and date proximity rank candidates; they do not rescue mismatched amounts.
-- The route labels candidate groups as **possible duplicates**, not certain duplicates.
-- Resolution is source-aware:
-  - If the unchecked row is manual-only and safe to delete, the route offers removal.
-  - If the unchecked row is imported and the checked row is manual, the route offers `Use imported transaction`, not raw delete.
-  - If both rows are imported, the route offers `Merge imported duplicates`, not raw delete.
-- `Use imported transaction` keeps the imported row as the durable survivor because future imports can only dedupe against import metadata, not a deleted imported row.
-- `Merge imported duplicates` keeps one imported survivor, removes the extra imported row, and preserves both transactions’ import identity metadata on the survivor so future imports of either bank-row variant collapse safely.
-- If the route finds no sufficiently strong duplicate candidates, it falls back to the 8c-style rejection copy plus the normal `Remaining` / `Checked` / `All` review controls. No destructive shortcut appears.
+- **Payee similarity** is computed via the shared `_payee_similarity()` function (token-set ratio with noise-word removal). Score range: 0.0–1.0.
+- **Amount proximity** is computed as a continuous score:
+  - 0 delta → 1.0
+  - Within tolerance → linear decay from 1.0 to 0.3
+  - Outside tolerance → 0.0
+- **Date proximity** decays from 1.0 (same day) toward 0.0 as `date_diff` approaches and exceeds `MAX_MANUAL_MATCH_DAYS` (3 days). Candidates beyond the window can still appear if amount + payee are strong, but date contributes zero.
+- **Combined score** is a weighted sum of the three signals: `amount_score * W_AMT + payee_score * W_PAYEE + date_score * W_DATE`. Weights should favor amount (most reliable signal), then payee, then date.
+- Candidates with combined score below `MIN_MATCH_SCORE` are dropped.
+- Candidates are sorted by descending combined score (not ascending tier).
+- Auto-suggestion fires when exactly one candidate scores above `AUTO_SUGGEST_THRESHOLD` (a high bar).
 
 ### Outputs
 
-- The reconcile route gains a duplicate-review mode for zero-diff 422 failures.
-- The duplicate-review mode presents checked rows paired with likely unchecked duplicates.
-- Manual duplicates can be removed safely.
-- Imported duplicates can be resolved durably through replace or merge actions.
+- `matchCandidates` array on each unknown transaction row, sorted by descending score.
+- Each candidate gains: `matchScore` (float), `matchReason` (human-readable string), `matchQuality` (one of `"strong"`, `"likely"`, `"possible"`).
+- `suggestedMatchId` populated only for high-confidence single candidates.
+- The old `matchTier` field is removed (breaking change scoped to the unknowns scan response — no external consumers).
 
 ## System Invariants
 
-- The app must never suggest a duplicate candidate on `close amount` alone.
-- Imported duplicates are not resolved by a default raw delete action if doing so would allow the same import to come back later.
-- `Use imported transaction` and `Merge imported duplicates` must preserve future import idempotency.
-- The route must not claim certainty when it only has heuristics; use `Possible duplicate` language.
-- The user must review and confirm every destructive or merge action before it writes.
-- The route does not surface internal terms such as `ledger`, `journal`, or `source_payload_hash` in default-path copy.
+- A candidate must never appear based on amount proximity alone when the delta exceeds the tolerance.
+- Substring containment (e.g., "AT&T" in "BATTERY PLUS") must not produce a high payee similarity score.
+- Auto-suggestion must never fire on a candidate that a human would consider dubious.
+- The scoring function must be deterministic and produce identical results for identical inputs.
 
 ## States
 
-- **Review ready:** normal route with `Remaining`, `Checked`, and `All` filters.
-- **Assertion failed, generic:** zero-diff or non-zero-diff failure with no safe duplicate candidates; show 8c rejection copy only.
-- **Assertion failed, duplicate-review available:** zero-diff 422 with one or more likely duplicate groups; show a `Possible duplicates` review surface.
-- **Candidate action confirm:** user is confirming remove, replace, or merge for one candidate.
-- **Resolution in progress:** route is applying the chosen duplicate-resolution action.
-- **Resolution applied:** route refreshed, candidate groups recomputed, tick state preserved around the survivor.
+- **No candidates:** "No manual entries found for this account." (unchanged)
+- **Candidates below threshold:** same as no candidates — they are filtered out.
+- **Candidates above threshold:** rendered in the match dropdown, sorted by score.
+- **Single high-confidence candidate:** auto-suggested (dropdown pre-selected).
 
 ## Edge Cases
 
-- **Checked manual + unchecked imported duplicate.** The durable action is `Use imported transaction`, not delete the imported row.
-- **Two imported duplicates with changed bank descriptions.** Merge is the only durable route-level fix in this task; deleting one imported row is insufficient.
-- **Multiple unchecked candidates match one checked row.** Show them ranked; do not auto-resolve.
-- **A row qualifies for duplicate review but is not safely mutable.** Show it in the review surface without an action.
-- **User resolves one candidate and others remain.** Refresh context, preserve the surviving checked rows, and recompute duplicate groups.
-- **User changes tick selections after seeing duplicate review.** Duplicate groups recompute from the new checked/unchecked split.
+- **Identical amounts, unrelated payees, same day.** Should still appear (amount is the strongest signal) but at "Likely match" or "Possible match", not "Strong match".
+- **Similar payees, wildly different amounts.** Rejected by the amount tolerance. Does not appear.
+- **One-character payee overlap.** `_payee_similarity()` returns 0.0 for short substrings; candidate rejected.
+- **Manual entry with no amount (elided posting).** Amount score is 0.0. Candidate can only qualify on payee + date, which requires a very strong payee match.
+- **Multiple candidates above auto-suggest threshold.** No auto-suggestion — the user must choose.
 
 ## Failure Behavior
 
-- **Remove manual duplicate fails:** show inline error, preserve current state, and do not alter the tick set.
-- **Use imported transaction fails:** show inline error, preserve both rows, and do not change which row is checked.
-- **Merge imported duplicates fails:** show inline error, preserve both rows, and do not partially rewrite import metadata.
-- **Context refresh fails after a successful resolution:** show a recoverable error banner and disable further destructive actions until the route is refreshed.
+- If `_payee_similarity()` raises on malformed input, treat payee score as 0.0 and continue scoring.
+- If `find_match_candidates()` raises, `populate_match_candidates()` catches per-transaction and continues (existing behavior).
 
 ## Regression Risks
 
-- **Heuristic trust failure.** Reusing the old `close amount` behavior would recreate the >$400 wrong-candidate bug that triggered 9a.
-- **Survivor-selection drift.** Manual-to-import replacement must leave the imported survivor checked or the route will silently lose the user’s reconciliation intent.
-- **Import-idempotency regression.** Imported-duplicate merge is pointless if the survivor does not retain both identities needed to suppress future re-imports.
-- **Scope bleed from 9b.** The reconciliation route only needs the merge substrate and reconciliation-scoped UI, not the full generic merge surface.
+- **Over-filtering.** If tolerances are too tight, legitimate matches that users previously relied on disappear. The amount tolerance (5% or $5) and payee threshold (reusing 8d's `SIMILAR_PAYEE_MIN = 0.72`) are intentionally generous — err toward showing a "Possible match" rather than hiding a real one.
+- **Auto-suggestion regression.** If `AUTO_SUGGEST_THRESHOLD` is too low, the unknowns page pre-selects wrong matches. Keep it at least as strict as the old tier-1 requirement (exact amount + close date).
+- **Frontend label breakage.** The `matchQualityLabel()` switch statement must be updated to handle the new quality strings; old strings removed.
 
 ## Acceptance Criteria
 
-- The reconcile route keeps `Remaining`, `Checked`, and `All` list filters.
-- On a zero-diff 422 `assertion_failed`, the route surfaces possible duplicate groups when strong candidates exist.
-- Each duplicate group shows a checked transaction and one or more matching unchecked transactions with source badges and plain-language match reasons.
-- The duplicate-review heuristic requires an exact amount match and does not surface `close amount`-only candidates.
-- Checked imported + unchecked manual pairs offer `Remove manual duplicate`.
-- Checked manual + unchecked imported pairs offer `Use imported transaction`.
-- Checked imported + unchecked imported pairs offer `Merge imported duplicates`.
-- `Use imported transaction` leaves the imported survivor checked after refresh.
-- `Merge imported duplicates` preserves future import dedupe for both bank-row variants.
-- The route does not offer a blanket `Delete remaining unreconciled transactions` action.
+- `find_match_candidates()` no longer returns candidates with amount deltas exceeding 5% of the smaller value (capped at $5.00).
+- `find_match_candidates()` no longer returns candidates on payee substring containment alone; payee scoring uses normalized token-set similarity.
+- Candidates are sorted by a continuous combined score, not discrete tiers.
+- Each candidate includes `matchScore`, `matchReason`, and updated `matchQuality` (`"strong"` / `"likely"` / `"possible"`).
+- Auto-suggestion only fires for a single candidate above the high-confidence threshold.
+- The unknowns page renders the new quality labels and reason strings.
 - `pnpm check` passes and `uv run pytest -q` passes.
+- At least 5 new or updated tests in `manual_entry_service` or a new test file covering: exact match, tolerance boundary, payee similarity edge cases, threshold rejection, and auto-suggestion gating.
 
 ## Proposed Sequence
 
-1. **Heuristic tightening.** Extract or reuse the unknowns/manual-match candidate logic, then narrow it for reconciliation duplicate review so exact-amount matching is mandatory.
-2. **Context expansion.** Add the row metadata the route needs for source badges and source-aware actions.
-3. **Duplicate-review UI.** Add the zero-diff 422 candidate surface grouped by checked row.
-4. **Manual duplicate actions.** Implement route-level manual delete and manual-to-import replacement.
-5. **Imported merge substrate.** Land the reconciliation-scoped imported-duplicate merge path that preserves both import identities on the survivor.
-6. **Regression verification.** Exercise manual/imported mixed pairs, imported/imported pairs with changed payees, no-candidate fallback, and tick-preservation after every action.
+1. **Extract shared payee utilities.** Move `_normalize_payee()`, `_normalize_payee_token()`, `_payee_similarity()`, and `PAYEE_NOISE_WORDS` from `reconciliation_duplicate_service.py` into a shared module (e.g., `app/backend/services/payee_similarity.py`). Update `reconciliation_duplicate_service.py` to import from the shared module. Verify existing reconciliation tests still pass.
+2. **Rewrite `find_match_candidates()` scoring.** Replace the tier system with the continuous scoring model. Add amount tolerance, payee similarity, date decay, combined score, and minimum threshold. Remove `TIER_LABELS`. Update the return shape (`matchScore`, `matchReason`, `matchQuality` instead of `matchTier`).
+3. **Update `populate_match_candidates()` auto-suggestion.** Replace the tier-1 check with the `AUTO_SUGGEST_THRESHOLD` check.
+4. **Update frontend labels.** Rewrite `matchQualityLabel()` in `+page.svelte` for the new quality strings. Add the reason string to the candidate row display.
+5. **Write tests.** Cover scoring boundaries, payee edge cases, auto-suggestion gating.
+6. **Regression check.** Run full test suite. Verify the reconciliation duplicate flow is unaffected.
 
 ## Definition of Done
 
 - All acceptance criteria pass.
-- Zero-diff 422 no longer funnels the user toward a blunt delete-everything choice.
-- Imported duplicates can be resolved durably enough that the same bank-row variant does not simply reappear on the next import.
-- The task leaves the full transactions-page merge UI for 9b instead of over-expanding reconciliation.
-
-## UX Notes
-
-- The rejection state should lead with the user’s money question, then the likely cause:
-  `Your checked balance matches the statement, but we found transactions you left out that look like duplicates.`
-- Use `Possible duplicate` language, not definitive or accusatory language.
-- Source badges should be plain: `Imported` and `Manual`.
-- Do not explain root cause in-product beyond what the data supports. The user needs a repair path more than a theory.
+- The >$400 wrong-candidate bug is structurally impossible under the new scoring.
+- Payee substring matching is replaced by token-set similarity everywhere in the unknowns flow.
+- The reconciliation duplicate heuristic is unchanged except for importing from the shared module.
 
 ## Out of Scope
 
-- Generic non-zero-diff completion escape hatches.
-- Full transactions-page merge UX.
-- Investigating or logging why the duplicate was not resolved earlier.
-
-## Dependencies
-
-- 8a backend reconcile endpoint and 8c route are shipped.
-- Unknowns/manual-match heuristics are the starting point, but must be tightened for reconciliation use.
-- 9a’s heuristic-fix concern is effectively a prerequisite slice of this task.
-- 9b’s full merge UX remains later, but this task pulls forward the minimum merge substrate needed for reconciliation.
-
-## Decisions
-
-- **Decision:** In zero-diff 422, the primary recovery surface is duplicate review, not bulk cleanup.
-- **Decision:** Imported duplicates require durable resolution, not raw delete.
-- **Decision:** The reconciliation route may pull forward a minimal merge substrate from 9b, but not the full generic merge UI.
-- **Decision:** The product should not try to answer “why wasn’t this merged earlier?” in the task copy. Resolve the bookkeeping problem first.
+- Reconciliation duplicate heuristic changes.
+- Unknowns apply/stage flow changes.
+- Multi-select or merge on the unknowns page.
+- Machine-learning or statistical models.
