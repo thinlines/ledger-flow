@@ -4,7 +4,6 @@ import logging
 import re
 from dataclasses import dataclass
 from datetime import date
-from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Literal
 from uuid import uuid4
@@ -29,10 +28,11 @@ ACCOUNT_ONLY_RE = re.compile(r"^(\s+)([^\s].*?)\s*$")
 META_RE = re.compile(r"^\s*;\s*([^:]+):\s*(.*)$")
 TXN_START_RE = re.compile(r"^\d{4}[-/]\d{2}[-/]\d{2}")
 
+from .payee_similarity import payee_similarity as _payee_similarity
+
 MATCH_WINDOW_DAYS = 3
 SIMILAR_PAYEE_MIN = 0.72
 NEAR_PAYEE_MIN = 0.55
-PAYEE_NOISE_WORDS = {"manual", "imported", "copy", "online", "mobile"}
 _LOG = logging.getLogger(__name__)
 
 
@@ -44,46 +44,6 @@ class DuplicateCandidate:
     action: Literal["remove_manual_duplicate", "use_imported_transaction", "merge_imported_duplicates"] | None
     action_label: str | None
     action_blocked_reason: str | None
-
-
-def _normalize_payee_token(token: str) -> str:
-    if token.endswith("ies") and len(token) > 4:
-        return token[:-3] + "y"
-    if token.endswith("s") and len(token) > 4:
-        return token[:-1]
-    return token
-
-
-def _normalize_payee(value: str) -> str:
-    normalized = re.sub(r"[^a-z0-9]+", " ", value.lower()).strip()
-    tokens = [
-        _normalize_payee_token(token)
-        for token in normalized.split()
-        if token not in PAYEE_NOISE_WORDS
-    ]
-    return " ".join(tokens)
-
-
-def _payee_similarity(left: str, right: str) -> float:
-    left_norm = _normalize_payee(left)
-    right_norm = _normalize_payee(right)
-    if not left_norm or not right_norm:
-        return 0.0
-    if left_norm == right_norm:
-        return 1.0
-    left_tokens = set(left_norm.split())
-    right_tokens = set(right_norm.split())
-    common = left_tokens & right_tokens
-    if common:
-        subset_ratio = len(common) / min(len(left_tokens), len(right_tokens))
-        coverage_ratio = len(common) / max(len(left_tokens), len(right_tokens))
-        if subset_ratio == 1.0:
-            return 0.9 + (0.05 * coverage_ratio)
-        return 0.7 + (0.2 * coverage_ratio)
-    if len(left_tokens) == 1 and len(right_tokens) == 1:
-        ratio = SequenceMatcher(None, left_norm, right_norm).ratio()
-        return ratio if ratio >= 0.92 else 0.0
-    return 0.0
 
 
 def _candidate_reason(date_diff: int, payee_score: float) -> tuple[str, int]:
