@@ -6,15 +6,37 @@ from decimal import Decimal
 from pathlib import Path
 
 from .currency_parser import parse_amount
+from .header_parser import HEADER_RE
 from .import_service import (
     _merge_transaction_blocks,
     _render_journal_text,
     _split_journal_preamble_and_transactions,
 )
+from .payee_similarity import payee_similarity
 
 MAX_MANUAL_MATCH_DAYS = 3
 
-from .header_parser import HEADER_RE
+# --- Scoring constants ---
+# Amount tolerance: delta must be ≤ 5% of the smaller absolute value, capped at $5.
+AMOUNT_TOLERANCE_PCT = Decimal("0.05")
+AMOUNT_TOLERANCE_CAP = Decimal("5.00")
+
+# Weights for the combined score (sum to 1.0).
+W_AMT = 0.50
+W_PAYEE = 0.35
+W_DATE = 0.15
+
+# Minimum combined score to surface a candidate.
+# Set above the max single-signal contribution (payee alone: 1.0 * 0.35 = 0.35)
+# so that a candidate needs at least two non-zero signals.
+MIN_MATCH_SCORE = 0.40
+
+# Auto-suggestion requires a single candidate above this bar.
+AUTO_SUGGEST_THRESHOLD = 0.80
+
+# Quality label thresholds.
+STRONG_THRESHOLD = 0.75
+LIKELY_THRESHOLD = 0.50
 
 META_RE = re.compile(r"^\s*;\s*([^:]+):\s*(.*)$")
 TXN_START_RE = re.compile(r"^\d{4}[-/]\d{2}[-/]\d{2}")
@@ -29,7 +51,6 @@ SYSTEM_METADATA_KEYS = frozenset({
     "match-id",
 })
 
-TIER_LABELS = {1: "date_exact_amount", 2: "date_close_amount", 3: "date_payee", 4: "payee_only"}
 
 
 def _load_known_accounts(accounts_dat: Path) -> set[str]:
@@ -196,6 +217,65 @@ def _extract_user_metadata_lines(lines: list[str]) -> list[str]:
 # Match candidate detection
 # ---------------------------------------------------------------------------
 
+def _amount_score(import_amount: Decimal | None, manual_amount: Decimal | None) -> float:
+    """Continuous amount-proximity score: 1.0 for exact, decaying within tolerance, 0.0 outside."""
+    if import_amount is None or manual_amount is None:
+        return 0.0
+    abs_import = abs(import_amount)
+    abs_manual = abs(manual_amount)
+    if abs_import == abs_manual:
+        return 1.0
+    delta = abs(abs_import - abs_manual)
+    smaller = min(abs_import, abs_manual)
+    if smaller == 0:
+        # One is zero, the other isn't — outside tolerance.
+        return 0.0
+    tolerance = min(smaller * AMOUNT_TOLERANCE_PCT, AMOUNT_TOLERANCE_CAP)
+    if delta > tolerance:
+        return 0.0
+    # Linear decay from 1.0 to 0.3 across the tolerance band.
+    return 1.0 - 0.7 * float(delta / tolerance)
+
+
+def _date_score(date_diff: int) -> float:
+    """Decay from 1.0 (same day) toward 0.0 at the edge of the match window."""
+    if date_diff <= 0:
+        return 1.0
+    if date_diff > MAX_MANUAL_MATCH_DAYS:
+        return 0.0
+    return 1.0 - (date_diff / (MAX_MANUAL_MATCH_DAYS + 1))
+
+
+def _match_quality(score: float) -> str:
+    if score >= STRONG_THRESHOLD:
+        return "strong"
+    if score >= LIKELY_THRESHOLD:
+        return "likely"
+    return "possible"
+
+
+def _match_reason(
+    amt_score: float, payee_score: float, date_diff: int,
+    import_amount: Decimal | None, manual_amount: Decimal | None,
+) -> str:
+    parts: list[str] = []
+    if amt_score >= 1.0:
+        parts.append("exact amount")
+    elif amt_score > 0:
+        parts.append("similar amount")
+    if payee_score >= 0.92:
+        parts.append("same payee")
+    elif payee_score >= 0.55:
+        parts.append("similar payee")
+    if date_diff == 0:
+        parts.append("same day")
+    elif date_diff <= MAX_MANUAL_MATCH_DAYS:
+        parts.append(f"{date_diff} day{'s' if date_diff != 1 else ''} apart")
+    if not parts:
+        return "Weak signal match."
+    return ", ".join(p.capitalize() if i == 0 else p for i, p in enumerate(parts)) + "."
+
+
 def find_match_candidates(
     journal_lines: list[str],
     import_txn_date: date,
@@ -230,35 +310,18 @@ def find_match_candidates(
 
         manual_amount = _parse_manual_entry_amount(txn_lines, tracked_ledger_account)
         date_diff = abs((import_txn_date - txn_date).days)
-        date_in_window = date_diff <= MAX_MANUAL_MATCH_DAYS
 
-        payee_match = False
-        if import_payee and txn_payee:
-            payee_match = (
-                import_payee.lower() in txn_payee.lower()
-                or txn_payee.lower() in import_payee.lower()
-            )
+        # --- Continuous scoring ---
+        amt_score = _amount_score(import_amount, manual_amount)
+        try:
+            p_score = payee_similarity(import_payee, txn_payee) if import_payee and txn_payee else 0.0
+        except Exception:
+            p_score = 0.0
+        d_score = _date_score(date_diff)
 
-        exact_amount = (
-            import_amount is not None
-            and manual_amount is not None
-            and abs(import_amount) == abs(manual_amount)
-        )
-        close_amount = (
-            import_amount is not None
-            and manual_amount is not None
-            and not exact_amount
-        )
+        combined = amt_score * W_AMT + p_score * W_PAYEE + d_score * W_DATE
 
-        if date_in_window and exact_amount:
-            tier = 1
-        elif date_in_window and close_amount:
-            tier = 2
-        elif date_in_window and payee_match:
-            tier = 3
-        elif payee_match:
-            tier = 4
-        else:
+        if combined < MIN_MATCH_SCORE:
             continue
 
         candidates.append({
@@ -269,12 +332,13 @@ def find_match_candidates(
             "destinationAccount": destination,
             "lineStart": start + 1,
             "lineEnd": end,
-            "matchTier": tier,
-            "matchQuality": TIER_LABELS[tier],
+            "matchScore": round(combined, 4),
+            "matchQuality": _match_quality(combined),
+            "matchReason": _match_reason(amt_score, p_score, date_diff, import_amount, manual_amount),
             "dateDiff": date_diff,
         })
 
-    candidates.sort(key=lambda c: (c["matchTier"], c["dateDiff"]))
+    candidates.sort(key=lambda c: (-c["matchScore"], c["dateDiff"]))
     return candidates
 
 
@@ -326,9 +390,9 @@ def populate_match_candidates(
 
             if candidates:
                 txn["matchCandidates"] = candidates
-                tier_1 = [c for c in candidates if c["matchTier"] == 1]
-                if len(tier_1) == 1:
-                    txn["suggestedMatchId"] = tier_1[0]["manualTxnId"]
+                high = [c for c in candidates if c["matchScore"] >= AUTO_SUGGEST_THRESHOLD]
+                if len(high) == 1:
+                    txn["suggestedMatchId"] = high[0]["manualTxnId"]
 
 
 # ---------------------------------------------------------------------------

@@ -191,12 +191,32 @@ def test_find_match_candidates_exact_date_amount(tmp_path: Path) -> None:
         "Assets:Bank:Checking",
     )
     assert len(candidates) == 1
-    assert candidates[0]["matchQuality"] == "date_exact_amount"
-    assert candidates[0]["matchTier"] == 1
+    assert candidates[0]["matchQuality"] == "strong"
+    assert "matchScore" in candidates[0]
     assert candidates[0]["destinationAccount"] == "Expenses:Rides"
 
 
-def test_find_match_candidates_close_amount(tmp_path: Path) -> None:
+def test_find_match_candidates_close_amount_within_tolerance(tmp_path: Path) -> None:
+    """$45.95 vs $46.00 — small delta within tolerance, should match."""
+    journal_lines = [
+        "2026/03/28 Uber",
+        "    ; :manual:",
+        "    Expenses:Rides  $45.95",
+        "    Assets:Bank:Checking",
+    ]
+    candidates = find_match_candidates(
+        journal_lines,
+        date(2026, 3, 28),
+        Decimal("46.00"),
+        "Uber",
+        "Assets:Bank:Checking",
+    )
+    assert len(candidates) == 1
+    assert candidates[0]["matchQuality"] in ("strong", "likely")
+
+
+def test_find_match_candidates_large_amount_delta_rejected(tmp_path: Path) -> None:
+    """$45.95 vs $47.95 — $2 delta is ~4.3% of $45.95, within 5% tolerance."""
     journal_lines = [
         "2026/03/28 Uber",
         "    ; :manual:",
@@ -210,12 +230,36 @@ def test_find_match_candidates_close_amount(tmp_path: Path) -> None:
         "Uber",
         "Assets:Bank:Checking",
     )
+    # $2 delta on $45.95 is ~4.3%, within the 5% tolerance
     assert len(candidates) == 1
-    assert candidates[0]["matchQuality"] == "date_close_amount"
-    assert candidates[0]["matchTier"] == 2
 
 
-def test_find_match_candidates_outside_date_window() -> None:
+def test_find_match_candidates_huge_amount_delta_weak(tmp_path: Path) -> None:
+    """$45.95 vs $500, same payee, same day — amount fails but payee+date survive.
+
+    Surfaces as a weak candidate, never as strong or auto-suggested.
+    """
+    journal_lines = [
+        "2026/03/28 Uber",
+        "    ; :manual:",
+        "    Expenses:Rides  $45.95",
+        "    Assets:Bank:Checking",
+    ]
+    candidates = find_match_candidates(
+        journal_lines,
+        date(2026, 3, 28),
+        Decimal("500.00"),
+        "Uber",
+        "Assets:Bank:Checking",
+    )
+    if candidates:
+        assert candidates[0]["matchQuality"] != "strong"
+        from services.manual_entry_service import AUTO_SUGGEST_THRESHOLD
+        assert candidates[0]["matchScore"] < AUTO_SUGGEST_THRESHOLD
+
+
+def test_find_match_candidates_outside_date_window_exact_amount() -> None:
+    """Exact amount match survives even outside the date window — amount is the strongest signal."""
     journal_lines = [
         "2026/03/20 Uber",
         "    ; :manual:",
@@ -229,11 +273,34 @@ def test_find_match_candidates_outside_date_window() -> None:
         "Something Else",
         "Assets:Bank:Checking",
     )
-    # Date is 8 days away and payees don't match -> no candidates
+    # Exact amount (score 0.5) exceeds threshold even with 0 date + 0 payee.
+    assert len(candidates) == 1
+    assert candidates[0]["matchQuality"] in ("likely", "possible")
+
+
+def test_find_match_candidates_outside_window_no_signal() -> None:
+    """No amount match + no payee match + outside date window → no candidates."""
+    journal_lines = [
+        "2026/03/20 Uber",
+        "    ; :manual:",
+        "    Expenses:Rides  $45.95",
+        "    Assets:Bank:Checking",
+    ]
+    candidates = find_match_candidates(
+        journal_lines,
+        date(2026, 3, 28),
+        Decimal("999.00"),
+        "Something Else",
+        "Assets:Bank:Checking",
+    )
     assert len(candidates) == 0
 
 
-def test_find_match_candidates_payee_only_outside_window() -> None:
+def test_find_match_candidates_payee_only_outside_window_rejected() -> None:
+    """Different amount + outside date window → no match even with good payee.
+
+    Payee score alone (max 0.35) cannot clear MIN_MATCH_SCORE (0.40).
+    """
     journal_lines = [
         "2026/03/20 Uber",
         "    ; :manual:",
@@ -247,9 +314,7 @@ def test_find_match_candidates_payee_only_outside_window() -> None:
         "Uber Trip",
         "Assets:Bank:Checking",
     )
-    assert len(candidates) == 1
-    assert candidates[0]["matchQuality"] == "payee_only"
-    assert candidates[0]["matchTier"] == 4
+    assert len(candidates) == 0
 
 
 def test_find_match_candidates_ignores_non_manual_entries() -> None:
@@ -330,7 +395,7 @@ def test_scan_unknowns_populates_match_candidates(tmp_path: Path) -> None:
     txn = group["txns"][0]
     assert "matchCandidates" in txn
     assert len(txn["matchCandidates"]) == 1
-    assert txn["matchCandidates"][0]["matchQuality"] == "date_exact_amount"
+    assert txn["matchCandidates"][0]["matchQuality"] == "strong"
     assert txn["suggestedMatchId"] is not None
 
 

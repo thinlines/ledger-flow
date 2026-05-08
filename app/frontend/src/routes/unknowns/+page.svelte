@@ -50,8 +50,9 @@
     destinationAccount: string;
     lineStart: number;
     lineEnd: number;
-    matchTier: number;
+    matchScore: number;
     matchQuality: string;
+    matchReason: string;
     dateDiff: number;
   };
 
@@ -1298,10 +1299,9 @@
 
   function matchQualityLabel(quality: string): string {
     switch (quality) {
-      case 'date_exact_amount': return 'Exact match';
-      case 'date_close_amount': return 'Close amount';
-      case 'date_payee': return 'Payee match';
-      case 'payee_only': return 'Payee only';
+      case 'strong': return 'Strong match';
+      case 'likely': return 'Likely match';
+      case 'possible': return 'Possible match';
       default: return quality;
     }
   }
@@ -1824,6 +1824,12 @@
                           </option>
                         {/each}
                       </select>
+                      {#if row.selectedMatchId}
+                        {@const reasonCandidate = row.matchCandidates.find((c) => c.manualTxnId === row.selectedMatchId)}
+                        {#if reasonCandidate?.matchReason}
+                          <p class="muted text-sm">{reasonCandidate.matchReason}</p>
+                        {/if}
+                      {/if}
                     </div>
 
                     {#if row.matchAmountDelta}
