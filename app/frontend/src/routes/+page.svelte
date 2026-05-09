@@ -4,8 +4,11 @@
   import { accountSubtypeLabel } from '$lib/account-subtypes';
   import { normalizeCurrencyCode } from '$lib/currency-format';
   import CashFlowChart from '$lib/components/dashboard/CashFlowChart.svelte';
+  import CategoryDetailPanel from '$lib/components/dashboard/CategoryDetailPanel.svelte';
+  import CategorySparkline from '$lib/components/dashboard/CategorySparkline.svelte';
   import DashboardDirection from '$lib/components/dashboard/DashboardDirection.svelte';
   import DrillBreadcrumb from '$lib/components/dashboard/DrillBreadcrumb.svelte';
+  import SpendingDriversDonut from '$lib/components/dashboard/SpendingDriversDonut.svelte';
   import type { DirectionData } from '$lib/components/dashboard/direction-types';
   import type { AccountKind } from '$lib/format';
 
@@ -72,15 +75,6 @@
     net: number;
   };
 
-  type CategoryTrend = {
-    category: string;
-    account: string;
-    current: number;
-    previous: number;
-    delta: number;
-    direction: 'up' | 'down' | 'flat';
-  };
-
   type RecentTransaction = {
     date: string;
     payee: string;
@@ -106,7 +100,6 @@
       net: number;
       series: CashFlowRow[];
     };
-    categoryTrends: CategoryTrend[];
     recentTransactions: RecentTransaction[];
     cashFlowHistory: CashFlowRow[];
     categoryHistory: Array<{
@@ -216,17 +209,6 @@
   function shortDate(value: string): string {
     const parsed = new Date(`${value}T00:00:00`);
     return new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' }).format(parsed);
-  }
-
-  function barWidth(value: number, max: number): string {
-    if (max <= 0 || value <= 0) return '0%';
-    return `${Math.max(8, (value / max) * 100)}%`;
-  }
-
-  function formatTrend(delta: number): string {
-    if (delta === 0) return 'Flat vs last month';
-    const direction = delta > 0 ? 'up' : 'down';
-    return `${formatCurrency(Math.abs(delta))} ${direction} vs last month`;
   }
 
   function countLabel(count: number, singular: string, plural = `${singular}s`): string {
@@ -522,13 +504,28 @@
   $: balanceGroups = buildBalanceGroups(overviewAccounts);
 
   let focusedPeriod: string | null = null;
+  let selectedCategory: string | null = null;
 
-  $: filteredCategoryTrends = (dashboard?.categoryTrends ?? [])
-    .filter((row) => row.current !== 0 || row.previous !== 0);
-  $: categoryMax = Math.max(
-    ...filteredCategoryTrends.flatMap((row) => [row.current, row.previous]),
-    0
-  );
+  $: focusedMonth = focusedPeriod ?? dashboard?.cashFlow.currentMonth ?? '';
+  $: categoryBreakdown = (dashboard?.categoryHistory ?? [])
+    .filter(r => r.month === focusedMonth)
+    .sort((a, b) => b.amount - a.amount);
+  $: sparklineMonths = (dashboard?.cashFlowHistory ?? []).slice(-6).map(r => r.month);
+  $: categorySparklineData = (() => {
+    const byCategory = new Map<string, number[]>();
+    for (const row of dashboard?.categoryHistory ?? []) {
+      if (!sparklineMonths.includes(row.month)) continue;
+      if (!byCategory.has(row.category)) {
+        byCategory.set(row.category, new Array(sparklineMonths.length).fill(0));
+      }
+      const idx = sparklineMonths.indexOf(row.month);
+      byCategory.get(row.category)![idx] = row.amount;
+    }
+    return byCategory;
+  })();
+  $: selectedCategoryLabel = categoryBreakdown.find(r => r.category === selectedCategory)?.categoryLabel
+    ?? (dashboard?.categoryHistory ?? []).find(r => r.category === selectedCategory)?.categoryLabel
+    ?? selectedCategory ?? '';
 
   onMount(async () => {
     loading = true;
@@ -753,47 +750,59 @@
     </article>
 
     <article class="categories-panel view-card p-5">
-      <div class="mb-4 flex items-start justify-between gap-4 max-tablet:grid max-tablet:grid-cols-1">
-        <div>
-          <p class="eyebrow">Category trends</p>
-          <h3 class="m-0 font-display text-xl">Where spending moved the most</h3>
-        </div>
-        <p class="m-0 text-sm text-muted-foreground">{monthTitle(dashboard.cashFlow.currentMonth)} vs {monthTitle(dashboard.cashFlow.previousMonth)}</p>
+      <div class="mb-4">
+        <p class="eyebrow">Spending breakdown</p>
+        <h3 class="m-0 font-display text-xl">
+          {focusedPeriod ? monthTitle(focusedPeriod) : 'This month\u2019s'} spending
+        </h3>
       </div>
 
-      {#if filteredCategoryTrends.length > 0}
-        <div class="grid gap-3.5">
-          {#each filteredCategoryTrends as row}
-            <a
-              class="category-row drilldown-link grid gap-1.5 -mx-2 -my-1.5 rounded-xl px-2 py-1.5 text-inherit no-underline transition-colors"
-              href={`/transactions?category=${encodeURIComponent(row.account)}`}
+      {#if categoryBreakdown.length > 0}
+        <SpendingDriversDonut
+          breakdown={categoryBreakdown}
+          {formatCurrency}
+          onCategoryClick={(label) => {
+            const match = categoryBreakdown.find(r => r.categoryLabel === label);
+            if (match) selectedCategory = match.category;
+          }}
+        />
+
+        <div class="mt-4 grid gap-0">
+          {#each categoryBreakdown as row}
+            <button
+              class="category-item drilldown-link grid w-full cursor-pointer gap-1 border-none bg-transparent px-2 py-2.5 text-left transition-colors"
+              class:active={selectedCategory === row.category}
+              on:click={() => selectedCategory = row.category}
             >
-              <div class="flex items-center justify-between gap-3 max-tablet:grid max-tablet:grid-cols-1">
-                <p class="m-0 font-bold">{row.category}</p>
-                <span class:negative={row.delta > 0} class:positive={row.delta < 0}>{formatTrend(row.delta)}</span>
+              <div class="flex items-center justify-between gap-3">
+                <p class="m-0 truncate font-bold">{row.categoryLabel}</p>
+                <span class="shrink-0 text-sm text-muted-foreground">{formatCurrency(row.amount)}</span>
               </div>
-              <div class="grid gap-1.5">
-                <div class="category-meter current h-2.5 overflow-hidden rounded-full bg-card-edge">
-                  <span class="block h-full rounded-[inherit]" style={`width: ${barWidth(row.current, categoryMax)}`}></span>
-                </div>
-                <div class="category-meter previous h-2.5 overflow-hidden rounded-full bg-card-edge">
-                  <span class="block h-full rounded-[inherit]" style={`width: ${barWidth(row.previous, categoryMax)}`}></span>
-                </div>
-              </div>
-              <div class="flex items-center justify-between gap-3 text-sm text-muted-foreground max-tablet:grid max-tablet:grid-cols-1">
-                <span>Now {formatCurrency(row.current)}</span>
-                <span>Prev {formatCurrency(row.previous)}</span>
-              </div>
-            </a>
+              {#if categorySparklineData.has(row.category)}
+                <CategorySparkline amounts={categorySparklineData.get(row.category) ?? []} />
+              {/if}
+            </button>
           {/each}
         </div>
       {:else}
         <p class="m-0 text-sm text-muted-foreground">
-          Once expenses land in at least two months of activity, category movement will show up here.
+          No spending data available.
         </p>
       {/if}
     </article>
   </section>
+
+  {#if selectedCategory}
+    <CategoryDetailPanel
+      category={selectedCategory}
+      categoryLabel={selectedCategoryLabel}
+      categoryHistory={dashboard.categoryHistory ?? []}
+      {focusedPeriod}
+      currentMonth={dashboard.cashFlow.currentMonth}
+      {formatCurrency}
+      onClose={() => selectedCategory = null}
+    />
+  {/if}
 
   <div id="direction" class="scroll-mt-6">
     <DashboardDirection {direction} baseCurrency={dashboard.baseCurrency} loading={directionLoading} />
@@ -923,22 +932,6 @@
     border-color: rgba(154, 81, 41, 0.18);
   }
 
-  .bar-income {
-    background: linear-gradient(90deg, #1d9f6e, #6fd6ae);
-  }
-
-  .bar-spending {
-    background: linear-gradient(90deg, #0a3d59, #2f88b7);
-  }
-
-  .category-meter.current span {
-    background: linear-gradient(90deg, #0f5f88, #47a5d8);
-  }
-
-  .category-meter.previous span {
-    background: linear-gradient(90deg, #d5dee8, #b7c9da);
-  }
-
   .drilldown-link:hover {
     background: rgba(10, 61, 89, 0.04);
   }
@@ -947,10 +940,13 @@
     border-top: 1px solid rgba(10, 61, 89, 0.08);
   }
 
-  .category-row + .category-row {
-    margin-top: 0.65rem;
-    padding-top: 0.65rem;
+  .category-item + .category-item {
     border-top: 1px solid rgba(10, 61, 89, 0.08);
+  }
+
+  .category-item.active {
+    background: rgba(10, 61, 89, 0.04);
+    border-radius: 0.75rem;
   }
 
   .balance-group + .balance-group {
