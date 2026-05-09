@@ -1,5 +1,7 @@
 # Dashboard Redesign: The Pulse (10c-redesign)
 
+**Status: COMPLETED — 2026-05-09**
+
 ## Objective
 
 Redesign the dashboard layout to prioritize the cash flow chart as the hero visual, replace the donut + category list with a compact horizontal category ribbon using SVG line sparklines, remove the detail panel in favor of transaction page drill-through, and reorder sections for progressive disclosure. The user should say "wow" when they open the app.
@@ -181,3 +183,8 @@ Replaces the `DrillBreadcrumb` component. Rendered directly in the cash flow sec
 - Direction panel redesign.
 - Mobile-specific layout beyond natural responsive flow.
 - Custom chart color palette.
+
+## Delivery Notes
+
+- **QA: PASS** — all 15 acceptance criteria verified, `pnpm check` 0 errors/0 warnings, `pnpm build` succeeds, all dead code removed (grep confirmed).
+- **Review: SHIP** — net -233 lines; SVG sparklines replace ECharts instances (no dispose management needed); focusedIndex opacity logic safe with null default.
