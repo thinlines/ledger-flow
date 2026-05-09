@@ -12,6 +12,7 @@
   export let currentMonth: string;
   export let formatCurrency: (value: number) => string;
   export let onMonthClick: (month: string) => void = () => {};
+  export let focusedIndex: number | null = null;
 
   let container: HTMLDivElement;
   let chart: EChartsInstance | null = null;
@@ -42,14 +43,28 @@
         {
           name: 'Income',
           type: 'bar' as const,
-          data: series.map(r => r.income),
-          itemStyle: { color: '#1d9f6e', borderRadius: [3, 3, 0, 0] }
+          cursor: 'pointer',
+          data: series.map((r, i) => ({
+            value: r.income,
+            itemStyle: {
+              color: '#1d9f6e',
+              borderRadius: [4, 4, 0, 0],
+              opacity: focusedIndex !== null && focusedIndex !== i ? 0.35 : 1
+            }
+          }))
         },
         {
           name: 'Spending',
           type: 'bar' as const,
-          data: series.map(r => r.spending),
-          itemStyle: { color: '#0a3d59', borderRadius: [3, 3, 0, 0] }
+          cursor: 'pointer',
+          data: series.map((r, i) => ({
+            value: r.spending,
+            itemStyle: {
+              color: '#0a3d59',
+              borderRadius: [4, 4, 0, 0],
+              opacity: focusedIndex !== null && focusedIndex !== i ? 0.35 : 1
+            }
+          }))
         }
       ]
     };
@@ -71,7 +86,7 @@
     observer.observe(container);
   });
 
-  $: if (chart && series) {
+  $: if (chart && series && focusedIndex !== undefined) {
     chart.setOption(buildOption());
   }
 
@@ -82,4 +97,4 @@
   });
 </script>
 
-<div bind:this={container} class="h-48 w-full"></div>
+<div bind:this={container} class="h-56 w-full"></div>
