@@ -10,8 +10,8 @@ from .journal_query_service import (
     ParsedTransaction,
     Posting,
     amount_to_number,
+    get_transactions_cached,
     is_generated_opening_balance_transaction,
-    load_transactions,
     pretty_account_name,
 )
 from .opening_balance_service import opening_balance_index
@@ -119,7 +119,7 @@ def _transaction_category(transaction: ParsedTransaction) -> tuple[str, bool]:
 
 def build_dashboard_overview(config: AppConfig, *, today: date | None = None) -> dict:
     current_day = today or date.today()
-    transactions = load_transactions(config)
+    transactions = get_transactions_cached(config)
     _, opening_by_ledger_account = opening_balance_index(config)
     opening_balance_accounts = set(opening_by_ledger_account)
     account_balances: defaultdict[str, Decimal] = defaultdict(lambda: Decimal("0"))
@@ -329,6 +329,31 @@ def build_dashboard_overview(config: AppConfig, *, today: date | None = None) ->
             }
         )
 
+    category_history = [
+        {
+            "month": month,
+            "category": account,
+            "categoryLabel": pretty_account_name(account),
+            "amount": amount_to_number(total),
+        }
+        for (month, account), total in sorted(category_spending.items())
+    ]
+
+    all_cash_flow_months = sorted(set(monthly_income.keys()) | set(monthly_spending.keys()))
+    cash_flow_history = [
+        {
+            "month": month_key,
+            "label": date(int(month_key[:4]), int(month_key[5:7]), 1).strftime("%b"),
+            "income": amount_to_number(monthly_income.get(month_key, Decimal("0"))),
+            "spending": amount_to_number(monthly_spending.get(month_key, Decimal("0"))),
+            "net": amount_to_number(
+                monthly_income.get(month_key, Decimal("0"))
+                - monthly_spending.get(month_key, Decimal("0"))
+            ),
+        }
+        for month_key in all_cash_flow_months
+    ]
+
     last_updated = activity_transactions[-1].posted_on.isoformat() if activity_transactions else None
     income_this_month = monthly_income.get(current_month, Decimal("0"))
     spending_this_month = monthly_spending.get(current_month, Decimal("0"))
@@ -357,4 +382,83 @@ def build_dashboard_overview(config: AppConfig, *, today: date | None = None) ->
         },
         "categoryTrends": category_trends,
         "recentTransactions": list(reversed(recent_rows))[:8],
+        "categoryHistory": category_history,
+        "cashFlowHistory": cash_flow_history,
+    }
+
+
+def query_dashboard_transactions(
+    config: AppConfig,
+    *,
+    period: str,
+    category: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> dict:
+    """Return paginated transactions for a given month, optionally filtered by category."""
+    import calendar
+    import re as _re
+
+    if not _re.fullmatch(r"\d{4}-\d{2}", period):
+        raise ValueError("Invalid period format. Expected YYYY-MM.")
+
+    year = int(period[:4])
+    month_num = int(period[5:7])
+    if month_num < 1 or month_num > 12:
+        raise ValueError("Invalid period format. Expected YYYY-MM.")
+
+    period_start = date(year, month_num, 1)
+    last_day = calendar.monthrange(year, month_num)[1]
+    period_end = date(year, month_num, last_day)
+
+    transactions = get_transactions_cached(config)
+
+    matching: list[dict] = []
+    for transaction in transactions:
+        if is_generated_opening_balance_transaction(transaction):
+            continue
+        if transaction.posted_on < period_start or transaction.posted_on > period_end:
+            continue
+
+        if category is not None:
+            has_category = any(
+                posting.account.startswith(category)
+                for posting in transaction.postings
+            )
+            if not has_category:
+                continue
+
+        category_label, _ = _transaction_category(transaction)
+        category_account = ""
+        for posting in transaction.postings:
+            kind = _account_kind(posting.account)
+            if kind in {"expense", "income"}:
+                category_account = posting.account
+                break
+
+        primary = _primary_posting(transaction, config)
+        primary_amount = primary.amount if primary and primary.amount is not None else Decimal("0")
+        account_label, _ = _primary_account_display(primary, config)
+
+        matching.append({
+            "date": transaction.posted_on.isoformat(),
+            "payee": transaction.payee,
+            "amount": amount_to_number(primary_amount),
+            "category": category_account,
+            "categoryLabel": category_label,
+            "accountLabel": account_label,
+        })
+
+    matching.sort(key=lambda r: r["date"], reverse=True)
+
+    total = len(matching)
+    limit = max(limit, 0)
+    offset = max(offset, 0)
+    page = matching[offset : offset + limit] if limit > 0 else []
+
+    return {
+        "transactions": page,
+        "total": total,
+        "period": period,
+        "category": category,
     }

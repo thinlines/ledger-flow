@@ -7,7 +7,7 @@ import pytest
 
 from services.commodity_service import CommodityMismatchError
 from services.config_service import AppConfig
-from services.dashboard_service import build_dashboard_overview
+from services.dashboard_service import build_dashboard_overview, query_dashboard_transactions
 from services.workspace_service import ensure_workspace_journal_includes
 
 
@@ -283,3 +283,245 @@ def test_dashboard_overview_reflects_tracked_account_offset_opening_balances_on_
     assert overview["summary"]["trackedBalanceTotal"] == 0.0
     assert overview["summary"]["netWorth"] == 0.0
     assert overview["summary"]["transactionCount"] == 0
+
+
+# --- categoryHistory and cashFlowHistory tests ---
+
+_FIXTURE_JOURNAL = """
+2026/02/12 Paycheck
+    ; import_account_id: checking
+    Assets:Bank:Checking  $2500.00
+    Income:Salary
+
+2026/02/14 Rent
+    ; import_account_id: checking
+    Expenses:Housing:Rent  $1200.00
+    Assets:Bank:Checking
+
+2026/02/18 Grocer
+    ; import_account_id: checking
+    Expenses:Food:Groceries  $140.50
+    Assets:Bank:Checking
+
+2026/03/01 Coffee Shop
+    ; import_account_id: checking
+    Assets:Bank:Checking  $-7.50
+    Expenses:Food:Coffee
+
+2026/03/02 Paycheck
+    ; import_account_id: checking
+    Assets:Bank:Checking  $2500.00
+    Income:Salary
+
+2026/03/04 Online Shop
+    ; import_account_id: visa
+    Liabilities:Cards:Visa  $-83.21
+    Expenses:Shopping
+
+2026/03/05 Credit Card Payment
+    ; import_account_id: checking
+    Liabilities:Cards:Visa  $50.00
+    Assets:Bank:Checking
+
+2026/03/07 Grocery Market
+    ; import_account_id: checking
+    Assets:Bank:Checking  $-84.30
+    Expenses:Food:Groceries
+
+2026/03/08 Unknown Merchant
+    ; import_account_id: checking
+    Assets:Bank:Checking  $-25.00
+    Expenses:Unknown
+""".strip() + "\n"
+
+
+def test_category_history_contains_all_month_category_pairs(tmp_path: Path) -> None:
+    config = _make_config(tmp_path / "workspace")
+    _write_year_journal(config, _FIXTURE_JOURNAL)
+
+    overview = build_dashboard_overview(config, today=date(2026, 3, 9))
+
+    history = overview["categoryHistory"]
+    by_key = {(r["month"], r["category"]): r for r in history}
+
+    assert ("2026-02", "Expenses:Housing:Rent") in by_key
+    assert by_key[("2026-02", "Expenses:Housing:Rent")]["amount"] == 1200.0
+    assert by_key[("2026-02", "Expenses:Housing:Rent")]["categoryLabel"] == "Housing / Rent"
+
+    assert ("2026-02", "Expenses:Food:Groceries") in by_key
+    assert by_key[("2026-02", "Expenses:Food:Groceries")]["amount"] == 140.5
+
+    assert ("2026-03", "Expenses:Food:Groceries") in by_key
+    assert by_key[("2026-03", "Expenses:Food:Groceries")]["amount"] == 84.3
+
+    assert ("2026-03", "Expenses:Shopping") in by_key
+    assert by_key[("2026-03", "Expenses:Shopping")]["amount"] == 83.21
+
+    assert ("2026-03", "Expenses:Food:Coffee") in by_key
+    assert by_key[("2026-03", "Expenses:Food:Coffee")]["amount"] == 7.5
+
+    # Transfers should not appear in categoryHistory
+    transfer_keys = [k for k in by_key if "Assets:" in k[1] or "Liabilities:" in k[1]]
+    assert transfer_keys == []
+
+    # Sorted by (month, category)
+    months_and_cats = [(r["month"], r["category"]) for r in history]
+    assert months_and_cats == sorted(months_and_cats)
+
+
+def test_cash_flow_history_contains_all_months(tmp_path: Path) -> None:
+    config = _make_config(tmp_path / "workspace")
+    _write_year_journal(config, _FIXTURE_JOURNAL)
+
+    overview = build_dashboard_overview(config, today=date(2026, 3, 9))
+
+    history = overview["cashFlowHistory"]
+    months = [r["month"] for r in history]
+    assert "2026-02" in months
+    assert "2026-03" in months
+
+    feb = next(r for r in history if r["month"] == "2026-02")
+    assert feb["income"] == 2500.0
+    assert feb["spending"] == 1340.5
+    assert feb["net"] == 2500.0 - 1340.5
+    assert feb["label"] == "Feb"
+
+    mar = next(r for r in history if r["month"] == "2026-03")
+    assert mar["income"] == 2500.0
+    assert mar["spending"] == 200.01
+
+    # Sorted chronologically
+    assert months == sorted(months)
+
+
+def test_empty_journal_returns_empty_history_arrays(tmp_path: Path) -> None:
+    config = _make_config(tmp_path / "workspace")
+    _write_year_journal(config)
+
+    overview = build_dashboard_overview(config, today=date(2026, 3, 9))
+
+    assert overview["categoryHistory"] == []
+    assert overview["cashFlowHistory"] == []
+
+
+def test_opening_balance_excluded_from_category_history(tmp_path: Path) -> None:
+    config = _make_config(tmp_path / "workspace")
+    config.tracked_accounts["cash_wallet"] = {
+        "display_name": "Cash Wallet",
+        "ledger_account": "Assets:Cash:Wallet",
+    }
+    (config.opening_bal_dir / "cash_wallet.journal").write_text(
+        "2026-01-15 Opening balance\n"
+        "    ; tracked_account_id: cash_wallet\n"
+        "    Assets:Cash:Wallet  USD 250.00\n"
+        "    Equity:Opening-Balances\n",
+        encoding="utf-8",
+    )
+    _write_year_journal(config)
+
+    overview = build_dashboard_overview(config, today=date(2026, 3, 9))
+
+    assert overview["categoryHistory"] == []
+    assert overview["cashFlowHistory"] == []
+
+
+# --- dashboard transactions endpoint tests ---
+
+
+def test_dashboard_transactions_returns_matching_period(tmp_path: Path) -> None:
+    config = _make_config(tmp_path / "workspace")
+    _write_year_journal(config, _FIXTURE_JOURNAL)
+
+    result = query_dashboard_transactions(config, period="2026-03")
+
+    assert result["period"] == "2026-03"
+    assert result["category"] is None
+    # March has: Coffee Shop, Paycheck, Online Shop, CC Payment, Grocery Market, Unknown Merchant
+    assert result["total"] == 6
+    assert len(result["transactions"]) == 6
+    dates = [r["date"] for r in result["transactions"]]
+    assert dates == sorted(dates, reverse=True)
+
+
+def test_dashboard_transactions_filters_by_category(tmp_path: Path) -> None:
+    config = _make_config(tmp_path / "workspace")
+    _write_year_journal(config, _FIXTURE_JOURNAL)
+
+    result = query_dashboard_transactions(
+        config, period="2026-03", category="Expenses:Food:Groceries"
+    )
+
+    assert result["total"] == 1
+    assert result["transactions"][0]["payee"] == "Grocery Market"
+    assert result["category"] == "Expenses:Food:Groceries"
+
+
+def test_dashboard_transactions_category_prefix_match(tmp_path: Path) -> None:
+    config = _make_config(tmp_path / "workspace")
+    _write_year_journal(config, _FIXTURE_JOURNAL)
+
+    result = query_dashboard_transactions(
+        config, period="2026-03", category="Expenses:Food"
+    )
+
+    # Should match both Coffee and Groceries in March
+    assert result["total"] == 2
+    payees = {r["payee"] for r in result["transactions"]}
+    assert payees == {"Coffee Shop", "Grocery Market"}
+
+
+def test_dashboard_transactions_pagination(tmp_path: Path) -> None:
+    config = _make_config(tmp_path / "workspace")
+    _write_year_journal(config, _FIXTURE_JOURNAL)
+
+    result = query_dashboard_transactions(config, period="2026-03", limit=2, offset=0)
+
+    assert result["total"] == 6
+    assert len(result["transactions"]) == 2
+
+    result2 = query_dashboard_transactions(config, period="2026-03", limit=2, offset=2)
+    assert result2["total"] == 6
+    assert len(result2["transactions"]) == 2
+    assert result2["transactions"][0] != result["transactions"][0]
+
+
+def test_dashboard_transactions_invalid_period_raises(tmp_path: Path) -> None:
+    config = _make_config(tmp_path / "workspace")
+    _write_year_journal(config)
+
+    with pytest.raises(ValueError, match="Invalid period format"):
+        query_dashboard_transactions(config, period="invalid")
+
+    with pytest.raises(ValueError, match="Invalid period format"):
+        query_dashboard_transactions(config, period="2026-13")
+
+
+def test_dashboard_transactions_empty_period_returns_empty(tmp_path: Path) -> None:
+    config = _make_config(tmp_path / "workspace")
+    _write_year_journal(config, _FIXTURE_JOURNAL)
+
+    result = query_dashboard_transactions(config, period="2025-01")
+
+    assert result["total"] == 0
+    assert result["transactions"] == []
+
+
+def test_dashboard_transactions_excludes_opening_balances(tmp_path: Path) -> None:
+    config = _make_config(tmp_path / "workspace")
+    config.tracked_accounts["cash_wallet"] = {
+        "display_name": "Cash Wallet",
+        "ledger_account": "Assets:Cash:Wallet",
+    }
+    (config.opening_bal_dir / "cash_wallet.journal").write_text(
+        "2026-01-15 Opening balance\n"
+        "    ; tracked_account_id: cash_wallet\n"
+        "    Assets:Cash:Wallet  USD 250.00\n"
+        "    Equity:Opening-Balances\n",
+        encoding="utf-8",
+    )
+    _write_year_journal(config)
+
+    result = query_dashboard_transactions(config, period="2026-01")
+
+    assert result["total"] == 0
+    assert result["transactions"] == []
