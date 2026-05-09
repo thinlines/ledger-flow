@@ -1,208 +1,232 @@
-# Dashboard History Payload + Transaction Cache (10a)
-
-**Status: COMPLETED — 2026-05-09**
+# ECharts Cash Flow Chart + Drill State (10b)
 
 ## Objective
 
-Expose full spending-category and cash-flow history from the dashboard endpoint so the frontend can render multi-month charts, sparklines, and cross-filter interactions without additional API calls. Add a lazy-fetch endpoint for drill-down to individual transactions scoped by period and category. Introduce an mtime-based transaction cache to eliminate redundant journal parsing on repeated dashboard loads.
+Replace the CSS-bar cash flow section on the dashboard with an interactive ECharts grouped bar chart. Clicking a month bar sets a drill-down focus (`drillState`) that downstream components (10c, 10d) will consume. A breadcrumb strip shows the current drill path and allows drilling back up. The chart reads from `cashFlowHistory` (shipped in 10a) instead of the old 6-month `cashFlow.series`.
 
 ## Scope
 
 ### Included
 
-1. **Add `categoryHistory` to the dashboard overview response.** Expose every `(month, category)` entry from the already-computed `category_spending` dict as a flat array. Each row includes the ledger account path, a pretty label (via `pretty_account_name`), and the absolute spending amount. This is the data source for category sparklines, spending-drivers donut, and selected-category time series on the frontend.
+1. **Install `echarts`.** `pnpm add echarts` in `app/frontend`.
 
-2. **Add `cashFlowHistory` to the dashboard overview response.** Expose all months present in `monthly_income` and `monthly_spending` as a flat array — not just the 6-month window. Each row includes month key, label, income, spending, and net. This is the data source for the ECharts grouped bar chart.
+2. **Create `$lib/echarts.ts`.** Shared ECharts registration module using tree-shaking ESM imports. Registers `BarChart`, `TooltipComponent`, `GridComponent`, `LegendComponent`, and `CanvasRenderer`. Exports the configured `echarts` namespace. All chart components import from here — no per-component `echarts.use()` calls.
 
-3. **Add `GET /api/dashboard/transactions` endpoint.** Lazy fetch for drill-down transaction detail, scoped by `period` (required, month key like `"2026-04"`) and optionally `category` (ledger account path). Returns a paginated list of matching transactions with `date`, `payee`, `amount`, `category`, `categoryLabel`, and `accountLabel`. Supports `limit` (default 50) and `offset` (default 0) query params. Response includes `total` count for pagination.
+3. **Create `CashFlowChart.svelte`.** New component at `$lib/components/dashboard/CashFlowChart.svelte`. Renders a grouped bar chart (income + spending per month) from the `cashFlowHistory` data. Props: `series` (the cash flow rows to display), `currentMonth` (for partial-month labeling), `formatCurrency` (formatter function). Events: `onMonthClick(month: string)`. Chart lifecycle: `onMount` → `echarts.init()` + click handler registration; `$effect` → `setOption()` on data changes; `onDestroy` → `dispose()`. Must handle container resize (use `ResizeObserver` or ECharts `resize()` on window resize).
 
-4. **Add mtime-based transaction cache in `journal_query_service.py`.** `load_transactions()` today re-parses all journal files on every call. Wrap it with a cache keyed on the maximum mtime across all journal files in `config.journal_dir`. Cache hit = one `stat()` per journal file. Cache miss = full re-parse. Thread-safe via `threading.Lock`. Module-level (process lifetime). The cache returns a copy or is treated as read-only by all callers.
+4. **Create `DrillBreadcrumb.svelte`.** New component at `$lib/components/dashboard/DrillBreadcrumb.svelte`. Shows the current drill path as a breadcrumb strip. When `drillState.focusedPeriod` is null, shows nothing (or just "All months" as static text, depending on layout). When focused on a month, shows: `All months → April 2026`. Clicking "All months" resets `drillState.focusedPeriod` to `null`. Props: `focusedPeriod` (string | null), `currentMonth` (string). Events: `onReset()`.
+
+5. **Add `DrillState` type and reactive state to `+page.svelte`.** Add `cashFlowHistory` and `categoryHistory` types to the `DashboardOverview` type. Add `drillState` reactive variable (`$state` or Svelte 4 `let` — match the page's current pattern, which uses `$:` reactive declarations, not Svelte 5 runes). The `drillState` only carries `focusedPeriod: string | null` for now (month-level only, `level` field deferred to 10e).
+
+6. **Replace the CSS cash flow section.** Remove the `cashflow-presets` toggle buttons, the `visibleCashFlow` reactive chain, `cashFlowMax`, `barWidth` usage in the cash flow section, and the `{#each visibleCashFlow}` row loop. Replace with `<CashFlowChart>` consuming `cashFlowHistory`. The preset toggle is eliminated — the chart shows all available history natively (ECharts handles scrolling/zooming if needed). Keep the section card, eyebrow, and heading structure.
+
+7. **Wire month click → drill state.** Clicking a bar in `CashFlowChart` sets `drillState.focusedPeriod` to the clicked month. Show `DrillBreadcrumb` above the chart when a month is focused. Clicking breadcrumb resets to null.
 
 ### Explicitly Excluded
 
-- Any frontend changes. This is a backend-only task.
-- Removing or modifying `categoryTrends` or `cashFlow.series` from the existing response. These remain for backward compatibility; the frontend still reads them. Removal happens in 10c.
-- Weekly or daily granularity in the transactions endpoint. Only month-level period filtering is supported in 10a.
-- Changes to any other endpoint (`/api/transactions`, `/api/transactions/activity`, `/api/dashboard/direction`).
-- User-facing UI changes.
+- Category sparklines, spending-drivers donut, category detail panel (10c).
+- Global date range picker (10d).
+- Weekly/daily drill-down levels (10e).
+- Backend changes — 10a already provides all needed data.
+- Removing `categoryTrends` or `cashFlow.series` from the `DashboardOverview` type — the category trends section still reads `categoryTrends`. Removal happens in 10c.
+- Changes to the category trends section, recent transactions, balance sheet, direction panel, or any other dashboard section.
+- The `barWidth` function and category-meter CSS — still used by the category trends section. Do not remove.
+- Mobile-specific layout changes beyond what ECharts handles natively.
 
 ## System Behavior
 
 ### Inputs
 
-- Frontend calls `GET /api/dashboard/overview` (existing endpoint, augmented response).
-- Frontend calls `GET /api/dashboard/transactions?period=2026-04&category=Expenses:Food:Groceries&limit=20&offset=0` (new endpoint).
+- Dashboard loads `GET /api/dashboard/overview` (existing). The response now includes `cashFlowHistory[]`.
+- User clicks a bar in the cash flow chart → `drillState.focusedPeriod` is set.
+- User clicks "All months" in the breadcrumb → `drillState.focusedPeriod` is reset to null.
 
 ### Logic
 
-**`categoryHistory` construction** (in `build_dashboard_overview`):
+**ECharts registration (`$lib/echarts.ts`):**
+```typescript
+import * as echarts from 'echarts/core';
+import { BarChart } from 'echarts/charts';
+import { TooltipComponent, GridComponent, LegendComponent } from 'echarts/components';
+import { CanvasRenderer } from 'echarts/renderers';
 
-After the existing single-pass accumulation loop, iterate all entries in `category_spending` and emit one row per `(month, account)` pair:
-```python
-category_history = [
-    {
-        "month": month,
-        "category": account,
-        "categoryLabel": pretty_account_name(account),
-        "amount": amount_to_number(total),
-    }
-    for (month, account), total in sorted(category_spending.items())
-]
-```
-Sort by `(month, category)` for stable ordering.
+echarts.use([BarChart, TooltipComponent, GridComponent, LegendComponent, CanvasRenderer]);
 
-**`cashFlowHistory` construction** (in `build_dashboard_overview`):
-
-Collect all month keys present in either `monthly_income` or `monthly_spending`. For each month, emit income, spending, net, and a short label. Sort chronologically.
-```python
-all_months = sorted(set(monthly_income.keys()) | set(monthly_spending.keys()))
-cash_flow_history = [
-    {
-        "month": month_key,
-        "label": date(int(month_key[:4]), int(month_key[5:7]), 1).strftime("%b"),
-        "income": amount_to_number(monthly_income.get(month_key, Decimal("0"))),
-        "spending": amount_to_number(monthly_spending.get(month_key, Decimal("0"))),
-        "net": amount_to_number(
-            monthly_income.get(month_key, Decimal("0"))
-            - monthly_spending.get(month_key, Decimal("0"))
-        ),
-    }
-    for month_key in all_months
-]
+export { echarts };
+export type EChartsInstance = ReturnType<typeof echarts.init>;
 ```
 
-**`GET /api/dashboard/transactions` logic:**
-
-1. Load transactions via the cached `load_transactions` path.
-2. Parse `period` as a month key (`"YYYY-MM"`). Validate format; return 422 if invalid.
-3. Filter transactions to those where `posted_on` falls within the month.
-4. If `category` is provided, further filter to transactions that have at least one posting whose `account` starts with the `category` value. This supports both exact matches (`Expenses:Food:Groceries`) and prefix matches (`Expenses:Food`).
-5. For each matching transaction, determine the display fields using the same helpers as `build_dashboard_overview`: `_primary_posting`, `_primary_account_display`, `_transaction_category`.
-6. Sort by date descending (most recent first within the month).
-7. Return `total` (pre-pagination count), then slice by `offset` and `limit`.
-8. Each transaction row:
-   - `date`: ISO date string
-   - `payee`: transaction payee
-   - `amount`: primary posting amount (signed, via `amount_to_number`)
-   - `category`: ledger account path of the expense/income posting
-   - `categoryLabel`: pretty name via `pretty_account_name`
-   - `accountLabel`: display name of the primary account
-
-**mtime cache:**
-
-```python
-import os
-import threading
-
-_tx_cache: list[ParsedTransaction] | None = None
-_tx_cache_mtime: float | None = None
-_tx_cache_lock = threading.Lock()
-
-def get_transactions_cached(config: AppConfig) -> list[ParsedTransaction]:
-    max_mtime = max(
-        (os.path.getmtime(p) for p in config.journal_dir.glob("*.journal") if p.exists()),
-        default=0.0,
-    )
-    with _tx_cache_lock:
-        global _tx_cache, _tx_cache_mtime
-        if _tx_cache is None or max_mtime != _tx_cache_mtime:
-            _tx_cache = load_transactions(config)
-            _tx_cache_mtime = max_mtime
-        return _tx_cache
+**CashFlowChart option builder:**
+```typescript
+function buildOption(series: CashFlowRow[], currentMonth: string, formatCurrency: (v: number) => string) {
+  return {
+    tooltip: {
+      trigger: 'axis',
+      valueFormatter: (v: number) => formatCurrency(v)
+    },
+    legend: { show: true, bottom: 0 },
+    grid: { top: 8, right: 0, bottom: 28, left: 0, containLabel: true },
+    xAxis: {
+      type: 'category',
+      data: series.map(r =>
+        r.month === currentMonth ? `${r.label}*` : r.label
+      ),
+      axisTick: { show: false },
+      axisLine: { show: false }
+    },
+    yAxis: {
+      type: 'value',
+      axisLabel: { show: false },
+      splitLine: { lineStyle: { type: 'dashed', color: 'rgba(10, 61, 89, 0.08)' } }
+    },
+    series: [
+      {
+        name: 'Income',
+        type: 'bar',
+        data: series.map(r => r.income),
+        itemStyle: { color: '#1d9f6e', borderRadius: [3, 3, 0, 0] }
+      },
+      {
+        name: 'Spending',
+        type: 'bar',
+        data: series.map(r => r.spending),
+        itemStyle: { color: '#0a3d59', borderRadius: [3, 3, 0, 0] }
+      }
+    ]
+  };
+}
 ```
 
-The cache checks the maximum mtime across all `.journal` files (not just one), since `load_transactions` reads all of them. Opening-balance journals live in a separate directory and are loaded via `include` directives, so their mtime is captured by the top-level journal file's mtime changing when the include is added.
+The colors (`#1d9f6e` for income, `#0a3d59` for spending) match the existing CSS gradient start colors for visual continuity.
+
+**Click handler:**
+```typescript
+chart.on('click', (params) => {
+  if (params.componentType === 'series') {
+    onMonthClick(series[params.dataIndex].month);
+  }
+});
+```
+
+**Resize handling:** Use `ResizeObserver` on the chart container. Call `chart.resize()` when dimensions change. This handles window resize, sidebar toggle, and responsive layout changes.
+
+**Drill state shape:**
+```typescript
+let focusedPeriod: string | null = null;
+```
+
+Use a simple `let` variable with `$:` reactive declarations (matching the page's current Svelte 4 pattern). Do not introduce Svelte 5 runes — the page uses `$:` throughout.
+
+**DrillBreadcrumb rendering:**
+- `focusedPeriod === null` → render nothing (empty fragment)
+- `focusedPeriod === "2026-04"` → render: `<button>All months</button> <span>→</span> <span>April 2026</span>`
+
+The month name is formatted with `Intl.DateTimeFormat` for locale awareness (same pattern as the existing `monthTitle()` helper).
 
 ### Outputs
 
-- `GET /api/dashboard/overview` response gains two new top-level fields: `categoryHistory` (array) and `cashFlowHistory` (array). All existing fields unchanged.
-- `GET /api/dashboard/transactions` returns `{ transactions, total, period, category }`.
+- Cash flow section renders an interactive ECharts grouped bar chart instead of CSS bars.
+- Clicking a month bar highlights it and sets `focusedPeriod`.
+- Breadcrumb appears above the chart when drilled into a month.
+- Clicking breadcrumb resets drill state.
+- `focusedPeriod` is available as a reactive variable for downstream components (10c, 10d).
 
 ## System Invariants
 
-- Existing `categoryTrends`, `cashFlow.series`, `recentTransactions`, `balances`, and `summary` fields must remain byte-identical to their current values for the same input data and `today` parameter. The new fields are pure additions.
-- `categoryHistory` amounts must be positive (absolute spending). This matches the sign convention of `category_spending` which accumulates expense posting amounts (already positive in the journal).
-- `cashFlowHistory` income values must be positive (negated from the journal's negative income postings), matching the existing `cashFlow.series` sign convention.
-- The cache must never serve stale data — if any journal file has been modified since the last parse, the cache must miss and re-parse.
-- The transactions endpoint must not return opening-balance transactions (consistent with `build_dashboard_overview` which skips them via `is_generated_opening_balance_transaction`).
-- `period` filtering is inclusive of the full month: day 1 through the last day of the month.
+- The chart must display the same income and spending values as the old CSS bars for the same data. The data source changes (`cashFlowHistory` instead of `cashFlow.series`), but both carry the same shape and values.
+- The partial-month asterisk label must appear on the current month bar (matching the existing `cashFlow.currentMonth` value).
+- `chart.dispose()` must be called on component destroy. Leaking ECharts instances causes memory growth.
+- The `categoryTrends` section, recent transactions, balance sheet, direction panel, and all other dashboard sections must render identically to before this change.
+- ECharts must not block SSR. The chart component must guard `echarts.init()` behind `onMount` (client-only). The container `div` renders on the server; the chart initializes client-side.
 
 ## States
 
-- **Default (overview):** `categoryHistory` and `cashFlowHistory` are present in every response. Empty arrays when `hasData` is false.
-- **Transactions endpoint — success:** returns matching transactions with count.
-- **Transactions endpoint — no matches:** returns `{ transactions: [], total: 0, period: "...", category: "..." }`.
-- **Transactions endpoint — invalid period format:** 422 with descriptive error message.
-- **Error (commodity mismatch):** existing 400 behavior unchanged. New fields are not computed if the error is raised during the accumulation loop (which runs before the new code).
+- **Loading:** Dashboard data not yet loaded. Chart container shows nothing (same as current behavior — the entire dashboard section is gated by `{#if dashboard}`).
+- **Default (no drill):** Chart shows all months from `cashFlowHistory`. No breadcrumb visible. `focusedPeriod` is null.
+- **Drilled into month:** Breadcrumb shows `All months → {Month Name}`. Chart continues to show all months (the selected month is visually distinguished in 10c when the donut appears; for 10b the click simply sets the state variable).
+- **Empty data:** `cashFlowHistory` is empty. Show the existing "No income or spending landed in the selected window." message instead of the chart.
+- **Single month:** Chart renders one bar group. Clicking it sets `focusedPeriod`.
 
 ## Edge Cases
 
-- **No journal data:** `categoryHistory` and `cashFlowHistory` are empty arrays. Transactions endpoint returns empty for any period. Cache stores the empty list with mtime 0.0.
-- **Single month of data:** `cashFlowHistory` has one entry. `categoryHistory` has entries only for that month's categories.
-- **Opening-balance transactions:** excluded from `categoryHistory` (they are already excluded from `category_spending` by the `is_opening_balance` check at line 192), excluded from the transactions endpoint response, but their account balance contributions are unchanged.
-- **Transfer transactions (no expense/income posting):** not present in `categoryHistory` (only expense postings feed `category_spending`). In the transactions endpoint, `_transaction_category` returns `("Transfer", False)` — they appear in period queries but are filtered out by a `category` param since they have no expense/income account path.
-- **Cache with no journal files:** `max()` returns default `0.0`. Cache holds empty list. No crash.
-- **Concurrent requests during cache miss:** Lock serializes. Second request waits for first parse to complete, then gets the cached result.
-- **Journal file deleted between cache check and parse:** `load_transactions` handles missing files gracefully (line 221: `if not journal_path.exists(): continue`). Cache stores whatever `load_transactions` returns.
+- **Window resize:** Chart must resize responsively. `ResizeObserver` handles this.
+- **Rapid clicks:** Each click replaces `focusedPeriod`. No debouncing needed — ECharts click events are discrete.
+- **Month with zero income and zero spending:** These months are filtered out of `cashFlowHistory` by the backend (only months with activity appear). No special handling needed.
+- **Very long history (50+ months):** ECharts handles many bars natively. The chart may become dense; this is acceptable for 10b. 10d adds a date range picker for scoping.
+- **SSR:** `echarts.init()` must only run in `onMount`. The `import` of `$lib/echarts.ts` is fine at module level (tree-shaken, no side effects until `.use()` which runs at import time but is safe in SvelteKit's SSR because ECharts checks for `document`).
 
 ## Failure Behavior
 
-- If `period` query param is missing or malformed (not `YYYY-MM`), return HTTP 422 with `"Invalid period format. Expected YYYY-MM."`.
-- If `limit` or `offset` are negative, clamp to 0.
-- If `category` does not match any postings, return empty results (not an error).
-- `CommodityMismatchError` in `build_dashboard_overview` continues to raise HTTP 400 as today. The new fields do not introduce new commodity-mismatch paths since they reuse `category_spending` and `monthly_income`/`monthly_spending` which already validate.
+- If `echarts.init()` throws (e.g., container has zero dimensions), the chart is empty. No crash — the rest of the dashboard still renders.
+- If `cashFlowHistory` is undefined or missing from the API response (e.g., old backend), fall back to empty array. The "no data" message appears.
 
 ## Regression Risks
 
-- **Payload size increase.** `categoryHistory` adds ~480 rows for a 24-month × 20-category journal. This is small (~20KB), but verify the response time does not degrade noticeably for the existing test fixture.
-- **Existing field mutation.** The new code must not change the computation of `categoryTrends`, `cashFlow`, `balances`, `summary`, or `recentTransactions`. Existing tests serve as the regression gate.
-- **Cache correctness.** A bug in mtime comparison (e.g., checking only one file instead of `max`) could serve stale data after an import. The cache must check all journal files.
-- **Thread safety.** The lock must protect both the read and write of `_tx_cache` and `_tx_cache_mtime`. A race condition here could serve a partially-constructed list.
+- **Category trends section.** This task must not touch the `filteredCategoryTrends`, `categoryMax`, or `{#each filteredCategoryTrends}` block. Those still use `categoryTrends` from the old response shape. Removing them is 10c's job.
+- **`barWidth` function and category CSS.** Still used by the category trends section. Do not remove.
+- **`cashFlowPreset` and `visibleCashFlow`.** These reactive declarations become dead code after the CSS cash flow section is replaced. Remove them to avoid confusion, but verify the category trends section doesn't reference them.
+- **Mobile layout.** The CSS cash flow section had specific mobile styles (`max-tablet:grid-cols-1`). The ECharts chart must render correctly on narrow viewports. ECharts handles this natively via `chart.resize()`, but verify.
+- **Bundle size.** ECharts tree-shaken with `BarChart` + `TooltipComponent` + `GridComponent` + `LegendComponent` + `CanvasRenderer` adds ~180–250KB gzipped. This is the first external visualization dependency. Acceptable for the value delivered.
 
 ## Acceptance Criteria
 
-- `GET /api/dashboard/overview` response includes `categoryHistory` array with entries for every `(month, category)` pair in the journal's expense history.
-- Each `categoryHistory` entry has `month` (string), `category` (string, ledger account path), `categoryLabel` (string, pretty name), `amount` (number, positive).
-- `GET /api/dashboard/overview` response includes `cashFlowHistory` array with entries for every month that has income or spending activity.
-- Each `cashFlowHistory` entry has `month`, `label`, `income`, `spending`, `net` — matching the shape of existing `cashFlow.series` entries.
-- `GET /api/dashboard/transactions?period=2026-03` returns transactions for March 2026 with correct `total` count.
-- `GET /api/dashboard/transactions?period=2026-03&category=Expenses:Food:Groceries` returns only grocery transactions in March.
-- `GET /api/dashboard/transactions?period=2026-03&limit=2&offset=0` returns at most 2 transactions.
-- `GET /api/dashboard/transactions` without `period` returns HTTP 422.
-- `GET /api/dashboard/transactions?period=invalid` returns HTTP 422.
-- All existing `test_dashboard_service.py` tests pass without modification (regression gate).
-- At least 6 new tests covering: `categoryHistory` content, `cashFlowHistory` content, empty journal, transactions endpoint with and without category filter, transactions endpoint with invalid period.
-- `uv run pytest -q` passes.
+- `pnpm check` passes in `app/frontend`.
+- `pnpm build` succeeds in `app/frontend`.
+- ECharts is installed as a dependency in `package.json`.
+- `$lib/echarts.ts` exists and exports the configured `echarts` namespace.
+- `CashFlowChart.svelte` renders a grouped bar chart with income (green) and spending (dark blue) bars per month.
+- The current month's x-axis label includes an asterisk (e.g., `"May*"`).
+- Clicking a month bar calls the `onMonthClick` callback with the month key.
+- `DrillBreadcrumb.svelte` renders nothing when `focusedPeriod` is null.
+- `DrillBreadcrumb.svelte` renders "All months → {Month}" when `focusedPeriod` is set, and clicking "All months" calls `onReset`.
+- The cash flow section of the dashboard replaces CSS bars with the ECharts chart.
+- The old `cashflow-presets` toggle and CSS cash flow row loop are removed from the template.
+- Dead reactive declarations (`cashFlowPreset`, `filteredCashFlowSeries`, `visibleCashFlow`, `cashFlowMax`) are removed.
+- The category trends section, recent transactions, balance sheet, direction panel, hero stats, and all other dashboard sections render unchanged.
+- `chart.dispose()` is called in `onDestroy`.
+- The chart resizes when the window resizes.
 
 ## Proposed Sequence
 
-1. **Add mtime cache.** Add `get_transactions_cached()` to `journal_query_service.py`. Update `build_dashboard_overview` to call it instead of `load_transactions` directly. Run existing tests — they must pass unchanged (cache is transparent).
+1. **Install ECharts.** `pnpm add echarts` in `app/frontend`. Verify `pnpm check` and `pnpm build` still pass.
 
-2. **Add `categoryHistory` to the overview response.** After the existing accumulation loop in `build_dashboard_overview`, construct the `categoryHistory` array from `category_spending`. Add it to the return dict. Write tests asserting correct content for the existing test fixture.
+2. **Create `$lib/echarts.ts`.** Register `BarChart`, `TooltipComponent`, `GridComponent`, `LegendComponent`, `CanvasRenderer`. Export `echarts` and `EChartsInstance` type.
 
-3. **Add `cashFlowHistory` to the overview response.** Construct from `monthly_income` and `monthly_spending` — all months, not windowed. Add to return dict. Write tests.
+3. **Create `CashFlowChart.svelte`.** Implement the grouped bar chart with click handler and resize observer. Test independently by temporarily rendering it in the page with hardcoded data.
 
-4. **Add `GET /api/dashboard/transactions` endpoint.** Register in `main.py`. Implement the filtering, pagination, and response construction. The handler calls `get_transactions_cached()`, filters, and returns. Write tests for period filtering, category filtering, pagination, empty results, and invalid period.
+4. **Create `DrillBreadcrumb.svelte`.** Implement the breadcrumb strip with `focusedPeriod` and `onReset` props.
 
-5. **Run full test suite.** Verify all existing dashboard tests pass unchanged. Verify no regressions in other test files.
+5. **Wire into `+page.svelte`.** Add `cashFlowHistory` and `categoryHistory` to the `DashboardOverview` type. Add `focusedPeriod` state variable. Replace the CSS cash flow section with `<CashFlowChart>` and `<DrillBreadcrumb>`. Remove dead reactive declarations and CSS.
+
+6. **Clean up dead code.** Remove `cashFlowPreset`, `filteredCashFlowSeries`, `visibleCashFlow`, `cashFlowMax`. Remove `.cashflow-presets`, `.cashflow-row` CSS rules. Keep `.bar-income`, `.bar-spending`, `barWidth()`, and category-meter CSS (used by category trends).
+
+7. **Verify.** `pnpm check`, `pnpm build`. Visual inspection: chart renders, click works, breadcrumb appears/resets. All other dashboard sections unchanged.
 
 ## Definition of Done
 
 - All acceptance criteria pass.
-- Existing dashboard tests pass without modification — confirms the new fields are pure additions with no side effects on existing response shape.
-- The transactions endpoint handles all documented error cases (missing period, invalid format).
-- The mtime cache is thread-safe and does not serve stale data.
-- `uv run pytest -q` passes.
+- `pnpm check` and `pnpm build` succeed.
+- The cash flow chart is interactive — bars are clickable, tooltip shows formatted currency.
+- No ECharts instance leaks (dispose on destroy).
+- Category trends, balance sheet, direction panel, recent transactions, and hero stats are visually unchanged.
+- Dead code from the old CSS cash flow section is removed.
+
+## UX Notes
+
+- **Chart height:** ~192px (`h-48`), matching the visual weight of the old CSS bars section.
+- **Colors:** Income bars use `#1d9f6e` (matching existing `.bar-income` gradient start). Spending bars use `#0a3d59` (matching `.bar-spending` gradient start).
+- **Tooltip:** Shows formatted currency on hover, triggered by axis (both bars at once).
+- **Legend:** Small legend at the bottom showing Income / Spending labels.
+- **Partial month:** Asterisk on x-axis label, tooltip footnote not required for 10b (can be added in polish).
+- **Breadcrumb:** Minimal — text button "All months" + separator + focused month name. No heavy styling. Appears only when drilled.
 
 ## Out of Scope
 
-- Frontend consumption of `categoryHistory`, `cashFlowHistory`, or the transactions endpoint.
-- Removal of deprecated fields (`categoryTrends`, `cashFlow.series`).
-- Weekly/daily period granularity in the transactions endpoint.
-- Any changes to the direction endpoint, transactions endpoint (`/api/transactions`), or activity endpoint.
-- ECharts installation or any frontend dependency changes.
-
-## Delivery Notes
-
-- **QA: PASS** — all 12 acceptance criteria verified, 674 tests pass, no invariant violations or regressions.
-- **Review: SHIP WITH NOTES** — function-level imports in `query_dashboard_transactions` (minor consistency nit); module-level mutable cache state acknowledged by task spec; archived-manual.journal included in mtime glob (harmless).
+- Spending-drivers donut (10c).
+- Category sparklines (10c).
+- Selected-category detail panel (10c).
+- Global date range picker (10d).
+- Weekly/daily drill-down (10e).
+- Removing `categoryTrends` or `cashFlow.series` from the type / API consumption (10c).
+- Backend changes.
+- Vitest tests for chart components (ECharts requires DOM/canvas — visual verification is the primary test).
