@@ -4,11 +4,8 @@
   import { accountSubtypeLabel } from '$lib/account-subtypes';
   import { normalizeCurrencyCode } from '$lib/currency-format';
   import CashFlowChart from '$lib/components/dashboard/CashFlowChart.svelte';
-  import CategoryDetailPanel from '$lib/components/dashboard/CategoryDetailPanel.svelte';
-  import CategorySparkline from '$lib/components/dashboard/CategorySparkline.svelte';
+  import CategoryRibbon from '$lib/components/dashboard/CategoryRibbon.svelte';
   import DashboardDirection from '$lib/components/dashboard/DashboardDirection.svelte';
-  import DrillBreadcrumb from '$lib/components/dashboard/DrillBreadcrumb.svelte';
-  import SpendingDriversDonut from '$lib/components/dashboard/SpendingDriversDonut.svelte';
   import type { DirectionData } from '$lib/components/dashboard/direction-types';
   import type { AccountKind } from '$lib/format';
 
@@ -504,7 +501,6 @@
   $: balanceGroups = buildBalanceGroups(overviewAccounts);
 
   let focusedPeriod: string | null = null;
-  let selectedCategory: string | null = null;
 
   $: focusedMonth = focusedPeriod ?? dashboard?.cashFlow.currentMonth ?? '';
   $: categoryBreakdown = (dashboard?.categoryHistory ?? [])
@@ -523,9 +519,10 @@
     }
     return byCategory;
   })();
-  $: selectedCategoryLabel = categoryBreakdown.find(r => r.category === selectedCategory)?.categoryLabel
-    ?? (dashboard?.categoryHistory ?? []).find(r => r.category === selectedCategory)?.categoryLabel
-    ?? selectedCategory ?? '';
+  $: cashFlowFocusedIndex = focusedPeriod
+    ? (dashboard?.cashFlowHistory ?? []).findIndex(r => r.month === focusedPeriod)
+    : null;
+  $: resolvedFocusedIndex = cashFlowFocusedIndex !== null && cashFlowFocusedIndex >= 0 ? cashFlowFocusedIndex : null;
 
   onMount(async () => {
     loading = true;
@@ -708,6 +705,60 @@
     </div>
   </section>
 
+  <section class="view-card p-5">
+    <div class="mb-3 flex items-center justify-between gap-4 max-tablet:grid max-tablet:grid-cols-1">
+      <div>
+        <p class="eyebrow">Cash flow</p>
+        {#if focusedPeriod}
+          <div class="flex items-center gap-1.5">
+            <button
+              class="cursor-pointer border-none bg-transparent p-0 font-semibold text-brand-strong hover:underline text-sm"
+              on:click={() => focusedPeriod = null}
+            >
+              All months
+            </button>
+            <span class="text-sm text-muted-foreground">&rarr;</span>
+            <span class="text-sm font-semibold">{monthTitle(focusedPeriod)}</span>
+          </div>
+        {:else}
+          <h3 class="m-0 font-display text-xl">Monthly income and spending</h3>
+        {/if}
+      </div>
+      <p class="m-0 text-sm text-muted-foreground">{formatCurrency(dashboard.cashFlow.net, { signed: true })} this month</p>
+    </div>
+
+    {#if (dashboard.cashFlowHistory ?? []).length > 0}
+      <CashFlowChart
+        series={dashboard.cashFlowHistory}
+        currentMonth={dashboard.cashFlow.currentMonth}
+        {formatCurrency}
+        onMonthClick={(month) => focusedPeriod = month}
+        focusedIndex={resolvedFocusedIndex}
+      />
+    {:else}
+      <p class="m-0 text-sm text-muted-foreground">
+        No income or spending recorded yet.
+      </p>
+    {/if}
+  </section>
+
+  <section class="view-card px-5 py-4">
+    <div class="mb-2 flex items-baseline justify-between">
+      <p class="eyebrow m-0">
+        {focusedPeriod ? monthTitle(focusedPeriod) : 'This month'} · spending by category
+      </p>
+    </div>
+    <CategoryRibbon
+      categories={categoryBreakdown}
+      sparklineData={categorySparklineData}
+      {formatCurrency}
+    />
+  </section>
+
+  <div id="direction" class="scroll-mt-6">
+    <DashboardDirection {direction} baseCurrency={dashboard.baseCurrency} loading={directionLoading} />
+  </div>
+
   <section class="grid gap-4 grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)] max-desktop:grid-cols-1">
     <article class="view-card p-5">
       <div class="mb-4 flex items-start justify-between gap-4 max-tablet:grid max-tablet:grid-cols-1">
@@ -749,91 +800,7 @@
       </div>
     </article>
 
-    <article class="categories-panel view-card p-5">
-      <div class="mb-4">
-        <p class="eyebrow">Spending breakdown</p>
-        <h3 class="m-0 font-display text-xl">
-          {focusedPeriod ? monthTitle(focusedPeriod) : 'This month\u2019s'} spending
-        </h3>
-      </div>
-
-      {#if categoryBreakdown.length > 0}
-        <SpendingDriversDonut
-          breakdown={categoryBreakdown}
-          {formatCurrency}
-          onCategoryClick={(label) => {
-            const match = categoryBreakdown.find(r => r.categoryLabel === label);
-            if (match) selectedCategory = match.category;
-          }}
-        />
-
-        <div class="mt-4 grid gap-0">
-          {#each categoryBreakdown as row}
-            <button
-              class="category-item drilldown-link grid w-full cursor-pointer gap-1 border-none bg-transparent px-2 py-2.5 text-left transition-colors"
-              class:active={selectedCategory === row.category}
-              on:click={() => selectedCategory = row.category}
-            >
-              <div class="flex items-center justify-between gap-3">
-                <p class="m-0 truncate font-bold">{row.categoryLabel}</p>
-                <span class="shrink-0 text-sm text-muted-foreground">{formatCurrency(row.amount)}</span>
-              </div>
-              {#if categorySparklineData.has(row.category)}
-                <CategorySparkline amounts={categorySparklineData.get(row.category) ?? []} />
-              {/if}
-            </button>
-          {/each}
-        </div>
-      {:else}
-        <p class="m-0 text-sm text-muted-foreground">
-          No spending data available.
-        </p>
-      {/if}
-    </article>
-  </section>
-
-  {#if selectedCategory}
-    <CategoryDetailPanel
-      category={selectedCategory}
-      categoryLabel={selectedCategoryLabel}
-      categoryHistory={dashboard.categoryHistory ?? []}
-      {focusedPeriod}
-      currentMonth={dashboard.cashFlow.currentMonth}
-      {formatCurrency}
-      onClose={() => selectedCategory = null}
-    />
-  {/if}
-
-  <div id="direction" class="scroll-mt-6">
-    <DashboardDirection {direction} baseCurrency={dashboard.baseCurrency} loading={directionLoading} />
-  </div>
-
-  <section class="view-card p-5">
-    <div class="mb-4 flex items-start justify-between gap-4 max-tablet:grid max-tablet:grid-cols-1">
-      <div>
-        <p class="eyebrow">Cash flow</p>
-        <h3 class="m-0 font-display text-xl">Monthly income and spending</h3>
-      </div>
-      <p class="m-0 text-sm text-muted-foreground">{formatCurrency(dashboard.cashFlow.net, { signed: true })} this month</p>
-    </div>
-
-    <DrillBreadcrumb {focusedPeriod} onReset={() => focusedPeriod = null} />
-
-    {#if (dashboard.cashFlowHistory ?? []).length > 0}
-      <CashFlowChart
-        series={dashboard.cashFlowHistory}
-        currentMonth={dashboard.cashFlow.currentMonth}
-        {formatCurrency}
-        onMonthClick={(month) => focusedPeriod = month}
-      />
-    {:else}
-      <p class="m-0 text-sm text-muted-foreground">
-        No income or spending landed in the selected window.
-      </p>
-    {/if}
-  </section>
-
-  <section class="view-card p-5">
+    <article class="view-card p-5">
     <div class="mb-4 flex items-start justify-between gap-4 max-tablet:grid max-tablet:grid-cols-1">
       <div>
         <p class="eyebrow">Balance sheet</p>
@@ -892,6 +859,7 @@
         No tracked accounts configured yet. <a class="text-link" href="/accounts">Add accounts</a> to see balances here.
       </p>
     {/if}
+    </article>
   </section>
 {/if}
 
@@ -940,15 +908,6 @@
     border-top: 1px solid rgba(10, 61, 89, 0.08);
   }
 
-  .category-item + .category-item {
-    border-top: 1px solid rgba(10, 61, 89, 0.08);
-  }
-
-  .category-item.active {
-    background: rgba(10, 61, 89, 0.04);
-    border-radius: 0.75rem;
-  }
-
   .balance-group + .balance-group {
     margin-top: 0.75rem;
     padding-top: 0.75rem;
@@ -961,9 +920,4 @@
     border-top: 1px solid rgba(10, 61, 89, 0.08);
   }
 
-  @media (max-width: 1100px) {
-    .categories-panel {
-      order: -1;
-    }
-  }
 </style>
