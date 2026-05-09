@@ -1,5 +1,7 @@
 # Category Insights + Detail Panel (10c)
 
+**Status: COMPLETED — 2026-05-09**
+
 ## Objective
 
 Replace the CSS category trends section with interactive ECharts visuals: a spending-drivers donut showing category breakdown for the focused month, per-row mini sparklines showing 6-month category history, and a selected-category detail panel with a time-series bar chart and lazy-fetched transaction list. Clicking a category anywhere sets `selectedCategory`; clicking a month in the cash flow chart already sets `focusedPeriod` (from 10b). Together these two state variables drive all the new visuals. Clean up dead CSS and deprecated response fields that this task replaces.
@@ -225,3 +227,8 @@ Filter `categoryHistory` to the selected category, render as a bar chart with mo
 - Transaction pagination in the detail panel.
 - Changes to cash flow chart, balance sheet, direction panel, hero stats, or recent transactions.
 - Custom donut color palette.
+
+## Delivery Notes
+
+- **QA: PASS** — all 17 acceptance criteria verified, `pnpm check` 0 errors/0 warnings, `pnpm build` succeeds, all dead code confirmed removed via grep.
+- **Review: SHIP** — clean implementation following established CashFlowChart pattern; AbortController correctly handles request cancellation.
