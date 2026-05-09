@@ -1,5 +1,7 @@
 # ECharts Cash Flow Chart + Drill State (10b)
 
+**Status: COMPLETED — 2026-05-09**
+
 ## Objective
 
 Replace the CSS-bar cash flow section on the dashboard with an interactive ECharts grouped bar chart. Clicking a month bar sets a drill-down focus (`drillState`) that downstream components (10c, 10d) will consume. A breadcrumb strip shows the current drill path and allows drilling back up. The chart reads from `cashFlowHistory` (shipped in 10a) instead of the old 6-month `cashFlow.series`.
@@ -230,3 +232,8 @@ The month name is formatted with `Intl.DateTimeFormat` for locale awareness (sam
 - Removing `categoryTrends` or `cashFlow.series` from the type / API consumption (10c).
 - Backend changes.
 - Vitest tests for chart components (ECharts requires DOM/canvas — visual verification is the primary test).
+
+## Delivery Notes
+
+- **QA: PASS** — all 15 acceptance criteria verified, `pnpm check` 0 errors/0 warnings, `pnpm build` succeeds.
+- **Review: SHIP** — `.bar-income`/`.bar-spending` CSS classes are now dead (no template references) but kept per task spec; defer removal to 10c cleanup.
