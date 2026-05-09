@@ -57,7 +57,7 @@ from services.account_register_service import build_account_register
 from services.commodity_service import CommodityMismatchError
 from services.custom_csv_service import inspect_csv_bytes
 from services.activity_service import build_activity_view
-from services.dashboard_service import build_dashboard_overview
+from services.dashboard_service import build_dashboard_overview, query_dashboard_transactions
 from services.direction_service import build_dashboard_direction
 from services.unified_transactions_service import (
     UnifiedTransactionFilters,
@@ -489,6 +489,24 @@ def dashboard_direction() -> dict:
         return build_dashboard_direction(config)
     except CommodityMismatchError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+@app.get("/api/dashboard/transactions")
+def dashboard_transactions(
+    period: str | None = None,
+    category: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> dict:
+    if period is None:
+        raise HTTPException(status_code=422, detail="Invalid period format. Expected YYYY-MM.")
+    config = _require_workspace_config()
+    try:
+        return query_dashboard_transactions(
+            config, period=period, category=category, limit=limit, offset=offset
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
 
 
 @app.get("/api/transactions/activity")

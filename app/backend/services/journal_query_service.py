@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import threading
 from dataclasses import dataclass, replace
 from datetime import date
 from decimal import Decimal, InvalidOperation
@@ -250,3 +252,23 @@ def load_transactions(config: AppConfig) -> list[ParsedTransaction]:
                 )
             )
     return sorted(transactions, key=lambda txn: txn.posted_on)
+
+
+_tx_cache: list[ParsedTransaction] | None = None
+_tx_cache_mtime: float | None = None
+_tx_cache_lock = threading.Lock()
+
+
+def get_transactions_cached(config: AppConfig) -> list[ParsedTransaction]:
+    """Return parsed transactions, using an mtime-based cache to skip re-parsing
+    when no journal files have changed since the last call."""
+    max_mtime = max(
+        (os.path.getmtime(p) for p in config.journal_dir.glob("*.journal") if p.exists()),
+        default=0.0,
+    )
+    with _tx_cache_lock:
+        global _tx_cache, _tx_cache_mtime
+        if _tx_cache is None or max_mtime != _tx_cache_mtime:
+            _tx_cache = load_transactions(config)
+            _tx_cache_mtime = max_mtime
+        return _tx_cache
