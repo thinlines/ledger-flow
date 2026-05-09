@@ -1,5 +1,7 @@
 # Dashboard History Payload + Transaction Cache (10a)
 
+**Status: COMPLETED — 2026-05-09**
+
 ## Objective
 
 Expose full spending-category and cash-flow history from the dashboard endpoint so the frontend can render multi-month charts, sparklines, and cross-filter interactions without additional API calls. Add a lazy-fetch endpoint for drill-down to individual transactions scoped by period and category. Introduce an mtime-based transaction cache to eliminate redundant journal parsing on repeated dashboard loads.
@@ -199,3 +201,8 @@ The cache checks the maximum mtime across all `.journal` files (not just one), s
 - Weekly/daily period granularity in the transactions endpoint.
 - Any changes to the direction endpoint, transactions endpoint (`/api/transactions`), or activity endpoint.
 - ECharts installation or any frontend dependency changes.
+
+## Delivery Notes
+
+- **QA: PASS** — all 12 acceptance criteria verified, 674 tests pass, no invariant violations or regressions.
+- **Review: SHIP WITH NOTES** — function-level imports in `query_dashboard_transactions` (minor consistency nit); module-level mutable cache state acknowledged by task spec; archived-manual.journal included in mtime glob (harmless).
