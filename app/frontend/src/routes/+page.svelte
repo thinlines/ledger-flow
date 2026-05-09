@@ -3,7 +3,9 @@
   import { apiGet } from '$lib/api';
   import { accountSubtypeLabel } from '$lib/account-subtypes';
   import { normalizeCurrencyCode } from '$lib/currency-format';
+  import CashFlowChart from '$lib/components/dashboard/CashFlowChart.svelte';
   import DashboardDirection from '$lib/components/dashboard/DashboardDirection.svelte';
+  import DrillBreadcrumb from '$lib/components/dashboard/DrillBreadcrumb.svelte';
   import type { DirectionData } from '$lib/components/dashboard/direction-types';
   import type { AccountKind } from '$lib/format';
 
@@ -106,6 +108,13 @@
     };
     categoryTrends: CategoryTrend[];
     recentTransactions: RecentTransaction[];
+    cashFlowHistory: CashFlowRow[];
+    categoryHistory: Array<{
+      month: string;
+      category: string;
+      categoryLabel: string;
+      amount: number;
+    }>;
   };
 
   type OverviewAccount = TrackedAccount & {
@@ -512,18 +521,10 @@
   $: overviewAccounts = buildOverviewAccounts(dashboard, trackedAccounts);
   $: balanceGroups = buildBalanceGroups(overviewAccounts);
 
-  let cashFlowPreset: 'month' | 'last3' | 'last6' = 'last3';
-  $: filteredCashFlowSeries = (dashboard?.cashFlow.series ?? [])
-    .filter((row) => row.income !== 0 || row.spending !== 0 || row.net !== 0);
+  let focusedPeriod: string | null = null;
+
   $: filteredCategoryTrends = (dashboard?.categoryTrends ?? [])
     .filter((row) => row.current !== 0 || row.previous !== 0);
-  $: visibleCashFlow = (() => {
-    const reversed = [...filteredCashFlowSeries].reverse();
-    if (cashFlowPreset === 'month') return reversed.slice(0, 1);
-    if (cashFlowPreset === 'last6') return reversed;
-    return reversed.slice(0, 3);
-  })();
-  $: cashFlowMax = Math.max(...visibleCashFlow.map((row) => Math.max(row.income, row.spending)), 0);
   $: categoryMax = Math.max(
     ...filteredCategoryTrends.flatMap((row) => [row.current, row.previous]),
     0
@@ -804,39 +805,23 @@
         <p class="eyebrow">Cash flow</p>
         <h3 class="m-0 font-display text-xl">Monthly income and spending</h3>
       </div>
-      <div class="grid justify-items-end gap-1.5 text-right">
-        <p class="m-0 text-sm text-muted-foreground">{formatCurrency(dashboard.cashFlow.net, { signed: true })} this month</p>
-        <div class="cashflow-presets inline-flex gap-0.5 rounded-full p-0.5">
-          <button class:active={cashFlowPreset === 'month'} on:click={() => cashFlowPreset = 'month'}>This month</button>
-          <button class:active={cashFlowPreset === 'last3'} on:click={() => cashFlowPreset = 'last3'}>Last 3</button>
-          <button class:active={cashFlowPreset === 'last6'} on:click={() => cashFlowPreset = 'last6'}>Last 6</button>
-        </div>
-      </div>
+      <p class="m-0 text-sm text-muted-foreground">{formatCurrency(dashboard.cashFlow.net, { signed: true })} this month</p>
     </div>
 
-    <div class="grid gap-3.5">
-      {#if visibleCashFlow.length > 0}
-        {#each visibleCashFlow as row}
-          <a
-            class="cashflow-row drilldown-link grid gap-1.5 -mx-2 -my-1.5 rounded-xl px-2 py-1.5 text-inherit no-underline transition-colors"
-            href={`/transactions?month=${row.month}`}
-          >
-            <div class="flex items-center justify-between gap-3 max-tablet:grid max-tablet:grid-cols-1">
-              <p class="m-0 font-bold">{row.label}</p>
-              <span class:positive={row.net >= 0} class:negative={row.net < 0}>{formatCurrency(row.net, { signed: true, compact: true })}</span>
-            </div>
-            <div class="flex h-2.5 gap-1">
-              <span class="bar-income h-full min-w-[2px] rounded-full" style={`width: ${barWidth(row.income, cashFlowMax)}`}></span>
-              <span class="bar-spending h-full min-w-[2px] rounded-full" style={`width: ${barWidth(row.spending, cashFlowMax)}`}></span>
-            </div>
-          </a>
-        {/each}
-      {:else}
-        <p class="m-0 text-sm text-muted-foreground">
-          No income or spending landed in the selected window.
-        </p>
-      {/if}
-    </div>
+    <DrillBreadcrumb {focusedPeriod} onReset={() => focusedPeriod = null} />
+
+    {#if (dashboard.cashFlowHistory ?? []).length > 0}
+      <CashFlowChart
+        series={dashboard.cashFlowHistory}
+        currentMonth={dashboard.cashFlow.currentMonth}
+        {formatCurrency}
+        onMonthClick={(month) => focusedPeriod = month}
+      />
+    {:else}
+      <p class="m-0 text-sm text-muted-foreground">
+        No income or spending landed in the selected window.
+      </p>
+    {/if}
   </section>
 
   <section class="view-card p-5">
@@ -954,32 +939,6 @@
     background: linear-gradient(90deg, #d5dee8, #b7c9da);
   }
 
-  .cashflow-presets {
-    background: rgba(10, 61, 89, 0.06);
-  }
-
-  .cashflow-presets button {
-    padding: 0.25rem 0.65rem;
-    border: none;
-    border-radius: 999px;
-    background: transparent;
-    color: var(--muted-foreground);
-    font-size: 0.78rem;
-    font-weight: 600;
-    cursor: pointer;
-    transition: background 0.15s, color 0.15s;
-  }
-
-  .cashflow-presets button.active {
-    background: #fff;
-    color: var(--foreground);
-    box-shadow: 0 1px 3px rgba(10, 61, 89, 0.1);
-  }
-
-  .cashflow-presets button:hover:not(.active) {
-    color: var(--foreground);
-  }
-
   .drilldown-link:hover {
     background: rgba(10, 61, 89, 0.04);
   }
@@ -988,7 +947,6 @@
     border-top: 1px solid rgba(10, 61, 89, 0.08);
   }
 
-  .cashflow-row + .cashflow-row,
   .category-row + .category-row {
     margin-top: 0.65rem;
     padding-top: 0.65rem;
