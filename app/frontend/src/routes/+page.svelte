@@ -707,7 +707,7 @@
 
   <section class="view-card p-5">
     <div class="mb-3 flex items-center justify-between gap-4 max-tablet:grid max-tablet:grid-cols-1">
-      <div>
+      <div class="min-h-12">
         <p class="eyebrow">Cash flow</p>
         {#if focusedPeriod}
           <div class="flex items-center gap-1.5">
