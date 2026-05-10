@@ -1,6 +1,6 @@
 # Transactions State Consistency: URL as Source of Truth (tx-state-fix)
 
-**Status: ACTIVE**
+**Status: COMPLETED — 2026-05-10**
 
 ## Objective
 
@@ -171,3 +171,10 @@ function changeFilters(next) {
 - New filters or filter combinations.
 - Performance optimization beyond the dedupe necessary to avoid double-fetches.
 - Tests beyond manual regression — the existing test suite must continue to pass; no new automated tests required for this fix.
+
+## Delivery Notes
+
+- **Implementation**: `0b7a7b7 fix(transactions): URL as filter source of truth`. Reactive derivation `$: parsedFromUrl = filtersFromUrl($page.url) → $: filters = pruneAccountsToTracked(...)`. One-shot `hasReconciledUrl` flag for migration + default-period rules. Reactive reload trigger keyed on `filtersToApiParams(filters)`. `changeFilters` collapsed to one `goto()`. `load()` sets `initialized = true` last to eliminate the trackedAccounts race.
+- **Fix-loop iteration 1**: `1ab22d1 fix(transactions): load on pure migration redirect`. The unconditional `lastFiltersKey = filtersToApiParams(filters)` inside the reconciliation block broke pure migration (`?accountId=X` → `?accounts=X`) where filter content is identical pre/post-redirect. Gated the assignment on `filtersToApiParams(next) !== filtersToApiParams(filters)` so it only suppresses the imminent reload when the redirect actually changes filter content.
+- **QA: PASS** — all 11 acceptance criteria verified by tracing the reactive flow against concrete URL examples. `pnpm check` 0/0, `pnpm build` succeeds, backend `pytest` 739 passed (untouched).
+- **Review: SHIP** — minimal correct change. Non-blocking note: `filtersToApiParams(filters)` invoked twice in the reconciliation block; could cache locally for a one-line readability win but not worth blocking on.
