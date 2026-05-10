@@ -329,6 +329,7 @@
     {trackedAccounts}
     {accountKindById}
     {baseCurrency}
+    onMonthFocus={(month) => changeFilters({ ...filters, month, period: month ? null : filters.period })}
   />
 
   {#if isSingleAccount && selectedAccount && meta}

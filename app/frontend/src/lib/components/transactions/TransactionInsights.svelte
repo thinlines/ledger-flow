@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { goto } from '$app/navigation';
+  import { onDestroy, onMount } from 'svelte';
+  import { echarts, type EChartsInstance } from '$lib/echarts';
   import type { TrackedAccount, TransactionFilters, TransactionRow } from '$lib/transactions/types';
   import { formatCurrency, type AccountKind } from '$lib/format';
   import { categoryLeadingSegment, truncatePayee } from '$lib/transactions/helpers';
@@ -25,6 +26,10 @@
   export let trackedAccounts: TrackedAccount[];
   export let accountKindById: Map<string, AccountKind>;
   export let baseCurrency: string;
+  // Callback the page wires to changeFilters({ ...filters, month, period: null })
+  // so chart clicks update state directly. Without this, navigation alone
+  // wouldn't re-fetch because the page's URL parsing only runs in onMount.
+  export let onMonthFocus: (month: string | null) => void = () => {};
 
   type DirectionMode = 'expense' | 'income' | 'net';
 
@@ -153,6 +158,30 @@
     return months.map((m) => bucket.get(m) ?? 0);
   }
 
+  // Split rows into income vs expense buckets per month for the paired
+  // bar chart in net mode. Both arrays return positive magnitudes — the
+  // chart series renders them side-by-side, not signed.
+  function pairedByMonth(rows: TransactionRow[], months: string[]): { income: number[]; spending: number[] } {
+    const incomeBucket = new Map<string, number>();
+    const spendBucket = new Map<string, number>();
+    for (const r of rows) {
+      const acct = r.categories[0]?.account ?? '';
+      const lead = categoryLeadingSegment(acct);
+      const k = monthKey(r.date);
+      if (lead === 'Income') {
+        incomeBucket.set(k, (incomeBucket.get(k) ?? 0) + Math.abs(r.amount));
+      } else if (lead === 'Expenses') {
+        spendBucket.set(k, (spendBucket.get(k) ?? 0) + Math.abs(r.amount));
+      }
+      // Other categories (transfers, equity) are intentionally dropped — the
+      // P&L exclusion logic upstream already filters them in net mode.
+    }
+    return {
+      income: months.map((m) => incomeBucket.get(m) ?? 0),
+      spending: months.map((m) => spendBucket.get(m) ?? 0)
+    };
+  }
+
   type MerchantTotal = { payee: string; amount: number; count: number };
   function topMerchants(rows: TransactionRow[], dir: DirectionMode, limit: number): MerchantTotal[] {
     const map = new Map<string, MerchantTotal>();
@@ -238,18 +267,8 @@
     return amount > 0 ? 'fig-pos' : '';
   }
 
-  function clearMonth() {
-    const params = new URLSearchParams(window.location.search);
-    params.delete('month');
-    params.delete('period');
-    void goto(`/transactions?${params.toString()}`);
-  }
-  function focusMonth(m: string) {
-    const params = new URLSearchParams(window.location.search);
-    params.set('month', m);
-    params.delete('period');
-    void goto(`/transactions?${params.toString()}`);
-  }
+  function clearMonth() { onMonthFocus(null); }
+  function focusMonth(m: string) { onMonthFocus(m); }
 
   $: subject = pickSubject(filters);
   $: contextChips = pickContextChips(filters);
@@ -261,16 +280,20 @@
     ? (accountKindById.get(filters.accounts[0]) ?? null)
     : null;
 
-  // In net mode (no category filter) the dossier reports P&L, so exclude
-  // anything that isn't real income/expense activity: transfers between
-  // tracked accounts (movement, not flow), opening-balance equity postings
-  // (one-time setup events that would dwarf real spending in their month),
-  // and balance assertions (no money actually moves). Category-driven
-  // views never see these because they don't carry Expenses/Income
-  // categories in the first place.
+  // In net mode (no category filter) the dossier reports P&L. We restrict
+  // to rows whose primary category is Income or Expenses — that's the
+  // ground-truth filter for "real flow," and it correctly drops transfers
+  // (Assets:Transfer-style accounts), opening balances (Equity:Opening),
+  // and balance assertions in one rule. Relying on the backend's flags
+  // (isOpeningBalance/isTransfer) misses cases where setup transactions
+  // weren't tagged. Category-driven views never need this filter because
+  // they're already restricted to one category.
   function netRowsOf(rows: TransactionRow[]): TransactionRow[] {
     if (dir !== 'net') return rows;
-    return rows.filter((r) => !r.isTransfer && !r.isOpeningBalance && !r.isAssertion);
+    return rows.filter((r) => {
+      const lead = categoryLeadingSegment(r.categories[0]?.account ?? '');
+      return lead === 'Expenses' || lead === 'Income';
+    });
   }
   $: visibleHistory = netRowsOf(historyRows);
   $: visibleHistoryHighlight = netRowsOf(historyRowsHighlight);
@@ -287,6 +310,14 @@
   $: hasHighlight = !!filters.search && historyRowsHighlight !== historyRows;
   $: focusedTrendIndex = filters.month ? trendMonths.indexOf(filters.month) : -1;
   $: trendFocusIndex = focusedTrendIndex >= 0 ? focusedTrendIndex : trendMonths.length - 1;
+
+  // Paired income/spending breakdown for net-mode chart. Computed from the
+  // *un-net-filtered* historyRows so income and spending each isolate their
+  // own categorized rows (the netRowsOf filter is for the gist/KPI scalar
+  // total, not for the chart breakdown).
+  $: paired = pairedByMonth(historyRows, trendMonths);
+  $: pairedHighlight = pairedByMonth(historyRowsHighlight, trendMonths);
+  $: pairedMax = Math.max(maxOrZero(paired.income), maxOrZero(paired.spending));
 
   $: currentTotal = magnitudeFor(visibleCurrent, dir);
   $: currentTotalAbs = Math.abs(currentTotal);
@@ -337,6 +368,22 @@
       }, 0) / rollingMonths.length
     : 0;
 
+  // Paired-bar baselines: separate income and spending averages so the
+  // reference lines on the net-mode chart aren't ambiguous about which
+  // series they measure. Use the *highlight* dataset for parity with the
+  // KPI math when a search is active.
+  function avgFromBuckets(values: number[], months: string[]): number {
+    if (!months.length) return 0;
+    let total = 0;
+    for (const m of months) {
+      const i = trendMonths.indexOf(m);
+      if (i >= 0) total += values[i];
+    }
+    return total / months.length;
+  }
+  $: rollingIncomeAvg = avgFromBuckets(pairedHighlight.income, rollingMonths);
+  $: rollingSpendAvg = avgFromBuckets(pairedHighlight.spending, rollingMonths);
+
   $: merchants = topMerchants(visibleCurrent, dir, 6);
   $: merchantMax = maxOrZero(merchants.map((m) => m.amount));
 
@@ -364,7 +411,7 @@
         ? 'received'
         : (currentTotal >= 0 ? 'netted' : 'spent net');
     const amount = fmt(currentTotalAbs);
-    let s = `You ${verb} ${amount} across ${currentCount} ${currentCount === 1 ? 'transaction' : 'transactions'}${excludedTransfers > 0 ? ` (${excludedTransfers} ${excludedTransfers === 1 ? 'transfer' : 'transfers'} excluded)` : ''}.`;
+    let s = `You ${verb} ${amount} across ${currentCount} ${currentCount === 1 ? 'transaction' : 'transactions'}${excludedTransfers > 0 ? ` (${excludedTransfers} non-P&L ${excludedTransfers === 1 ? 'entry' : 'entries'} excluded)` : ''}.`;
     if (deltaVsPrior !== null) {
       // Use spending vocabulary when in spending lens, savings/income otherwise.
       const dirWord = spendingLens || dir === 'expense'
@@ -413,6 +460,226 @@
     if (categoryBreakdown.length > 0) return 'categories';
     return 'weekday';
   })();
+
+  // ─── ECharts trend ────────────────────────────────────────────────────
+  // Matches the dashboard's CashFlowChart aesthetic (paired Income +
+  // Spending bars, same colors). When a category narrows the slice we show
+  // a single bar series colored to match the direction. Cross-filter
+  // overlay (search) is rendered as a dimmed outer + solid inner pair via
+  // overlapping ECharts series with barGap '-100%'.
+  let chartContainer: HTMLDivElement | null = null;
+  let chart: EChartsInstance | null = null;
+  let chartObserver: ResizeObserver | null = null;
+
+  const COLOR_INCOME = '#1d9f6e';
+  const COLOR_SPENDING = '#0a3d59';
+  const COLOR_FOCUS_RING = '#ad6a00';
+
+  function buildChartOption() {
+    const xLabels = trendMonths.map((m) => monthLabel(m));
+    const focusIdx = focusedTrendIndex >= 0 ? focusedTrendIndex : trendMonths.length - 1;
+    const useNet = dir === 'net';
+
+    // Per-bar opacity helper — focused month at full opacity, others slightly
+    // dimmed when a focus exists at all.
+    const dataWithFocus = (vals: number[], color: string) => vals.map((v, i) => ({
+      value: v,
+      itemStyle: {
+        color,
+        borderRadius: [4, 4, 0, 0] as [number, number, number, number],
+        opacity: focusedTrendIndex >= 0 && i !== focusIdx ? 0.55 : 1
+      }
+    }));
+
+    const baseSeries = useNet
+      ? [
+          {
+            name: 'Income',
+            type: 'bar' as const,
+            cursor: 'pointer',
+            data: dataWithFocus(paired.income, COLOR_INCOME),
+            ...(hasHighlight ? { itemStyle: { opacity: 0.25 } } : {})
+          },
+          {
+            name: 'Spending',
+            type: 'bar' as const,
+            cursor: 'pointer',
+            data: dataWithFocus(paired.spending, COLOR_SPENDING),
+            ...(hasHighlight ? { itemStyle: { opacity: 0.25 } } : {})
+          }
+        ]
+      : [
+          {
+            name: dir === 'income' ? 'Received' : 'Spent',
+            type: 'bar' as const,
+            cursor: 'pointer',
+            data: dataWithFocus(trendDisplay, dir === 'income' ? COLOR_INCOME : COLOR_SPENDING),
+            ...(hasHighlight ? { itemStyle: { opacity: 0.25 } } : {})
+          }
+        ];
+
+    // When a search narrows the result, overlay solid inner bars showing
+    // the matched portion. barGap '-100%' makes them sit on top of the
+    // outer bars rather than beside them.
+    const highlightSeries = hasHighlight
+      ? (useNet
+          ? [
+              {
+                name: 'Income (match)',
+                type: 'bar' as const,
+                cursor: 'pointer',
+                barGap: '-100%',
+                z: 3,
+                data: dataWithFocus(pairedHighlight.income, COLOR_INCOME)
+              },
+              {
+                name: 'Spending (match)',
+                type: 'bar' as const,
+                cursor: 'pointer',
+                barGap: '-100%',
+                z: 3,
+                data: dataWithFocus(pairedHighlight.spending, COLOR_SPENDING)
+              }
+            ]
+          : [
+              {
+                name: 'Match',
+                type: 'bar' as const,
+                cursor: 'pointer',
+                barGap: '-100%',
+                z: 3,
+                data: dataWithFocus(trendHighlightDisplay, dir === 'income' ? COLOR_INCOME : COLOR_SPENDING)
+              }
+            ])
+      : [];
+
+    // Markline(s) for the 6-month rolling baseline. In net mode we draw
+    // two distinct color-matched lines so the user can tell income avg
+    // from spending avg at a glance. In single-direction mode one line
+    // suffices and matches the bar color.
+    const series = [...baseSeries, ...highlightSeries];
+    if (series.length > 0) {
+      const baseLineStyle = (color: string) => ({
+        color, type: 'dashed' as const, width: 1, opacity: 0.7
+      });
+      const baseLabel = (text: string, color: string) => ({
+        formatter: text,
+        position: 'insideEndTop' as const,
+        color, fontSize: 10, fontWeight: 600,
+        backgroundColor: 'rgba(255,255,255,0.92)',
+        padding: [2, 4, 2, 4] as [number, number, number, number],
+        borderRadius: 3
+      });
+      const lines: Array<Record<string, unknown>> = [];
+      if (useNet) {
+        if (rollingIncomeAvg > 0) {
+          lines.push({
+            name: 'Avg income',
+            yAxis: rollingIncomeAvg,
+            lineStyle: baseLineStyle(COLOR_INCOME),
+            label: baseLabel(`Avg income · ${fmt(rollingIncomeAvg)}`, COLOR_INCOME)
+          });
+        }
+        if (rollingSpendAvg > 0) {
+          lines.push({
+            name: 'Avg spending',
+            yAxis: rollingSpendAvg,
+            lineStyle: baseLineStyle(COLOR_SPENDING),
+            label: baseLabel(`Avg spending · ${fmt(rollingSpendAvg)}`, COLOR_SPENDING)
+          });
+        }
+      } else if (rollingAvg > 0) {
+        const c = dir === 'income' ? COLOR_INCOME : COLOR_SPENDING;
+        lines.push({
+          name: '6-mo avg',
+          yAxis: rollingAvg,
+          lineStyle: baseLineStyle(c),
+          label: baseLabel(`6-mo avg · ${fmt(rollingAvg)}`, c)
+        });
+      }
+      if (lines.length) {
+        (series[0] as Record<string, unknown>).markLine = {
+          symbol: 'none', silent: true, animation: false, data: lines
+        };
+      }
+    }
+
+    return {
+      animationDuration: 350,
+      tooltip: {
+        trigger: 'axis' as const,
+        axisPointer: { type: 'shadow' as const },
+        backgroundColor: 'rgba(255,255,255,0.96)',
+        borderColor: 'rgba(10,61,89,0.12)',
+        borderWidth: 1,
+        textStyle: { color: '#0a3d59', fontSize: 12 },
+        formatter: (params: Array<{ axisValue: string; seriesName: string; value: number; color: string }>) => {
+          if (!params.length) return '';
+          const idx = trendMonths.findIndex((m) => monthLabel(m) === params[0].axisValue);
+          const month = idx >= 0 ? monthTitle(trendMonths[idx]) : params[0].axisValue;
+          const lines = params
+            .filter((p) => p.value > 0)
+            .map((p) => `<div style="display:flex;gap:8px;align-items:center;margin-top:2px"><span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:${p.color}"></span><span style="flex:1">${p.seriesName}</span><span style="font-variant-numeric:tabular-nums;font-weight:600">${fmt(p.value)}</span></div>`)
+            .join('');
+          return `<div style="font-weight:700;margin-bottom:2px">${month}</div>${lines || '<div style="color:rgba(10,61,89,0.5)">No activity</div>'}`;
+        }
+      },
+      legend: useNet
+        ? {
+            data: ['Income', 'Spending'],
+            bottom: 0,
+            textStyle: { fontSize: 11, color: 'rgba(10,61,89,0.7)' },
+            itemWidth: 10,
+            itemHeight: 10
+          }
+        : { show: false },
+      grid: { top: 20, right: 8, bottom: useNet ? 28 : 20, left: 8, containLabel: true },
+      xAxis: {
+        type: 'category' as const,
+        data: xLabels,
+        axisTick: { show: false },
+        axisLine: { lineStyle: { color: 'rgba(10,61,89,0.12)' } },
+        axisLabel: {
+          color: (_v: string, idx: number) => idx === focusIdx ? '#0a3d59' : 'rgba(10,61,89,0.55)',
+          fontWeight: (_v: string, idx: number) => idx === focusIdx ? 700 : 500,
+          fontSize: 11,
+          letterSpacing: 0.5
+        }
+      },
+      yAxis: {
+        type: 'value' as const,
+        axisLabel: { show: false },
+        splitLine: { lineStyle: { type: 'dashed' as const, color: 'rgba(10,61,89,0.06)' } }
+      },
+      series
+    };
+  }
+
+  function mountChart() {
+    if (!chartContainer) return;
+    chart = echarts.init(chartContainer);
+    chart.setOption(buildChartOption());
+    chart.on('click', (params: { dataIndex: number }) => {
+      if (typeof params.dataIndex === 'number' && trendMonths[params.dataIndex]) {
+        focusMonth(trendMonths[params.dataIndex]);
+      }
+    });
+    chartObserver = new ResizeObserver(() => chart?.resize());
+    chartObserver.observe(chartContainer);
+  }
+
+  // Re-render whenever any input the chart depends on changes. ECharts'
+  // setOption is idempotent + diff-aware, so this is cheap.
+  $: if (chart && trendMonths) {
+    chart.setOption(buildChartOption(), { notMerge: true });
+  }
+
+  onMount(() => mountChart());
+  onDestroy(() => {
+    chartObserver?.disconnect();
+    chart?.dispose();
+    chart = null;
+  });
 </script>
 
 <section class="dossier">
@@ -483,56 +750,10 @@
       <p class="dossier-card-aux">Click a month to focus it</p>
     </div>
 
-    {#if trendMax === 0}
+    {#if trendMax === 0 && (dir !== 'net' || pairedMax === 0)}
       <p class="dossier-empty">No matching activity in the last year.</p>
     {:else}
-      <div class="trend-stage">
-        {#if rollingAvg > 0}
-          <div
-            class="trend-baseline"
-            style="bottom: calc(1.1rem + (100% - 2.15rem) * {rollingAvg / trendMax})"
-            aria-hidden="true"
-          >
-            <span>6-mo avg · {fmt(rollingAvg)}</span>
-          </div>
-        {/if}
-        <div class="trend-grid">
-          {#each trendMonths as m, i}
-            {@const v = trendDisplay[i]}
-            {@const vh = trendHighlightDisplay[i]}
-            {@const h = trendMax > 0 ? Math.max(2, (v / trendMax) * 100) : 2}
-            {@const hh = trendMax > 0 && hasHighlight && vh > 0 ? Math.max(2, (vh / trendMax) * 100) : 0}
-            {@const isFocus = i === trendFocusIndex}
-            {@const isCurrent = i === trendMonths.length - 1}
-            {@const labelV = hasHighlight ? vh : v}
-            {@const showLabel = (isFocus || (focusedTrendIndex < 0 && isCurrent) || labelV >= trendMax * 0.85) && labelV > 0}
-            {@const signedV = trendValues[i]}
-            {@const isNeg = dir === 'net' && signedV < 0}
-            <button
-              type="button"
-              class="trend-col"
-              class:is-focus={isFocus}
-              class:is-current={isCurrent}
-              class:is-dimmed={hasHighlight}
-              class:is-positive={dir === 'net' && signedV > 0}
-              class:is-negative={isNeg}
-              on:click={() => focusMonth(m)}
-              title={hasHighlight
-                ? `${monthTitle(m)} · ${fmt(vh)} matches “${filters.search}” of ${fmt(v)} total`
-                : `${monthTitle(m)} · ${dir === 'net' ? fmtSigned(signedV) : fmt(v)}`}
-              aria-label={`${monthTitle(m)} ${fmt(labelV)}`}
-            >
-              <span class="trend-amt">{showLabel ? fmt(labelV).replace(/\.\d+/, '') : ''}</span>
-              <span class="trend-bar" style="--h: {h}%">
-                {#if hasHighlight}
-                  <span class="trend-bar-fill" style="--hh: {h > 0 ? (hh / h) * 100 : 0}%"></span>
-                {/if}
-              </span>
-              <span class="trend-mo">{monthLabel(m)}</span>
-            </button>
-          {/each}
-        </div>
-      </div>
+      <div bind:this={chartContainer} class="trend-chart" aria-label="12-month trend chart"></div>
     {/if}
   </div>
 
@@ -842,86 +1063,10 @@
 
   /* TREND */
   .dossier-trend { position: relative; }
-  .trend-stage { position: relative; height: 11.5rem; margin-top: 0.5rem; }
-  .trend-grid {
-    position: absolute; inset: 0;
-    display: grid;
-    grid-template-columns: repeat(12, minmax(0, 1fr));
-    gap: 0.45rem;
-    align-items: end;
-    padding: 0 0.25rem;
-    z-index: 1;
-  }
-  .trend-col {
-    background: none; border: none; padding: 0; cursor: pointer;
-    display: grid; grid-template-rows: 1.05rem 1fr 1.1rem;
-    align-items: end; justify-items: center;
-    height: 100%; gap: 0.25rem;
-  }
-  .trend-amt {
-    font-size: 0.62rem; color: rgba(10, 61, 89, 0.4);
-    font-variant-numeric: tabular-nums; line-height: 1; align-self: end;
-    transition: color 0.18s, transform 0.18s;
-  }
-  .trend-bar {
-    width: 100%; max-width: 38px;
-    height: var(--h, 6%);
-    border-radius: 6px 6px 0 0;
-    background: linear-gradient(180deg, rgba(15, 95, 136, 0.28), rgba(10, 61, 89, 0.45));
-    transition: background 0.18s, transform 0.18s, box-shadow 0.18s;
-    align-self: end;
-    position: relative;
-    overflow: hidden;
-  }
-  /* Inner highlight bar for cross-filter overlay (search narrows totals).
-     Sits at the bottom of the outer bar; --hh is its height as % of outer. */
-  .trend-bar-fill {
-    position: absolute;
-    left: 0; right: 0; bottom: 0;
-    height: var(--hh, 0%);
-    background: linear-gradient(180deg, #0f5f88, #0a3d59);
-    border-radius: 6px 6px 0 0;
-    transition: height 0.18s;
-  }
-  /* When a highlight overlay is present, dim the outer bar so the matched
-     portion stands out visually without losing the surrounding context. */
-  .trend-col.is-dimmed .trend-bar {
-    background: linear-gradient(180deg, rgba(15, 95, 136, 0.12), rgba(10, 61, 89, 0.18));
-  }
-  /* In net mode, only call out *surplus* months in green — they're the
-     unusual signal. Deficit months keep the default teal so a credit card
-     register doesn't look like a sea of red, since net-negative is the
-     normal case there. */
-  .trend-col.is-positive:not(.is-focus):not(.is-dimmed) .trend-bar {
-    background: linear-gradient(180deg, rgba(13, 127, 88, 0.45), rgba(13, 127, 88, 0.7));
-  }
-  .trend-mo {
-    font-size: 0.7rem; color: rgba(10, 61, 89, 0.55);
-    letter-spacing: 0.04em; text-transform: uppercase; font-weight: 600;
-  }
-  .trend-col.is-focus .trend-bar {
-    background: linear-gradient(180deg, #0f5f88, #0a3d59);
-    box-shadow: 0 4px 14px rgba(10, 61, 89, 0.3);
-  }
-  .trend-col.is-focus .trend-amt { color: var(--brand-strong); font-weight: 700; transform: translateY(-2px); }
-  .trend-col.is-focus .trend-mo { color: var(--brand-strong); }
-  .trend-col.is-current:not(.is-focus) .trend-bar {
-    background: linear-gradient(180deg, rgba(173, 106, 0, 0.55), rgba(173, 106, 0, 0.85));
-  }
-  .trend-col:hover:not(.is-focus) .trend-bar {
-    background: linear-gradient(180deg, rgba(15, 95, 136, 0.55), rgba(10, 61, 89, 0.7));
-  }
-  .trend-baseline {
-    position: absolute; left: 0.25rem; right: 0.25rem;
-    border-top: 1px dashed rgba(10, 61, 89, 0.4);
-    pointer-events: none; z-index: 2;
-  }
-  .trend-baseline span {
-    position: absolute; top: -0.7rem; right: 0;
-    background: rgba(255, 255, 255, 0.95);
-    padding: 0 0.45rem; font-size: 0.7rem;
-    color: rgba(10, 61, 89, 0.65); font-weight: 600;
-    border-radius: 4px;
+  .trend-chart {
+    width: 100%;
+    height: 13.5rem;
+    margin-top: 0.5rem;
   }
 
   /* GRID */
