@@ -168,7 +168,7 @@
 		</nav>
 	</aside>
 
-	<main class="grid min-w-0 gap-4"><slot /></main>
+	<main class="grid grid-cols-1 min-w-0 gap-4"><slot /></main>
 </div>
 
 <!-- Mobile nav drawer (slide-in from the left). bits-ui handles backdrop
