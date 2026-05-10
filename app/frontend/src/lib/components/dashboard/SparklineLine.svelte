@@ -12,7 +12,7 @@
     .join(' ');
 </script>
 
-<svg viewBox="0 0 {w} {h}" class="h-4 w-full" preserveAspectRatio="none">
+<svg viewBox="0 0 {w} {h}" class="h-4 w-full overflow-visible" preserveAspectRatio="none">
   <polyline
     {points}
     fill="none"
