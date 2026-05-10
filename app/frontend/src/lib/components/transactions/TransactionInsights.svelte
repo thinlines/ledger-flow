@@ -751,8 +751,17 @@
           filters.search];
     const sig = dir;
     const structureChanged = lastChartSig !== null && lastChartSig !== sig;
+    const opt = buildChartOption();
+    if (structureChanged) {
+      // Disable the entry animation so the new series snap straight to
+      // their final geometry instead of growing in from zero (the "flash"
+      // the user reports). The dir transition is conceptually a major view
+      // change, so an instant switch reads better than a re-grow. Updates
+      // within the new structure still animate via animationDurationUpdate.
+      opt.animationDuration = 0;
+    }
     chart.setOption(
-      buildChartOption(),
+      opt,
       structureChanged ? { replaceMerge: ['series'] } : {}
     );
     lastChartSig = sig;
