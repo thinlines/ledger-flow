@@ -8,16 +8,15 @@
   import TransactionDayGroup from '$lib/components/transactions/TransactionDayGroup.svelte';
   import TransactionRow from '$lib/components/transactions/TransactionRow.svelte';
   import TransactionDetailSheet from '$lib/components/transactions/TransactionDetailSheet.svelte';
-  import TransactionsExplanationHeader from '$lib/components/transactions/TransactionsExplanationHeader.svelte';
-  import CategoryInsights from '$lib/components/transactions/CategoryInsights.svelte';
+  import TransactionInsights from '$lib/components/transactions/TransactionInsights.svelte';
+  import AccountStatusStrip from '$lib/components/transactions/AccountStatusStrip.svelte';
   import TransactionsFilterBar from '$lib/components/transactions/TransactionsFilterBar.svelte';
   import TransactionsFilterDialog from '$lib/components/transactions/TransactionsFilterDialog.svelte';
-  import { describeBalanceTrust } from '$lib/account-trust';
   import type {
     TrackedAccount, TransactionRow as TxRow, TransactionsResponse,
     TransactionFilters, ManualResolutionApplyResult
   } from '$lib/transactions/types';
-  import { formatCurrency, formatStoredAmount, shortDate, countLabel, type AccountKind } from '$lib/format';
+  import { formatCurrency, shortDate, type AccountKind } from '$lib/format';
   import { groupByDate, CLEARING_TOOLTIPS } from '$lib/transactions/helpers';
   import { filtersFromUrl, filtersToUrl, EMPTY_FILTERS } from '$lib/transactions/transactionFilters';
   import { loadTransactions } from '$lib/transactions/loadTransactions';
@@ -60,48 +59,57 @@
   let filterBarWrap: HTMLElement | null = null;
   let filterBarObserver: ResizeObserver | null = null;
 
-  // Display name for a category leaf — "Expenses:Eating Out" → "Eating Out"
-  function categoryLeaf(cat: string | null): string {
-    if (!cat) return '';
-    const parts = cat.split(':').filter(Boolean);
-    return parts[parts.length - 1] ?? cat;
+  // History rows feed the trend chart. Two datasets so the chart can render
+  // a Power-BI cross-filter highlight when a search narrows the visible list:
+  //   historyRows         — every active filter EXCEPT period/month/search
+  //                         (the outer faded bars; preserves chart context)
+  //   historyRowsHighlight — every active filter EXCEPT period/month
+  //                         (search applied; the inner solid overlay)
+  // Both intentionally drop period/month so the 12-month shape is stable
+  // when the user focuses a single month.
+  let historyRows: TxRow[] = [];
+  let historyRowsHighlight: TxRow[] = [];
+  let historyKey = '';
+
+  function buildHistoryParams(f: TransactionFilters, includeSearch: boolean): string {
+    const params = new URLSearchParams();
+    if (f.accounts.length > 0) params.set('accounts', f.accounts.join(','));
+    if (f.category) params.set('categories', f.category);
+    if (f.status) params.set('status', f.status);
+    if (includeSearch && f.search) params.set('search', f.search);
+    return params.toString();
   }
 
-  // All-time history rows for the active category — fed into CategoryInsights
-  // so the trend chart and 6-month baseline have data even when the in-view
-  // filter is narrowed to a single month.
-  let categoryHistoryRows: TxRow[] = [];
-  let categoryHistoryLoading = false;
-  let categoryHistoryKey = '';
-
-  async function loadCategoryHistory(category: string) {
-    const key = category;
-    categoryHistoryKey = key;
-    categoryHistoryLoading = true;
+  async function loadHistory(f: TransactionFilters) {
+    // Cache key over everything that *changes* the history datasets. Period
+    // and month are deliberately omitted — that's the whole point.
+    const key = `${f.accounts.join(',')}|${f.category ?? ''}|${f.status ?? ''}|${f.search ?? ''}`;
+    if (historyKey === key) return;
+    historyKey = key;
     try {
-      const params = new URLSearchParams();
-      params.set('categories', category);
-      const res = await fetch(`/api/transactions?${params.toString()}`);
-      if (!res.ok) throw new Error(await res.text());
-      const data = (await res.json()) as TransactionsResponse;
-      if (categoryHistoryKey !== key) return;
-      categoryHistoryRows = data.rows;
+      const baseParams = buildHistoryParams(f, false);
+      const fetches: Promise<TransactionsResponse>[] = [
+        fetch(`/api/transactions${baseParams ? `?${baseParams}` : ''}`).then((r) => r.json())
+      ];
+      if (f.search) {
+        const hlParams = buildHistoryParams(f, true);
+        fetches.push(fetch(`/api/transactions${hlParams ? `?${hlParams}` : ''}`).then((r) => r.json()));
+      }
+      const results = await Promise.all(fetches);
+      if (historyKey !== key) return;
+      historyRows = results[0].rows;
+      historyRowsHighlight = f.search && results[1] ? results[1].rows : results[0].rows;
     } catch {
-      if (categoryHistoryKey === key) categoryHistoryRows = [];
-    } finally {
-      if (categoryHistoryKey === key) categoryHistoryLoading = false;
+      if (historyKey === key) {
+        historyRows = [];
+        historyRowsHighlight = [];
+      }
     }
   }
 
-  $: if (filters.category) {
-    if (categoryHistoryKey !== filters.category) void loadCategoryHistory(filters.category);
-  } else {
-    categoryHistoryRows = [];
-    categoryHistoryKey = '';
-  }
+  $: void loadHistory(filters);
 
   $: isSingleAccount = filters.accounts.length === 1;
-  $: isCategoryDrill = !isSingleAccount && !!filters.category;
   $: selectedAccount = isSingleAccount ? trackedAccounts.find((a) => a.id === filters.accounts[0]) ?? null : null;
   $: accountKindById = buildAccountKindMap(trackedAccounts);
   // Single-account view drives the filtered-account kind; cross-account views
@@ -119,10 +127,6 @@
   $: curBal = meta?.currentBalance ?? null;
   $: balPending = curBal !== null ? curBal + pendingTotal : null;
   $: showRunBal = isSingleAccount;
-  // Old explanation header now suppressed for category drill-throughs — the
-  // richer CategoryInsights component takes over.
-  $: showExpl = !isSingleAccount && !filters.category && result?.summary != null;
-  $: explTxs = postedRows.map(toExplTx);
 
   function buildAccountKindMap(accounts: TrackedAccount[]): Map<string, AccountKind> {
     const map = new Map<string, AccountKind>();
@@ -138,23 +142,8 @@
     return accountKindById.get(row.account.id) ?? null;
   }
 
-  function toExplTx(r: TxRow) {
-    return {
-      date: r.date, payee: r.payee, accountLabel: r.account.label,
-      importAccountId: r.account.id, category: r.categories[0]?.label ?? '',
-      categoryAccount: r.categories[0]?.account ?? '', amount: r.amount,
-      isIncome: r.amount > 0, isUnknown: r.isUnknown,
-    };
-  }
-
-  function trust() {
-    if (!selectedAccount || !meta) return null;
-    return describeBalanceTrust({
-      hasOpeningBalance: meta.hasOpeningBalance, hasTransactionActivity: meta.hasTransactionActivity,
-      hasBalanceSource: meta.hasBalanceSource, importConfigured: selectedAccount.importConfigured,
-      openingBalanceDate: selectedAccount.openingBalanceDate, latestActivityDate: meta.latestActivityDate,
-    });
-  }
+  // (legacy hero/trust helpers removed — superseded by the unified dossier
+  // and AccountStatusStrip components.)
 
   async function loadData() {
     if (abortController) abortController.abort();
@@ -194,7 +183,17 @@
       const ids = new Set(trackedAccounts.map((a) => a.id));
       filters = { ...filters, accounts: filters.accounts.filter((id: string) => ids.has(id)) };
     }
-    if (migrated) void goto(`/transactions${filtersToUrl(filters)}`, { replaceState: true, noScroll: true, keepFocus: true });
+    // Default the sidebar entry (no filters at all) to "this month" so users
+    // arrive on a meaningful slice of activity instead of an unbounded list.
+    let defaultedPeriod = false;
+    if (
+      filters.accounts.length === 0 && !filters.category && !filters.month &&
+      !filters.period && !filters.search && !filters.status
+    ) {
+      filters = { ...filters, period: 'this-month' };
+      defaultedPeriod = true;
+    }
+    if (migrated || defaultedPeriod) void goto(`/transactions${filtersToUrl(filters)}`, { replaceState: true, noScroll: true, keepFocus: true });
     await loadData();
   }
 
@@ -318,68 +317,29 @@
     </div>
   </section>
 {:else}
-  {#if !isCategoryDrill}
-    <section class="view-card transactions-hero">
-      <div class="grid gap-3">
-        <p class="eyebrow">Transactions</p>
-        {#if isSingleAccount && selectedAccount}
-          <h2 class="page-title">{selectedAccount.displayName}</h2>
-          <p class="subtitle">{trust()?.note || 'Review recent activity and running balances for this account.'}</p>
-          {#if selectedAccount.openingBalance}
-            <p class="text-muted-foreground text-sm">Starting balance {formatStoredAmount(selectedAccount.openingBalance, baseCurrency)}{#if selectedAccount.openingBalanceDate}{' '}on {shortDate(selectedAccount.openingBalanceDate)}{/if}</p>
-          {/if}
-        {:else}
-          <h2 class="page-title">All activity</h2>
-          <p class="subtitle">Cross-account transactions across all tracked accounts.</p>
-        {/if}
-      </div>
-      {#if isSingleAccount}
-        <div class="hero-side">
-          <div class="flex flex-wrap gap-3">
-            {#if filteredAccountKind && selectedAccount}
-              <button
-                class="btn btn-primary"
-                type="button"
-                on:click={() => void goto(`/accounts/${encodeURIComponent(selectedAccount.id)}/reconcile`)}
-              >
-                Reconcile
-              </button>
-            {/if}
-            <button class="btn" type="button" on:click={() => { addSuccess = ''; showAddForm = true; }}>Add transaction</button>
-            <a class="text-link" href="/accounts">Back to accounts</a>
-          </div>
-        </div>
-      {/if}
-    </section>
-  {/if}
-
   <div class="filter-bar-sticky sticky top-0 z-10" bind:this={filterBarWrap}>
     <TransactionsFilterBar {filters} {trackedAccounts} onChange={changeFilters} onOpenFilterDialog={() => (filterDialogOpen = true)} />
   </div>
 
-  {#if isSingleAccount && meta}
-    <section class="grid gap-4 grid-cols-[repeat(auto-fit,minmax(15rem,1fr))] max-shell:grid-cols-1">
-      <article class="view-card grid gap-1.5">
-        <p class="eyebrow">Balance coverage</p>
-        <p class="font-display text-2xl leading-none">{trust()?.label || 'No balance yet'}</p>
-        <p class="text-muted-foreground text-sm">{trust()?.note || 'Add activity or a starting balance.'}</p>
-      </article>
-      <article class="view-card summary-balance-card grid gap-1.5">
-        <p class="eyebrow">Current balance</p>
-        <p class:positive={(curBal ?? 0) > 0} class:negative={(curBal ?? 0) < 0} class="font-display text-2xl leading-none">{formatCurrency(curBal, baseCurrency)}</p>
-        <p class="text-muted-foreground text-sm">{selectedAccount?.institutionDisplayName || 'Tracked account'}{#if selectedAccount?.last4} &bull; {selectedAccount.last4}{/if}</p>
-      </article>
-      <article class="view-card summary-balance-pending grid gap-1.5">
-        <p class="eyebrow">Balance with pending</p>
-        <p class:positive={(balPending ?? 0) > 0} class:negative={(balPending ?? 0) < 0} class="font-display text-2xl leading-none">{formatCurrency(balPending, baseCurrency)}</p>
-        <p class="text-muted-foreground text-sm">{#if pendingCount > 0}{countLabel(pendingCount, 'pending transfer')} worth {formatCurrency(pendingTotal, baseCurrency, { signed: true })}.{:else}Matches current balance when nothing is pending.{/if}</p>
-      </article>
-      <article class="view-card grid gap-1.5">
-        <p class="eyebrow">Latest activity</p>
-        <p class="font-display text-2xl leading-none">{meta.latestTransactionDate ? shortDate(meta.latestTransactionDate) : 'No activity yet'}</p>
-        <p class="text-muted-foreground text-sm">{meta.latestTransactionDate ? `Posted to this ${selectedAccount?.kind || 'account'} register.` : 'Posted activity will appear after first import.'}</p>
-      </article>
-    </section>
+  <TransactionInsights
+    {filters}
+    {historyRows}
+    {historyRowsHighlight}
+    currentRows={postedRows}
+    {trackedAccounts}
+    {accountKindById}
+    {baseCurrency}
+  />
+
+  {#if isSingleAccount && selectedAccount && meta}
+    <AccountStatusStrip
+      account={selectedAccount}
+      {meta}
+      {baseCurrency}
+      {pendingCount}
+      {pendingTotal}
+      onAddTransaction={() => { addSuccess = ''; showAddForm = true; }}
+    />
   {/if}
 
   {#if manualResolutionSuccess}
@@ -399,21 +359,6 @@
 
   {#if showAddForm && isSingleAccount}
     <AddTransactionForm selectedAccountId={filters.accounts[0]} {allAccounts} onCancel={() => (showAddForm = false)} onSuccess={handleAddSuccess} onAccountsChanged={(a) => (allAccounts = a)} />
-  {/if}
-
-  {#if showExpl && result?.summary}
-    <TransactionsExplanationHeader summary={result.summary} category={filters.category} month={filters.month} transactions={explTxs} {baseCurrency} />
-  {/if}
-
-  {#if isCategoryDrill && filters.category}
-    <CategoryInsights
-      category={filters.category}
-      month={filters.month}
-      period={filters.period}
-      historyRows={categoryHistoryRows}
-      currentRows={postedRows}
-      {baseCurrency}
-    />
   {/if}
 
   {#if isSingleAccount && pendingCount > 0}
