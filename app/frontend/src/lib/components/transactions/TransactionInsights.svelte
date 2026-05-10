@@ -474,14 +474,20 @@
   const COLOR_INCOME = '#1d9f6e';
   const COLOR_SPENDING = '#0a3d59';
   const COLOR_FOCUS_RING = '#ad6a00';
+  // Cross-filter "context" fill — neutral gray so the matched portion (drawn
+  // on top in the brand color) clearly pops. Same-hue + opacity didn't read:
+  // ECharts per-data itemStyle overrides series-level styling, so the bars
+  // stayed at full saturation and looked like a single stacked bar.
+  const COLOR_CONTEXT = '#d8dee5';
 
   function buildChartOption() {
     const xLabels = trendMonths.map((m) => monthLabel(m));
     const focusIdx = focusedTrendIndex >= 0 ? focusedTrendIndex : trendMonths.length - 1;
     const useNet = dir === 'net';
 
-    // Per-bar opacity helper — focused month at full opacity, others slightly
-    // dimmed when a focus exists at all.
+    // Per-bar styling helper. When a search is active, outer "context" bars
+    // get a gray fill so the inner (matched) brand-colored bars read as
+    // distinct from the unmatched remainder.
     const dataWithFocus = (vals: number[], color: string) => vals.map((v, i) => ({
       value: v,
       itemStyle: {
@@ -491,73 +497,101 @@
       }
     }));
 
-    const baseSeries = useNet
-      ? [
+    // Per-bar styling for stacked segments. The "match" segment uses square
+    // top corners since the unmatched remainder sits on top of it; only the
+    // top-of-stack segment gets the rounded top.
+    const dataFlatTop = (vals: number[], color: string) => vals.map((v, i) => ({
+      value: v,
+      itemStyle: {
+        color,
+        borderRadius: 0,
+        opacity: focusedTrendIndex >= 0 && i !== focusIdx ? 0.55 : 1
+      }
+    }));
+    const subtract = (a: number[], b: number[]) =>
+      a.map((v, i) => Math.max(0, v - (b[i] ?? 0)));
+
+    let series: Array<Record<string, unknown>>;
+    if (hasHighlight) {
+      // Stacked layout: each bar shows matched portion (brand color, bottom)
+      // + unmatched remainder (gray, top), summing to the total. Same paired
+      // two-bar layout per month in net mode (Income | Spending), one bar in
+      // single-direction mode. Reading "what portion of spending matched"
+      // = "how tall is the colored chunk vs the gray chunk on the spending
+      // bar."
+      if (useNet) {
+        series = [
           {
-            name: 'Income',
-            type: 'bar' as const,
-            cursor: 'pointer',
-            data: dataWithFocus(paired.income, COLOR_INCOME),
-            ...(hasHighlight ? { itemStyle: { opacity: 0.25 } } : {})
+            name: 'Income · match',
+            type: 'bar' as const, cursor: 'pointer',
+            stack: 'income', color: COLOR_INCOME,
+            data: dataFlatTop(pairedHighlight.income, COLOR_INCOME)
           },
           {
-            name: 'Spending',
-            type: 'bar' as const,
-            cursor: 'pointer',
-            data: dataWithFocus(paired.spending, COLOR_SPENDING),
-            ...(hasHighlight ? { itemStyle: { opacity: 0.25 } } : {})
-          }
-        ]
-      : [
+            name: 'Income · other',
+            type: 'bar' as const, cursor: 'pointer',
+            stack: 'income', color: COLOR_CONTEXT,
+            data: dataWithFocus(subtract(paired.income, pairedHighlight.income), COLOR_CONTEXT)
+          },
           {
-            name: dir === 'income' ? 'Received' : 'Spent',
-            type: 'bar' as const,
-            cursor: 'pointer',
-            data: dataWithFocus(trendDisplay, dir === 'income' ? COLOR_INCOME : COLOR_SPENDING),
-            ...(hasHighlight ? { itemStyle: { opacity: 0.25 } } : {})
+            name: 'Spending · match',
+            type: 'bar' as const, cursor: 'pointer',
+            stack: 'spending', color: COLOR_SPENDING,
+            data: dataFlatTop(pairedHighlight.spending, COLOR_SPENDING)
+          },
+          {
+            name: 'Spending · other',
+            type: 'bar' as const, cursor: 'pointer',
+            stack: 'spending', color: COLOR_CONTEXT,
+            data: dataWithFocus(subtract(paired.spending, pairedHighlight.spending), COLOR_CONTEXT)
           }
         ];
-
-    // When a search narrows the result, overlay solid inner bars showing
-    // the matched portion. barGap '-100%' makes them sit on top of the
-    // outer bars rather than beside them.
-    const highlightSeries = hasHighlight
-      ? (useNet
-          ? [
-              {
-                name: 'Income (match)',
-                type: 'bar' as const,
-                cursor: 'pointer',
-                barGap: '-100%',
-                z: 3,
-                data: dataWithFocus(pairedHighlight.income, COLOR_INCOME)
-              },
-              {
-                name: 'Spending (match)',
-                type: 'bar' as const,
-                cursor: 'pointer',
-                barGap: '-100%',
-                z: 3,
-                data: dataWithFocus(pairedHighlight.spending, COLOR_SPENDING)
-              }
-            ]
-          : [
-              {
-                name: 'Match',
-                type: 'bar' as const,
-                cursor: 'pointer',
-                barGap: '-100%',
-                z: 3,
-                data: dataWithFocus(trendHighlightDisplay, dir === 'income' ? COLOR_INCOME : COLOR_SPENDING)
-              }
-            ])
-      : [];
+      } else {
+        const brand = dir === 'income' ? COLOR_INCOME : COLOR_SPENDING;
+        const totalLabel = dir === 'income' ? 'Received · other' : 'Spent · other';
+        series = [
+          {
+            name: 'Match',
+            type: 'bar' as const, cursor: 'pointer',
+            stack: 'value', color: brand,
+            data: dataFlatTop(trendHighlightDisplay, brand)
+          },
+          {
+            name: totalLabel,
+            type: 'bar' as const, cursor: 'pointer',
+            stack: 'value', color: COLOR_CONTEXT,
+            data: dataWithFocus(subtract(trendDisplay, trendHighlightDisplay), COLOR_CONTEXT)
+          }
+        ];
+      }
+    } else {
+      series = useNet
+        ? [
+            {
+              name: 'Income',
+              type: 'bar' as const, cursor: 'pointer', color: COLOR_INCOME,
+              data: dataWithFocus(paired.income, COLOR_INCOME)
+            },
+            {
+              name: 'Spending',
+              type: 'bar' as const, cursor: 'pointer', color: COLOR_SPENDING,
+              data: dataWithFocus(paired.spending, COLOR_SPENDING)
+            }
+          ]
+        : [
+            {
+              name: dir === 'income' ? 'Received' : 'Spent',
+              type: 'bar' as const, cursor: 'pointer',
+              color: dir === 'income' ? COLOR_INCOME : COLOR_SPENDING,
+              data: dataWithFocus(trendDisplay, dir === 'income' ? COLOR_INCOME : COLOR_SPENDING)
+            }
+          ];
+    }
 
     // Markline(s) for the 6-month rolling baseline. In net mode we draw
     // two distinct color-matched lines so the user can tell income avg
     // from spending avg at a glance. In single-direction mode one line
     // suffices and matches the bar color.
-    const series = [...baseSeries, ...highlightSeries];
     if (series.length > 0) {
       const baseLineStyle = (color: string) => ({
         color, type: 'dashed' as const, width: 1, opacity: 0.7
@@ -626,14 +660,24 @@
       },
       legend: useNet
         ? {
-            data: ['Income', 'Spending'],
+            data: hasHighlight
+              ? ['Income · match', 'Income · other', 'Spending · match', 'Spending · other']
+              : ['Income', 'Spending'],
             bottom: 0,
             textStyle: { fontSize: 11, color: 'rgba(10,61,89,0.7)' },
             itemWidth: 10,
             itemHeight: 10
           }
-        : { show: false },
-      grid: { top: 20, right: 8, bottom: useNet ? 28 : 20, left: 8, containLabel: true },
+        : (hasHighlight
+            ? {
+                data: ['Match', dir === 'income' ? 'Received · other' : 'Spent · other'],
+                bottom: 0,
+                textStyle: { fontSize: 11, color: 'rgba(10,61,89,0.7)' },
+                itemWidth: 10,
+                itemHeight: 10
+              }
+            : { show: false }),
+      grid: { top: 20, right: 8, bottom: (useNet || hasHighlight) ? 28 : 20, left: 8, containLabel: true },
       xAxis: {
         type: 'category' as const,
         data: xLabels,
