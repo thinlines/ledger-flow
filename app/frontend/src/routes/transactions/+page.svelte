@@ -9,6 +9,7 @@
   import TransactionRow from '$lib/components/transactions/TransactionRow.svelte';
   import TransactionDetailSheet from '$lib/components/transactions/TransactionDetailSheet.svelte';
   import TransactionsExplanationHeader from '$lib/components/transactions/TransactionsExplanationHeader.svelte';
+  import CategoryInsights from '$lib/components/transactions/CategoryInsights.svelte';
   import TransactionsFilterBar from '$lib/components/transactions/TransactionsFilterBar.svelte';
   import TransactionsFilterDialog from '$lib/components/transactions/TransactionsFilterDialog.svelte';
   import { describeBalanceTrust } from '$lib/account-trust';
@@ -59,7 +60,48 @@
   let filterBarWrap: HTMLElement | null = null;
   let filterBarObserver: ResizeObserver | null = null;
 
+  // Display name for a category leaf — "Expenses:Eating Out" → "Eating Out"
+  function categoryLeaf(cat: string | null): string {
+    if (!cat) return '';
+    const parts = cat.split(':').filter(Boolean);
+    return parts[parts.length - 1] ?? cat;
+  }
+
+  // All-time history rows for the active category — fed into CategoryInsights
+  // so the trend chart and 6-month baseline have data even when the in-view
+  // filter is narrowed to a single month.
+  let categoryHistoryRows: TxRow[] = [];
+  let categoryHistoryLoading = false;
+  let categoryHistoryKey = '';
+
+  async function loadCategoryHistory(category: string) {
+    const key = category;
+    categoryHistoryKey = key;
+    categoryHistoryLoading = true;
+    try {
+      const params = new URLSearchParams();
+      params.set('categories', category);
+      const res = await fetch(`/api/transactions?${params.toString()}`);
+      if (!res.ok) throw new Error(await res.text());
+      const data = (await res.json()) as TransactionsResponse;
+      if (categoryHistoryKey !== key) return;
+      categoryHistoryRows = data.rows;
+    } catch {
+      if (categoryHistoryKey === key) categoryHistoryRows = [];
+    } finally {
+      if (categoryHistoryKey === key) categoryHistoryLoading = false;
+    }
+  }
+
+  $: if (filters.category) {
+    if (categoryHistoryKey !== filters.category) void loadCategoryHistory(filters.category);
+  } else {
+    categoryHistoryRows = [];
+    categoryHistoryKey = '';
+  }
+
   $: isSingleAccount = filters.accounts.length === 1;
+  $: isCategoryDrill = !isSingleAccount && !!filters.category;
   $: selectedAccount = isSingleAccount ? trackedAccounts.find((a) => a.id === filters.accounts[0]) ?? null : null;
   $: accountKindById = buildAccountKindMap(trackedAccounts);
   // Single-account view drives the filtered-account kind; cross-account views
@@ -77,7 +119,9 @@
   $: curBal = meta?.currentBalance ?? null;
   $: balPending = curBal !== null ? curBal + pendingTotal : null;
   $: showRunBal = isSingleAccount;
-  $: showExpl = !isSingleAccount && result?.summary != null;
+  // Old explanation header now suppressed for category drill-throughs — the
+  // richer CategoryInsights component takes over.
+  $: showExpl = !isSingleAccount && !filters.category && result?.summary != null;
   $: explTxs = postedRows.map(toExplTx);
 
   function buildAccountKindMap(accounts: TrackedAccount[]): Map<string, AccountKind> {
@@ -274,38 +318,40 @@
     </div>
   </section>
 {:else}
-  <section class="view-card transactions-hero">
-    <div class="grid gap-3">
-      <p class="eyebrow">Transactions</p>
-      {#if isSingleAccount && selectedAccount}
-        <h2 class="page-title">{selectedAccount.displayName}</h2>
-        <p class="subtitle">{trust()?.note || 'Review recent activity and running balances for this account.'}</p>
-        {#if selectedAccount.openingBalance}
-          <p class="text-muted-foreground text-sm">Starting balance {formatStoredAmount(selectedAccount.openingBalance, baseCurrency)}{#if selectedAccount.openingBalanceDate}{' '}on {shortDate(selectedAccount.openingBalanceDate)}{/if}</p>
-        {/if}
-      {:else}
-        <h2 class="page-title">All activity</h2>
-        <p class="subtitle">Cross-account transactions across all tracked accounts.</p>
-      {/if}
-    </div>
-    {#if isSingleAccount}
-      <div class="hero-side">
-        <div class="flex flex-wrap gap-3">
-          {#if filteredAccountKind && selectedAccount}
-            <button
-              class="btn btn-primary"
-              type="button"
-              on:click={() => void goto(`/accounts/${encodeURIComponent(selectedAccount.id)}/reconcile`)}
-            >
-              Reconcile
-            </button>
+  {#if !isCategoryDrill}
+    <section class="view-card transactions-hero">
+      <div class="grid gap-3">
+        <p class="eyebrow">Transactions</p>
+        {#if isSingleAccount && selectedAccount}
+          <h2 class="page-title">{selectedAccount.displayName}</h2>
+          <p class="subtitle">{trust()?.note || 'Review recent activity and running balances for this account.'}</p>
+          {#if selectedAccount.openingBalance}
+            <p class="text-muted-foreground text-sm">Starting balance {formatStoredAmount(selectedAccount.openingBalance, baseCurrency)}{#if selectedAccount.openingBalanceDate}{' '}on {shortDate(selectedAccount.openingBalanceDate)}{/if}</p>
           {/if}
-          <button class="btn" type="button" on:click={() => { addSuccess = ''; showAddForm = true; }}>Add transaction</button>
-          <a class="text-link" href="/accounts">Back to accounts</a>
-        </div>
+        {:else}
+          <h2 class="page-title">All activity</h2>
+          <p class="subtitle">Cross-account transactions across all tracked accounts.</p>
+        {/if}
       </div>
-    {/if}
-  </section>
+      {#if isSingleAccount}
+        <div class="hero-side">
+          <div class="flex flex-wrap gap-3">
+            {#if filteredAccountKind && selectedAccount}
+              <button
+                class="btn btn-primary"
+                type="button"
+                on:click={() => void goto(`/accounts/${encodeURIComponent(selectedAccount.id)}/reconcile`)}
+              >
+                Reconcile
+              </button>
+            {/if}
+            <button class="btn" type="button" on:click={() => { addSuccess = ''; showAddForm = true; }}>Add transaction</button>
+            <a class="text-link" href="/accounts">Back to accounts</a>
+          </div>
+        </div>
+      {/if}
+    </section>
+  {/if}
 
   <div class="filter-bar-sticky sticky top-0 z-10" bind:this={filterBarWrap}>
     <TransactionsFilterBar {filters} {trackedAccounts} onChange={changeFilters} onOpenFilterDialog={() => (filterDialogOpen = true)} />
@@ -357,6 +403,17 @@
 
   {#if showExpl && result?.summary}
     <TransactionsExplanationHeader summary={result.summary} category={filters.category} month={filters.month} transactions={explTxs} {baseCurrency} />
+  {/if}
+
+  {#if isCategoryDrill && filters.category}
+    <CategoryInsights
+      category={filters.category}
+      month={filters.month}
+      period={filters.period}
+      historyRows={categoryHistoryRows}
+      currentRows={postedRows}
+      {baseCurrency}
+    />
   {/if}
 
   {#if isSingleAccount && pendingCount > 0}

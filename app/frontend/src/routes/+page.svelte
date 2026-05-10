@@ -752,6 +752,7 @@
       categories={categoryBreakdown}
       sparklineData={categorySparklineData}
       {formatCurrency}
+      focusedMonth={focusedPeriod}
     />
   </section>
 

@@ -8,13 +8,23 @@
   }>;
   export let sparklineData: Map<string, number[]>;
   export let formatCurrency: (value: number) => string;
+  // Optional focused month (YYYY-MM). When set, the drill-through carries it
+  // forward so users see "Eating Out · April" instead of all-time Eating Out.
+  export let focusedMonth: string | null = null;
+
+  function categoryHref(cat: string): string {
+    const params = new URLSearchParams();
+    params.set('category', cat);
+    if (focusedMonth) params.set('month', focusedMonth);
+    return `/transactions?${params.toString()}`;
+  }
 </script>
 
 {#if categories.length > 0}
   <div class="ribbon-scroll flex gap-3 overflow-x-auto pb-2" style="scroll-snap-type: x mandatory; -webkit-overflow-scrolling: touch;">
     {#each categories as row}
       <a
-        href={`/transactions?category=${encodeURIComponent(row.category)}`}
+        href={categoryHref(row.category)}
         class="ribbon-chip flex-none rounded-xl border border-card-edge bg-white/80 px-4 py-3 no-underline text-inherit transition-all hover:-translate-y-px hover:border-[rgba(15,95,136,0.3)] hover:shadow-md"
         style="scroll-snap-align: start; min-width: 140px; max-width: 180px;"
       >
