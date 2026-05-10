@@ -222,6 +222,21 @@
   function fmtSigned(amount: number): string {
     return formatCurrency(amount, baseCurrency, { signMode: 'always' });
   }
+  // Unsigned for "bad-direction" changes, "+$X" green for "good-direction"
+  // changes — the existing app-wide convention. Used for the big NET amount
+  // and the 12-month NET KPI when we know the account kind.
+  function fmtKindAware(amount: number, kind: AccountKind | null): string {
+    if (kind === null) return fmtSigned(amount);
+    return formatCurrency(amount, baseCurrency, { signMode: 'good-change-plus', accountKind: kind });
+  }
+  // Tone class for kind-aware amounts: matches goodChangeTone() — positive
+  // amount on either kind is a "good change" (green), everything else is
+  // neutral. We don't paint bad-direction amounts red here; the unsigned
+  // rendering itself already encodes "this is the normal/expected direction."
+  function kindToneClass(amount: number, kind: AccountKind | null): string {
+    if (kind === null) return amount < 0 ? 'fig-neg' : '';
+    return amount > 0 ? 'fig-pos' : '';
+  }
 
   function clearMonth() {
     const params = new URLSearchParams(window.location.search);
@@ -239,6 +254,12 @@
   $: subject = pickSubject(filters);
   $: contextChips = pickContextChips(filters);
   $: dir = directionFor(filters);
+  // When exactly one account is filtered we know whether "good" means up
+  // (asset) or down (liability), which lets us apply the existing
+  // unsigned/green-plus convention consistently across the dossier.
+  $: filteredAccountKind = filters.accounts.length === 1
+    ? (accountKindById.get(filters.accounts[0]) ?? null)
+    : null;
 
   // In net mode (no category filter) the dossier reports P&L, so exclude
   // anything that isn't real income/expense activity: transfers between
@@ -279,9 +300,32 @@
   $: priorMonth = filters.month ? previousMonth(filters.month) : null;
   $: priorMonthIndex = priorMonth ? trendMonths.indexOf(priorMonth) : -1;
   $: priorMonthValue = priorMonthIndex >= 0 ? trendHighlightValues[priorMonthIndex] : null;
-  $: deltaVsPrior = priorMonthValue !== null && priorMonthValue !== 0
-    ? ((currentTotal - priorMonthValue) / Math.abs(priorMonthValue)) * 100
-    : null;
+
+  // "Spending lens": present the slice as "how much was spent" rather than
+  // "how much was netted." Expense categories always read this way; net mode
+  // on a liability does too (charges are the dominant story); and net mode
+  // with no kind context falls into spending lens when the current total is
+  // negative (you spent more than you took in). In spending lens, the
+  // up/down arrow follows |amount| direction so "down 68%" reads naturally
+  // as "spent 68% less" instead of the signed delta which would read "up
+  // 68%" because -200 > -600 numerically.
+  $: spendingLens = dir === 'expense'
+    || (dir === 'net' && filteredAccountKind === 'liability')
+    || (dir === 'net' && filteredAccountKind === null && currentTotal < 0);
+
+  // deltaForUser is what the arrow + percentage display: in spending lens,
+  // compare magnitudes; otherwise compare signed values.
+  $: deltaForUser = (() => {
+    if (priorMonthValue === null || priorMonthValue === 0) return null;
+    if (spendingLens) {
+      const cur = Math.abs(currentTotal);
+      const prior = Math.abs(priorMonthValue);
+      if (prior === 0) return null;
+      return ((cur - prior) / prior) * 100;
+    }
+    return ((currentTotal - priorMonthValue) / Math.abs(priorMonthValue)) * 100;
+  })();
+  $: deltaVsPrior = deltaForUser;
 
   $: rollingMonths = filters.month
     ? trendMonths.filter((m) => m !== filters.month).slice(-6)
@@ -314,13 +358,19 @@
 
   $: gist = (() => {
     if (currentCount === 0) return 'No transactions match these filters yet.';
-    const verb = dir === 'expense' ? 'spent' : dir === 'income' ? 'received' : (currentTotal >= 0 ? 'netted' : 'spent net');
+    const verb = dir === 'expense' || spendingLens
+      ? 'spent'
+      : dir === 'income'
+        ? 'received'
+        : (currentTotal >= 0 ? 'netted' : 'spent net');
     const amount = fmt(currentTotalAbs);
     let s = `You ${verb} ${amount} across ${currentCount} ${currentCount === 1 ? 'transaction' : 'transactions'}${excludedTransfers > 0 ? ` (${excludedTransfers} ${excludedTransfers === 1 ? 'transfer' : 'transfers'} excluded)` : ''}.`;
     if (deltaVsPrior !== null) {
-      const dirWord = deltaVsPrior > 0 ? 'up' : 'down';
-      const goodNess = dir === 'expense' ? deltaVsPrior < 0 : deltaVsPrior > 0;
-      const tone = goodNess ? ' ✓' : '';
+      // Use spending vocabulary when in spending lens, savings/income otherwise.
+      const dirWord = spendingLens || dir === 'expense'
+        ? (deltaVsPrior > 0 ? 'up' : 'down')
+        : (deltaVsPrior > 0 ? 'up' : 'down');
+      const tone = deltaTone === 'good' ? ' ✓' : '';
       s += ` That's ${dirWord} ${Math.abs(deltaVsPrior).toFixed(0)}% from ${monthTitle(priorMonth!)}${tone}.`;
     } else if (monthScopedView && rollingAvg > 0) {
       const ratio = currentTotalAbs / rollingAvg;
@@ -337,7 +387,9 @@
 
   $: deltaTone = (() => {
     if (deltaVsPrior === null) return 'neutral';
-    if (dir === 'expense') return deltaVsPrior < 0 ? 'good' : 'bad';
+    // In spending lens, less spending (negative delta) is favorable.
+    // Otherwise (income/asset/mixed positive net), more is favorable.
+    if (spendingLens) return deltaVsPrior < 0 ? 'good' : 'bad';
     if (dir === 'income') return deltaVsPrior > 0 ? 'good' : 'bad';
     return deltaVsPrior > 0 ? 'good' : 'bad';
   })();
@@ -346,7 +398,9 @@
   $: vsAvgTone = (() => {
     if (vsAvgPct === null) return 'neutral';
     if (Math.abs(vsAvgPct) < 5) return 'neutral';
-    if (dir === 'expense') return vsAvgPct < 0 ? 'good' : 'bad';
+    // vsAvgPct is computed on absolute values, so it always represents
+    // magnitude direction. Spending lens prefers smaller magnitudes.
+    if (spendingLens) return vsAvgPct < 0 ? 'good' : 'bad';
     if (dir === 'income') return vsAvgPct > 0 ? 'good' : 'bad';
     return vsAvgPct > 0 ? 'good' : 'bad';
   })();
@@ -382,8 +436,8 @@
 
       <div class="dossier-hero-figure">
         <p class="dossier-fig-eyebrow">{magnitudeLabel(dir)}</p>
-        <p class="dossier-fig-amount" class:fig-neg={dir === 'net' && currentTotal < 0}>
-          {dir === 'net' ? fmtSigned(currentTotal) : fmt(currentTotal)}
+        <p class="dossier-fig-amount {dir === 'net' ? kindToneClass(currentTotal, filteredAccountKind) : ''}">
+          {dir === 'net' ? fmtKindAware(currentTotal, filteredAccountKind) : fmt(currentTotal)}
         </p>
         {#if deltaVsPrior !== null}
           <p class="dossier-fig-delta" data-tone={deltaTone}>
@@ -414,7 +468,7 @@
       <div class="kpi">
         <p class="kpi-label">12-month {dir === 'net' ? 'net' : 'total'}</p>
         <p class="kpi-value">{dir === 'net'
-          ? fmtSigned(trendHighlightValues.reduce((s, v) => s + v, 0))
+          ? fmtKindAware(trendHighlightValues.reduce((s, v) => s + v, 0), filteredAccountKind)
           : fmt(trendHighlightDisplay.reduce((s, v) => s + v, 0))}</p>
       </div>
     </div>
@@ -721,6 +775,7 @@
     color: #0a3d59; font-variant-numeric: tabular-nums;
   }
   .fig-neg { color: var(--bad); }
+  .fig-pos { color: var(--ok); }
   .dossier-fig-delta {
     margin: 0.55rem 0 0;
     font-size: 0.95rem; font-weight: 600;
