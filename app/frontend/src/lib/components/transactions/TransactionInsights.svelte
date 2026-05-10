@@ -499,96 +499,82 @@
       }
     }));
 
-    // Per-bar styling for stacked segments. The "match" segment uses square
-    // top corners since the unmatched remainder sits on top of it; only the
-    // top-of-stack segment gets the rounded top.
-    const dataFlatTop = (vals: number[], color: string) => vals.map((v, i) => ({
-      value: v,
-      itemStyle: {
-        color,
-        borderRadius: 0,
-        opacity: focusedTrendIndex >= 0 && i !== focusIdx ? 0.55 : 1
-      }
-    }));
     const subtract = (a: number[], b: number[]) =>
       a.map((v, i) => Math.max(0, v - (b[i] ?? 0)));
 
+    // Per-bar styling for the bottom-of-stack "match" segment. Uses rounded
+    // top corners only when no "other" segment sits on top — otherwise flat
+    // top so the two segments butt cleanly. This is a per-data decision (some
+    // months may have other > 0 while others have other = 0).
+    const dataMatch = (vals: number[], otherVals: number[], color: string) =>
+      vals.map((v, i) => ({
+        value: v,
+        itemStyle: {
+          color,
+          borderRadius: ((otherVals[i] ?? 0) > 0 ? 0 : [4, 4, 0, 0]) as 0 | [number, number, number, number],
+          opacity: focusedTrendIndex >= 0 && i !== focusIdx ? 0.55 : 1
+        }
+      }));
+
+    // Keep the series structure constant across the hasHighlight toggle so
+    // plain `setOption` merge can animate data deltas in place rather than
+    // remounting bars from zero. The trick: when !hasHighlight,
+    // `pairedHighlight === paired` (see line ~310), so "match" data equals
+    // the total and "other" data is zero — the bar visually reads as a
+    // single brand-color column. When search activates, "match" smoothly
+    // shrinks to the matched value while "other" grows to fill the
+    // remainder in the faded brand tint.
+    const incomeOther = subtract(paired.income, pairedHighlight.income);
+    const spendingOther = subtract(paired.spending, pairedHighlight.spending);
+    const trendOther = subtract(trendDisplay, trendHighlightDisplay);
+
     let series: Array<Record<string, unknown>>;
-    if (hasHighlight) {
-      // Stacked layout: each bar shows matched portion (brand color, bottom)
-      // + unmatched remainder (gray, top), summing to the total. Same paired
-      // two-bar layout per month in net mode (Income | Spending), one bar in
-      // single-direction mode. Reading "what portion of spending matched"
-      // = "how tall is the colored chunk vs the gray chunk on the spending
-      // bar."
-      if (useNet) {
-        series = [
-          {
-            name: 'Income · match',
-            type: 'bar' as const, cursor: 'pointer',
-            stack: 'income', color: COLOR_INCOME,
-            data: dataFlatTop(pairedHighlight.income, COLOR_INCOME)
-          },
-          {
-            name: 'Income · other',
-            type: 'bar' as const, cursor: 'pointer',
-            stack: 'income', color: COLOR_INCOME_OTHER,
-            data: dataWithFocus(subtract(paired.income, pairedHighlight.income), COLOR_INCOME_OTHER)
-          },
-          {
-            name: 'Spending · match',
-            type: 'bar' as const, cursor: 'pointer',
-            stack: 'spending', color: COLOR_SPENDING,
-            data: dataFlatTop(pairedHighlight.spending, COLOR_SPENDING)
-          },
-          {
-            name: 'Spending · other',
-            type: 'bar' as const, cursor: 'pointer',
-            stack: 'spending', color: COLOR_SPENDING_OTHER,
-            data: dataWithFocus(subtract(paired.spending, pairedHighlight.spending), COLOR_SPENDING_OTHER)
-          }
-        ];
-      } else {
-        const brand = dir === 'income' ? COLOR_INCOME : COLOR_SPENDING;
-        const otherTint = dir === 'income' ? COLOR_INCOME_OTHER : COLOR_SPENDING_OTHER;
-        const totalLabel = dir === 'income' ? 'Received · other' : 'Spent · other';
-        series = [
-          {
-            name: 'Match',
-            type: 'bar' as const, cursor: 'pointer',
-            stack: 'value', color: brand,
-            data: dataFlatTop(trendHighlightDisplay, brand)
-          },
-          {
-            name: totalLabel,
-            type: 'bar' as const, cursor: 'pointer',
-            stack: 'value', color: otherTint,
-            data: dataWithFocus(subtract(trendDisplay, trendHighlightDisplay), otherTint)
-          }
-        ];
-      }
+    if (useNet) {
+      series = [
+        {
+          id: 'income-match', name: 'Income',
+          type: 'bar' as const, cursor: 'pointer',
+          stack: 'income', color: COLOR_INCOME,
+          data: dataMatch(pairedHighlight.income, incomeOther, COLOR_INCOME)
+        },
+        {
+          id: 'income-other', name: 'Income · other',
+          type: 'bar' as const, cursor: 'pointer',
+          stack: 'income', color: COLOR_INCOME_OTHER,
+          data: dataWithFocus(incomeOther, COLOR_INCOME_OTHER)
+        },
+        {
+          id: 'spending-match', name: 'Spending',
+          type: 'bar' as const, cursor: 'pointer',
+          stack: 'spending', color: COLOR_SPENDING,
+          data: dataMatch(pairedHighlight.spending, spendingOther, COLOR_SPENDING)
+        },
+        {
+          id: 'spending-other', name: 'Spending · other',
+          type: 'bar' as const, cursor: 'pointer',
+          stack: 'spending', color: COLOR_SPENDING_OTHER,
+          data: dataWithFocus(spendingOther, COLOR_SPENDING_OTHER)
+        }
+      ];
     } else {
-      series = useNet
-        ? [
-            {
-              name: 'Income',
-              type: 'bar' as const, cursor: 'pointer', color: COLOR_INCOME,
-              data: dataWithFocus(paired.income, COLOR_INCOME)
-            },
-            {
-              name: 'Spending',
-              type: 'bar' as const, cursor: 'pointer', color: COLOR_SPENDING,
-              data: dataWithFocus(paired.spending, COLOR_SPENDING)
-            }
-          ]
-        : [
-            {
-              name: dir === 'income' ? 'Received' : 'Spent',
-              type: 'bar' as const, cursor: 'pointer',
-              color: dir === 'income' ? COLOR_INCOME : COLOR_SPENDING,
-              data: dataWithFocus(trendDisplay, dir === 'income' ? COLOR_INCOME : COLOR_SPENDING)
-            }
-          ];
+      const brand = dir === 'income' ? COLOR_INCOME : COLOR_SPENDING;
+      const otherTint = dir === 'income' ? COLOR_INCOME_OTHER : COLOR_SPENDING_OTHER;
+      const matchLabel = dir === 'income' ? 'Received' : 'Spent';
+      const otherLabel = dir === 'income' ? 'Received · other' : 'Spent · other';
+      series = [
+        {
+          id: 'value-match', name: matchLabel,
+          type: 'bar' as const, cursor: 'pointer',
+          stack: 'value', color: brand,
+          data: dataMatch(trendHighlightDisplay, trendOther, brand)
+        },
+        {
+          id: 'value-other', name: otherLabel,
+          type: 'bar' as const, cursor: 'pointer',
+          stack: 'value', color: otherTint,
+          data: dataWithFocus(trendOther, otherTint)
+        }
+      ];
     }
 
     // Markline(s) for the 6-month rolling baseline. In net mode we draw
@@ -663,8 +649,11 @@
       },
       legend: useNet
         ? {
+            // "Income"/"Spending" name the match series; the "· other"
+            // series only matter visually when search is active so they
+            // are absent from the legend otherwise.
             data: hasHighlight
-              ? ['Income · match', 'Income · other', 'Spending · match', 'Spending · other']
+              ? ['Income', 'Income · other', 'Spending', 'Spending · other']
               : ['Income', 'Spending'],
             bottom: 0,
             textStyle: { fontSize: 11, color: 'rgba(10,61,89,0.7)' },
@@ -673,7 +662,9 @@
           }
         : (hasHighlight
             ? {
-                data: ['Match', dir === 'income' ? 'Received · other' : 'Spent · other'],
+                data: dir === 'income'
+                  ? ['Received', 'Received · other']
+                  : ['Spent', 'Spent · other'],
                 bottom: 0,
                 textStyle: { fontSize: 11, color: 'rgba(10,61,89,0.7)' },
                 itemWidth: 10,
@@ -744,14 +735,13 @@
   // compile-time tracking — without these reads, this reactive would only
   // fire when `chart` itself changes (i.e., on mount) and the chart would
   // never update on filter changes.
-  // Track the chart's last structural signature (which series exist) so we
-  // can choose the right merge mode. ECharts default merge animates data
-  // deltas smoothly in place — what we want for month-focus clicks and
-  // for character-by-character typing in the search box. But it merges by
-  // index, which produces ugly cross-fades when the series array itself
-  // changes shape (no-highlight 2 series ↔ hasHighlight 4 series, or
-  // net ↔ single-direction). For those transitions only, fall back to
-  // replaceMerge so each series renders cleanly from its own state.
+  // Track the chart's last structural signature so the right merge mode
+  // is chosen. ECharts default merge animates data deltas smoothly in
+  // place — what we want for month focus, search keystrokes, and search
+  // toggle (which now only changes data values, not series shape). The
+  // series array shape only changes when `dir` flips between net and a
+  // single direction (4 series vs 2). Fall back to replaceMerge for that
+  // structural transition only.
   let lastChartSig: string | null = null;
   $: if (chart) {
     void [paired, pairedHighlight, trendValues, trendHighlightValues,
@@ -759,7 +749,7 @@
           rollingIncomeAvg, rollingSpendAvg, rollingAvg,
           focusedTrendIndex, hasHighlight, dir, trendMax,
           filters.search];
-    const sig = `${dir}|${hasHighlight ? '1' : '0'}`;
+    const sig = dir;
     const structureChanged = lastChartSig !== null && lastChartSig !== sig;
     chart.setOption(
       buildChartOption(),
