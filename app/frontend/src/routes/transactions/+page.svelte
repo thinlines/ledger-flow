@@ -18,7 +18,7 @@
   } from '$lib/transactions/types';
   import { formatCurrency, shortDate, type AccountKind } from '$lib/format';
   import { groupByDate, CLEARING_TOOLTIPS } from '$lib/transactions/helpers';
-  import { filtersFromUrl, filtersToUrl, EMPTY_FILTERS } from '$lib/transactions/transactionFilters';
+  import { filtersFromUrl, filtersToUrl, filtersToApiParams, EMPTY_FILTERS } from '$lib/transactions/transactionFilters';
   import { loadTransactions } from '$lib/transactions/loadTransactions';
   import {
     deleteTransaction, resetCategory, recategorize,
@@ -31,7 +31,6 @@
   let workspaceName = '';
   let trackedAccounts: TrackedAccount[] = [];
   let allAccounts: string[] = [];
-  let filters: TransactionFilters = { ...EMPTY_FILTERS };
   let result: TransactionsResponse | null = null;
   let baseCurrency = 'USD';
   let error = '';
@@ -107,7 +106,82 @@
     }
   }
 
-  $: void loadHistory(filters);
+  // ── Filter derivation: URL is the single source of truth ───────────────
+  // The page parses `$page.url` reactively so any URL change — anchor click,
+  // browser back/forward, programmatic goto, deep link, in-component
+  // callback — re-derives `filters` and triggers a reload. State→URL flows
+  // through `changeFilters` (which just calls goto). URL→state flows through
+  // these reactive declarations.
+
+  // One-shot URL reconciliation. The migration redirect (old `?accountId=X`
+  // and `?view=activity` formats) and the default-period rule (empty URL →
+  // `period=this-month` so sidebar entry lands on a meaningful slice) both
+  // rewrite the URL exactly once per page mount. After the first reactive
+  // run, `hasReconciledUrl` is set true and both rules are skipped — that
+  // way the user's later "All time" preset (which produces an empty URL)
+  // isn't re-overridden by the default. Cross-route navigation remounts
+  // this page and resets the flag, so deep entries default again.
+  let hasReconciledUrl = false;
+  // Stable dedupe key for reload triggers. `filtersToApiParams` already
+  // produces a deterministic URL-safe string from a filter set.
+  let lastFiltersKey: string | null = null;
+
+  function pruneAccountsToTracked(f: TransactionFilters, accounts: TrackedAccount[]): TransactionFilters {
+    if (f.accounts.length === 0 || accounts.length === 0) return f;
+    const ids = new Set(accounts.map((a) => a.id));
+    const filtered = f.accounts.filter((id) => ids.has(id));
+    if (filtered.length === f.accounts.length) return f;
+    return { ...f, accounts: filtered };
+  }
+
+  function isFiltersEmpty(f: TransactionFilters): boolean {
+    return (
+      f.accounts.length === 0 && !f.category && !f.month &&
+      !f.period && !f.search && !f.status
+    );
+  }
+
+  $: parsedFromUrl = filtersFromUrl($page.url);
+  $: filters = pruneAccountsToTracked(parsedFromUrl.filters, trackedAccounts);
+
+  // First reactive flush after `initialized` flips true: rewrite the URL to
+  // the canonical form (resolve old param names, apply default period for
+  // empty URLs). When the goto will actually change filter content, set
+  // `lastFiltersKey` to the *pre-redirect* key so the reload trigger below
+  // skips this flush — the imminent URL update will be the trigger for the
+  // first real fetch. When the redirect is content-preserving (pure
+  // migration: e.g. `?accountId=X` → `?accounts=X`), leave `lastFiltersKey`
+  // alone so the reload trigger fires on this flush — the post-goto flush
+  // will see no key change and won't fire.
+  $: if (initialized && !hasReconciledUrl) {
+    hasReconciledUrl = true;
+    let next = filters;
+    let needsRedirect = parsedFromUrl.migrated;
+    if (isFiltersEmpty(filters)) {
+      next = { ...filters, period: 'this-month' };
+      needsRedirect = true;
+    }
+    if (needsRedirect) {
+      const willChangeContent = filtersToApiParams(next) !== filtersToApiParams(filters);
+      if (willChangeContent) {
+        lastFiltersKey = filtersToApiParams(filters);
+      }
+      void goto(`/transactions${filtersToUrl(next)}`, {
+        replaceState: true, noScroll: true, keepFocus: true
+      });
+    }
+  }
+
+  // Reactive reload. Fires whenever the URL-derived filters change. The
+  // existing AbortController inside loadData ensures any in-flight fetch
+  // superseded by a newer filter change is aborted before its result lands.
+  $: filtersKey = filtersToApiParams(filters);
+  $: if (initialized && hasReconciledUrl && filtersKey !== lastFiltersKey) {
+    lastFiltersKey = filtersKey;
+    selectedRow = null;
+    void loadData();
+    void loadHistory(filters);
+  }
 
   $: isSingleAccount = filters.accounts.length === 1;
   $: selectedAccount = isSingleAccount ? trackedAccounts.find((a) => a.id === filters.accounts[0]) ?? null : null;
@@ -161,40 +235,38 @@
     } finally { if (seq === requestSeq) dataLoading = false; }
   }
 
+  // Filter changes from in-page UI (filter bar, dialog, chart click) flow
+  // through here. State assignment and reload are handled by the reactive
+  // subscription on `$page.url`/`filters`/`filtersKey` above — this function
+  // just navigates the URL.
   function changeFilters(next: TransactionFilters) {
-    filters = next;
-    selectedRow = null;
-    void goto(`/transactions${filtersToUrl(filters)}`, { replaceState: true, noScroll: true, keepFocus: true });
-    void loadData();
+    void goto(`/transactions${filtersToUrl(next)}`, {
+      replaceState: true, noScroll: true, keepFocus: true
+    });
   }
 
+  // Loads the world the page needs before user interaction begins. Sets
+  // `initialized` LAST so reactive subscriptions never fire against a
+  // half-loaded `trackedAccounts` (which would prune valid account ids
+  // from the URL during the brief window before /api/tracked-accounts
+  // resolves).
   async function load() {
     const state = await apiGet<AppState>('/api/app/state');
-    initialized = state.initialized; workspaceName = state.workspaceName ?? '';
-    if (!initialized) return;
+    workspaceName = state.workspaceName ?? '';
+    if (!state.initialized) {
+      initialized = false;
+      return;
+    }
     const [ad, al] = await Promise.all([
       apiGet<{ trackedAccounts: TrackedAccount[] }>('/api/tracked-accounts'),
       apiGet<{ accounts: string[] }>('/api/accounts').catch(() => ({ accounts: [] as string[] }))
     ]);
-    trackedAccounts = ad.trackedAccounts; allAccounts = al.accounts;
-    const { filters: parsed, migrated } = filtersFromUrl($page.url);
-    filters = parsed;
-    if (filters.accounts.length > 0) {
-      const ids = new Set(trackedAccounts.map((a) => a.id));
-      filters = { ...filters, accounts: filters.accounts.filter((id: string) => ids.has(id)) };
-    }
-    // Default the sidebar entry (no filters at all) to "this month" so users
-    // arrive on a meaningful slice of activity instead of an unbounded list.
-    let defaultedPeriod = false;
-    if (
-      filters.accounts.length === 0 && !filters.category && !filters.month &&
-      !filters.period && !filters.search && !filters.status
-    ) {
-      filters = { ...filters, period: 'this-month' };
-      defaultedPeriod = true;
-    }
-    if (migrated || defaultedPeriod) void goto(`/transactions${filtersToUrl(filters)}`, { replaceState: true, noScroll: true, keepFocus: true });
-    await loadData();
+    trackedAccounts = ad.trackedAccounts;
+    allAccounts = al.accounts;
+    initialized = true;
+    // The reactive subscriptions above pick it up from here: parse URL,
+    // run the one-shot reconciliation if needed, fire the first loadData
+    // and loadHistory once the canonical URL is in place.
   }
 
   onMount(async () => {
