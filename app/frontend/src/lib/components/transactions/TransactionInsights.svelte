@@ -744,18 +744,28 @@
   // compile-time tracking — without these reads, this reactive would only
   // fire when `chart` itself changes (i.e., on mount) and the chart would
   // never update on filter changes.
+  // Track the chart's last structural signature (which series exist) so we
+  // can choose the right merge mode. ECharts default merge animates data
+  // deltas smoothly in place — what we want for month-focus clicks and
+  // for character-by-character typing in the search box. But it merges by
+  // index, which produces ugly cross-fades when the series array itself
+  // changes shape (no-highlight 2 series ↔ hasHighlight 4 series, or
+  // net ↔ single-direction). For those transitions only, fall back to
+  // replaceMerge so each series renders cleanly from its own state.
+  let lastChartSig: string | null = null;
   $: if (chart) {
     void [paired, pairedHighlight, trendValues, trendHighlightValues,
           trendDisplay, trendHighlightDisplay,
           rollingIncomeAvg, rollingSpendAvg, rollingAvg,
           focusedTrendIndex, hasHighlight, dir, trendMax,
           filters.search];
-    // replaceMerge: ['series'] swaps the series array (handles the 2↔4
-    // toggle between no-highlight and hasHighlight cleanly) while
-    // preserving chart instance state, so data-only updates animate
-    // smoothly between values rather than re-growing from zero. notMerge
-    // would cause a full reset/regrowth on every keystroke debounce.
-    chart.setOption(buildChartOption(), { replaceMerge: ['series'] });
+    const sig = `${dir}|${hasHighlight ? '1' : '0'}`;
+    const structureChanged = lastChartSig !== null && lastChartSig !== sig;
+    chart.setOption(
+      buildChartOption(),
+      structureChanged ? { replaceMerge: ['series'] } : {}
+    );
+    lastChartSig = sig;
   }
 
   onDestroy(() => {
