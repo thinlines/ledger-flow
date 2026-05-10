@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onDestroy, onMount } from 'svelte';
+  import { onDestroy } from 'svelte';
   import { echarts, type EChartsInstance } from '$lib/echarts';
   import type { TrackedAccount, TransactionFilters, TransactionRow } from '$lib/transactions/types';
   import { formatCurrency, type AccountKind } from '$lib/format';
@@ -668,13 +668,32 @@
     chartObserver.observe(chartContainer);
   }
 
+  // Mount the chart reactively rather than in onMount: the trend container
+  // is conditionally rendered (`{#if trendMax === 0 && ...}` shows an empty
+  // message instead), so on initial paint when historyRows is still empty
+  // the container doesn't exist yet and a one-shot onMount would silently
+  // no-op, leaving `chart === null` forever even after data arrives. This
+  // reactive fires whenever `chartContainer` transitions from null to bound
+  // — including the case where the empty branch flips to the chart branch
+  // after history loads.
+  $: if (chartContainer && !chart) {
+    mountChart();
+  }
+  // If the chart was mounted but its container later disappears (e.g.,
+  // historyRows resets to empty and the empty-state branch shows again),
+  // tear it down so a future re-bind starts clean.
+  $: if (!chartContainer && chart) {
+    chartObserver?.disconnect();
+    chartObserver = null;
+    chart.dispose();
+    chart = null;
+  }
   // Re-render whenever any input the chart depends on changes. ECharts'
   // setOption is idempotent + diff-aware, so this is cheap.
   $: if (chart && trendMonths) {
     chart.setOption(buildChartOption(), { notMerge: true });
   }
 
-  onMount(() => mountChart());
   onDestroy(() => {
     chartObserver?.disconnect();
     chart?.dispose();
