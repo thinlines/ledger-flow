@@ -146,9 +146,13 @@
 
   // First reactive flush after `initialized` flips true: rewrite the URL to
   // the canonical form (resolve old param names, apply default period for
-  // empty URLs). Set `lastFiltersKey` to the *pre-redirect* key so the
-  // reload trigger below skips this flush — the imminent URL update will
-  // be the trigger for the first real fetch.
+  // empty URLs). When the goto will actually change filter content, set
+  // `lastFiltersKey` to the *pre-redirect* key so the reload trigger below
+  // skips this flush — the imminent URL update will be the trigger for the
+  // first real fetch. When the redirect is content-preserving (pure
+  // migration: e.g. `?accountId=X` → `?accounts=X`), leave `lastFiltersKey`
+  // alone so the reload trigger fires on this flush — the post-goto flush
+  // will see no key change and won't fire.
   $: if (initialized && !hasReconciledUrl) {
     hasReconciledUrl = true;
     let next = filters;
@@ -158,7 +162,10 @@
       needsRedirect = true;
     }
     if (needsRedirect) {
-      lastFiltersKey = filtersToApiParams(filters);
+      const willChangeContent = filtersToApiParams(next) !== filtersToApiParams(filters);
+      if (willChangeContent) {
+        lastFiltersKey = filtersToApiParams(filters);
+      }
       void goto(`/transactions${filtersToUrl(next)}`, {
         replaceState: true, noScroll: true, keepFocus: true
       });
