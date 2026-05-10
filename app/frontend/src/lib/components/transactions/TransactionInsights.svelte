@@ -689,8 +689,18 @@
     chart = null;
   }
   // Re-render whenever any input the chart depends on changes. ECharts'
-  // setOption is idempotent + diff-aware, so this is cheap.
-  $: if (chart && trendMonths) {
+  // setOption is idempotent + diff-aware, so this is cheap. We have to
+  // *explicitly* read each reactive dep here because `buildChartOption()`
+  // is a function call whose internal reads are opaque to Svelte's
+  // compile-time tracking — without these reads, this reactive would only
+  // fire when `chart` itself changes (i.e., on mount) and the chart would
+  // never update on filter changes.
+  $: if (chart) {
+    void [paired, pairedHighlight, trendValues, trendHighlightValues,
+          trendDisplay, trendHighlightDisplay,
+          rollingIncomeAvg, rollingSpendAvg, rollingAvg,
+          focusedTrendIndex, hasHighlight, dir, trendMax,
+          filters.search];
     chart.setOption(buildChartOption(), { notMerge: true });
   }
 
