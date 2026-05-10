@@ -474,11 +474,13 @@
   const COLOR_INCOME = '#1d9f6e';
   const COLOR_SPENDING = '#0a3d59';
   const COLOR_FOCUS_RING = '#ad6a00';
-  // Cross-filter "context" fill — neutral gray so the matched portion (drawn
-  // on top in the brand color) clearly pops. Same-hue + opacity didn't read:
-  // ECharts per-data itemStyle overrides series-level styling, so the bars
-  // stayed at full saturation and looked like a single stacked bar.
-  const COLOR_CONTEXT = '#d8dee5';
+  // "Other" fill for the unmatched remainder of a stacked highlight bar:
+  // a low-alpha tint of the brand color, mirroring the focused-month tone
+  // treatment (full color = active, faded color = context). Keeping the
+  // same hue rather than switching to neutral gray keeps Income vs Spending
+  // legible at a glance even when the matched portion is tiny.
+  const COLOR_INCOME_OTHER = 'rgba(29, 159, 110, 0.32)';
+  const COLOR_SPENDING_OTHER = 'rgba(10, 61, 89, 0.28)';
 
   function buildChartOption() {
     const xLabels = trendMonths.map((m) => monthLabel(m));
@@ -530,8 +532,8 @@
           {
             name: 'Income · other',
             type: 'bar' as const, cursor: 'pointer',
-            stack: 'income', color: COLOR_CONTEXT,
-            data: dataWithFocus(subtract(paired.income, pairedHighlight.income), COLOR_CONTEXT)
+            stack: 'income', color: COLOR_INCOME_OTHER,
+            data: dataWithFocus(subtract(paired.income, pairedHighlight.income), COLOR_INCOME_OTHER)
           },
           {
             name: 'Spending · match',
@@ -542,12 +544,13 @@
           {
             name: 'Spending · other',
             type: 'bar' as const, cursor: 'pointer',
-            stack: 'spending', color: COLOR_CONTEXT,
-            data: dataWithFocus(subtract(paired.spending, pairedHighlight.spending), COLOR_CONTEXT)
+            stack: 'spending', color: COLOR_SPENDING_OTHER,
+            data: dataWithFocus(subtract(paired.spending, pairedHighlight.spending), COLOR_SPENDING_OTHER)
           }
         ];
       } else {
         const brand = dir === 'income' ? COLOR_INCOME : COLOR_SPENDING;
+        const otherTint = dir === 'income' ? COLOR_INCOME_OTHER : COLOR_SPENDING_OTHER;
         const totalLabel = dir === 'income' ? 'Received · other' : 'Spent · other';
         series = [
           {
@@ -559,8 +562,8 @@
           {
             name: totalLabel,
             type: 'bar' as const, cursor: 'pointer',
-            stack: 'value', color: COLOR_CONTEXT,
-            data: dataWithFocus(subtract(trendDisplay, trendHighlightDisplay), COLOR_CONTEXT)
+            stack: 'value', color: otherTint,
+            data: dataWithFocus(subtract(trendDisplay, trendHighlightDisplay), otherTint)
           }
         ];
       }
@@ -677,7 +680,9 @@
                 itemHeight: 10
               }
             : { show: false }),
-      grid: { top: 20, right: 8, bottom: (useNet || hasHighlight) ? 28 : 20, left: 8, containLabel: true },
+      // Constant bottom padding so toggling the legend (no-search → search,
+      // or single-direction → net) doesn't shift the bars vertically.
+      grid: { top: 20, right: 8, bottom: 28, left: 8, containLabel: true },
       xAxis: {
         type: 'category' as const,
         data: xLabels,
@@ -745,7 +750,12 @@
           rollingIncomeAvg, rollingSpendAvg, rollingAvg,
           focusedTrendIndex, hasHighlight, dir, trendMax,
           filters.search];
-    chart.setOption(buildChartOption(), { notMerge: true });
+    // replaceMerge: ['series'] swaps the series array (handles the 2↔4
+    // toggle between no-highlight and hasHighlight cleanly) while
+    // preserving chart instance state, so data-only updates animate
+    // smoothly between values rather than re-growing from zero. notMerge
+    // would cause a full reset/regrowth on every keystroke debounce.
+    chart.setOption(buildChartOption(), { replaceMerge: ['series'] });
   }
 
   onDestroy(() => {
