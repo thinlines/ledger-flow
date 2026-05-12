@@ -7,6 +7,11 @@
 	import HistoryIcon from '@lucide/svelte/icons/history';
 	import UndoToast from '$lib/components/UndoToast.svelte';
 	import RecentActivitySheet from '$lib/components/RecentActivitySheet.svelte';
+	import KeyboardListener from '$lib/components/KeyboardListener.svelte';
+	import CommandPalette from '$lib/components/CommandPalette.svelte';
+	import { onMount } from 'svelte';
+	import { goto } from '$app/navigation';
+	import { registerCommands } from '$lib/command-registry';
 
 	const navSections = [
 		{
@@ -50,6 +55,69 @@
 		lastPathname = $page.url.pathname;
 		if (drawerOpen) drawerOpen = false;
 	}
+
+	onMount(() => {
+		registerCommands([
+			{
+				id: 'action.add-transaction',
+				label: 'Add Transaction',
+				shortcut: 'Ctrl+N',
+				category: 'actions',
+				action: () => {
+					/* wired in Task C */
+				},
+				keywords: ['new', 'create', 'entry', 'manual']
+			},
+			{
+				id: 'nav.overview',
+				label: 'Go to Overview',
+				category: 'navigation',
+				action: () => goto('/'),
+				href: '/',
+				keywords: ['home', 'dashboard']
+			},
+			{
+				id: 'nav.accounts',
+				label: 'Go to Accounts',
+				category: 'navigation',
+				action: () => goto('/accounts'),
+				href: '/accounts',
+				keywords: ['balances']
+			},
+			{
+				id: 'nav.transactions',
+				label: 'Go to Transactions',
+				category: 'navigation',
+				action: () => goto('/transactions'),
+				href: '/transactions',
+				keywords: ['register', 'ledger']
+			},
+			{
+				id: 'nav.import',
+				label: 'Go to Import',
+				category: 'navigation',
+				action: () => goto('/import'),
+				href: '/import',
+				keywords: ['csv', 'statement', 'upload']
+			},
+			{
+				id: 'nav.review',
+				label: 'Go to Review',
+				category: 'navigation',
+				action: () => goto('/unknowns'),
+				href: '/unknowns',
+				keywords: ['unknowns', 'categorize']
+			},
+			{
+				id: 'nav.rules',
+				label: 'Go to Rules',
+				category: 'navigation',
+				action: () => goto('/rules'),
+				href: '/rules',
+				keywords: ['automation', 'categorization']
+			}
+		]);
+	});
 </script>
 
 <svelte:head>
@@ -230,6 +298,9 @@
 <RecentActivitySheet bind:open={recentActivityOpen} />
 
 <UndoToast />
+
+<KeyboardListener />
+<CommandPalette />
 
 <style>
 	.brand-card {
