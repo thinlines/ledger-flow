@@ -333,16 +333,29 @@ def _prepared_collision_txn(*, date: str, payee: str, source_identity: str) -> d
     }
 
 
-def _prepared_fence_txn(*, date: str, payee: str, source_identity: str, reconciled_through: str) -> dict:
+def _prepared_fence_txn(
+    *,
+    date: str,
+    payee: str,
+    source_identity: str,
+    reconciled_through: str,
+    amount: str = "$-7.50",
+) -> dict:
     return {
         "matchStatus": "conflict",
         "conflictReason": "reconciled_date_fence",
         "reconciledThrough": reconciled_through,
+        # postings are read by _build_fence_conflicts to populate the amount
+        # field on the user-facing conflict row.
+        "postings": [
+            {"account": "Assets:Bank:Checking", "amount": amount},
+            {"account": "Expenses:Unknown", "amount": ""},
+        ],
         "annotatedRaw": (
             f"{date} {payee}\n"
             f"    ; source_identity: {source_identity}\n"
             f"    ; source_payload_hash: payload-{source_identity}\n"
-            "    Assets:Bank:Checking  $-7.50\n"
+            f"    Assets:Bank:Checking  {amount}\n"
             "    Expenses:Unknown\n"
         ),
         "sourceIdentity": source_identity,
@@ -500,3 +513,37 @@ def test_apply_import_conflicts_list_contains_only_fence_rows(tmp_path: Path) ->
     assert conflicts[0]["conflictReason"] == "reconciled_date_fence"
     assert conflicts[0]["sourceIdentity"] == "fence-1"
     assert conflicts[0]["reconciledThrough"] == "2026-04-30"
+
+
+def test_fence_conflict_row_carries_render_fields(tmp_path: Path) -> None:
+    """The conflict-resolution view needs date, payee, and amount per fenced
+    row to render in transactions-register style."""
+    config = _make_config(tmp_path / "workspace")
+
+    stage = {
+        "targetJournalPath": str(config.journal_dir / "2026.journal"),
+        # apply_import reads destinationAccount to attribute the institution-
+        # side amount. _make_config wires wf_checking → Assets:Bank:Checking.
+        "destinationAccount": "Assets:Bank:Checking",
+        "preparedTransactions": [
+            _prepared_fence_txn(
+                date="2026/04/15",
+                payee="Pre-Reconciliation Activity",
+                source_identity="fence-1",
+                reconciled_through="2026-04-30",
+                amount="$-42.18",
+            ),
+        ],
+        "importAccountId": "wf_checking",
+        "year": "2026",
+        "sourceFileSha256": "deadbeef",
+    }
+
+    _, _, _, conflicts = apply_import(config, stage)
+
+    assert len(conflicts) == 1
+    row = conflicts[0]
+    assert row["date"] == "2026/04/15"
+    assert row["payee"] == "Pre-Reconciliation Activity"
+    assert row["amount"] == "$-42.18"
+    assert row["reconciledThrough"] == "2026-04-30"

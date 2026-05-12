@@ -640,6 +640,9 @@ def preview_import(
         "institutionTemplateId": source.get("institution_id"),
         "importMode": source["mode"],
         "importSourceDisplayName": source.get("display_name"),
+        # Linked tracked account (if any) so the conflict-resolution view can
+        # deep-link to /accounts/<id> for un-reconcile. None for orphan imports.
+        "trackedAccountId": _tracked_account_id_for_import_account(config, import_account_id),
         "summary": {
             "count": len(txns),
             "unknownCount": converted_journal.count("Expenses:Unknown"),
@@ -652,10 +655,34 @@ def preview_import(
             # conflict reason the UI surfaces.
             "fenceCount": len(fence_txns),
         },
+        # Render-ready fence rows for the conflict-resolution view. Only fence
+        # conflicts appear here — identity collisions stay invisible to the UI.
+        "conflicts": _build_fence_conflicts(txns, account),
         "preview": [t["annotatedRaw"].strip() for t in txns[:200]],
         "targetJournalPath": str(target_journal.resolve()),
         "preparedTransactions": txns,
     }
+
+
+def _build_fence_conflicts(all_txns: list[dict], institution_account: str) -> list[dict]:
+    """Render-ready dicts for reconciled-date-fence rows. Includes ``amount``
+    so the conflict view can present them in transactions-register style.
+    Identity-collision rows are excluded — they never reach the UI."""
+    out: list[dict] = []
+    for t in all_txns:
+        if t.get("matchStatus") != "conflict":
+            continue
+        if t.get("conflictReason") != "reconciled_date_fence":
+            continue
+        out.append({
+            "date": t.get("date"),
+            "payee": t.get("payee"),
+            "amount": _extract_institution_amount(t.get("postings") or [], institution_account),
+            "sourceIdentity": t.get("sourceIdentity"),
+            "conflictReason": t.get("conflictReason"),
+            "reconciledThrough": t.get("reconciledThrough"),
+        })
+    return out
 
 
 def apply_import(config: AppConfig, stage: dict) -> tuple[str, int, int, list[dict]]:
@@ -671,18 +698,7 @@ def apply_import(config: AppConfig, stage: dict) -> tuple[str, int, int, list[di
     # conflicts are silently skipped at write time (still excluded from
     # new_txns) and emit a diagnostic event for support visibility instead.
     # See DECISIONS §21.
-    conflicts = [
-        {
-            "date": t.get("date"),
-            "payee": t.get("payee"),
-            "sourceIdentity": t.get("sourceIdentity"),
-            "conflictReason": t.get("conflictReason"),
-            "reconciledThrough": t.get("reconciledThrough"),
-        }
-        for t in all_txns
-        if t.get("matchStatus") == "conflict"
-        and t.get("conflictReason") == "reconciled_date_fence"
-    ]
+    conflicts = _build_fence_conflicts(all_txns, stage.get("destinationAccount", ""))
 
     if new_txns:
         preamble_lines, existing_blocks = _split_journal_preamble_and_transactions(target.read_text(encoding="utf-8"))
