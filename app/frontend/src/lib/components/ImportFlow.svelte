@@ -27,7 +27,7 @@
     summary?: {
       newCount: number;
       duplicateCount: number;
-      conflictCount: number;
+      fenceCount: number;
       unknownCount: number;
     };
     preview?: string[];
@@ -68,6 +68,10 @@
       sourceCsvWarning?: string | null;
     };
     summary?: {
+      // Persisted history entries may carry the old `conflictCount` field
+      // (pre-§21). New entries write `fenceCount`. Read both for forward
+      // and backward compatibility.
+      fenceCount?: number;
       conflictCount?: number;
     };
     undo?: {
@@ -777,7 +781,7 @@
               <div class="flex gap-2 flex-wrap">
                 <span class="pill ok">New {preview.summary.newCount}</span>
                 <span class="pill">Duplicates {preview.summary.duplicateCount}</span>
-                <span class="pill warn">Conflicts {preview.summary.conflictCount}</span>
+                <span class="pill warn">Conflicts {preview.summary.fenceCount}</span>
                 <span class="pill">Unknown {preview.summary.unknownCount}</span>
               </div>
             {/if}
@@ -1021,7 +1025,7 @@
                 <div class="flex gap-2 flex-wrap">
                   <span class="pill ok">New {preview.summary.newCount}</span>
                   <span class="pill">Duplicates {preview.summary.duplicateCount}</span>
-                  <span class="pill warn">Conflicts {preview.summary.conflictCount}</span>
+                  <span class="pill warn">Conflicts {preview.summary.fenceCount}</span>
                   <span class="pill">Unknown {preview.summary.unknownCount}</span>
                 </div>
               {/if}
@@ -1188,7 +1192,7 @@
                     <span class="pill ok">Added {entry.result?.appendedTxnCount ?? 0}</span>
                     <span class="pill">Duplicates {entry.result?.skippedDuplicateCount ?? 0}</span>
                     <span class="pill warn">
-                      Conflicts {entry.summary?.conflictCount ?? entry.result?.conflicts?.length ?? 0}
+                      Conflicts {entry.summary?.fenceCount ?? entry.summary?.conflictCount ?? entry.result?.conflicts?.length ?? 0}
                     </span>
                   </div>
 

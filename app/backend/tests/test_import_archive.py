@@ -299,3 +299,116 @@ def test_apply_import_inserts_older_batch_before_later_existing_transactions(tmp
     text = journal_path.read_text(encoding="utf-8")
     assert text.startswith("include ../rules/10-accounts.dat")
     assert text.index("ONLINE PAYMENT THANK YOU") < text.index("Later Transaction")
+
+
+# ---------------------------------------------------------------------------
+# DECISIONS §21: conflicts list and skipped count must distinguish identity
+# collisions (silent, diagnostic-only) from reconciled-date fence rows
+# (user-facing). Identity collisions fold into the skipped count alongside
+# duplicates; the conflicts list returns only fence rows.
+# ---------------------------------------------------------------------------
+
+
+def _prepared_collision_txn(*, date: str, payee: str, source_identity: str) -> dict:
+    """A prepared identity-collision txn — same identity exists in journal but
+    payload differs (e.g. rule edit between imports)."""
+    return {
+        "matchStatus": "conflict",
+        "conflictReason": "identity_collision",
+        "reconciledThrough": None,
+        "storedPayloadHash": f"stored-payload-{source_identity}",
+        "annotatedRaw": (
+            f"{date} {payee}\n"
+            f"    ; source_identity: {source_identity}\n"
+            f"    ; source_payload_hash: new-payload-{source_identity}\n"
+            "    Assets:Bank:Checking  $-7.50\n"
+            "    Expenses:Groceries\n"
+        ),
+        "sourceIdentity": source_identity,
+        "sourcePayloadHash": f"new-payload-{source_identity}",
+        "date": date,
+        "payee": payee,
+    }
+
+
+def _prepared_fence_txn(*, date: str, payee: str, source_identity: str, reconciled_through: str) -> dict:
+    return {
+        "matchStatus": "conflict",
+        "conflictReason": "reconciled_date_fence",
+        "reconciledThrough": reconciled_through,
+        "annotatedRaw": (
+            f"{date} {payee}\n"
+            f"    ; source_identity: {source_identity}\n"
+            f"    ; source_payload_hash: payload-{source_identity}\n"
+            "    Assets:Bank:Checking  $-7.50\n"
+            "    Expenses:Unknown\n"
+        ),
+        "sourceIdentity": source_identity,
+        "sourcePayloadHash": f"payload-{source_identity}",
+        "date": date,
+        "payee": payee,
+    }
+
+
+def test_apply_import_skipped_count_folds_identity_collisions(tmp_path: Path) -> None:
+    config = _make_config(tmp_path / "workspace")
+
+    stage = {
+        "targetJournalPath": str(config.journal_dir / "2026.journal"),
+        "preparedTransactions": [
+            _prepared_txn(date="2026/03/01", payee="Coffee", source_identity="new-1", amount="$-4.00"),
+            {
+                "matchStatus": "duplicate",
+                "sourceIdentity": "dup-1",
+                "sourcePayloadHash": "payload-dup-1",
+                "date": "2026/03/02",
+                "payee": "Already Imported",
+                "annotatedRaw": "2026/03/02 Already Imported\n",
+            },
+            _prepared_collision_txn(date="2026/03/03", payee="Rule-Edited Payee", source_identity="coll-1"),
+            _prepared_collision_txn(date="2026/03/04", payee="Other Edit", source_identity="coll-2"),
+        ],
+        "importAccountId": "wf_checking",
+        "year": "2026",
+        "sourceFileSha256": "deadbeef",
+    }
+
+    _, appended_count, skipped_count, conflicts = apply_import(config, stage)
+
+    assert appended_count == 1, "Only the genuine new row should be written"
+    # 1 duplicate + 2 identity collisions = 3 silent skips
+    assert skipped_count == 3, "Identity collisions must fold into the skipped count"
+    # No fence rows in this stage, so the conflicts list is empty
+    assert conflicts == [], "Identity collisions must not appear in the conflicts list"
+
+
+def test_apply_import_conflicts_list_contains_only_fence_rows(tmp_path: Path) -> None:
+    config = _make_config(tmp_path / "workspace")
+
+    stage = {
+        "targetJournalPath": str(config.journal_dir / "2026.journal"),
+        "preparedTransactions": [
+            _prepared_txn(date="2026/05/01", payee="Coffee", source_identity="new-1", amount="$-4.00"),
+            _prepared_collision_txn(date="2026/05/02", payee="Rule-Edited Payee", source_identity="coll-1"),
+            _prepared_fence_txn(
+                date="2026/04/15",
+                payee="Pre-Reconciliation Activity",
+                source_identity="fence-1",
+                reconciled_through="2026-04-30",
+            ),
+        ],
+        "importAccountId": "wf_checking",
+        "year": "2026",
+        "sourceFileSha256": "deadbeef",
+    }
+
+    _, appended_count, skipped_count, conflicts = apply_import(config, stage)
+
+    assert appended_count == 1
+    # The identity collision counts toward skipped; the fence row does NOT
+    # (it surfaces as a conflict instead).
+    assert skipped_count == 1, "Only the identity collision folds into skipped; fence rows do not"
+    assert len(conflicts) == 1, "Only the fence row appears in conflicts"
+    assert conflicts[0]["conflictReason"] == "reconciled_date_fence"
+    assert conflicts[0]["sourceIdentity"] == "fence-1"
+    assert conflicts[0]["reconciledThrough"] == "2026-04-30"

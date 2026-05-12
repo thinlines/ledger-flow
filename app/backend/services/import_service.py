@@ -594,6 +594,11 @@ def preview_import(
             base_currency=base_currency,
         )
         txn["matchStatus"] = _classify_transaction(txn, existing_map)
+        if txn["matchStatus"] == "conflict":
+            # Capture the journal-side payload hash so apply_import can emit a
+            # diagnostic event for identity collisions without re-reading the
+            # journal. None means the existing entry lacked a stored hash.
+            txn["storedPayloadHash"] = existing_map.get(txn["sourceIdentity"])
         txn["annotatedRaw"] = _annotated_raw_txn(
             txn,
             source_file_sha256,
@@ -614,7 +619,14 @@ def preview_import(
 
     new_txns = [t for t in txns if t["matchStatus"] == "new"]
     duplicate_txns = [t for t in txns if t["matchStatus"] == "duplicate"]
-    conflict_txns = [t for t in txns if t["matchStatus"] == "conflict"]
+    fence_txns = [
+        t for t in txns
+        if t["matchStatus"] == "conflict" and t.get("conflictReason") == "reconciled_date_fence"
+    ]
+    collision_txns = [
+        t for t in txns
+        if t["matchStatus"] == "conflict" and t.get("conflictReason") != "reconciled_date_fence"
+    ]
 
     return {
         "sourceFileSha256": source_file_sha256,
@@ -628,8 +640,13 @@ def preview_import(
             "count": len(txns),
             "unknownCount": converted_journal.count("Expenses:Unknown"),
             "newCount": len(new_txns),
-            "duplicateCount": len(duplicate_txns),
-            "conflictCount": len(conflict_txns),
+            # Identity collisions fold into duplicateCount — both mean "already
+            # imported, nothing to add" from the user's perspective. See
+            # DECISIONS §21.
+            "duplicateCount": len(duplicate_txns) + len(collision_txns),
+            # fenceCount counts only reconciled_date_fence rows — the only
+            # conflict reason the UI surfaces.
+            "fenceCount": len(fence_txns),
         },
         "preview": [t["annotatedRaw"].strip() for t in txns[:200]],
         "targetJournalPath": str(target_journal.resolve()),
@@ -645,6 +662,11 @@ def apply_import(config: AppConfig, stage: dict) -> tuple[str, int, int, list[di
 
     all_txns = stage.get("preparedTransactions", [])
     new_txns = [t for t in all_txns if t.get("matchStatus") == "new"]
+    # The conflicts list returned to callers contains only reconciled-date-
+    # fence rows — the only conflict reason the UI surfaces. Identity-collision
+    # conflicts are silently skipped at write time (still excluded from
+    # new_txns) and emit a diagnostic event for support visibility instead.
+    # See DECISIONS §21.
     conflicts = [
         {
             "date": t.get("date"),
@@ -655,6 +677,7 @@ def apply_import(config: AppConfig, stage: dict) -> tuple[str, int, int, list[di
         }
         for t in all_txns
         if t.get("matchStatus") == "conflict"
+        and t.get("conflictReason") == "reconciled_date_fence"
     ]
 
     if new_txns:
@@ -678,4 +701,16 @@ def apply_import(config: AppConfig, stage: dict) -> tuple[str, int, int, list[di
         ],
     )
 
-    return str(target.resolve()), len(new_txns), len([t for t in all_txns if t.get("matchStatus") == "duplicate"]), conflicts
+    # Skipped count folds duplicates + identity collisions: both are silent
+    # non-writes from the user's perspective. Fence rows are reported via
+    # the conflicts list, not the skipped count. See DECISIONS §21.
+    skipped_count = sum(
+        1
+        for t in all_txns
+        if t.get("matchStatus") == "duplicate"
+        or (
+            t.get("matchStatus") == "conflict"
+            and t.get("conflictReason") != "reconciled_date_fence"
+        )
+    )
+    return str(target.resolve()), len(new_txns), skipped_count, conflicts

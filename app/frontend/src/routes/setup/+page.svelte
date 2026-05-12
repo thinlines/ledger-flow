@@ -81,7 +81,7 @@
     summary?: {
       newCount: number;
       duplicateCount: number;
-      conflictCount: number;
+      fenceCount: number;
       unknownCount: number;
     };
     result?: {
@@ -93,7 +93,7 @@
   type AppliedImportSummary = {
     newCount: number;
     duplicateCount: number;
-    conflictCount: number;
+    fenceCount: number;
     unknownCount: number;
     appendedTxnCount: number;
     skippedDuplicateCount: number;
@@ -183,7 +183,7 @@
     return {
       newCount: preview.summary?.newCount ?? 0,
       duplicateCount: preview.summary?.duplicateCount ?? 0,
-      conflictCount: preview.summary?.conflictCount ?? 0,
+      fenceCount: preview.summary?.fenceCount ?? 0,
       unknownCount: preview.summary?.unknownCount ?? 0,
       appendedTxnCount: preview.result?.appendedTxnCount ?? preview.summary?.newCount ?? 0,
       skippedDuplicateCount: preview.result?.skippedDuplicateCount ?? preview.summary?.duplicateCount ?? 0
