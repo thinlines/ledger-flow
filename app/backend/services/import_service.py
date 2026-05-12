@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import re
 from dataclasses import dataclass
 from datetime import date
@@ -9,12 +10,15 @@ from pathlib import Path
 from .commodity_service import canonicalize_base_currency_posting
 from .config_service import AppConfig
 from .csv_normalizer import normalize_csv_to_intermediate
+from .event_log_service import emit_event, rel_path
 from .import_index import ImportIndex
 from .import_identity_service import source_payload_hash_for_lines
 from .import_profile_service import import_source_summary, resolve_import_source
 from .ledger_runner import CommandError, run_cmd
 from .payee_alias_service import ensure_payee_alias_dat
 from .workspace_service import ensure_standard_commodities_file, ensure_workspace_journal_includes
+
+_log = logging.getLogger(__name__)
 
 
 INBOX_FILE_RE = re.compile(
@@ -713,4 +717,67 @@ def apply_import(config: AppConfig, stage: dict) -> tuple[str, int, int, list[di
             and t.get("conflictReason") != "reconciled_date_fence"
         )
     )
+
+    # Diagnostic event per identity-collision row. Observability only —
+    # never block or fail the import. See DECISIONS §21.
+    _emit_identity_collision_events(
+        config,
+        target_journal=target,
+        import_account_id=stage.get("importAccountId", ""),
+        all_txns=all_txns,
+    )
+
     return str(target.resolve()), len(new_txns), skipped_count, conflicts
+
+
+def _emit_identity_collision_events(
+    config: AppConfig,
+    *,
+    target_journal: Path,
+    import_account_id: str,
+    all_txns: list[dict],
+) -> None:
+    """Emit one ``import.identity_collision.v1`` per identity-collision row.
+
+    Identity collisions are silently skipped at write time (excluded from
+    new_txns) and never surface in the UI. Per DECISIONS §21 we log them
+    to the event stream so support and debugging have a record of which
+    rows the importer refused to overwrite, with both the stored and the
+    newly-computed payload hashes for diff inspection.
+
+    The function is fail-soft: any emission error is logged and discarded
+    so a misbehaving event log cannot fail an otherwise-successful import.
+    """
+    journal_ref = rel_path(target_journal, config.root_dir)
+    for txn in all_txns:
+        if txn.get("matchStatus") != "conflict":
+            continue
+        if txn.get("conflictReason") != "identity_collision":
+            continue
+        try:
+            emit_event(
+                config.root_dir,
+                event_type="import.identity_collision.v1",
+                summary=(
+                    f"Identity collision skipped: {txn.get('payee') or 'unknown payee'} "
+                    f"on {txn.get('date') or 'unknown date'}"
+                ),
+                payload={
+                    "import_account_id": import_account_id,
+                    "source_identity": txn.get("sourceIdentity"),
+                    "stored_payload_hash": txn.get("storedPayloadHash"),
+                    "new_payload_hash": txn.get("sourcePayloadHash"),
+                    "target_journal": journal_ref,
+                    "date": txn.get("date"),
+                    "payee": txn.get("payee"),
+                },
+                # Diagnostic, not a mutation: no journal_refs.
+                journal_refs=[],
+                actor="system",
+            )
+        except Exception:
+            _log.warning(
+                "Failed to emit import.identity_collision.v1 event for %s",
+                txn.get("sourceIdentity"),
+                exc_info=True,
+            )

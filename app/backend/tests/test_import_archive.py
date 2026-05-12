@@ -1,9 +1,11 @@
+import json
 from pathlib import Path
 
 import pytest
 
 import services.import_service as import_service
 from services.config_service import AppConfig
+from services.event_log_service import EVENTS_FILENAME
 from services.import_service import (
     ImportPreviewBlockedError,
     apply_import,
@@ -380,6 +382,92 @@ def test_apply_import_skipped_count_folds_identity_collisions(tmp_path: Path) ->
     assert skipped_count == 3, "Identity collisions must fold into the skipped count"
     # No fence rows in this stage, so the conflicts list is empty
     assert conflicts == [], "Identity collisions must not appear in the conflicts list"
+
+
+def _read_events(workspace_root: Path) -> list[dict]:
+    events_file = workspace_root / EVENTS_FILENAME
+    if not events_file.exists():
+        return []
+    return [
+        json.loads(line)
+        for line in events_file.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+
+
+def test_apply_import_emits_identity_collision_diagnostic_event(tmp_path: Path) -> None:
+    """Each identity-collision row produces one import.identity_collision.v1
+    event with both the stored and the newly-computed payload hashes, so
+    operators can diff the two off-line."""
+    config = _make_config(tmp_path / "workspace")
+
+    stage = {
+        "targetJournalPath": str(config.journal_dir / "2026.journal"),
+        "preparedTransactions": [
+            _prepared_txn(date="2026/03/01", payee="Coffee", source_identity="new-1", amount="$-4.00"),
+            _prepared_collision_txn(
+                date="2026/03/02", payee="Rule-Edited Payee", source_identity="coll-1"
+            ),
+            _prepared_collision_txn(
+                date="2026/03/03", payee="Another Edit", source_identity="coll-2"
+            ),
+        ],
+        "importAccountId": "wf_checking",
+        "year": "2026",
+        "sourceFileSha256": "deadbeef",
+    }
+
+    apply_import(config, stage)
+
+    events = _read_events(config.root_dir)
+    collision_events = [e for e in events if e["type"] == "import.identity_collision.v1"]
+    assert len(collision_events) == 2, "One event per identity-collision row"
+
+    by_identity = {e["payload"]["source_identity"]: e for e in collision_events}
+    coll_1 = by_identity["coll-1"]
+    assert coll_1["payload"]["import_account_id"] == "wf_checking"
+    assert coll_1["payload"]["stored_payload_hash"] == "stored-payload-coll-1"
+    assert coll_1["payload"]["new_payload_hash"] == "new-payload-coll-1"
+    assert coll_1["payload"]["target_journal"] == "journals/2026.journal"
+    assert coll_1["payload"]["date"] == "2026/03/02"
+    assert coll_1["payload"]["payee"] == "Rule-Edited Payee"
+    assert coll_1["actor"] == "system"
+    # Diagnostic only — no journal mutation tracking.
+    assert coll_1["journal_refs"] == []
+
+
+def test_apply_import_does_not_emit_events_for_fence_or_duplicate_rows(tmp_path: Path) -> None:
+    config = _make_config(tmp_path / "workspace")
+
+    stage = {
+        "targetJournalPath": str(config.journal_dir / "2026.journal"),
+        "preparedTransactions": [
+            _prepared_txn(date="2026/05/01", payee="Coffee", source_identity="new-1", amount="$-4.00"),
+            {
+                "matchStatus": "duplicate",
+                "sourceIdentity": "dup-1",
+                "sourcePayloadHash": "payload-dup-1",
+                "date": "2026/05/02",
+                "payee": "Duplicate Row",
+                "annotatedRaw": "2026/05/02 Duplicate Row\n",
+            },
+            _prepared_fence_txn(
+                date="2026/04/15",
+                payee="Pre-Reconciliation",
+                source_identity="fence-1",
+                reconciled_through="2026-04-30",
+            ),
+        ],
+        "importAccountId": "wf_checking",
+        "year": "2026",
+        "sourceFileSha256": "deadbeef",
+    }
+
+    apply_import(config, stage)
+
+    events = _read_events(config.root_dir)
+    collision_events = [e for e in events if e["type"] == "import.identity_collision.v1"]
+    assert collision_events == [], "Only identity_collision conflicts emit diagnostic events"
 
 
 def test_apply_import_conflicts_list_contains_only_fence_rows(tmp_path: Path) -> None:
