@@ -41,6 +41,7 @@ from models import (
     WorkspaceSelectRequest,
 )
 from services.backup_service import backup_file
+from services.category_suggestion_service import suggest_category
 from services.event_log_service import check_drift, check_startup_drift, emit_event, hash_file, rel_path
 from services.git_snapshot_service import hours_since_last_snapshot, snapshot_commit
 from services.header_parser import TransactionStatus, parse_header, set_header_status, HEADER_RE as _HEADER_RE
@@ -1156,6 +1157,19 @@ def transactions_unmatch(req: UnmatchTransactionRequest) -> dict:
         _log.error("Event emission failed for unmatch", exc_info=True)
 
     return {"success": True, "eventId": event_id}
+
+
+# ---------------------------------------------------------------------------
+# Category suggestion
+# ---------------------------------------------------------------------------
+
+
+@app.get("/api/categories/suggest")
+def categories_suggest(payee: str = "") -> dict:
+    if not payee.strip():
+        return {"suggestion": None, "confidence": 0, "source": None, "alternatives": []}
+    config = _require_workspace_config()
+    return suggest_category(payee.strip(), config)
 
 
 # ---------------------------------------------------------------------------
