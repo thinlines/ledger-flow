@@ -6,6 +6,7 @@
 	import ZapIcon from '@lucide/svelte/icons/zap';
 
 	let search = '';
+	let selectedValue = '';
 
 	$: commands = Array.from($commandRegistry.values());
 
@@ -21,7 +22,7 @@
 
 <Command.Dialog
 	bind:open={$commandPaletteOpen}
-	bind:value={search}
+	bind:value={selectedValue}
 >
 	<Command.Input placeholder="Type a command or search..." bind:value={search} />
 	<Command.List>
