@@ -26,18 +26,20 @@
     </p>
 
     <div class="shrink-0">
-      {#if toast.status === 'idle'}
-        <button class={btnClass} type="button" on:click={() => void triggerUndo()}>
-          Undo
-        </button>
-      {:else if toast.status === 'undoing'}
-        <button class={btnClass} type="button" disabled>
-          Undoing…
-        </button>
-      {:else if toast.status === 'error'}
-        <button class={btnClass} type="button" on:click={dismissUndoToast}>
-          Dismiss
-        </button>
+      {#if toast.kind === 'undoable'}
+        {#if toast.status === 'idle'}
+          <button class={btnClass} type="button" on:click={() => void triggerUndo()}>
+            Undo
+          </button>
+        {:else if toast.status === 'undoing'}
+          <button class={btnClass} type="button" disabled>
+            Undoing…
+          </button>
+        {:else if toast.status === 'error'}
+          <button class={btnClass} type="button" on:click={dismissUndoToast}>
+            Dismiss
+          </button>
+        {/if}
       {/if}
     </div>
   </div>

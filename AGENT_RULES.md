@@ -48,9 +48,8 @@ This file captures repo-specific rules for agents and contributors. Use it with 
   - `source_payload_hash`
   - `source_file_sha256`
   - `importer_version`
-- Keep preview before apply.
+- Apply imports optimistically with an undoable toast. Interrupt the user only when a row would fall in a reconciled period (`conflictReason === 'reconciled_date_fence'`). Identity-collision conflicts silently skip and emit `import.identity_collision.v1` for diagnostic visibility. Trust is preserved at the write layer (`apply_import` never writes non-`new` rows) and via undo (toast + history `Undo Import`); not via a preview-before-apply screen.
 - Never auto-rewrite or normalize transactions that already exist in journals.
-- Surface conflicts for review instead of silently resolving them.
 - Preserve the audit trail: journal metadata plus the SQLite import index should continue to explain why an import was applied, skipped, or undoable.
 
 ## Verification Rules

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import re
 from dataclasses import dataclass
 from datetime import date
@@ -9,12 +10,15 @@ from pathlib import Path
 from .commodity_service import canonicalize_base_currency_posting
 from .config_service import AppConfig
 from .csv_normalizer import normalize_csv_to_intermediate
+from .event_log_service import emit_event, rel_path
 from .import_index import ImportIndex
 from .import_identity_service import source_payload_hash_for_lines
 from .import_profile_service import import_source_summary, resolve_import_source
 from .ledger_runner import CommandError, run_cmd
 from .payee_alias_service import ensure_payee_alias_dat
 from .workspace_service import ensure_standard_commodities_file, ensure_workspace_journal_includes
+
+_log = logging.getLogger(__name__)
 
 
 INBOX_FILE_RE = re.compile(
@@ -594,6 +598,11 @@ def preview_import(
             base_currency=base_currency,
         )
         txn["matchStatus"] = _classify_transaction(txn, existing_map)
+        if txn["matchStatus"] == "conflict":
+            # Capture the journal-side payload hash so apply_import can emit a
+            # diagnostic event for identity collisions without re-reading the
+            # journal. None means the existing entry lacked a stored hash.
+            txn["storedPayloadHash"] = existing_map.get(txn["sourceIdentity"])
         txn["annotatedRaw"] = _annotated_raw_txn(
             txn,
             source_file_sha256,
@@ -614,7 +623,14 @@ def preview_import(
 
     new_txns = [t for t in txns if t["matchStatus"] == "new"]
     duplicate_txns = [t for t in txns if t["matchStatus"] == "duplicate"]
-    conflict_txns = [t for t in txns if t["matchStatus"] == "conflict"]
+    fence_txns = [
+        t for t in txns
+        if t["matchStatus"] == "conflict" and t.get("conflictReason") == "reconciled_date_fence"
+    ]
+    collision_txns = [
+        t for t in txns
+        if t["matchStatus"] == "conflict" and t.get("conflictReason") != "reconciled_date_fence"
+    ]
 
     return {
         "sourceFileSha256": source_file_sha256,
@@ -624,17 +640,49 @@ def preview_import(
         "institutionTemplateId": source.get("institution_id"),
         "importMode": source["mode"],
         "importSourceDisplayName": source.get("display_name"),
+        # Linked tracked account (if any) so the conflict-resolution view can
+        # deep-link to /accounts/<id> for un-reconcile. None for orphan imports.
+        "trackedAccountId": _tracked_account_id_for_import_account(config, import_account_id),
         "summary": {
             "count": len(txns),
             "unknownCount": converted_journal.count("Expenses:Unknown"),
             "newCount": len(new_txns),
-            "duplicateCount": len(duplicate_txns),
-            "conflictCount": len(conflict_txns),
+            # Identity collisions fold into duplicateCount — both mean "already
+            # imported, nothing to add" from the user's perspective. See
+            # DECISIONS §21.
+            "duplicateCount": len(duplicate_txns) + len(collision_txns),
+            # fenceCount counts only reconciled_date_fence rows — the only
+            # conflict reason the UI surfaces.
+            "fenceCount": len(fence_txns),
         },
+        # Render-ready fence rows for the conflict-resolution view. Only fence
+        # conflicts appear here — identity collisions stay invisible to the UI.
+        "conflicts": _build_fence_conflicts(txns, account),
         "preview": [t["annotatedRaw"].strip() for t in txns[:200]],
         "targetJournalPath": str(target_journal.resolve()),
         "preparedTransactions": txns,
     }
+
+
+def _build_fence_conflicts(all_txns: list[dict], institution_account: str) -> list[dict]:
+    """Render-ready dicts for reconciled-date-fence rows. Includes ``amount``
+    so the conflict view can present them in transactions-register style.
+    Identity-collision rows are excluded — they never reach the UI."""
+    out: list[dict] = []
+    for t in all_txns:
+        if t.get("matchStatus") != "conflict":
+            continue
+        if t.get("conflictReason") != "reconciled_date_fence":
+            continue
+        out.append({
+            "date": t.get("date"),
+            "payee": t.get("payee"),
+            "amount": _extract_institution_amount(t.get("postings") or [], institution_account),
+            "sourceIdentity": t.get("sourceIdentity"),
+            "conflictReason": t.get("conflictReason"),
+            "reconciledThrough": t.get("reconciledThrough"),
+        })
+    return out
 
 
 def apply_import(config: AppConfig, stage: dict) -> tuple[str, int, int, list[dict]]:
@@ -645,17 +693,12 @@ def apply_import(config: AppConfig, stage: dict) -> tuple[str, int, int, list[di
 
     all_txns = stage.get("preparedTransactions", [])
     new_txns = [t for t in all_txns if t.get("matchStatus") == "new"]
-    conflicts = [
-        {
-            "date": t.get("date"),
-            "payee": t.get("payee"),
-            "sourceIdentity": t.get("sourceIdentity"),
-            "conflictReason": t.get("conflictReason"),
-            "reconciledThrough": t.get("reconciledThrough"),
-        }
-        for t in all_txns
-        if t.get("matchStatus") == "conflict"
-    ]
+    # The conflicts list returned to callers contains only reconciled-date-
+    # fence rows — the only conflict reason the UI surfaces. Identity-collision
+    # conflicts are silently skipped at write time (still excluded from
+    # new_txns) and emit a diagnostic event for support visibility instead.
+    # See DECISIONS §21.
+    conflicts = _build_fence_conflicts(all_txns, stage.get("destinationAccount", ""))
 
     if new_txns:
         preamble_lines, existing_blocks = _split_journal_preamble_and_transactions(target.read_text(encoding="utf-8"))
@@ -678,4 +721,79 @@ def apply_import(config: AppConfig, stage: dict) -> tuple[str, int, int, list[di
         ],
     )
 
-    return str(target.resolve()), len(new_txns), len([t for t in all_txns if t.get("matchStatus") == "duplicate"]), conflicts
+    # Skipped count folds duplicates + identity collisions: both are silent
+    # non-writes from the user's perspective. Fence rows are reported via
+    # the conflicts list, not the skipped count. See DECISIONS §21.
+    skipped_count = sum(
+        1
+        for t in all_txns
+        if t.get("matchStatus") == "duplicate"
+        or (
+            t.get("matchStatus") == "conflict"
+            and t.get("conflictReason") != "reconciled_date_fence"
+        )
+    )
+
+    # Diagnostic event per identity-collision row. Observability only —
+    # never block or fail the import. See DECISIONS §21.
+    _emit_identity_collision_events(
+        config,
+        target_journal=target,
+        import_account_id=stage.get("importAccountId", ""),
+        all_txns=all_txns,
+    )
+
+    return str(target.resolve()), len(new_txns), skipped_count, conflicts
+
+
+def _emit_identity_collision_events(
+    config: AppConfig,
+    *,
+    target_journal: Path,
+    import_account_id: str,
+    all_txns: list[dict],
+) -> None:
+    """Emit one ``import.identity_collision.v1`` per identity-collision row.
+
+    Identity collisions are silently skipped at write time (excluded from
+    new_txns) and never surface in the UI. Per DECISIONS §21 we log them
+    to the event stream so support and debugging have a record of which
+    rows the importer refused to overwrite, with both the stored and the
+    newly-computed payload hashes for diff inspection.
+
+    The function is fail-soft: any emission error is logged and discarded
+    so a misbehaving event log cannot fail an otherwise-successful import.
+    """
+    journal_ref = rel_path(target_journal, config.root_dir)
+    for txn in all_txns:
+        if txn.get("matchStatus") != "conflict":
+            continue
+        if txn.get("conflictReason") != "identity_collision":
+            continue
+        try:
+            emit_event(
+                config.root_dir,
+                event_type="import.identity_collision.v1",
+                summary=(
+                    f"Identity collision skipped: {txn.get('payee') or 'unknown payee'} "
+                    f"on {txn.get('date') or 'unknown date'}"
+                ),
+                payload={
+                    "import_account_id": import_account_id,
+                    "source_identity": txn.get("sourceIdentity"),
+                    "stored_payload_hash": txn.get("storedPayloadHash"),
+                    "new_payload_hash": txn.get("sourcePayloadHash"),
+                    "target_journal": journal_ref,
+                    "date": txn.get("date"),
+                    "payee": txn.get("payee"),
+                },
+                # Diagnostic, not a mutation: no journal_refs.
+                journal_refs=[],
+                actor="system",
+            )
+        except Exception:
+            _log.warning(
+                "Failed to emit import.identity_collision.v1 event for %s",
+                txn.get("sourceIdentity"),
+                exc_info=True,
+            )

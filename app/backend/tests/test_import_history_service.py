@@ -82,7 +82,7 @@ def _stage(
             "unknownCount": 0,
             "newCount": 1,
             "duplicateCount": 0,
-            "conflictCount": 0,
+            "fenceCount": 0,
         },
         "preparedTransactions": [
             {

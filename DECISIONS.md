@@ -36,7 +36,7 @@ This document records stable product and architecture choices that explain why t
 - Rerunning an import stays safe when identity fields are stable.
 - Journal text remains authoritative, while the import index acts as audit and idempotency memory.
 
-**Implication:** Preserve source identity and payload metadata, require preview before apply, and never auto-modify transactions that already exist in journals. New transactions may be merged into journal date order, but existing transaction text remains unchanged.
+**Implication:** Preserve source identity and payload metadata, refuse to write any non-`new` row at apply time, and never auto-modify transactions that already exist in journals. New transactions may be merged into journal date order, but existing transaction text remains unchanged. §21 supersedes the earlier "require preview before apply" framing: trust is enforced at the write layer + via undo (toast + history `Undo Import`), not via a preview-before-apply screen.
 
 ## 5. Treat Eventual Consistency as a Product Principle
 
@@ -184,3 +184,13 @@ with one zero-amount posting carrying a native balance assertion. Existing trans
 - Pre-existing journals were migrated to ISO via `Scripts/migrate_journal_dates_to_iso.py` in the same task. The script is idempotent, anchors with `^…\s` under `re.MULTILINE` so metadata comments (`; CSV: 2026/01/01,…`) stay untouched, skips `*.bak.*` files, and writes `<name>.iso-migration.bak.<timestamp>` per file before mutating.
 - Historical `*.bak.*` files keep their original slash format as a record of what existed.
 - Ledger ≥3.x respects `LEDGER_DATE_FORMAT`; older versions would fall back to the default and any cosmetic "found `$X`" string in error messages would arrive with slash dates. Our parsers don't depend on the format, so this only affects display.
+
+## 21. Imports Apply Optimistically; Only Reconciliation-Fence Conflicts Interrupt
+
+**Decision:** Imports apply silently with an undoable toast for the routine path. The only conflict reason that interrupts the user is `reconciled_date_fence`. Identity-collision conflicts are silently skipped at write time (as they are today) and emit a diagnostic event for support and debugging instead of surfacing in the UI.
+
+**Why:** §4's behavior (idempotent imports, conflict-visible, non-rewriting) is preserved at the write layer — `apply_import` continues to skip every non-`new` row. The visibility requirement that §4 implied — a preview screen with `new / duplicate / conflict` counts — was a mechanism, not a behavior. In practice, `identity_collision` almost always means "the user re-imported the same statement after editing a rule or upgrading the importer." There is no user action to take; surfacing it as a "conflict needing review" misleads. `reconciled_date_fence` (§17) is the only case where silent skip would erode trust — the user has personally attested to a balance, and missing the fact that we refused some rows could leave them thinking the statement landed clean when it didn't. That case warrants a focused, plain-language interrupt; nothing else does.
+
+**Implication:** Backend write semantics are unchanged. Frontend orchestration upload → preview → apply happens transparently in the routine path; only fence rows trigger a UI step. The audit trail required by §4 lives in `events.jsonl` (Feature 5b) + `workspace/.workflow/state.db` import index + the journal metadata, not in a preview-before-apply screen. Toast undo is the live affordance; the `Undo Import` button on history is the durable one. `import.identity_collision.v1` events are visible to operators via the event log, not to end users. The backend response field formerly named `summary.conflictCount` is renamed to `summary.fenceCount` and counts only `reconciled_date_fence` rows; identity collisions are folded into `summary.duplicateCount` since both mean "already imported, nothing to add" from the user's perspective. The `conflicts` list returned from `/api/import/preview`, `/api/import/upload?preview=true`, and `/api/import/apply` contains only fence rows.
+
+**References:** §4 (idempotent + conflict-visible), §12 (event-sourced undo as substrate), §17 (reconciled-date fence).
