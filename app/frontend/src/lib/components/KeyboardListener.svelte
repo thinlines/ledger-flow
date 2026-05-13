@@ -15,24 +15,26 @@
 	}
 
 	function handleKeydown(event: KeyboardEvent) {
-		// Ctrl+K (or Meta+K on Mac) always toggles the palette, even from inputs.
-		const paletteKey =
-			event.key.toLowerCase() === 'k' && (event.ctrlKey || event.metaKey) && !event.shiftKey && !event.altKey;
+		const key = event.key.toLowerCase();
+		const mod = event.ctrlKey || event.metaKey;
 
-		if (paletteKey) {
+		// Ctrl+K — always toggles the palette, even from inputs.
+		if (mod && key === 'k' && !event.shiftKey && !event.altKey) {
 			event.preventDefault();
 			commandPaletteOpen.update((v) => !v);
 			return;
 		}
 
-		// Skip shortcuts when focus is on an editable element.
-		if (isEditableTarget(event.target)) return;
-
+		// Match registered shortcuts. preventDefault early for all mod-key
+		// combos to beat the browser's native handling (e.g. Ctrl+N = new window).
 		for (const cmd of $commandRegistry.values()) {
 			if (!cmd.shortcut) continue;
 			const parsed = parseShortcut(cmd.shortcut);
 			if (matchesShortcut(event, parsed)) {
 				event.preventDefault();
+				// Still respect the editable guard for non-palette shortcuts,
+				// but only after preventing the browser default.
+				if (isEditableTarget(event.target)) return;
 				cmd.action();
 				return;
 			}

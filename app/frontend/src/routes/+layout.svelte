@@ -63,7 +63,7 @@
 			{
 				id: 'action.add-transaction',
 				label: 'Add Transaction',
-				shortcut: 'Ctrl+N',
+				shortcut: 'Alt+N',
 				category: 'actions',
 				action: () => openEntryModal(),
 				keywords: ['new', 'create', 'entry', 'manual']
