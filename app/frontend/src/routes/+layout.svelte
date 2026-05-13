@@ -9,9 +9,11 @@
 	import RecentActivitySheet from '$lib/components/RecentActivitySheet.svelte';
 	import KeyboardListener from '$lib/components/KeyboardListener.svelte';
 	import CommandPalette from '$lib/components/CommandPalette.svelte';
+	import TransactionEntryModal from '$lib/components/TransactionEntryModal.svelte';
 	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { registerCommands } from '$lib/command-registry';
+	import { openEntryModal } from '$lib/stores/entry-modal';
 
 	const navSections = [
 		{
@@ -63,9 +65,7 @@
 				label: 'Add Transaction',
 				shortcut: 'Ctrl+N',
 				category: 'actions',
-				action: () => {
-					/* wired in Task C */
-				},
+				action: () => openEntryModal(),
 				keywords: ['new', 'create', 'entry', 'manual']
 			},
 			{
@@ -301,6 +301,7 @@
 
 <KeyboardListener />
 <CommandPalette />
+<TransactionEntryModal />
 
 <style>
 	.brand-card {
