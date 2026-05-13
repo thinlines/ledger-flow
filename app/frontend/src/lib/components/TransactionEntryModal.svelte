@@ -1,5 +1,4 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
 	import { Dialog as DialogPrimitive } from 'bits-ui';
 	import XIcon from '@lucide/svelte/icons/x';
 	import CheckIcon from '@lucide/svelte/icons/check';
@@ -11,7 +10,6 @@
 	import { entryModal, closeEntryModal, incrementSession, setLastAccount } from '$lib/stores/entry-modal';
 	import type { TrackedAccount } from '$lib/transactions/types';
 
-	/* ── State ── */
 	let trackedAccounts: TrackedAccount[] = [];
 	let allAccounts: string[] = [];
 	let dataLoaded = false;
@@ -31,7 +29,6 @@
 	let suggestionSource: string | null = null;
 	let suggestedCategory = '';
 
-	/* ── Create-account modal (for new categories) ── */
 	let showCreateModal = false;
 	let newAccountName = '';
 	let newAccountType = 'Expense';
@@ -39,18 +36,12 @@
 	let createError = '';
 	let createLoading = false;
 
-	/* ── Refs ── */
 	let payeeEl: HTMLInputElement | null = null;
 	let notesEl: HTMLTextAreaElement | null = null;
-	let dateEl: HTMLInputElement | null = null;
 
-	/* ── Lifecycle ── */
 	function todayISO(): string {
 		const d = new Date();
-		const yyyy = d.getFullYear();
-		const mm = String(d.getMonth() + 1).padStart(2, '0');
-		const dd = String(d.getDate()).padStart(2, '0');
-		return `${yyyy}-${mm}-${dd}`;
+		return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 	}
 
 	async function loadData() {
@@ -65,32 +56,29 @@
 			allAccounts = al.accounts;
 			dataLoaded = true;
 			lastFetchTime = now;
-		} catch (e) {
+		} catch {
 			error = 'Failed to load accounts.';
 		}
 	}
 
-	function resetForm(keepContext = false) {
-		if (!keepContext) {
-			selectedAccountId = $entryModal.lastAccountId || (trackedAccounts[0]?.id ?? '');
-			txnDate = todayISO();
-		}
+	function resetForm() {
+		selectedAccountId = $entryModal.lastAccountId || (trackedAccounts[0]?.id ?? '');
+		txnDate = todayISO();
 		payee = '';
 		amount = '';
 		category = '';
 		notes = '';
 		showNotes = false;
 		error = '';
+		lastSaved = '';
 		suggestionSource = null;
 		suggestedCategory = '';
 	}
 
-	// React to modal open
 	$: if ($entryModal.open) {
 		void loadData().then(() => {
-			resetForm(false);
-			// Auto-focus date after render
-			setTimeout(() => dateEl?.focus(), 60);
+			resetForm();
+			setTimeout(() => payeeEl?.focus(), 60);
 		});
 	}
 
@@ -112,15 +100,12 @@
 				source: string | null;
 				alternatives: { account: string; frequency: number }[];
 			}>(`/api/categories/suggest?payee=${encodeURIComponent(payee.trim())}`);
-
 			if (result.suggestion && result.confidence >= 0.5 && !category) {
 				category = result.suggestion;
 				suggestedCategory = result.suggestion;
 				suggestionSource = result.source;
 			}
-		} catch {
-			// Silent — suggestion is optional
-		}
+		} catch { /* optional */ }
 	}
 
 	function handlePayeeBlur() {
@@ -128,37 +113,18 @@
 		void fetchSuggestion();
 	}
 
-	/* ── Account chip helpers ── */
-	function chipKind(account: TrackedAccount): string {
-		return account.kind === 'asset' ? 'asset' : account.kind === 'liability' ? 'liability' : 'other';
-	}
-
-	/* ── Notes toggle (Ctrl+;) ── */
-	function handleModalKeydown(event: KeyboardEvent) {
-		// Ctrl+; → toggle notes
+	/* ── Keyboard ── */
+	function handleKeydown(event: KeyboardEvent) {
 		if ((event.ctrlKey || event.metaKey) && event.key === ';') {
 			event.preventDefault();
-			if (!showNotes) {
-				showNotes = true;
-				setTimeout(() => notesEl?.focus(), 30);
-			} else {
-				notesEl?.focus();
-			}
-			return;
-		}
-
-		// Ctrl+Enter → Save & Add Another
-		if ((event.ctrlKey || event.metaKey) && event.key === 'Enter' && !event.shiftKey) {
-			event.preventDefault();
-			void submit(true);
-			return;
-		}
-
-		// Ctrl+Shift+Enter → Save & Close
-		if ((event.ctrlKey || event.metaKey) && event.shiftKey && event.key === 'Enter') {
+			showNotes = true;
+			setTimeout(() => notesEl?.focus(), 30);
+		} else if ((event.ctrlKey || event.metaKey) && event.shiftKey && event.key === 'Enter') {
 			event.preventDefault();
 			void submit(false);
-			return;
+		} else if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
+			event.preventDefault();
+			void submit(true);
 		}
 	}
 
@@ -181,57 +147,37 @@
 		showCreateModal = true;
 	}
 
-	function closeCreateModal() {
-		createError = '';
-		showCreateModal = false;
-	}
-
 	async function createAccountAndSelect() {
 		if (!newAccountName || !newAccountType) return;
 		createLoading = true;
 		createError = '';
 		try {
 			const result = await apiPost<{ added: boolean; warning: string | null }>('/api/accounts', {
-				account: newAccountName,
-				accountType: newAccountType,
-				description: newAccountDescription
+				account: newAccountName, accountType: newAccountType, description: newAccountDescription
 			});
-			if (result.warning) {
-				createError = result.warning;
-				return;
-			}
+			if (result.warning) { createError = result.warning; return; }
 			const refreshed = await apiGet<{ accounts: string[] }>('/api/accounts');
 			allAccounts = refreshed.accounts;
 			category = newAccountName;
 			showCreateModal = false;
-		} catch (e) {
-			createError = String(e);
-		} finally {
-			createLoading = false;
-		}
+		} catch (e) { createError = String(e); }
+		finally { createLoading = false; }
 	}
 
 	/* ── Submit ── */
 	async function submit(addAnother: boolean) {
 		if (!selectedAccountId || !txnDate || !payee.trim() || !amount.trim() || !category.trim()) {
-			error = 'Account, date, payee, amount, and category are required.';
+			error = 'All fields are required.';
 			return;
 		}
 		error = '';
 		submitting = true;
 		try {
 			const result = await apiPost<{
-				created: boolean;
-				warning?: string | null;
-				eventId?: string | null;
-				payee?: string;
-				amount?: string;
+				created: boolean; warning?: string | null; eventId?: string | null;
 			}>('/api/transactions/create', {
-				trackedAccountId: selectedAccountId,
-				date: txnDate,
-				payee: payee.trim(),
-				amount: amount.trim(),
-				destinationAccount: category.trim()
+				trackedAccountId: selectedAccountId, date: txnDate,
+				payee: payee.trim(), amount: amount.trim(), destinationAccount: category.trim()
 			});
 
 			const savedPayee = payee.trim();
@@ -241,216 +187,124 @@
 
 			if (addAnother) {
 				lastSaved = `${savedPayee} $${savedAmount}`;
-				// Clear form but keep date + account
-				payee = '';
-				amount = '';
-				notes = '';
-				showNotes = false;
-				category = '';
-				suggestionSource = null;
-				suggestedCategory = '';
-				error = '';
+				payee = ''; amount = ''; notes = ''; showNotes = false;
+				category = ''; suggestionSource = null; suggestedCategory = ''; error = '';
 				setTimeout(() => payeeEl?.focus(), 30);
 			} else {
-				if (result.eventId) {
-					showUndoToast(result.eventId, `Added: ${savedPayee} $${savedAmount}`);
-				}
+				if (result.eventId) showUndoToast(result.eventId, `Added: ${savedPayee} $${savedAmount}`);
 				closeEntryModal();
 				lastSaved = '';
 			}
-
-			if (result.warning) {
-				error = result.warning;
-			}
-		} catch (e) {
-			error = String(e);
-		} finally {
-			submitting = false;
-		}
+			if (result.warning) error = result.warning;
+		} catch (e) { error = String(e); }
+		finally { submitting = false; }
 	}
 
 	function handleOpenChange(open: boolean) {
-		if (!open) {
-			closeEntryModal();
-			lastSaved = '';
-		}
+		if (!open) { closeEntryModal(); lastSaved = ''; }
 	}
 </script>
 
 <DialogPrimitive.Root open={$entryModal.open} onOpenChange={handleOpenChange}>
 	<DialogPrimitive.Portal>
-		<DialogPrimitive.Overlay class="entry-modal-overlay fixed inset-0 z-30 bg-black/30 backdrop-blur-[2px]" />
+		<DialogPrimitive.Overlay class="entry-overlay fixed inset-0 z-30 bg-black/25" />
 
 		<DialogPrimitive.Content
-			class="entry-modal fixed top-1/2 left-1/2 z-40 w-full max-w-[min(32rem,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 overflow-auto rounded-2xl border border-line shadow-card"
+			class="entry-dialog fixed top-1/2 left-1/2 z-40 w-full max-w-[min(26rem,calc(100vw-1.5rem))] -translate-x-1/2 -translate-y-1/2 overflow-y-auto max-h-[calc(100vh-2rem)] rounded-2xl border border-line shadow-card"
 		>
 			<DialogPrimitive.Title class="sr-only">Add Transaction</DialogPrimitive.Title>
 			<DialogPrimitive.Description class="sr-only">Enter a new manual transaction</DialogPrimitive.Description>
 
 			<!-- svelte-ignore a11y-no-static-element-interactions -->
-			<div class="entry-modal-inner grid gap-5 p-5" on:keydown={handleModalKeydown}>
+			<div class="e-surface" on:keydown={handleKeydown}>
+
 				<!-- Header -->
-				<div class="flex items-center justify-between gap-4">
-					<div>
-						<p class="eyebrow m-0">New Transaction</p>
-						<h2 class="m-0 font-display text-xl">Quick Entry</h2>
-					</div>
-					<DialogPrimitive.Close
-						class="inline-flex size-9 items-center justify-center rounded-lg text-muted-foreground hover:bg-accent hover:text-foreground"
-					>
-						<XIcon class="size-4" />
-						<span class="sr-only">Close</span>
+				<div class="e-head">
+					<h2 class="m-0 font-display text-lg">New Transaction</h2>
+					<DialogPrimitive.Close class="e-x">
+						<XIcon class="size-4" /><span class="sr-only">Close</span>
 					</DialogPrimitive.Close>
 				</div>
 
-				<!-- Account chips — horizontal scroll on narrow screens -->
-				<div class="field" role="group" aria-label="Account">
-					<span class="font-semibold text-muted-foreground text-sm">Account</span>
-					<div class="chip-row">
-						{#each trackedAccounts as account (account.id)}
-							<button
-								type="button"
-								class="account-chip"
-								class:selected={selectedAccountId === account.id}
-								class:chip-asset={chipKind(account) === 'asset'}
-								class:chip-liability={chipKind(account) === 'liability'}
-								on:click={() => { selectedAccountId = account.id; }}
-							>
-								<span class="chip-indicator"></span>
-								<span class="chip-label">{account.displayName}</span>
-								{#if account.last4}
-									<span class="text-muted-foreground text-xs">...{account.last4}</span>
-								{/if}
-							</button>
-						{/each}
-					</div>
-				</div>
+				{#if lastSaved}
+					<p class="e-flash"><CheckIcon class="size-3.5" /> {lastSaved}</p>
+				{/if}
 
-				<!-- Date + Payee row -->
-				<div class="entry-row-2col">
-					<div class="field field-date">
-						<label for="entry-date">Date</label>
-						<input
-							id="entry-date"
-							type="date"
-							bind:this={dateEl}
-							bind:value={txnDate}
-						/>
+				<!-- Fields -->
+				<div class="e-fields">
+					<div class="field">
+						<label for="e-acct">Account</label>
+						<select id="e-acct" bind:value={selectedAccountId}>
+							{#each trackedAccounts as a (a.id)}
+								<option value={a.id}>{a.displayName}{a.last4 ? ` (...${a.last4})` : ''}</option>
+							{/each}
+						</select>
 					</div>
-					<div class="field field-grow">
-						<label for="entry-payee">Payee</label>
-						<input
-							id="entry-payee"
-							type="text"
-							bind:this={payeeEl}
-							bind:value={payee}
+
+					<div class="field">
+						<label for="e-date">Date</label>
+						<input id="e-date" type="date" bind:value={txnDate} />
+					</div>
+
+					<div class="field">
+						<label for="e-payee">Payee</label>
+						<input id="e-payee" type="text" bind:this={payeeEl} bind:value={payee}
 							placeholder="e.g. Coffee Shop"
-							on:input={debounceSuggestion}
-							on:blur={handlePayeeBlur}
-						/>
+							on:input={debounceSuggestion} on:blur={handlePayeeBlur} />
 					</div>
-				</div>
 
-				<!-- Amount + Category row -->
-				<div class="entry-row-2col">
-					<div class="field field-amount">
-						<label for="entry-amount">Amount</label>
-						<input
-							id="entry-amount"
-							type="text"
-							inputmode="decimal"
-							bind:value={amount}
-							placeholder="0.00"
-						/>
+					<div class="field">
+						<label for="e-amt">Amount</label>
+						<input id="e-amt" type="text" inputmode="decimal" bind:value={amount} placeholder="0.00" />
 					</div>
-					<div class="field field-grow">
-						<label for="entry-category">
+
+					<div class="field">
+						<label for="e-cat">
 							Category
 							{#if suggestionSource && category === suggestedCategory}
-								<span class="suggestion-badge" class:rule={suggestionSource === 'rule'} class:history={suggestionSource === 'history'}>
-									{suggestionSource === 'rule' ? 'Rule match' : 'Similar payees'}
+								<span class="e-badge" class:rule={suggestionSource === 'rule'} class:hist={suggestionSource === 'history'}>
+									{suggestionSource === 'rule' ? 'rule' : 'similar'}
 								</span>
 							{/if}
 						</label>
 						<AccountCombobox
-							accounts={allAccounts}
-							value={category}
-							placeholder="e.g. Expenses:Food"
-							onChange={(account) => { category = account; }}
-							onCreate={(seed) => openCreateModal(seed)}
-						/>
+							accounts={allAccounts} value={category} placeholder="e.g. Expenses:Food"
+							onChange={(v) => { category = v; }} onCreate={(s) => openCreateModal(s)} />
 					</div>
+
+					{#if showNotes}
+						<div class="field">
+							<label for="e-notes">Notes</label>
+							<textarea id="e-notes" bind:this={notesEl} bind:value={notes}
+								rows="2" placeholder="Optional" class="resize-none"></textarea>
+						</div>
+					{:else}
+						<button type="button" class="e-notes-btn" on:click={() => { showNotes = true; setTimeout(() => notesEl?.focus(), 30); }}>
+							<StickyNoteIcon class="size-3.5" /> Notes <kbd>Ctrl+;</kbd>
+						</button>
+					{/if}
 				</div>
 
-				<!-- Notes (collapsible) -->
-				{#if showNotes}
-					<div class="field">
-						<label for="entry-notes">Notes</label>
-						<textarea
-							id="entry-notes"
-							bind:this={notesEl}
-							bind:value={notes}
-							rows="2"
-							placeholder="Optional notes..."
-							class="resize-none"
-						></textarea>
-					</div>
-				{:else}
-					<button
-						type="button"
-						class="notes-toggle flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground"
-						on:click={() => { showNotes = true; setTimeout(() => notesEl?.focus(), 30); }}
-					>
-						<StickyNoteIcon class="size-3.5" />
-						Add notes
-						<span class="text-xs opacity-60">Ctrl+;</span>
-					</button>
-				{/if}
-
-				<!-- Error -->
 				{#if error}
-					<p class="m-0 text-sm text-destructive">{error}</p>
+					<p class="e-err">{error}</p>
 				{/if}
 
-				<!-- Status + Actions -->
-				{#if $entryModal.sessionCount > 0 || lastSaved}
-					<div class="text-sm text-muted-foreground">
+				<!-- Footer -->
+				<div class="e-foot">
+					<div class="e-meta">
 						{#if $entryModal.sessionCount > 0}
-							<span class="session-counter">
-								<CheckIcon class="size-3.5 inline -mt-0.5" />
-								{$entryModal.sessionCount} {$entryModal.sessionCount === 1 ? 'entry' : 'entries'}
-							</span>
+							<span class="e-count">{$entryModal.sessionCount} added</span>
 						{/if}
-						{#if lastSaved}
-							<span class="last-saved">Saved: {lastSaved}</span>
-						{/if}
+						<span class="e-keys"><kbd>⌃↵</kbd> next · <kbd>⌃⇧↵</kbd> close</span>
 					</div>
-				{/if}
-
-				<div class="entry-actions">
-					<button
-						type="button"
-						class="btn"
-						disabled={submitting}
-						on:click={() => void submit(false)}
-					>
-						{submitting ? 'Saving...' : 'Save & Close'}
-					</button>
-					<button
-						type="button"
-						class="btn btn-primary"
-						disabled={submitting}
-						on:click={() => void submit(true)}
-					>
-						Save & Add Another
-					</button>
-				</div>
-
-				<!-- Keyboard hints — hidden on touch/narrow screens -->
-				<div class="entry-hints flex flex-wrap gap-3 text-xs text-muted-foreground opacity-60">
-					<span>Ctrl+Enter save & add</span>
-					<span>Ctrl+Shift+Enter save & close</span>
-					<span>Esc close</span>
+					<div class="e-btns">
+						<button type="button" class="btn" disabled={submitting} on:click={() => void submit(false)}>
+							{submitting ? 'Saving…' : 'Close'}
+						</button>
+						<button type="button" class="btn btn-primary" disabled={submitting} on:click={() => void submit(true)}>
+							Save & Next
+						</button>
+					</div>
 				</div>
 			</div>
 		</DialogPrimitive.Content>
@@ -458,195 +312,85 @@
 </DialogPrimitive.Root>
 
 <CreateAccountModal
-	bind:open={showCreateModal}
-	bind:accountName={newAccountName}
-	bind:accountType={newAccountType}
-	bind:accountDescription={newAccountDescription}
-	error={createError}
-	loading={createLoading}
-	accountNamePlaceholder="Expenses:Food:Dining"
+	bind:open={showCreateModal} bind:accountName={newAccountName}
+	bind:accountType={newAccountType} bind:accountDescription={newAccountDescription}
+	error={createError} loading={createLoading} accountNamePlaceholder="Expenses:Food:Dining"
 	onNameInput={() => { newAccountType = inferAccountType(newAccountName); }}
-	onClose={closeCreateModal}
-	onSubmit={createAccountAndSelect}
-/>
+	onClose={() => { createError = ''; showCreateModal = false; }}
+	onSubmit={createAccountAndSelect} />
 
 <style>
-	.entry-modal-inner {
-		background:
-			linear-gradient(165deg, #f9faf6 0%, #f4f4ea 40%, #f6fbff 100%);
+	:global(.entry-overlay) { animation: e-fade 0.15s ease-out; }
+	:global(.entry-dialog) { animation: e-in 0.18s ease-out; }
+	@keyframes e-fade { from { opacity: 0 } }
+	@keyframes e-in {
+		from { opacity: 0; transform: translate(-50%, -50%) scale(0.97) }
+	}
+	@media (prefers-reduced-motion: reduce) {
+		:global(.entry-overlay), :global(.entry-dialog) { animation: none }
 	}
 
-	/* Tighter spacing on narrow screens */
-	@media (max-width: 480px) {
-		.entry-modal-inner {
-			gap: 0.85rem;
-			padding: 1rem 1rem 1.25rem;
-		}
+	.e-surface {
+		background: linear-gradient(168deg, #fafaf5, #f4f4ea 55%, #f5f9fc);
+		padding: 1.25rem 1.5rem 1rem;
 	}
 
-	:global(.entry-modal-overlay) {
-		animation: entry-fade-in 0.18s ease-out;
-	}
-
-	:global(.entry-modal) {
-		animation: entry-zoom-in 0.2s ease-out;
-	}
-
-	@keyframes entry-fade-in {
-		from { opacity: 0; }
-		to { opacity: 1; }
-	}
-
-	@keyframes entry-zoom-in {
-		from { opacity: 0; transform: translate(-50%, -50%) scale(0.96); }
-		to { opacity: 1; transform: translate(-50%, -50%) scale(1); }
-	}
-
-	/* ── Account chips ── */
-	.chip-row {
-		display: flex;
-		flex-wrap: wrap;
-		gap: 0.4rem;
-	}
-
-	.account-chip {
+	.e-head {
 		display: flex;
 		align-items: center;
-		gap: 0.35rem;
-		padding: 0.35rem 0.65rem;
-		border-radius: 9999px;
-		border: 1px solid rgba(10, 61, 89, 0.12);
-		background: white;
-		font-size: 0.82rem;
-		font-weight: 600;
-		color: var(--brand-strong, #0a3d59);
-		cursor: pointer;
-		transition: all 0.15s;
-		white-space: nowrap;
+		justify-content: space-between;
+		margin-bottom: 0.85rem;
+	}
+	:global(.e-x) {
+		display: inline-flex; align-items: center; justify-content: center;
+		width: 1.75rem; height: 1.75rem; border-radius: 0.375rem;
+		border: none; background: none; color: var(--muted-foreground); cursor: pointer;
+	}
+	:global(.e-x:hover) { background: var(--accent); color: var(--foreground) }
+
+	.e-flash {
+		display: flex; align-items: center; gap: 0.3rem;
+		margin: 0 0 0.6rem; font-size: 0.8rem; font-weight: 500; color: var(--ok);
 	}
 
-	.account-chip:hover {
-		border-color: rgba(15, 95, 136, 0.25);
-		background: rgba(255, 255, 255, 0.95);
+	.e-fields {
+		display: grid;
+		gap: 0.65rem;
 	}
 
-	.account-chip.selected {
-		color: #fff;
-		background: linear-gradient(130deg, #0f5f88, #0c7b59);
-		border-color: transparent;
-		box-shadow: 0 4px 12px rgba(15, 95, 136, 0.2);
+	.e-badge {
+		font-size: 0.65rem; font-weight: 500;
+		padding: 0.05rem 0.3rem; border-radius: 9999px;
+		margin-left: 0.3rem; vertical-align: middle;
 	}
+	.e-badge.rule { background: rgba(13,127,88,0.1); color: var(--ok) }
+	.e-badge.hist { background: rgba(15,95,136,0.1); color: var(--brand) }
 
-	.chip-indicator {
-		width: 5px;
-		height: 5px;
-		border-radius: 50%;
-		flex-shrink: 0;
+	.e-notes-btn {
+		display: flex; align-items: center; gap: 0.35rem;
+		font-size: 0.82rem; color: var(--muted-foreground);
+		background: none; border: none; padding: 0; cursor: pointer;
 	}
+	.e-notes-btn:hover { color: var(--foreground) }
+	.e-notes-btn kbd { font-size: 0.68rem; opacity: 0.5; font-family: inherit }
 
-	.chip-asset .chip-indicator { background: #0f5f88; }
-	.chip-liability .chip-indicator { background: #9a5129; }
-	.account-chip.selected .chip-indicator { background: rgba(255, 255, 255, 0.7); }
+	.e-err { margin: 0.5rem 0 0; font-size: 0.8rem; color: var(--destructive) }
 
-	/* Narrow screens: horizontal scroll, no wrap */
+	.e-foot {
+		display: flex; align-items: flex-end; justify-content: space-between;
+		gap: 0.75rem; margin-top: 0.85rem; padding-top: 0.7rem;
+		border-top: 1px solid var(--line);
+	}
+	.e-meta { display: grid; gap: 0.1rem; font-size: 0.7rem; color: var(--muted-foreground) }
+	.e-count { font-weight: 600; color: var(--ok) }
+	.e-keys kbd { font-size: 0.65rem; font-family: inherit; opacity: 0.55 }
+	.e-btns { display: flex; gap: 0.35rem; flex-shrink: 0 }
+
 	@media (max-width: 480px) {
-		.chip-row {
-			flex-wrap: nowrap;
-			overflow-x: auto;
-			-webkit-overflow-scrolling: touch;
-			scrollbar-width: none;
-			padding-bottom: 2px;
-		}
-
-		.chip-row::-webkit-scrollbar { display: none; }
-	}
-
-	/* ── Two-column field rows ── */
-	.entry-row-2col {
-		display: grid;
-		grid-template-columns: auto 1fr;
-		gap: 0.75rem;
-	}
-
-	.field-date input,
-	.field-amount input {
-		width: 8rem;
-	}
-
-	/* Only collapse to single column on truly tiny screens */
-	@media (max-width: 360px) {
-		.entry-row-2col { grid-template-columns: 1fr; }
-		.field-date input,
-		.field-amount input { width: 100%; }
-	}
-
-	/* ── Action buttons ── */
-	.entry-actions {
-		display: flex;
-		gap: 0.5rem;
-		justify-content: flex-end;
-	}
-
-	/* ── Keyboard hints — hide on narrow/touch ── */
-	@media (max-width: 720px) {
-		.entry-hints { display: none; }
-	}
-
-	/* ── Suggestion badge ── */
-	.suggestion-badge {
-		display: inline-block;
-		font-size: 0.72rem;
-		font-weight: 500;
-		padding: 0.1rem 0.45rem;
-		border-radius: 9999px;
-		margin-left: 0.4rem;
-		vertical-align: middle;
-	}
-
-	.suggestion-badge.rule {
-		background: rgba(13, 127, 88, 0.1);
-		color: #0d7f58;
-	}
-
-	.suggestion-badge.history {
-		background: rgba(15, 95, 136, 0.1);
-		color: #0f5f88;
-	}
-
-	/* ── Notes toggle ── */
-	.notes-toggle {
-		background: none;
-		border: none;
-		padding: 0;
-		cursor: pointer;
-	}
-
-	/* ── Session counter ── */
-	.session-counter {
-		color: #0d7f58;
-	}
-
-	.last-saved {
-		color: #0d7f58;
-		margin-left: 0.5rem;
-	}
-
-	/* ── Fields ── */
-	.field {
-		display: grid;
-		gap: 0.35rem;
-	}
-
-	.field label {
-		font-size: 0.86rem;
-		font-weight: 600;
-		color: var(--muted-foreground);
-	}
-
-	@media (prefers-reduced-motion: reduce) {
-		:global(.entry-modal-overlay),
-		:global(.entry-modal) {
-			animation: none;
-		}
+		.e-surface { padding: 1rem 1.1rem 0.85rem }
+		.e-foot { flex-direction: column; align-items: stretch; gap: 0.5rem }
+		.e-btns { justify-content: stretch }
+		.e-btns .btn { flex: 1 }
+		.e-keys { display: none }
 	}
 </style>
