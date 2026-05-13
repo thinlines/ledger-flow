@@ -303,10 +303,10 @@
 					</DialogPrimitive.Close>
 				</div>
 
-				<!-- Account chips -->
+				<!-- Account chips — horizontal scroll on narrow screens -->
 				<div class="field" role="group" aria-label="Account">
 					<span class="font-semibold text-muted-foreground text-sm">Account</span>
-					<div class="flex flex-wrap gap-2">
+					<div class="chip-row">
 						{#each trackedAccounts as account (account.id)}
 							<button
 								type="button"
@@ -317,7 +317,7 @@
 								on:click={() => { selectedAccountId = account.id; }}
 							>
 								<span class="chip-indicator"></span>
-								<span class="truncate">{account.displayName}</span>
+								<span class="chip-label">{account.displayName}</span>
 								{#if account.last4}
 									<span class="text-muted-foreground text-xs">...{account.last4}</span>
 								{/if}
@@ -327,8 +327,8 @@
 				</div>
 
 				<!-- Date + Payee row -->
-				<div class="grid grid-cols-[auto_1fr] gap-3 max-shell:grid-cols-1">
-					<div class="field">
+				<div class="entry-row-2col">
+					<div class="field field-date">
 						<label for="entry-date">Date</label>
 						<input
 							id="entry-date"
@@ -337,7 +337,7 @@
 							bind:value={txnDate}
 						/>
 					</div>
-					<div class="field">
+					<div class="field field-grow">
 						<label for="entry-payee">Payee</label>
 						<input
 							id="entry-payee"
@@ -352,8 +352,8 @@
 				</div>
 
 				<!-- Amount + Category row -->
-				<div class="grid grid-cols-[auto_1fr] gap-3 max-shell:grid-cols-1">
-					<div class="field">
+				<div class="entry-row-2col">
+					<div class="field field-amount">
 						<label for="entry-amount">Amount</label>
 						<input
 							id="entry-amount"
@@ -363,7 +363,7 @@
 							placeholder="0.00"
 						/>
 					</div>
-					<div class="field">
+					<div class="field field-grow">
 						<label for="entry-category">
 							Category
 							{#if suggestionSource && category === suggestedCategory}
@@ -412,42 +412,42 @@
 					<p class="m-0 text-sm text-destructive">{error}</p>
 				{/if}
 
-				<!-- Actions -->
-				<div class="flex items-center justify-between gap-3">
+				<!-- Status + Actions -->
+				{#if $entryModal.sessionCount > 0 || lastSaved}
 					<div class="text-sm text-muted-foreground">
 						{#if $entryModal.sessionCount > 0}
 							<span class="session-counter">
 								<CheckIcon class="size-3.5 inline -mt-0.5" />
-								{$entryModal.sessionCount} {$entryModal.sessionCount === 1 ? 'entry' : 'entries'} this session
+								{$entryModal.sessionCount} {$entryModal.sessionCount === 1 ? 'entry' : 'entries'}
 							</span>
 						{/if}
 						{#if lastSaved}
 							<span class="last-saved">Saved: {lastSaved}</span>
 						{/if}
 					</div>
+				{/if}
 
-					<div class="flex gap-2">
-						<button
-							type="button"
-							class="btn"
-							disabled={submitting}
-							on:click={() => void submit(false)}
-						>
-							{submitting ? 'Saving...' : 'Save & Close'}
-						</button>
-						<button
-							type="button"
-							class="btn btn-primary"
-							disabled={submitting}
-							on:click={() => void submit(true)}
-						>
-							Save & Add Another
-						</button>
-					</div>
+				<div class="entry-actions">
+					<button
+						type="button"
+						class="btn"
+						disabled={submitting}
+						on:click={() => void submit(false)}
+					>
+						{submitting ? 'Saving...' : 'Save & Close'}
+					</button>
+					<button
+						type="button"
+						class="btn btn-primary"
+						disabled={submitting}
+						on:click={() => void submit(true)}
+					>
+						Save & Add Another
+					</button>
 				</div>
 
-				<!-- Keyboard hints -->
-				<div class="flex flex-wrap gap-3 text-xs text-muted-foreground opacity-60">
+				<!-- Keyboard hints — hidden on touch/narrow screens -->
+				<div class="entry-hints flex flex-wrap gap-3 text-xs text-muted-foreground opacity-60">
 					<span>Ctrl+Enter save & add</span>
 					<span>Ctrl+Shift+Enter save & close</span>
 					<span>Esc close</span>
@@ -476,6 +476,14 @@
 			linear-gradient(165deg, #f9faf6 0%, #f4f4ea 40%, #f6fbff 100%);
 	}
 
+	/* Tighter spacing on narrow screens */
+	@media (max-width: 480px) {
+		.entry-modal-inner {
+			gap: 0.85rem;
+			padding: 1rem 1rem 1.25rem;
+		}
+	}
+
 	:global(.entry-modal-overlay) {
 		animation: entry-fade-in 0.18s ease-out;
 	}
@@ -495,19 +503,26 @@
 	}
 
 	/* ── Account chips ── */
+	.chip-row {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.4rem;
+	}
+
 	.account-chip {
 		display: flex;
 		align-items: center;
-		gap: 0.4rem;
-		padding: 0.4rem 0.75rem;
+		gap: 0.35rem;
+		padding: 0.35rem 0.65rem;
 		border-radius: 9999px;
 		border: 1px solid rgba(10, 61, 89, 0.12);
 		background: white;
-		font-size: 0.86rem;
+		font-size: 0.82rem;
 		font-weight: 600;
 		color: var(--brand-strong, #0a3d59);
 		cursor: pointer;
 		transition: all 0.15s;
+		white-space: nowrap;
 	}
 
 	.account-chip:hover {
@@ -519,25 +534,62 @@
 		color: #fff;
 		background: linear-gradient(130deg, #0f5f88, #0c7b59);
 		border-color: transparent;
-		box-shadow: 0 6px 16px rgba(15, 95, 136, 0.2);
+		box-shadow: 0 4px 12px rgba(15, 95, 136, 0.2);
 	}
 
 	.chip-indicator {
-		width: 6px;
-		height: 6px;
+		width: 5px;
+		height: 5px;
 		border-radius: 50%;
+		flex-shrink: 0;
 	}
 
-	.chip-asset .chip-indicator {
-		background: #0f5f88;
+	.chip-asset .chip-indicator { background: #0f5f88; }
+	.chip-liability .chip-indicator { background: #9a5129; }
+	.account-chip.selected .chip-indicator { background: rgba(255, 255, 255, 0.7); }
+
+	/* Narrow screens: horizontal scroll, no wrap */
+	@media (max-width: 480px) {
+		.chip-row {
+			flex-wrap: nowrap;
+			overflow-x: auto;
+			-webkit-overflow-scrolling: touch;
+			scrollbar-width: none;
+			padding-bottom: 2px;
+		}
+
+		.chip-row::-webkit-scrollbar { display: none; }
 	}
 
-	.chip-liability .chip-indicator {
-		background: #9a5129;
+	/* ── Two-column field rows ── */
+	.entry-row-2col {
+		display: grid;
+		grid-template-columns: auto 1fr;
+		gap: 0.75rem;
 	}
 
-	.account-chip.selected .chip-indicator {
-		background: rgba(255, 255, 255, 0.7);
+	.field-date input,
+	.field-amount input {
+		width: 8rem;
+	}
+
+	/* Only collapse to single column on truly tiny screens */
+	@media (max-width: 360px) {
+		.entry-row-2col { grid-template-columns: 1fr; }
+		.field-date input,
+		.field-amount input { width: 100%; }
+	}
+
+	/* ── Action buttons ── */
+	.entry-actions {
+		display: flex;
+		gap: 0.5rem;
+		justify-content: flex-end;
+	}
+
+	/* ── Keyboard hints — hide on narrow/touch ── */
+	@media (max-width: 720px) {
+		.entry-hints { display: none; }
 	}
 
 	/* ── Suggestion badge ── */
