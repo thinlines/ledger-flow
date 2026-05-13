@@ -210,7 +210,7 @@
 		<DialogPrimitive.Overlay class="entry-overlay fixed inset-0 z-30 bg-black/25" />
 
 		<DialogPrimitive.Content
-			class="entry-dialog fixed top-1/2 left-1/2 z-40 w-full max-w-[min(26rem,calc(100vw-1.5rem))] -translate-x-1/2 -translate-y-1/2 overflow-y-auto max-h-[calc(100vh-2rem)] rounded-2xl border border-line shadow-card"
+			class="entry-dialog fixed top-1/2 left-1/2 z-40 w-full max-w-[min(30rem,calc(100vw-1.5rem))] -translate-x-1/2 -translate-y-1/2 overflow-y-auto max-h-[calc(100vh-2rem)] rounded-2xl border border-line shadow-card"
 		>
 			<DialogPrimitive.Title class="sr-only">Add Transaction</DialogPrimitive.Title>
 			<DialogPrimitive.Description class="sr-only">Enter a new manual transaction</DialogPrimitive.Description>
@@ -241,35 +241,37 @@
 						</select>
 					</div>
 
-					<div class="field">
-						<label for="e-date">Date</label>
-						<input id="e-date" type="date" bind:value={txnDate} />
+					<div class="e-row">
+						<div class="field e-date-field">
+							<label for="e-date">Date</label>
+							<input id="e-date" type="date" bind:value={txnDate} />
+						</div>
+						<div class="field e-grow">
+							<label for="e-payee">Payee</label>
+							<input id="e-payee" type="text" bind:this={payeeEl} bind:value={payee}
+								placeholder="e.g. Coffee Shop"
+								on:input={debounceSuggestion} on:blur={handlePayeeBlur} />
+						</div>
 					</div>
 
-					<div class="field">
-						<label for="e-payee">Payee</label>
-						<input id="e-payee" type="text" bind:this={payeeEl} bind:value={payee}
-							placeholder="e.g. Coffee Shop"
-							on:input={debounceSuggestion} on:blur={handlePayeeBlur} />
-					</div>
-
-					<div class="field">
-						<label for="e-amt">Amount</label>
-						<input id="e-amt" type="text" inputmode="decimal" bind:value={amount} placeholder="0.00" />
-					</div>
-
-					<div class="field">
-						<label for="e-cat">
-							Category
-							{#if suggestionSource && category === suggestedCategory}
-								<span class="e-badge" class:rule={suggestionSource === 'rule'} class:hist={suggestionSource === 'history'}>
-									{suggestionSource === 'rule' ? 'rule' : 'similar'}
-								</span>
-							{/if}
-						</label>
-						<AccountCombobox
-							accounts={allAccounts} value={category} placeholder="e.g. Expenses:Food"
-							onChange={(v) => { category = v; }} onCreate={(s) => openCreateModal(s)} />
+					<div class="e-row">
+						<div class="field e-amt-field">
+							<label for="e-amt">Amount</label>
+							<input id="e-amt" type="text" inputmode="decimal" bind:value={amount} placeholder="0.00" />
+						</div>
+						<div class="field e-grow">
+							<label for="e-cat">
+								Category
+								{#if suggestionSource && category === suggestedCategory}
+									<span class="e-badge" class:rule={suggestionSource === 'rule'} class:hist={suggestionSource === 'history'}>
+										{suggestionSource === 'rule' ? 'rule' : 'similar'}
+									</span>
+								{/if}
+							</label>
+							<AccountCombobox
+								accounts={allAccounts} value={category} placeholder="e.g. Expenses:Food"
+								onChange={(v) => { category = v; }} onCreate={(s) => openCreateModal(s)} />
+						</div>
 					</div>
 
 					{#if showNotes}
@@ -358,6 +360,14 @@
 		gap: 0.65rem;
 	}
 
+	.e-row {
+		display: grid;
+		grid-template-columns: auto 1fr;
+		gap: 0.65rem;
+	}
+	.e-date-field { width: 10.5rem; }
+	.e-amt-field { width: 7.5rem; }
+
 	.e-badge {
 		font-size: 0.65rem; font-weight: 500;
 		padding: 0.05rem 0.3rem; border-radius: 9999px;
@@ -388,6 +398,8 @@
 
 	@media (max-width: 480px) {
 		.e-surface { padding: 1rem 1.1rem 0.85rem }
+		.e-row { grid-template-columns: 1fr }
+		.e-date-field, .e-amt-field { width: 100% }
 		.e-foot { flex-direction: column; align-items: stretch; gap: 0.5rem }
 		.e-btns { justify-content: stretch }
 		.e-btns .btn { flex: 1 }
