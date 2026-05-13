@@ -44,11 +44,11 @@
           name: 'Income',
           type: 'bar' as const,
           cursor: 'pointer',
+          color: '#1d9f6e',
+          itemStyle: { borderRadius: [4, 4, 0, 0] },
           data: series.map((r, i) => ({
             value: r.income,
             itemStyle: {
-              color: '#1d9f6e',
-              borderRadius: [4, 4, 0, 0],
               opacity: focusedIndex !== null && focusedIndex !== i ? 0.35 : 1
             }
           }))
@@ -57,11 +57,11 @@
           name: 'Spending',
           type: 'bar' as const,
           cursor: 'pointer',
+          color: '#0a3d59',
+          itemStyle: { borderRadius: [4, 4, 0, 0] },
           data: series.map((r, i) => ({
             value: r.spending,
             itemStyle: {
-              color: '#0a3d59',
-              borderRadius: [4, 4, 0, 0],
               opacity: focusedIndex !== null && focusedIndex !== i ? 0.35 : 1
             }
           }))
