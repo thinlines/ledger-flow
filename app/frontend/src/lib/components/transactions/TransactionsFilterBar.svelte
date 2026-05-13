@@ -130,7 +130,7 @@
       {/if}
       <button
         bind:this={helpBtnEl}
-        class="ml-1 inline-flex items-center justify-center w-5 h-5 rounded-full border border-[rgba(10,61,89,0.15)] bg-white text-[0.7rem] font-semibold text-[var(--muted-foreground)] hover:bg-[rgba(15,95,136,0.08)] hover:text-[var(--foreground)] transition-colors cursor-pointer"
+        class="ml-1 inline-flex items-center justify-center w-5 h-5 rounded-full border border-[rgba(10,61,89,0.15)] bg-white text-[0.7rem] font-semibold text-muted-foreground hover:bg-[rgba(15,95,136,0.08)] hover:text-foreground transition-colors cursor-pointer"
         type="button"
         on:click={toggleHelp}
         aria-label="Search syntax help"
@@ -140,18 +140,18 @@
           bind:this={helpPopoverEl}
           class="absolute top-full left-0 mt-1.5 z-50 w-72 rounded-lg border border-[rgba(10,61,89,0.12)] bg-white shadow-lg p-3"
         >
-          <p class="text-[0.78rem] font-semibold text-[var(--foreground)] mb-2">Search syntax</p>
+          <p class="text-[0.78rem] font-semibold text-foreground mb-2">Search syntax</p>
           <table class="w-full text-[0.74rem] leading-snug">
             <tbody>
-              <tr><td class="pr-3 py-0.5 font-mono text-[var(--brand-strong)] whitespace-nowrap">amount:&gt;100</td><td class="text-[var(--muted-foreground)]">Over $100</td></tr>
-              <tr><td class="pr-3 py-0.5 font-mono text-[var(--brand-strong)] whitespace-nowrap">amount:50..200</td><td class="text-[var(--muted-foreground)]">$50 to $200</td></tr>
-              <tr><td class="pr-3 py-0.5 font-mono text-[var(--brand-strong)] whitespace-nowrap">category:food</td><td class="text-[var(--muted-foreground)]">Category contains "food"</td></tr>
-              <tr><td class="pr-3 py-0.5 font-mono text-[var(--brand-strong)] whitespace-nowrap">date:this-month</td><td class="text-[var(--muted-foreground)]">Current month</td></tr>
-              <tr><td class="pr-3 py-0.5 font-mono text-[var(--brand-strong)] whitespace-nowrap">status:cleared</td><td class="text-[var(--muted-foreground)]">Bank-confirmed only</td></tr>
-              <tr><td class="pr-3 py-0.5 font-mono text-[var(--brand-strong)] whitespace-nowrap">account:chase</td><td class="text-[var(--muted-foreground)]">Account name contains "chase"</td></tr>
+              <tr><td class="pr-3 py-0.5 font-mono text-brand-strong whitespace-nowrap">amount:&gt;100</td><td class="text-muted-foreground">Over $100</td></tr>
+              <tr><td class="pr-3 py-0.5 font-mono text-brand-strong whitespace-nowrap">amount:50..200</td><td class="text-muted-foreground">$50 to $200</td></tr>
+              <tr><td class="pr-3 py-0.5 font-mono text-brand-strong whitespace-nowrap">category:food</td><td class="text-muted-foreground">Category contains "food"</td></tr>
+              <tr><td class="pr-3 py-0.5 font-mono text-brand-strong whitespace-nowrap">date:this-month</td><td class="text-muted-foreground">Current month</td></tr>
+              <tr><td class="pr-3 py-0.5 font-mono text-brand-strong whitespace-nowrap">status:cleared</td><td class="text-muted-foreground">Bank-confirmed only</td></tr>
+              <tr><td class="pr-3 py-0.5 font-mono text-brand-strong whitespace-nowrap">account:chase</td><td class="text-muted-foreground">Account name contains "chase"</td></tr>
             </tbody>
           </table>
-          <p class="mt-2 text-[0.7rem] text-[var(--muted-foreground)]">Combine terms with spaces. Plain text matches payee.</p>
+          <p class="mt-2 text-[0.7rem] text-muted-foreground">Combine terms with spaces. Plain text matches payee.</p>
         </div>
       {/if}
     </div>

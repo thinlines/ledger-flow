@@ -500,7 +500,7 @@
         {/each}
       </div>
       {#if postedRows.length > 0}
-        <div class="sticky bottom-0 flex items-center justify-between border-t border-[rgba(10,61,89,0.08)] bg-white/90 backdrop-blur-sm px-4 py-2 text-sm text-muted-foreground">
+        <div class="sticky bottom-0 flex items-center justify-between border-t border-card-edge bg-white/90 backdrop-blur-sm px-4 py-2 text-sm text-muted-foreground">
           <span>{postedRows.length} {postedRows.length === 1 ? 'transaction' : 'transactions'}</span>
           <span class:text-green-600={filteredAccountKind && filteredTotal > 0} class="font-medium">
             {filteredAccountKind
