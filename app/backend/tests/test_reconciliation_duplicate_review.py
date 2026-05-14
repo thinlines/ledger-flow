@@ -195,13 +195,13 @@ class TestDuplicateResolution:
         journal = _seed_journal(
             config,
             (
-                "2026-03-01 Manual groceries\n"
+                "2026-03-01 Winco groceries\n"
                 "    ; :manual:\n"
                 "    ; notes: remembered later\n"
                 "    Assets:Checking:Wells Fargo  $-25.00\n"
                 "    Expenses:Food:Groceries\n"
                 "\n"
-                "2026-03-02 Grocery Store\n"
+                "2026-03-02 Winco Foods Store\n"
                 "    ; import_account_id: checking\n"
                 "    ; source_identity: import-1\n"
                 "    ; source_payload_hash: payload-1\n"
@@ -210,8 +210,8 @@ class TestDuplicateResolution:
             ),
         )
         rows = _context_rows(config, monkeypatch)
-        manual = _row_by_payee(rows, "Manual groceries")
-        imported = _row_by_payee(rows, "Grocery Store")
+        manual = _row_by_payee(rows, "Winco groceries")
+        imported = _row_by_payee(rows, "Winco Foods Store")
 
         review = main.accounts_reconciliation_duplicate_review(
             "checking",
@@ -241,11 +241,11 @@ class TestDuplicateResolution:
         assert result["removedSelectionKeys"] == [manual["selectionKey"]]
         assert result["addedCheckedSelectionKeys"] == [imported["selectionKey"]]
         assert result["eventId"]
-        assert "Manual groceries" not in updated
+        assert "Winco groceries" not in updated
         assert "Expenses:Food:Groceries" in updated
         assert "; notes: remembered later" in updated
         assert "; match-id:" in updated
-        assert "Manual groceries" in archive
+        assert "Winco groceries" in archive
         assert events[-1]["type"] == "reconciliation.imported_transaction_used.v1"
 
     def test_remove_manual_duplicate_deletes_unchecked_manual_row(
@@ -406,13 +406,13 @@ class TestDuplicateResolution:
         _seed_journal(
             config,
             (
-                "2026-03-01 Manual groceries split\n"
+                "2026-03-01 Winco split purchase\n"
                 "    ; :manual:\n"
                 "    Assets:Checking:Wells Fargo  $-25.00\n"
                 "    Expenses:Food:Groceries  $-20.00\n"
                 "    Expenses:Food:Dining  $-5.00\n"
                 "\n"
-                "2026-03-02 Grocery Store\n"
+                "2026-03-02 Winco Foods Store\n"
                 "    ; import_account_id: checking\n"
                 "    ; source_identity: import-1\n"
                 "    ; source_payload_hash: payload-1\n"
@@ -422,8 +422,8 @@ class TestDuplicateResolution:
         )
 
         rows = _context_rows(config, monkeypatch)
-        manual = _row_by_payee(rows, "Manual groceries split")
-        imported = _row_by_payee(rows, "Grocery Store")
+        manual = _row_by_payee(rows, "Winco split purchase")
+        imported = _row_by_payee(rows, "Winco Foods Store")
 
         with pytest.raises(main.HTTPException) as exc_info:
             main.accounts_reconciliation_duplicate_resolution(
