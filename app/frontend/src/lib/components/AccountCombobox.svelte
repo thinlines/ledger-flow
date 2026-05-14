@@ -2,6 +2,7 @@
   import CheckIcon from '@lucide/svelte/icons/check';
   import PlusIcon from '@lucide/svelte/icons/plus';
   import * as Command from '$lib/components/ui/command/index.js';
+  import * as Popover from '$lib/components/ui/popover/index.js';
   import { cn } from '$lib/utils.js';
 
   export let accounts: string[] = [];
@@ -15,16 +16,15 @@
   let open = false;
   let query = '';
   let inputEl: HTMLInputElement | null = null;
-  let panelEl: HTMLDivElement | null = null;
   let blurTimer: ReturnType<typeof setTimeout> | null = null;
   const listId = `acct-combo-${Math.random().toString(36).slice(2, 8)}`;
 
-  $: filteredAccounts = filterAccounts(accounts, query);
+  $: filteredAccounts = filterAccounts(accounts, query, value);
   $: displayValue = open ? query : (value || '');
 
-  function filterAccounts(items: string[], search: string): string[] {
+  function filterAccounts(items: string[], search: string, selected: string): string[] {
     const normalized = search.trim().toLowerCase();
-    if (!normalized) return items.slice(0, 50);
+    if (!normalized || normalized === selected.toLowerCase()) return items.slice(0, 50);
     return items.filter((account) => account.toLowerCase().includes(normalized)).slice(0, 50);
   }
 
@@ -43,10 +43,23 @@
     onCreate(seed);
   }
 
+  function selectHighlightedOrFirst() {
+    if (filteredAccounts.length === 0) return;
+    const popoverEl = document.getElementById(listId);
+    const selectedEl = popoverEl?.querySelector('[aria-selected="true"]');
+    const selectedValue = selectedEl?.getAttribute('data-value');
+    if (selectedValue && accounts.includes(selectedValue)) {
+      selectAccount(selectedValue);
+    } else {
+      selectAccount(filteredAccounts[0]);
+    }
+  }
+
   function handleFocus() {
     if (blurTimer) { clearTimeout(blurTimer); blurTimer = null; }
-    query = '';
+    query = value || '';
     open = true;
+    requestAnimationFrame(() => inputEl?.select());
   }
 
   function handleBlur() {
@@ -55,6 +68,10 @@
       query = '';
       blurTimer = null;
     }, 200);
+  }
+
+  function handleOpenChange(isOpen: boolean) {
+    if (!isOpen) { open = false; query = ''; }
   }
 
   function handleInputKeydown(event: KeyboardEvent) {
@@ -66,21 +83,16 @@
       return;
     }
     if (event.key === 'Tab') {
-      open = false;
-      query = '';
+      if (open && filteredAccounts.length > 0) {
+        selectHighlightedOrFirst();
+      }
       return;
     }
     if (event.key === 'Enter') {
       event.preventDefault();
       event.stopPropagation();
       if (filteredAccounts.length > 0) {
-        const selectedEl = panelEl?.querySelector('[aria-selected="true"]');
-        const selectedValue = selectedEl?.getAttribute('data-value');
-        if (selectedValue && accounts.includes(selectedValue)) {
-          selectAccount(selectedValue);
-        } else {
-          selectAccount(filteredAccounts[0]);
-        }
+        selectHighlightedOrFirst();
       } else if (allowCreate && query.trim()) {
         requestCreate();
       }
@@ -89,7 +101,8 @@
     if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
       event.preventDefault();
       if (!open) { open = true; return; }
-      const items = panelEl ? Array.from(panelEl.querySelectorAll('[data-slot="command-item"]')) : [];
+      const popoverEl = document.getElementById(listId);
+      const items = popoverEl ? Array.from(popoverEl.querySelectorAll('[data-slot="command-item"]')) : [];
       if (items.length === 0) return;
       const current = items.findIndex((el) => el.getAttribute('aria-selected') === 'true');
       let next: number;
@@ -126,13 +139,15 @@
     on:keydown={handleInputKeydown}
   />
 
-  {#if open}
-    <!-- svelte-ignore a11y_no_static_element_interactions -->
-    <div
-      bind:this={panelEl}
+  <Popover.Root bind:open onOpenChange={handleOpenChange}>
+    <Popover.Trigger class="absolute inset-0 -z-10" tabindex={-1} aria-hidden="true">
+      <span class="sr-only">anchor</span>
+    </Popover.Trigger>
+    <Popover.Content
       id={listId}
-      class="absolute top-full left-0 z-50 mt-1 w-full rounded-md border bg-popover text-popover-foreground shadow-md"
-      on:pointerdown|preventDefault
+      class="w-(--bits-popover-anchor-width) max-w-[calc(100vw-2rem)] p-0"
+      align="start"
+      sideOffset={4}
     >
       <Command.Root shouldFilter={false}>
         <Command.List>
@@ -176,6 +191,6 @@
           {/if}
         </Command.List>
       </Command.Root>
-    </div>
-  {/if}
+    </Popover.Content>
+  </Popover.Root>
 </div>

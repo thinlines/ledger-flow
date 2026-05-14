@@ -7,6 +7,7 @@
 	import { showUndoToast } from '$lib/undo-toast';
 	import AccountCombobox from '$lib/components/AccountCombobox.svelte';
 	import * as Command from '$lib/components/ui/command/index.js';
+	import * as Popover from '$lib/components/ui/popover/index.js';
 	import CreateAccountModal from '$lib/components/CreateAccountModal.svelte';
 	import { entryModal, closeEntryModal, incrementSession, setLastAccount } from '$lib/stores/entry-modal';
 	import type { TrackedAccount } from '$lib/transactions/types';
@@ -45,16 +46,16 @@
 	let acctOpen = false;
 	let acctQuery = '';
 	let acctInputEl: HTMLInputElement | null = null;
-	let acctPanelEl: HTMLDivElement | null = null;
 	let acctBlurTimer: ReturnType<typeof setTimeout> | null = null;
 
-	$: filteredTracked = filterTracked(trackedAccounts, acctQuery);
+	$: filteredTracked = filterTracked(trackedAccounts, acctQuery, selectedAccount);
 	$: selectedAccount = trackedAccounts.find((a) => a.id === selectedAccountId) ?? null;
 	$: acctDisplayValue = acctOpen ? acctQuery : (selectedAccount ? acctLabel(selectedAccount) : '');
 
-	function filterTracked(items: TrackedAccount[], search: string): TrackedAccount[] {
+	function filterTracked(items: TrackedAccount[], search: string, selected: TrackedAccount | null): TrackedAccount[] {
 		const normalized = search.trim().toLowerCase();
 		if (!normalized) return items;
+		if (selected && normalized === acctLabel(selected).toLowerCase()) return items;
 		return items.filter((a) => a.displayName.toLowerCase().includes(normalized));
 	}
 
@@ -68,10 +69,20 @@
 		acctOpen = false;
 	}
 
+	function acctSelectHighlightedOrFirst() {
+		if (filteredTracked.length === 0) return;
+		const popoverEl = document.getElementById('e-acct-list');
+		const selectedEl = popoverEl?.querySelector('[aria-selected="true"]');
+		const selectedValue = selectedEl?.getAttribute('data-value');
+		const match = filteredTracked.find((a) => a.id === selectedValue);
+		selectTrackedAccount(match ?? filteredTracked[0]);
+	}
+
 	function handleAcctFocus() {
 		if (acctBlurTimer) { clearTimeout(acctBlurTimer); acctBlurTimer = null; }
-		acctQuery = '';
+		acctQuery = selectedAccount ? acctLabel(selectedAccount) : '';
 		acctOpen = true;
+		requestAnimationFrame(() => acctInputEl?.select());
 	}
 
 	function handleAcctBlur() {
@@ -80,6 +91,10 @@
 			acctQuery = '';
 			acctBlurTimer = null;
 		}, 200);
+	}
+
+	function handleAcctOpenChange(isOpen: boolean) {
+		if (!isOpen) { acctOpen = false; acctQuery = ''; }
 	}
 
 	function handleAcctKeydown(event: KeyboardEvent) {
@@ -91,25 +106,24 @@
 			return;
 		}
 		if (event.key === 'Tab') {
-			acctOpen = false;
-			acctQuery = '';
+			if (acctOpen && filteredTracked.length > 0) {
+				acctSelectHighlightedOrFirst();
+			}
 			return;
 		}
 		if (event.key === 'Enter') {
 			event.preventDefault();
 			event.stopPropagation();
 			if (filteredTracked.length > 0) {
-				const selectedEl = acctPanelEl?.querySelector('[aria-selected="true"]');
-				const selectedValue = selectedEl?.getAttribute('data-value');
-				const match = filteredTracked.find((a) => a.id === selectedValue);
-				selectTrackedAccount(match ?? filteredTracked[0]);
+				acctSelectHighlightedOrFirst();
 			}
 			return;
 		}
 		if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
 			event.preventDefault();
 			if (!acctOpen) { acctOpen = true; return; }
-			const items = acctPanelEl ? Array.from(acctPanelEl.querySelectorAll('[data-slot="command-item"]')) : [];
+			const popoverEl = document.getElementById('e-acct-list');
+			const items = popoverEl ? Array.from(popoverEl.querySelectorAll('[data-slot="command-item"]')) : [];
 			if (items.length === 0) return;
 			const current = items.findIndex((el) => el.getAttribute('aria-selected') === 'true');
 			let next: number;
@@ -371,13 +385,15 @@
 							on:input={(e) => { acctQuery = e.currentTarget.value; if (!acctOpen) acctOpen = true; }}
 							on:keydown={handleAcctKeydown}
 						/>
-						{#if acctOpen}
-							<!-- svelte-ignore a11y_no_static_element_interactions -->
-							<div
-								bind:this={acctPanelEl}
+						<Popover.Root bind:open={acctOpen} onOpenChange={handleAcctOpenChange}>
+							<Popover.Trigger class="absolute inset-0 -z-10" tabindex={-1} aria-hidden="true">
+								<span class="sr-only">anchor</span>
+							</Popover.Trigger>
+							<Popover.Content
 								id="e-acct-list"
-								class="absolute top-full left-0 z-50 mt-1 w-full rounded-md border bg-popover text-popover-foreground shadow-md"
-								on:pointerdown|preventDefault
+								class="w-(--bits-popover-anchor-width) max-w-[calc(100vw-2rem)] p-0"
+								align="start"
+								sideOffset={4}
 							>
 								<Command.Root shouldFilter={false}>
 									<Command.List>
@@ -395,8 +411,8 @@
 										{/if}
 									</Command.List>
 								</Command.Root>
-							</div>
-						{/if}
+							</Popover.Content>
+						</Popover.Root>
 					</div>
 
 					{#if showNotes}
