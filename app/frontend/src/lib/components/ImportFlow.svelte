@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { apiGet, apiPost } from '$lib/api';
-  import { showImportUndoToast, showInfoToast } from '$lib/undo-toast';
+  import { showImportUndoToast } from '$lib/undo-toast';
 
   type Candidate = {
     file_name: string;
@@ -11,6 +11,8 @@
     detected_import_account_display_name: string | null;
     detected_institution_display_name: string | null;
     is_configured_import_account: boolean;
+    transaction_count: number | null;
+    date_range: { start: string; end: string } | null;
   };
 
   type ImportAccountOption = {
@@ -81,9 +83,6 @@
       sourceCsvWarning?: string | null;
     };
     summary?: {
-      // Persisted history entries may carry the old `conflictCount` field
-      // (pre-§21). New entries write `fenceCount`. Read both for forward
-      // and backward compatibility.
       fenceCount?: number;
       conflictCount?: number;
     };
@@ -121,6 +120,13 @@
     fenceRows: FenceRow[];
   };
 
+  type StagedPreview = {
+    stageId: string;
+    newCount: number;
+    duplicateCount: number;
+    fenceCount: number;
+  };
+
   export let mode: 'standalone' | 'setup' = 'standalone';
   export let refreshToken = 0;
   export let onApplied: ((preview: PreviewResult) => void | Promise<void>) | null = null;
@@ -133,7 +139,6 @@
   let importAccountId = '';
   let selectedFile: File | null = null;
   let historyEntries: ImportHistoryEntry[] = [];
-  let historyMessage = '';
   let error = '';
   let recoveryState: ImportRecoveryState | null = null;
   let loadingState: LoadingState = 'idle';
@@ -141,40 +146,50 @@
   let lastRefreshToken = refreshToken;
   let statementFileInput: HTMLInputElement | null = null;
   let selectedCandidate: Candidate | null = null;
-
-  // The conflict-resolution view replaces the main panel when a stage
-  // produces fence rows. Per DECISIONS §21 this is the only conflict reason
-  // the UI surfaces; identity collisions silently skip.
   let conflictView: ConflictView | null = null;
-
-  // Inline year-override affordance: hidden by default, shown when the user
-  // clicks "Change". A 400ms debounce on input avoids one-import-per-keystroke.
-  let yearOverrideOpen = false;
-  let yearDebounceTimer: ReturnType<typeof setTimeout> | null = null;
-
-  // Idempotency: re-trigger only when the selection or year actually changes.
-  // Format: `${importAccountId}|${year}|${filePathOrName}`. Reset to '' when
-  // a manual retry should fire.
   let lastTriggerKey = '';
+  let stagedPreview: StagedPreview | null = null;
+  let dropZoneActive = false;
+  let dropError = '';
+  let showAllHistory = false;
+  let expandedHistoryId = '';
 
-  $: selectedCandidate = candidates.find((candidate) => candidate.abs_path === selectedPath) ?? null;
+  $: selectedCandidate = candidates.find((c) => c.abs_path === selectedPath) ?? null;
   $: loading = loadingState !== 'idle';
   $: if (hydrated && refreshToken !== lastRefreshToken) {
     lastRefreshToken = refreshToken;
     void loadImportData();
   }
+  $: visibleHistory = showAllHistory ? historyEntries : historyEntries.slice(0, 5);
 
-  function pathLabel(path: string): string {
-    const parts = path.split('/').filter(Boolean);
-    return parts.at(-1) ?? path;
-  }
-
-  function optionalPathLabel(path?: string | null, fallback = 'Unknown file'): string {
-    return path ? pathLabel(path) : fallback;
-  }
+  // ── Helpers ──
 
   function accountLabel(account: ImportAccountOption): string {
     return account.last4 ? `${account.displayName} ••${account.last4}` : account.displayName;
+  }
+
+  function candidateLabel(candidate: Candidate): string {
+    return candidate.detected_import_account_display_name ?? candidate.file_name;
+  }
+
+  function candidateSecondary(candidate: Candidate): string | null {
+    if (!candidate.transaction_count || !candidate.date_range) return null;
+    const start = formatShortDate(candidate.date_range.start);
+    const end = formatShortDate(candidate.date_range.end);
+    return `${candidate.transaction_count} transactions · ${start} – ${end}`;
+  }
+
+  function formatShortDate(iso: string): string {
+    const date = new Date(`${iso}T00:00:00`);
+    if (Number.isNaN(date.getTime())) return iso;
+    return new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' }).format(date);
+  }
+
+  function formatHistoryDate(value?: string | null): string {
+    if (!value) return '';
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return '';
+    return new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' }).format(date);
   }
 
   function formatDateTime(value?: string | null): string {
@@ -193,8 +208,6 @@
     return count === 1 ? singular : pluralForm;
   }
 
-  /** Format an ISO date (YYYY-MM-DD) as a human-friendly date for the
-   *  conflict view body and un-reconcile link copy. */
   function formatReconciledThrough(iso: string): string {
     if (!iso) return 'your last reconciliation date';
     const date = new Date(`${iso}T00:00:00`);
@@ -202,13 +215,15 @@
     return new Intl.DateTimeFormat(undefined, { dateStyle: 'long' }).format(date);
   }
 
-  /** Short date for register-style rows in the conflict view. Accepts
-   *  either YYYY-MM-DD or YYYY/MM/DD from the importer. */
   function formatFenceDate(raw: string): string {
     const normalized = raw.replace(/\//g, '-');
     const date = new Date(`${normalized}T00:00:00`);
     if (Number.isNaN(date.getTime())) return raw;
     return new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' }).format(date);
+  }
+
+  function optionalPathLabel(path?: string | null, fallback = 'Unknown file'): string {
+    return path ? (path.split('/').filter(Boolean).at(-1) ?? path) : fallback;
   }
 
   function clearSelectedFile() {
@@ -218,9 +233,16 @@
 
   function resetImportState() {
     error = '';
-    historyMessage = '';
     recoveryState = null;
   }
+
+  // ── File validation ──
+
+  function isValidCsv(file: File): boolean {
+    return file.name.toLowerCase().endsWith('.csv') || file.type === 'text/csv';
+  }
+
+  // ── API helpers ──
 
   function parseApiFailure(path: string, status: number, text: string): ParsedApiFailure {
     let detail: unknown = null;
@@ -289,8 +311,10 @@
     return (await res.json()) as T;
   }
 
+  // ── State management ──
+
   function readyForTrigger(): boolean {
-    return Boolean(importAccountId && year && (selectedFile || selectedPath));
+    return Boolean(importAccountId && (selectedFile || selectedPath));
   }
 
   function setImportAccount(nextId: string) {
@@ -298,25 +322,9 @@
     importAccountId = nextId;
     resetImportState();
     conflictView = null;
+    stagedPreview = null;
     lastTriggerKey = '';
-    if (readyForTrigger() && !loading) void triggerImport();
-  }
-
-  function setYear(nextYear: string) {
-    if (nextYear === year) return;
-    year = nextYear;
-    resetImportState();
-    conflictView = null;
-    if (yearDebounceTimer !== null) clearTimeout(yearDebounceTimer);
-    yearDebounceTimer = setTimeout(() => {
-      yearDebounceTimer = null;
-      lastTriggerKey = '';
-      if (readyForTrigger() && !loading) void triggerImport();
-    }, 400);
-  }
-
-  function toggleYearOverride() {
-    yearOverrideOpen = !yearOverrideOpen;
+    if (readyForTrigger() && !loading) void triggerPreview();
   }
 
   function onStatementFileChange(event: Event) {
@@ -329,8 +337,9 @@
     }
     resetImportState();
     conflictView = null;
+    stagedPreview = null;
     lastTriggerKey = '';
-    if (readyForTrigger() && !loading) void triggerImport();
+    if (readyForTrigger() && !loading) void triggerPreview();
   }
 
   function pickCandidate(candidate: Candidate) {
@@ -340,9 +349,50 @@
     importAccountId = candidate.detected_import_account_id ?? importAccountId;
     resetImportState();
     conflictView = null;
+    stagedPreview = null;
     lastTriggerKey = '';
-    if (readyForTrigger() && !loading) void triggerImport();
+    if (readyForTrigger() && !loading) void triggerPreview();
   }
+
+  // ── Drop zone handlers ──
+
+  function onDragOver(e: DragEvent) {
+    e.preventDefault();
+    dropZoneActive = true;
+  }
+
+  function onDragLeave() {
+    dropZoneActive = false;
+  }
+
+  function onDrop(e: DragEvent) {
+    e.preventDefault();
+    dropZoneActive = false;
+    dropError = '';
+
+    const files = e.dataTransfer?.files;
+    if (!files || files.length === 0) return;
+
+    const file = Array.from(files).find(isValidCsv);
+    if (!file) {
+      dropError = 'Choose a CSV file';
+      return;
+    }
+
+    selectedFile = file;
+    selectedPath = '';
+    resetImportState();
+    conflictView = null;
+    stagedPreview = null;
+    lastTriggerKey = '';
+    if (readyForTrigger() && !loading) void triggerPreview();
+  }
+
+  function openFilePicker() {
+    statementFileInput?.click();
+  }
+
+  // ── Data loading ──
 
   async function loadImportData() {
     try {
@@ -369,11 +419,11 @@
         importAccountId = importAccounts[0].id;
       }
 
-      if (importAccountId && !importAccounts.some((account) => account.id === importAccountId)) {
+      if (importAccountId && !importAccounts.some((a) => a.id === importAccountId)) {
         importAccountId = '';
       }
 
-      if (selectedPath && !candidates.some((candidate) => candidate.abs_path === selectedPath)) {
+      if (selectedPath && !candidates.some((c) => c.abs_path === selectedPath)) {
         const removedPath = selectedPath;
         selectedPath = '';
         if (recoveryState?.csvPath === removedPath) {
@@ -385,12 +435,9 @@
     }
   }
 
-  /** End-to-end import sequence. Selection (inbox row OR file pick) triggers
-   *  this; the user does not click a Preview button. When the staged result
-   *  has no fence rows the apply runs immediately and confirms via toast.
-   *  Fence rows transition to the in-place conflict-resolution view.
-   *  See DECISIONS §21. */
-  async function triggerImport() {
+  // ── Preview (selection does NOT apply) ──
+
+  async function triggerPreview() {
     if (!readyForTrigger() || loading) return;
 
     const fileKey = selectedFile?.name ?? selectedPath;
@@ -399,6 +446,7 @@
     lastTriggerKey = currentKey;
 
     resetImportState();
+    stagedPreview = null;
 
     let stage: PreviewResult | null;
     try {
@@ -413,12 +461,7 @@
           method: 'POST',
           body: form
         });
-        if (!uploaded) {
-          // recoveryState set by sendImportRequest
-          return;
-        }
-        // The file is now in the inbox under uploaded.absPath; future
-        // re-triggers will read from there.
+        if (!uploaded) return;
         selectedPath = uploaded.absPath;
         clearSelectedFile();
         stage = uploaded;
@@ -441,25 +484,21 @@
       const duplicateCount = stage.summary?.duplicateCount ?? 0;
 
       if (fenceCount > 0) {
-        // Hand off to the conflict-resolution view; do not apply yet.
         conflictView = buildConflictView(stage, newCount, fenceCount);
         return;
       }
 
-      if (newCount === 0) {
-        // Nothing to apply. Skip the apply call entirely.
-        if (duplicateCount > 0) {
-          showInfoToast(`Nothing new to add — ${duplicateCount} already imported`);
-        }
-        selectedPath = '';
-        await loadImportData();
-        return;
-      }
+      stagedPreview = {
+        stageId: stage.stageId,
+        newCount,
+        duplicateCount,
+        fenceCount
+      };
 
-      await applyStage(stage, { fenceCount: 0 });
+      // Reload to pick up newly uploaded file in inbox list
+      await loadImportData();
     } catch (e) {
       error = errorMessage(e);
-      // Allow a fresh retry on the same selection.
       lastTriggerKey = '';
     } finally {
       loadingState = 'idle';
@@ -482,35 +521,47 @@
     };
   }
 
-  async function applyStage(stage: PreviewResult, opts: { fenceCount: number }) {
-    loadingState = 'apply';
-    const applied = await apiPost<PreviewResult>('/api/import/apply', { stageId: stage.stageId });
-    const appendedCount = applied.result?.appendedTxnCount ?? 0;
-    const skippedDuplicates = applied.result?.skippedDuplicateCount ?? 0;
-    const historyId = applied.result?.historyId;
+  // ── Confirm + apply (user-initiated) ──
 
-    const parts: string[] = [`Added ${appendedCount} ${plural(appendedCount, 'transaction')}`];
-    if (skippedDuplicates > 0) {
-      parts.push(`skipped ${skippedDuplicates} already imported`);
-    }
-    if (opts.fenceCount > 0) {
-      parts.push(`skipped ${opts.fenceCount} reconciled`);
-    }
-    const summary = parts.join(' · ');
+  async function confirmApply() {
+    if (!stagedPreview || loading) return;
+    const { stageId, fenceCount } = stagedPreview;
 
-    if (historyId) {
-      showImportUndoToast(historyId, summary, async () => {
-        await loadImportData();
-      });
-    }
+    try {
+      loadingState = 'apply';
+      const applied = await apiPost<PreviewResult>('/api/import/apply', { stageId });
+      const appendedCount = applied.result?.appendedTxnCount ?? 0;
+      const skippedDuplicates = applied.result?.skippedDuplicateCount ?? 0;
+      const historyId = applied.result?.historyId;
 
-    selectedPath = '';
-    conflictView = null;
-    lastTriggerKey = '';
-    await loadImportData();
+      const parts: string[] = [`Added ${appendedCount} ${plural(appendedCount, 'transaction')}`];
+      if (skippedDuplicates > 0) {
+        parts.push(`skipped ${skippedDuplicates} already imported`);
+      }
+      if (fenceCount > 0) {
+        parts.push(`skipped ${fenceCount} reconciled`);
+      }
+      const summary = parts.join(' · ');
 
-    if (onApplied) {
-      await onApplied(applied);
+      if (historyId) {
+        showImportUndoToast(historyId, summary, async () => {
+          await loadImportData();
+        });
+      }
+
+      selectedPath = '';
+      stagedPreview = null;
+      conflictView = null;
+      lastTriggerKey = '';
+      await loadImportData();
+
+      if (onApplied) {
+        await onApplied(applied);
+      }
+    } catch (e) {
+      error = errorMessage(e);
+    } finally {
+      loadingState = 'idle';
     }
   }
 
@@ -521,10 +572,34 @@
 
     resetImportState();
     try {
-      await applyStage(
-        { stageId: cv.stageId } as PreviewResult,
-        { fenceCount: cv.fenceCount }
-      );
+      loadingState = 'apply';
+      const applied = await apiPost<PreviewResult>('/api/import/apply', { stageId: cv.stageId });
+      const appendedCount = applied.result?.appendedTxnCount ?? 0;
+      const skippedDuplicates = applied.result?.skippedDuplicateCount ?? 0;
+      const historyId = applied.result?.historyId;
+
+      const parts: string[] = [`Added ${appendedCount} ${plural(appendedCount, 'transaction')}`];
+      if (skippedDuplicates > 0) {
+        parts.push(`skipped ${skippedDuplicates} already imported`);
+      }
+      parts.push(`skipped ${cv.fenceCount} reconciled`);
+      const summary = parts.join(' · ');
+
+      if (historyId) {
+        showImportUndoToast(historyId, summary, async () => {
+          await loadImportData();
+        });
+      }
+
+      selectedPath = '';
+      stagedPreview = null;
+      conflictView = null;
+      lastTriggerKey = '';
+      await loadImportData();
+
+      if (onApplied) {
+        await onApplied(applied);
+      }
     } catch (e) {
       error = errorMessage(e);
     } finally {
@@ -533,34 +608,32 @@
   }
 
   function cancelConflictView() {
-    // Per task: clear the view only. Do NOT remove the stage or the inbox
-    // row. The user may un-reconcile and come back. Explicit cleanup belongs
-    // on the Remove from Inbox affordance, not Cancel.
     conflictView = null;
     lastTriggerKey = '';
   }
 
-  async function removeSelectedCandidate() {
-    if (!selectedCandidate) return;
+  // ── Inbox removal (per-row, not gated on selection) ──
+
+  async function removeCandidate(candidate: Candidate, event: Event) {
+    event.stopPropagation();
 
     const confirmed = window.confirm(
-      `Remove ${selectedCandidate.file_name} from the inbox? This only deletes the waiting statement and will not change imported activity.`
+      `Remove ${candidate.detected_import_account_display_name ?? candidate.file_name} from the inbox?`
     );
     if (!confirmed) return;
 
     loadingState = 'remove';
     error = '';
-    historyMessage = '';
     recoveryState = null;
 
     try {
-      await apiPost('/api/import/remove', {
-        csvPath: selectedCandidate.abs_path
-      });
-      historyMessage = `${selectedCandidate.file_name} was removed from the inbox.`;
-      selectedPath = '';
-      conflictView = null;
-      lastTriggerKey = '';
+      await apiPost('/api/import/remove', { csvPath: candidate.abs_path });
+      if (selectedPath === candidate.abs_path) {
+        selectedPath = '';
+        stagedPreview = null;
+        conflictView = null;
+        lastTriggerKey = '';
+      }
       await loadImportData();
     } catch (e) {
       error = errorMessage(e);
@@ -568,28 +641,24 @@
       loadingState = 'idle';
     }
   }
+
+  // ── History ──
 
   async function undoHistoryEntry(entry: ImportHistoryEntry) {
     if (!entry.canUndo) return;
 
     const confirmed = window.confirm(
-      `Undo ${entry.csvFileName ?? 'this import'}? This removes the transactions added by this import and creates a recovery backup first.`
+      `Undo ${entry.csvFileName ?? 'this import'}? This removes the transactions added by this import.`
     );
     if (!confirmed) return;
 
     error = '';
-    historyMessage = '';
     recoveryState = null;
     loadingState = 'undo';
 
     try {
-      const data = await apiPost<{ entry: ImportHistoryEntry }>('/api/import/undo', {
-        historyId: entry.id
-      });
+      await apiPost<{ entry: ImportHistoryEntry }>('/api/import/undo', { historyId: entry.id });
       await loadImportData();
-      historyMessage = data.entry.undo?.restoredInboxCsvPath
-        ? 'Import undone, its transactions were removed, and the source statement was restored to the inbox.'
-        : 'Import undone and its transactions were removed.';
     } catch (e) {
       error = errorMessage(e);
     } finally {
@@ -597,14 +666,11 @@
     }
   }
 
-  function progressLabel(): string {
-    if (loadingState === 'upload') return 'Uploading…';
-    if (loadingState === 'preview') return 'Checking statement…';
-    if (loadingState === 'apply') return 'Adding…';
-    if (loadingState === 'remove') return 'Removing…';
-    if (loadingState === 'undo') return 'Undoing…';
-    return '';
+  function toggleHistoryDetail(id: string) {
+    expandedHistoryId = expandedHistoryId === id ? '' : id;
   }
+
+  // ── Lifecycle ──
 
   onMount(async () => {
     hydrated = true;
@@ -614,528 +680,539 @@
 </script>
 
 <div class="grid gap-4">
-  {#if mode === 'standalone'}
-    <section class="view-card hero grid gap-1.5">
-      <p class="eyebrow">Import</p>
-      <h2 class="page-title">Bring in new statement activity</h2>
-      <p class="subtitle">Drop a CSV or pick a waiting statement. We add new transactions, skip ones already imported, and only pause to ask if a row falls before your last reconciliation.</p>
-    </section>
-  {/if}
-
   {#if !initialized}
     <section class="view-card">
-      <p class="eyebrow">Import</p>
       <h3 class="m-0">Finish setup before importing statements</h3>
       <p class="muted">Import becomes available after the workspace exists and at least one account is ready to receive statement activity.</p>
       <a class="btn btn-primary" href="/setup">Open setup</a>
     </section>
+  {:else if importAccounts.length === 0}
+    <section class="view-card">
+      <h3 class="m-0">Add an account before importing</h3>
+      <p class="muted">Connect a supported account or save a custom CSV mapping first.</p>
+      <div class="flex gap-2.5 flex-wrap">
+        <a class="btn btn-primary" href="/accounts/configure?mode=institution">Add supported account</a>
+        <a class="btn" href="/accounts/configure?mode=custom">Add custom CSV</a>
+      </div>
+    </section>
+  {:else if conflictView}
+    <!-- Conflict resolution view -->
+    <section class="view-card conflict-card grid gap-4">
+      <div class="grid gap-1.5">
+        <h3 class="m-0">Some transactions are before your last reconciliation</h3>
+        <p class="muted mt-1">
+          You reconciled this account through {formatReconciledThrough(conflictView.reconciledThrough)}.
+          {conflictView.fenceCount === 1 ? 'This transaction is' : `These ${conflictView.fenceCount} transactions are`}
+          dated on or before that, so we won't add {conflictView.fenceCount === 1 ? 'it' : 'them'} automatically.
+        </p>
+      </div>
+
+      <div class="fence-list">
+        {#each conflictView.fenceRows as row}
+          <div class="fence-row">
+            <span class="fence-date">{formatFenceDate(row.date)}</span>
+            <span class="fence-payee">{row.payee}</span>
+            <span class="fence-amount">{row.amount}</span>
+          </div>
+        {/each}
+      </div>
+
+      <div class="flex justify-between items-center gap-4 flex-wrap">
+        <p class="muted m-0 text-sm">
+          {#if conflictView.trackedAccountId && conflictView.importAccountDisplayName}
+            <a href="/accounts/{conflictView.trackedAccountId}">Un-reconcile {conflictView.importAccountDisplayName} →</a>
+          {:else if conflictView.importAccountDisplayName}
+            Un-reconcile {conflictView.importAccountDisplayName} to include these.
+          {/if}
+        </p>
+        <div class="flex gap-2.5 flex-wrap">
+          <button class="btn" type="button" disabled={loading} on:click={cancelConflictView}>
+            Cancel
+          </button>
+          <button class="btn btn-primary" type="button"
+                  disabled={loading || conflictView.newCount === 0}
+                  on:click={applyFromConflictView}>
+            {#if conflictView.newCount === 0}
+              No new transactions to add
+            {:else if loadingState === 'apply'}
+              Adding…
+            {:else}
+              Add {conflictView.newCount} {plural(conflictView.newCount, 'transaction')}
+            {/if}
+          </button>
+        </div>
+      </div>
+    </section>
   {:else}
+    <!-- Main import flow -->
+
     {#if error}
-      <section class="view-card"><p class="error-text">{error}</p></section>
+      <p class="error-text m-0">{error}</p>
     {/if}
 
-    {#if importAccounts.length === 0}
-      <section class="view-card">
-        <p class="eyebrow">Import</p>
-        <h3 class="m-0">Add an account before importing</h3>
-        <p class="muted">Connect a supported account or save a custom CSV mapping first. Then statement imports can flow straight into review and overview.</p>
-        <div class="flex gap-2.5 flex-wrap">
-          <a class="btn btn-primary" href="/accounts/configure?mode=institution">Add supported account</a>
-          <a class="btn" href="/accounts/configure?mode=custom">Add custom CSV</a>
+    <!-- Drop zone hero -->
+    <div
+      class="drop-zone"
+      class:drop-zone-active={dropZoneActive}
+      on:dragover={onDragOver}
+      on:dragleave={onDragLeave}
+      on:drop={onDrop}
+      role="region"
+      aria-label="File drop zone"
+    >
+      <input
+        bind:this={statementFileInput}
+        type="file"
+        accept=".csv,text/csv"
+        class="hidden"
+        on:change={onStatementFileChange}
+      />
+
+      <div class="drop-zone-content">
+        <svg class="drop-zone-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+          <polyline points="17 8 12 3 7 8" />
+          <line x1="12" y1="3" x2="12" y2="15" />
+        </svg>
+        <button type="button" class="drop-zone-label" on:click={openFilePicker}>
+          Drop a CSV here, or click to browse
+        </button>
+
+        {#if dropError}
+          <p class="text-sm text-red-600 m-0 mt-1">{dropError}</p>
+        {/if}
+      </div>
+
+      <!-- Account selector inside drop zone -->
+      {#if importAccounts.length > 1}
+        <div class="drop-zone-account">
+          <select
+            value={importAccountId}
+            on:change={(e) => setImportAccount((e.currentTarget as HTMLSelectElement).value)}
+            class="drop-zone-select"
+          >
+            <option value="">Select account…</option>
+            {#each importAccounts as account}
+              <option value={account.id}>{accountLabel(account)}</option>
+            {/each}
+          </select>
+        </div>
+      {/if}
+    </div>
+
+    {#if mode === 'setup'}
+      <p class="muted text-sm m-0">Pick the account, then drop in a CSV. We add new transactions, skip ones already imported, and pause only if something would change a balance you've already reconciled.</p>
+    {/if}
+
+    <!-- Recovery state -->
+    {#if recoveryState}
+      <section class="recovery-card">
+        <div class="min-w-0">
+          <h4 class="m-0">{recoveryState.fileKeptInInbox ? 'This statement needs a different account' : 'Upload blocked'}</h4>
+          <p class="muted mt-1 m-0">{recoveryState.message}</p>
+          {#if recoveryState.causeMessage}
+            <pre class="cause-detail">{recoveryState.causeMessage}</pre>
+          {/if}
         </div>
       </section>
-    {:else if conflictView}
-      <section class="view-card conflict-card grid gap-4">
-        <div class="grid gap-1.5">
-          <p class="eyebrow conflict-eyebrow">Needs your attention</p>
-          <h3 class="m-0">Some transactions are before your last reconciliation</h3>
-          <p class="muted mt-1">
-            You reconciled this account through {formatReconciledThrough(conflictView.reconciledThrough)}.
-            {conflictView.fenceCount === 1 ? 'This transaction is' : `These ${conflictView.fenceCount} transactions are`}
-            dated on or before that, so we won't add {conflictView.fenceCount === 1 ? 'it' : 'them'} automatically.
-          </p>
+    {/if}
+
+    <!-- Inbox list -->
+    {#if candidates.length > 0}
+      <section class="grid gap-2">
+        <div class="flex justify-between items-center">
+          <h3 class="m-0 text-sm font-semibold text-muted-foreground uppercase tracking-wide">Inbox</h3>
+          <span class="text-xs text-muted-foreground">{candidates.length} waiting</span>
         </div>
 
-        <div class="fence-list">
-          {#each conflictView.fenceRows as row}
-            <div class="fence-row">
-              <span class="fence-date">{formatFenceDate(row.date)}</span>
-              <span class="fence-payee">{row.payee}</span>
-              <span class="fence-amount">{row.amount}</span>
+        <div class="inbox-list">
+          {#each candidates as candidate}
+            <div class="inbox-item-wrapper">
+              <button
+                class="inbox-row"
+                class:inbox-row-selected={candidate.abs_path === selectedPath}
+                type="button"
+                aria-pressed={candidate.abs_path === selectedPath}
+                on:click={() => pickCandidate(candidate)}
+              >
+                <div class="grid gap-0.5 min-w-0">
+                  <span class="font-semibold text-sm truncate">{candidateLabel(candidate)}</span>
+                  {#if candidateSecondary(candidate)}
+                    <span class="text-xs text-muted-foreground">{candidateSecondary(candidate)}</span>
+                  {/if}
+                </div>
+
+                <div class="flex items-center gap-2 shrink-0">
+                  {#if candidate.is_configured_import_account}
+                    <span class="pill ok text-xs">Ready</span>
+                  {:else}
+                    <span class="pill warn text-xs">Needs setup</span>
+                  {/if}
+                </div>
+              </button>
+
+              <button
+                class="trash-btn"
+                type="button"
+                aria-label="Remove from inbox"
+                disabled={loading}
+                on:click={(e) => removeCandidate(candidate, e)}
+              >
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" class="w-3.5 h-3.5">
+                  <polyline points="3 6 5 6 21 6" />
+                  <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                </svg>
+              </button>
             </div>
+
+            <!-- Animated preview slot attached to selected row -->
+            {#if candidate.abs_path === selectedPath}
+              <div class="preview-slot" class:preview-slot-open={stagedPreview || loadingState === 'preview' || loadingState === 'upload'}>
+                <div class="preview-slot-inner">
+                  {#if loadingState === 'preview' || loadingState === 'upload'}
+                    <span class="text-sm text-muted-foreground">Checking…</span>
+                  {:else if stagedPreview}
+                    <div class="flex items-center justify-between gap-3 flex-wrap">
+                      <span class="text-sm">
+                        {#if stagedPreview.newCount === 0}
+                          Nothing new to add — {stagedPreview.duplicateCount} already imported
+                        {:else}
+                          {stagedPreview.newCount} new · {stagedPreview.duplicateCount} already imported
+                        {/if}
+                      </span>
+                      {#if stagedPreview.newCount > 0}
+                        <button
+                          class="btn btn-primary text-sm"
+                          type="button"
+                          disabled={loading}
+                          on:click={confirmApply}
+                        >
+                          {#if loadingState === 'apply'}
+                            Adding…
+                          {:else}
+                            Add {stagedPreview.newCount} {plural(stagedPreview.newCount, 'transaction')}
+                          {/if}
+                        </button>
+                      {/if}
+                    </div>
+                  {/if}
+                </div>
+              </div>
+            {/if}
+          {/each}
+        </div>
+      </section>
+    {/if}
+
+    <!-- Preview for file drop (no inbox row to attach to) -->
+    {#if selectedFile && !selectedPath}
+      <div class="preview-slot preview-slot-open">
+        <div class="preview-slot-inner">
+          {#if loadingState === 'upload'}
+            <span class="text-sm text-muted-foreground">Uploading…</span>
+          {:else if !importAccountId}
+            <span class="text-sm text-muted-foreground">Choose an account to continue.</span>
+          {/if}
+        </div>
+      </div>
+    {/if}
+
+    <!-- Compact history -->
+    {#if historyEntries.length > 0}
+      <section class="grid gap-2 mt-2">
+        <h3 class="m-0 text-sm font-semibold text-muted-foreground uppercase tracking-wide">History</h3>
+
+        <div class="history-compact">
+          {#each visibleHistory as entry}
+            <div class="history-compact-row">
+              <div class="flex items-center gap-3 min-w-0 flex-1">
+                <span class="text-xs text-muted-foreground w-12 shrink-0 tabular-nums">{formatHistoryDate(entry.appliedAt)}</span>
+                <span class="text-sm truncate">{entry.importAccountDisplayName ?? entry.importAccountId ?? ''}</span>
+                <span class="text-xs font-semibold text-ok">+{entry.result?.appendedTxnCount ?? 0}</span>
+                {#if entry.status === 'undone'}
+                  <span class="text-xs text-muted-foreground">Undone</span>
+                {/if}
+              </div>
+              <div class="flex items-center gap-1.5 shrink-0">
+                {#if entry.canUndo && entry.status !== 'undone'}
+                  <button
+                    class="text-xs text-muted-foreground hover:text-brand-strong cursor-pointer bg-transparent border-none p-0"
+                    type="button"
+                    disabled={loading}
+                    on:click={() => undoHistoryEntry(entry)}
+                  >Undo</button>
+                {/if}
+                <button
+                  class="info-btn"
+                  type="button"
+                  aria-label="Show details"
+                  on:click={() => toggleHistoryDetail(entry.id)}
+                >
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" class="w-3.5 h-3.5">
+                    <circle cx="12" cy="12" r="10" />
+                    <line x1="12" y1="16" x2="12" y2="12" />
+                    <line x1="12" y1="8" x2="12.01" y2="8" />
+                  </svg>
+                </button>
+              </div>
+            </div>
+
+            {#if expandedHistoryId === entry.id}
+              <div class="history-detail">
+                <p class="text-xs text-muted-foreground m-0">{formatDateTime(entry.appliedAt)}</p>
+                {#if entry.csvFileName}
+                  <p class="text-xs text-muted-foreground m-0">File: {entry.csvFileName}</p>
+                {/if}
+                {#if entry.targetJournalPath}
+                  <p class="text-xs text-muted-foreground m-0">Journal: {entry.targetJournalPath}</p>
+                {/if}
+                {#if entry.backupPath}
+                  <p class="text-xs text-muted-foreground m-0">Backup: {entry.backupPath}</p>
+                {/if}
+                {#if entry.undo?.undoneAt}
+                  <p class="text-xs text-muted-foreground m-0">Undone: {formatDateTime(entry.undo.undoneAt)}</p>
+                {/if}
+                {#if entry.undo?.restoredInboxCsvPath}
+                  <p class="text-xs text-muted-foreground m-0">Restored to inbox: {entry.undo.restoredInboxCsvPath}</p>
+                {/if}
+                {#if !entry.canUndo && entry.undoBlockedReason}
+                  <p class="text-xs text-muted-foreground m-0">{entry.undoBlockedReason}</p>
+                {/if}
+              </div>
+            {/if}
           {/each}
         </div>
 
-        <div class="workflow-footer max-tablet:flex-col max-tablet:items-stretch">
-          <p class="muted m-0">
-            {#if conflictView.trackedAccountId && conflictView.importAccountDisplayName}
-              To include these, un-reconcile {formatReconciledThrough(conflictView.reconciledThrough)} first.
-              <a href="/accounts/{conflictView.trackedAccountId}">Open {conflictView.importAccountDisplayName} →</a>
-            {:else if conflictView.importAccountDisplayName}
-              To include these, un-reconcile {formatReconciledThrough(conflictView.reconciledThrough)} first on {conflictView.importAccountDisplayName}.
-            {/if}
-          </p>
-          <div class="flex gap-2.5 flex-wrap">
-            <button class="btn" type="button" disabled={loading} on:click={cancelConflictView}>
-              Cancel
-            </button>
-            <button class="btn btn-primary" type="button"
-                    disabled={loading || conflictView.newCount === 0}
-                    on:click={applyFromConflictView}>
-              {#if conflictView.newCount === 0}
-                All rows are before {formatReconciledThrough(conflictView.reconciledThrough)}
-              {:else if loadingState === 'apply'}
-                Adding…
-              {:else}
-                Add the other {conflictView.newCount} {plural(conflictView.newCount, 'transaction')}
-              {/if}
-            </button>
-          </div>
-        </div>
-      </section>
-    {:else if mode === 'setup'}
-      <section class="view-card grid gap-4">
-        <div class="flex justify-between gap-4 items-start flex-wrap">
-          <div class="min-w-0">
-            <p class="eyebrow">Prepare</p>
-            <h3 class="m-0">Upload your first statement</h3>
-            <p class="muted mt-1">Pick the account, then drop in a CSV. We add new transactions, skip ones already imported, and pause only if something would change a balance you've already reconciled.</p>
-          </div>
-          {#if candidates.length > 0}
-            <span class="pill">{candidates.length} waiting</span>
-          {/if}
-        </div>
-
-        <div class="grid grid-cols-2 gap-3 max-tablet:grid-cols-1">
-          <div class="field">
-            <label for={`importAccountId-${mode}`}>Import account</label>
-            <select id={`importAccountId-${mode}`} value={importAccountId} on:change={(e) => setImportAccount((e.currentTarget as HTMLSelectElement).value)}>
-              <option value="">Select...</option>
-              {#each importAccounts as account}
-                <option value={account.id}>{accountLabel(account)}</option>
-              {/each}
-            </select>
-          </div>
-
-          <div class="field">
-            <div class="year-override-row">
-              <span class="year-override-label">Year: {year}</span>
-              <button type="button" class="year-override-toggle" on:click={toggleYearOverride}>
-                {yearOverrideOpen ? 'Done' : 'Change'}
-              </button>
-            </div>
-            {#if yearOverrideOpen}
-              <input
-                id={`year-${mode}`}
-                value={year}
-                inputmode="numeric"
-                on:input={(e) => setYear((e.currentTarget as HTMLInputElement).value)}
-              />
-            {/if}
-          </div>
-        </div>
-
-        <div class="grid">
-          <div class="field">
-            <label for={`statementFile-${mode}`}>Statement CSV</label>
-            <input
-              id={`statementFile-${mode}`}
-              bind:this={statementFileInput}
-              type="file"
-              accept=".csv,text/csv"
-              on:change={onStatementFileChange}
-            />
-            {#if !importAccountId}
-              <p class="muted text-xs m-0">Choose an account above to import.</p>
-            {/if}
-          </div>
-        </div>
-
-        <section class="grid gap-3.5">
-          <div class="flex justify-between gap-4 items-start flex-wrap">
-            <div class="min-w-0">
-              <p class="eyebrow">Inbox</p>
-              <h3 class="m-0">Pick a statement to continue</h3>
-              <p class="muted mt-1">Files that already passed validation wait here until you import them.</p>
-            </div>
-            {#if candidates.length > 0}
-              <span class="pill">{candidates.length} waiting</span>
-            {/if}
-          </div>
-
-          {#if candidates.length === 0}
-            <div class="empty-panel">
-              <h4 class="m-0 mb-1.5">No statements in the inbox</h4>
-              <p class="m-0">Choose a CSV above to start the first import.</p>
-            </div>
-          {:else}
-            <div class="list">
-              {#each candidates as candidate}
-                <button
-                  class="row"
-                  class:row-selected={candidate.abs_path === selectedPath}
-                  type="button"
-                  aria-pressed={candidate.abs_path === selectedPath}
-                  on:click={() => pickCandidate(candidate)}
-                >
-                  <div class="grid gap-2 min-w-0">
-                    <p class="m-0 font-bold wrap-anywhere">{candidate.file_name}</p>
-                    <div class="row-meta">
-                      {#if candidate.detected_import_account_display_name}
-                        <span>{candidate.detected_import_account_display_name}</span>
-                      {/if}
-                      {#if candidate.detected_institution_display_name}
-                        <span>{candidate.detected_institution_display_name}</span>
-                      {/if}
-                      {#if candidate.detected_year}
-                        <span>{candidate.detected_year}</span>
-                      {/if}
-                    </div>
-                  </div>
-
-                  <div class="grid justify-items-end gap-1.5 shrink-0">
-                    {#if candidate.is_configured_import_account}
-                      <span class="pill ok">Ready</span>
-                    {:else}
-                      <span class="pill warn">Needs setup</span>
-                    {/if}
-
-                    {#if candidate.abs_path === selectedPath}
-                      <span class="row-selected-note">Selected</span>
-                    {/if}
-                  </div>
-                </button>
-              {/each}
-            </div>
-          {/if}
-        </section>
-
-        {#if recoveryState}
-          <section class="recovery-card">
-            <div class="min-w-0">
-              <p class="eyebrow">Recovery</p>
-              <h4 class="m-0">{recoveryState.fileKeptInInbox ? 'This statement needs a different account' : 'This upload was blocked before it reached the inbox'}</h4>
-              <p class="muted mt-1">{recoveryState.message}</p>
-              {#if recoveryState.causeMessage}
-                <pre class="cause-detail">{recoveryState.causeMessage}</pre>
-              {/if}
-            </div>
-          </section>
-        {/if}
-
-        {#if loading || selectedCandidate}
-          <div class="workflow-footer max-tablet:flex-col max-tablet:items-stretch">
-            <p class="muted m-0">
-              {#if loading}
-                {progressLabel()}
-              {:else}
-                Selected: {selectedCandidate?.file_name}
-              {/if}
-            </p>
-            {#if selectedCandidate && !loading}
-              <button class="btn" type="button" on:click={removeSelectedCandidate}>
-                Remove from Inbox
-              </button>
-            {/if}
-          </div>
+        {#if historyEntries.length > 5}
+          <button
+            class="text-xs text-brand cursor-pointer bg-transparent border-none p-0 text-left"
+            type="button"
+            on:click={() => (showAllHistory = !showAllHistory)}
+          >
+            {showAllHistory ? 'Show fewer' : `Show all ${historyEntries.length}`}
+          </button>
         {/if}
       </section>
-    {:else}
-      <section class="import-layout max-desktop:grid-cols-1">
-        <article class="view-card grid gap-4">
-          <div class="min-w-0">
-            <p class="eyebrow">Current Import</p>
-            <h3 class="m-0">Add a statement</h3>
-            <p class="muted mt-1">Pick an inbox statement or drop in a new CSV — we'll add it as soon as it's selected.</p>
-          </div>
-
-          <div class="grid grid-cols-2 gap-3 max-tablet:grid-cols-1">
-            <div class="field">
-              <label for={`importAccountId-${mode}`}>Import account</label>
-              <select id={`importAccountId-${mode}`} value={importAccountId} on:change={(e) => setImportAccount((e.currentTarget as HTMLSelectElement).value)}>
-                <option value="">Select...</option>
-                {#each importAccounts as account}
-                  <option value={account.id}>{accountLabel(account)}</option>
-                {/each}
-              </select>
-            </div>
-
-            <div class="field">
-              <div class="year-override-row">
-                <span class="year-override-label">Year: {year}</span>
-                <button type="button" class="year-override-toggle" on:click={toggleYearOverride}>
-                  {yearOverrideOpen ? 'Done' : 'Change'}
-                </button>
-              </div>
-              {#if yearOverrideOpen}
-                <input
-                  id={`year-${mode}`}
-                  value={year}
-                  inputmode="numeric"
-                  on:input={(e) => setYear((e.currentTarget as HTMLInputElement).value)}
-                />
-              {/if}
-            </div>
-          </div>
-
-          <div class="grid">
-            <div class="field">
-              <label for={`statementFile-${mode}`}>Statement CSV</label>
-              <input
-                id={`statementFile-${mode}`}
-                bind:this={statementFileInput}
-                type="file"
-                accept=".csv,text/csv"
-                on:change={onStatementFileChange}
-              />
-              {#if !importAccountId}
-                <p class="muted text-xs m-0">Choose an account above to import.</p>
-              {/if}
-            </div>
-          </div>
-
-          {#if recoveryState}
-            <section class="recovery-card max-tablet:flex-col">
-              <div class="min-w-0">
-                <p class="eyebrow">Recovery</p>
-                <h4 class="m-0">{recoveryState.fileKeptInInbox ? 'This statement needs a different account' : 'This upload was blocked before it reached the inbox'}</h4>
-                <p class="muted mt-1">{recoveryState.message}</p>
-                {#if recoveryState.causeMessage}
-                  <pre class="cause-detail">{recoveryState.causeMessage}</pre>
-                {/if}
-              </div>
-            </section>
-          {/if}
-
-          {#if loading || selectedCandidate}
-            <div class="workflow-footer max-tablet:flex-col max-tablet:items-stretch">
-              <p class="muted m-0">
-                {#if loading}
-                  {progressLabel()}
-                {:else}
-                  Selected: {selectedCandidate?.file_name}
-                {/if}
-              </p>
-              {#if selectedCandidate && !loading}
-                <button class="btn" type="button" on:click={removeSelectedCandidate}>
-                  Remove from Inbox
-                </button>
-              {/if}
-            </div>
-          {/if}
-        </article>
-
-        <aside class="grid gap-4 items-start">
-          <article class="view-card grid gap-4">
-            <div class="flex justify-between gap-4 items-start flex-wrap">
-              <div class="min-w-0">
-                <p class="eyebrow">Waiting Statements</p>
-                <h3 class="m-0">Pick a statement to continue</h3>
-                <p class="muted mt-1">Validated statements stay here until they're imported or removed.</p>
-              </div>
-              {#if candidates.length > 0}
-                <span class="pill">{candidates.length} waiting</span>
-              {/if}
-            </div>
-
-            {#if candidates.length === 0}
-              <div class="empty-panel">
-                <h4 class="m-0 mb-1.5">No statements in the inbox</h4>
-                <p class="m-0">Choose a CSV above to start a new import.</p>
-              </div>
-            {:else}
-              <div class="list">
-                {#each candidates as candidate}
-                  <button
-                    class="row"
-                    class:row-selected={candidate.abs_path === selectedPath}
-                    type="button"
-                    aria-pressed={candidate.abs_path === selectedPath}
-                    on:click={() => pickCandidate(candidate)}
-                  >
-                    <div class="grid gap-2 min-w-0">
-                      <p class="m-0 font-bold wrap-anywhere">{candidate.file_name}</p>
-                      <div class="row-meta">
-                        {#if candidate.detected_import_account_display_name}
-                          <span>{candidate.detected_import_account_display_name}</span>
-                        {/if}
-                        {#if candidate.detected_institution_display_name}
-                          <span>{candidate.detected_institution_display_name}</span>
-                        {/if}
-                        {#if candidate.detected_year}
-                          <span>{candidate.detected_year}</span>
-                        {/if}
-                      </div>
-                    </div>
-
-                    <div class="grid justify-items-end gap-1.5 shrink-0">
-                      {#if candidate.is_configured_import_account}
-                        <span class="pill ok">Ready</span>
-                      {:else}
-                        <span class="pill warn">Needs setup</span>
-                      {/if}
-
-                      {#if candidate.abs_path === selectedPath}
-                        <span class="row-selected-note">Selected</span>
-                      {/if}
-                    </div>
-                  </button>
-                {/each}
-              </div>
-            {/if}
-          </article>
-        </aside>
-      </section>
-      <section class="view-card grid gap-4">
-        <div class="flex justify-between gap-4 items-start flex-wrap">
-          <div class="min-w-0">
-            <p class="eyebrow">Import History</p>
-            <h3 class="m-0">Recent imports</h3>
-            <p class="muted mt-1">Undo is available for the latest applied import in each destination year.</p>
-          </div>
-          {#if historyEntries.length > 0}
-            <span class="pill">{historyEntries.length} recorded</span>
-          {/if}
-        </div>
-
-        {#if historyMessage}
-          <p class="m-0 text-ok">{historyMessage}</p>
-        {/if}
-
-        {#if !initialized}
-          <p class="muted">Complete workspace setup to start recording import history.</p>
-        {:else if historyEntries.length === 0}
-          <div class="empty-panel">
-            <h4 class="m-0 mb-1.5">No imports have been applied yet</h4>
-            <p class="m-0">Your recent imports and undo actions will appear here.</p>
-          </div>
-        {:else}
-          <div class="history-list">
-            {#each historyEntries as entry}
-              <article class="history-row max-tablet:grid-cols-1">
-                <div class="min-w-0">
-                  <div class="flex justify-between gap-4 items-start max-tablet:flex-col max-tablet:items-stretch">
-                    <p class="m-0 font-bold wrap-anywhere">{entry.csvFileName ?? optionalPathLabel(entry.originalCsvPath)}</p>
-                    <span class={`pill ${entry.status === 'undone' ? 'warn' : 'ok'}`}>
-                      {entry.status === 'undone' ? 'Undone' : 'Applied'}
-                    </span>
-                  </div>
-
-                  <p class="muted text-xs m-0">
-                    {formatDateTime(entry.appliedAt)} • {entry.importAccountDisplayName ?? entry.importAccountId} •
-                    {optionalPathLabel(entry.targetJournalPath, 'Unknown journal')}
-                  </p>
-
-                  <div class="flex gap-2 flex-wrap">
-                    <span class="pill ok">Added {entry.result?.appendedTxnCount ?? 0}</span>
-                    <span class="pill">Duplicates {entry.result?.skippedDuplicateCount ?? 0}</span>
-                    <span class="pill warn">
-                      Conflicts {entry.summary?.fenceCount ?? entry.summary?.conflictCount ?? entry.result?.conflicts?.length ?? 0}
-                    </span>
-                  </div>
-
-                  {#if entry.undo?.undoneAt}
-                    <p class="muted text-xs">Undone {formatDateTime(entry.undo.undoneAt)}.</p>
-                  {:else if !entry.canUndo && entry.undoBlockedReason}
-                    <p class="muted text-xs">{entry.undoBlockedReason}</p>
-                  {/if}
-
-                  <details class="advanced-panel mt-1.5">
-                    <summary>Paths and recovery details</summary>
-                    {#if entry.targetJournalPath}
-                      <p class="muted text-xs m-0">Journal: {entry.targetJournalPath}</p>
-                    {/if}
-                    {#if entry.backupPath}
-                      <p class="muted text-xs m-0">Import backup: {entry.backupPath}</p>
-                    {/if}
-                    {#if entry.undo?.undoBackupPath}
-                      <p class="muted text-xs m-0">Undo backup: {entry.undo.undoBackupPath}</p>
-                    {/if}
-                    {#if entry.originalCsvPath}
-                      <p class="muted text-xs m-0">Original statement: {entry.originalCsvPath}</p>
-                    {/if}
-                    {#if entry.archivedCsvPath}
-                      <p class="muted text-xs m-0">Archived statement: {entry.archivedCsvPath}</p>
-                    {/if}
-                    {#if entry.undo?.restoredInboxCsvPath}
-                      <p class="muted text-xs m-0">Restored to inbox: {entry.undo.restoredInboxCsvPath}</p>
-                    {/if}
-                    {#if entry.result?.sourceCsvWarning}
-                      <p class="error-text">{entry.result.sourceCsvWarning}</p>
-                    {/if}
-                    {#if entry.undo?.sourceCsvWarning}
-                      <p class="error-text">{entry.undo.sourceCsvWarning}</p>
-                    {/if}
-                  </details>
-                </div>
-
-                <div class="flex items-start max-tablet:justify-start">
-                  <button class="btn" type="button" disabled={loading || !entry.canUndo} on:click={() => undoHistoryEntry(entry)}>
-                    Undo Import
-                  </button>
-                </div>
-              </article>
-            {/each}
-          </div>
-        {/if}
-      </section>
+    {:else if initialized}
+      <p class="text-xs text-muted-foreground m-0 mt-2">No imports yet.</p>
     {/if}
   {/if}
 </div>
 
 <style>
-  /* ── Asymmetric two-column layout (standalone) ── */
+  /* ── Drop zone (hero) ── */
 
-  .import-layout {
-    display: grid;
-    grid-template-columns: minmax(0, 1.45fr) minmax(19rem, 0.9fr);
+  .drop-zone {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
     gap: 1rem;
-    align-items: start;
+    min-height: 160px;
+    border: 2px dashed rgba(10, 61, 89, 0.18);
+    border-radius: 16px;
+    background: rgba(255, 255, 255, 0.5);
+    padding: 2rem 1.5rem;
+    transition:
+      border-color 0.18s ease,
+      background-color 0.18s ease;
   }
 
-  /* ── Inline year override (replaces a labeled input on the resting state) ── */
+  .drop-zone-active {
+    border-color: var(--brand);
+    border-style: solid;
+    background: rgba(13, 127, 88, 0.04);
+  }
 
-  .year-override-row {
+  .drop-zone-content {
     display: flex;
+    flex-direction: column;
     align-items: center;
     gap: 0.5rem;
-    padding: 0.55rem 0;
   }
 
-  .year-override-label {
-    font-weight: 600;
-    color: var(--brand-strong);
+  .drop-zone-icon {
+    width: 2.5rem;
+    height: 2.5rem;
+    color: var(--muted-foreground);
+    opacity: 0.6;
   }
 
-  .year-override-toggle {
-    background: transparent;
+  .drop-zone-label {
+    background: none;
     border: none;
     padding: 0;
     color: var(--brand);
-    font-size: 0.85rem;
+    font-size: 0.95rem;
+    font-weight: 500;
     cursor: pointer;
     text-decoration: underline;
-    text-underline-offset: 2px;
+    text-underline-offset: 3px;
   }
 
-  .year-override-toggle:hover {
+  .drop-zone-label:hover {
     color: var(--brand-strong);
   }
 
-  /* ── Conflict-resolution view (amber emphasis per project palette) ── */
+  .drop-zone-account {
+    width: 100%;
+    max-width: 18rem;
+  }
+
+  .drop-zone-select {
+    width: 100%;
+    padding: 0.45rem 0.7rem;
+    border: 1px solid rgba(10, 61, 89, 0.14);
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.8);
+    font-size: 0.85rem;
+    color: var(--brand-strong);
+    cursor: pointer;
+  }
+
+  .drop-zone-select:focus {
+    outline: 2px solid var(--brand);
+    outline-offset: 1px;
+  }
+
+  /* ── Inbox rows ── */
+
+  .inbox-list {
+    display: grid;
+    gap: 0;
+  }
+
+  .inbox-item-wrapper {
+    display: flex;
+    align-items: stretch;
+    gap: 0;
+    border-bottom: 1px solid rgba(10, 61, 89, 0.06);
+  }
+
+  .inbox-item-wrapper:last-child {
+    border-bottom: none;
+  }
+
+  .inbox-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 0.75rem;
+    flex: 1;
+    min-width: 0;
+    text-align: left;
+    cursor: pointer;
+    border: none;
+    background: transparent;
+    padding: 0.6rem 0.7rem;
+    border-radius: 8px;
+    transition:
+      background-color 0.14s ease;
+  }
+
+  .inbox-row:hover {
+    background: rgba(15, 95, 136, 0.04);
+  }
+
+  .inbox-row-selected {
+    background: rgba(15, 95, 136, 0.07);
+  }
+
+  .trash-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 2rem;
+    background: transparent;
+    border: none;
+    color: var(--muted-foreground);
+    opacity: 0.4;
+    cursor: pointer;
+    transition: opacity 0.14s ease;
+  }
+
+  .trash-btn:hover {
+    opacity: 0.9;
+    color: #b91c1c;
+  }
+
+  /* ── Preview slot (animated) ── */
+
+  .preview-slot {
+    display: grid;
+    grid-template-rows: 0fr;
+    opacity: 0;
+    transition:
+      grid-template-rows 0.2s ease,
+      opacity 0.2s ease;
+  }
+
+  .preview-slot-open {
+    grid-template-rows: 1fr;
+    opacity: 1;
+  }
+
+  .preview-slot-inner {
+    overflow: hidden;
+    padding: 0 0.7rem;
+  }
+
+  .preview-slot-open .preview-slot-inner {
+    padding: 0.5rem 0.7rem 0.6rem;
+  }
+
+  /* ── Compact history ── */
+
+  .history-compact {
+    display: grid;
+    gap: 0;
+  }
+
+  .history-compact-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.4rem 0;
+    border-bottom: 1px solid rgba(10, 61, 89, 0.05);
+  }
+
+  .history-compact-row:last-child {
+    border-bottom: none;
+  }
+
+  .info-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: transparent;
+    border: none;
+    color: var(--muted-foreground);
+    opacity: 0.5;
+    cursor: pointer;
+    padding: 0.15rem;
+  }
+
+  .info-btn:hover {
+    opacity: 1;
+  }
+
+  .history-detail {
+    padding: 0.4rem 0 0.5rem 3.75rem;
+    display: grid;
+    gap: 0.2rem;
+  }
+
+  /* ── Conflict view ── */
 
   .conflict-card {
     border-color: rgba(176, 117, 14, 0.32);
     background: linear-gradient(145deg, rgba(255, 252, 241, 0.96), rgba(255, 246, 225, 0.94));
   }
 
-  .conflict-eyebrow {
-    color: #b0750e;
-  }
-
   .fence-list {
     display: grid;
-    gap: 0.4rem;
+    gap: 0.35rem;
   }
 
   .fence-row {
@@ -1143,186 +1220,58 @@
     grid-template-columns: 4rem minmax(0, 1fr) auto;
     gap: 0.75rem;
     align-items: baseline;
-    padding: 0.55rem 0.7rem;
+    padding: 0.5rem 0.65rem;
     background: rgba(255, 255, 255, 0.7);
-    border-radius: 10px;
-    border: 1px solid rgba(176, 117, 14, 0.18);
+    border-radius: 8px;
+    border: 1px solid rgba(176, 117, 14, 0.15);
   }
 
   .fence-date {
     color: var(--muted-foreground);
-    font-size: 0.85rem;
+    font-size: 0.82rem;
     font-weight: 600;
   }
 
   .fence-payee {
     min-width: 0;
     overflow-wrap: anywhere;
-    font-weight: 600;
+    font-weight: 500;
+    font-size: 0.9rem;
   }
 
   .fence-amount {
     font-variant-numeric: tabular-nums;
     font-weight: 600;
-  }
-
-  /* ── Advanced details panel (kept for history row details) ── */
-
-  .advanced-panel {
-    margin-top: 0;
-    border: 1px solid rgba(15, 95, 136, 0.12);
-    border-radius: 12px;
-    background: rgba(255, 255, 255, 0.68);
-    padding: 0.8rem;
-  }
-
-  .advanced-panel summary {
-    cursor: pointer;
-    font-weight: 700;
-    color: var(--brand-strong);
-  }
-
-  /* ── Workflow footer ── */
-
-  .workflow-footer {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    gap: 1rem;
-    padding-top: 0.15rem;
-    border-top: 1px solid rgba(10, 61, 89, 0.08);
+    font-size: 0.9rem;
   }
 
   /* ── Recovery card ── */
 
   .recovery-card {
-    display: flex;
-    justify-content: space-between;
-    gap: 1rem;
-    align-items: start;
     border: 1px solid rgba(176, 117, 14, 0.22);
-    border-radius: 14px;
+    border-radius: 12px;
     background: linear-gradient(145deg, rgba(255, 252, 241, 0.96), rgba(255, 246, 225, 0.94));
-    padding: 0.85rem 0.9rem;
+    padding: 0.8rem 0.9rem;
   }
 
   .recovery-card .cause-detail {
-    margin: 0.5rem 0 0;
-    padding: 0.5rem 0.65rem;
+    margin: 0.4rem 0 0;
+    padding: 0.4rem 0.6rem;
     background: rgba(0, 0, 0, 0.04);
     border-radius: 6px;
-    font-size: 0.78rem;
-    line-height: 1.45;
+    font-size: 0.75rem;
+    line-height: 1.4;
     white-space: pre-wrap;
     word-break: break-word;
     color: rgba(0, 0, 0, 0.6);
   }
 
-  /* ── Inbox / history lists ── */
-
-  .list,
-  .history-list {
-    display: grid;
-    gap: 0.7rem;
-    overflow: auto;
-    padding-right: 0.15rem;
-  }
-
-  .list {
-    max-height: 30rem;
-  }
-
-  .history-list {
-    max-height: 32rem;
-  }
-
-  /* ── Candidate row ── */
-
-  .row {
-    display: flex;
-    justify-content: space-between;
-    gap: 0.85rem;
-    align-items: start;
-    width: 100%;
-    text-align: left;
-    cursor: pointer;
-    border: 1px solid rgba(10, 61, 89, 0.08);
-    border-radius: 14px;
-    background: rgba(255, 255, 255, 0.7);
-    padding: 0.8rem 0.85rem;
-    transition:
-      border-color 0.16s ease,
-      box-shadow 0.16s ease,
-      transform 0.16s ease;
-  }
-
-  .row:hover {
-    border-color: rgba(15, 95, 136, 0.18);
-    box-shadow: 0 12px 24px rgba(10, 61, 89, 0.06);
-    transform: translateY(-1px);
-  }
-
-  .row-selected {
-    border-color: rgba(15, 95, 136, 0.24);
-    background: linear-gradient(145deg, rgba(255, 255, 255, 0.96), rgba(238, 246, 255, 0.88));
-    box-shadow: 0 14px 28px rgba(10, 61, 89, 0.08);
-  }
-
-  .row-meta {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.35rem;
-  }
-
-  .row-meta span {
-    display: inline-flex;
-    align-items: center;
-    padding: 0.18rem 0.45rem;
-    border-radius: 999px;
-    border: 1px solid rgba(10, 61, 89, 0.08);
-    background: rgba(255, 255, 255, 0.86);
-    color: var(--muted-foreground);
-    font-size: 0.78rem;
-    overflow-wrap: anywhere;
-  }
-
-  .row-selected-note {
-    font-size: 0.78rem;
-    font-weight: 700;
-    color: var(--brand);
-  }
-
-  /* ── Empty state panel ── */
-
-  .empty-panel {
-    border: 1px dashed rgba(10, 61, 89, 0.14);
-    border-radius: 16px;
-    background: rgba(255, 255, 255, 0.46);
-    padding: 1rem;
-  }
-
-  /* ── History row ── */
-
-  .history-row {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
-    gap: 1rem;
-    border: 1px solid rgba(10, 61, 89, 0.08);
-    border-radius: 14px;
-    background: rgba(255, 255, 255, 0.66);
-    padding: 0.9rem;
-  }
-
-  /* ── Tablet responsive ── */
+  /* ── Responsive ── */
 
   @media (max-width: 720px) {
-    .row {
-      flex-direction: column;
-    }
-
     .fence-row {
       grid-template-columns: 1fr;
-      gap: 0.25rem;
+      gap: 0.2rem;
     }
   }
 </style>
