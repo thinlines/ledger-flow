@@ -2,13 +2,18 @@
 	import { Dialog as DialogPrimitive } from 'bits-ui';
 	import XIcon from '@lucide/svelte/icons/x';
 	import CheckIcon from '@lucide/svelte/icons/check';
+	import ChevronsUpDownIcon from '@lucide/svelte/icons/chevrons-up-down';
 	import StickyNoteIcon from '@lucide/svelte/icons/sticky-note';
+	import { tick } from 'svelte';
 	import { apiGet, apiPost } from '$lib/api';
 	import { showUndoToast } from '$lib/undo-toast';
 	import AccountCombobox from '$lib/components/AccountCombobox.svelte';
+	import * as Command from '$lib/components/ui/command/index.js';
+	import * as Popover from '$lib/components/ui/popover/index.js';
 	import CreateAccountModal from '$lib/components/CreateAccountModal.svelte';
 	import { entryModal, closeEntryModal, incrementSession, setLastAccount } from '$lib/stores/entry-modal';
 	import type { TrackedAccount } from '$lib/transactions/types';
+	import { cn } from '$lib/utils.js';
 
 	let trackedAccounts: TrackedAccount[] = [];
 	let allAccounts: string[] = [];
@@ -38,6 +43,33 @@
 
 	let payeeEl: HTMLInputElement | null = null;
 	let notesEl: HTMLTextAreaElement | null = null;
+
+	/* ── Tracked-account combobox ── */
+	let acctOpen = false;
+	let acctQuery = '';
+	let acctTriggerRef: HTMLButtonElement | null = null;
+
+	$: filteredTracked = filterTracked(trackedAccounts, acctQuery);
+	$: selectedAccount = trackedAccounts.find((a) => a.id === selectedAccountId) ?? null;
+	$: if (!acctOpen) acctQuery = '';
+
+	function filterTracked(items: TrackedAccount[], search: string): TrackedAccount[] {
+		const normalized = search.trim().toLowerCase();
+		if (!normalized) return items;
+		return items.filter((a) => a.displayName.toLowerCase().includes(normalized));
+	}
+
+	function acctLabel(a: TrackedAccount): string {
+		return a.displayName + (a.last4 ? ` (...${a.last4})` : '');
+	}
+
+	async function selectTrackedAccount(a: TrackedAccount) {
+		selectedAccountId = a.id;
+		acctQuery = '';
+		acctOpen = false;
+		await tick();
+		acctTriggerRef?.focus();
+	}
 
 	function todayISO(): string {
 		const d = new Date();
@@ -232,15 +264,6 @@
 
 				<!-- Fields -->
 				<div class="e-fields">
-					<div class="field">
-						<label for="e-acct">Account</label>
-						<select id="e-acct" bind:value={selectedAccountId}>
-							{#each trackedAccounts as a (a.id)}
-								<option value={a.id}>{a.displayName}{a.last4 ? ` (...${a.last4})` : ''}</option>
-							{/each}
-						</select>
-					</div>
-
 					<div class="e-row">
 						<div class="field e-date-field">
 							<label for="e-date">Date</label>
@@ -272,6 +295,45 @@
 								accounts={allAccounts} value={category} placeholder="e.g. Expenses:Food"
 								onChange={(v) => { category = v; }} onCreate={(s) => openCreateModal(s)} />
 						</div>
+					</div>
+
+					<div class="field">
+						<!-- svelte-ignore a11y_label_has_associated_control -->
+						<label id="e-acct-label">Account</label>
+						<Popover.Root bind:open={acctOpen}>
+							<Popover.Trigger
+								bind:ref={acctTriggerRef}
+								class={cn(
+									'flex w-full min-w-0 items-center justify-between gap-2 rounded-md border border-input bg-background px-3 py-2 text-left text-sm shadow-xs outline-hidden transition-[color,box-shadow] hover:bg-accent hover:text-accent-foreground focus-visible:ring-2 focus-visible:ring-ring',
+									!selectedAccount && 'text-muted-foreground'
+								)}
+								role="combobox"
+								aria-labelledby="e-acct-label"
+								aria-expanded={acctOpen}
+							>
+								<span class="truncate">{selectedAccount ? acctLabel(selectedAccount) : 'Select account...'}</span>
+								<ChevronsUpDownIcon class="size-4 shrink-0 opacity-50" />
+							</Popover.Trigger>
+							<Popover.Content class="w-72 max-w-[calc(100vw-2rem)] p-0" align="start">
+								<Command.Root shouldFilter={false}>
+									<Command.Input bind:value={acctQuery} placeholder="Search account..." />
+									<Command.List>
+										{#if filteredTracked.length === 0}
+											<Command.Empty>No account found.</Command.Empty>
+										{:else}
+											<Command.Group>
+												{#each filteredTracked as a (a.id)}
+													<Command.Item value={a.id} onSelect={() => void selectTrackedAccount(a)}>
+														<CheckIcon class={cn('size-4', selectedAccountId !== a.id && 'text-transparent')} />
+														<span class="truncate">{acctLabel(a)}</span>
+													</Command.Item>
+												{/each}
+											</Command.Group>
+										{/if}
+									</Command.List>
+								</Command.Root>
+							</Popover.Content>
+						</Popover.Root>
 					</div>
 
 					{#if showNotes}

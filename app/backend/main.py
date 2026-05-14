@@ -186,6 +186,35 @@ def _account_kind(account: str) -> str:
     return "other"
 
 
+def _transaction_counts_by_ledger_account(config) -> dict[str, int]:
+    """Return {ledger_account: count} via ``ledger accounts --count``."""
+    from services.reconciliation_service import _journal_files
+
+    journals = _journal_files(config)
+    if not journals:
+        return {}
+    args = ["ledger"]
+    for journal in journals:
+        args.extend(["-f", str(journal)])
+    args.extend(["accounts", "--count"])
+    try:
+        output = run_cmd(args, cwd=config.root_dir)
+    except (CommandError, FileNotFoundError):
+        return {}
+    counts: dict[str, int] = {}
+    for line in output.strip().splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        parts = line.split(None, 1)
+        if len(parts) == 2:
+            try:
+                counts[parts[1]] = int(parts[0])
+            except ValueError:
+                pass
+    return counts
+
+
 def _tracked_account_ui(
     config,
     account_id: str,
@@ -1355,13 +1384,14 @@ def tracked_accounts_list() -> dict:
     opening_by_id, opening_by_ledger = opening_balance_index(config)
     reconciliation_status_map = compute_reconciliation_status(config)
     last_reconciled_map = latest_reconciliation_dates_by_tracked_id(config)
-    rows = [
-        _tracked_account_ui(config, account_id, account_cfg, opening_by_id, opening_by_ledger, reconciliation_status_map, last_reconciled_map)
-        for account_id, account_cfg in sorted(
-            config.tracked_accounts.items(),
-            key=lambda item: str(item[1].get("display_name", item[0])),
-        )
-    ]
+    txn_counts = _transaction_counts_by_ledger_account(config)
+    rows = []
+    for account_id, account_cfg in config.tracked_accounts.items():
+        row = _tracked_account_ui(config, account_id, account_cfg, opening_by_id, opening_by_ledger, reconciliation_status_map, last_reconciled_map)
+        ledger_acct = str(account_cfg.get("ledger_account", "")).strip()
+        row["transactionCount"] = txn_counts.get(ledger_acct, 0)
+        rows.append(row)
+    rows.sort(key=lambda r: (-r["transactionCount"], r["displayName"]))
     return {"trackedAccounts": rows, "institutionTemplates": list_templates()}
 
 
