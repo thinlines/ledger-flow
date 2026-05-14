@@ -2,14 +2,11 @@
 	import { Dialog as DialogPrimitive } from 'bits-ui';
 	import XIcon from '@lucide/svelte/icons/x';
 	import CheckIcon from '@lucide/svelte/icons/check';
-	import ChevronsUpDownIcon from '@lucide/svelte/icons/chevrons-up-down';
 	import StickyNoteIcon from '@lucide/svelte/icons/sticky-note';
-	import { tick } from 'svelte';
 	import { apiGet, apiPost } from '$lib/api';
 	import { showUndoToast } from '$lib/undo-toast';
 	import AccountCombobox from '$lib/components/AccountCombobox.svelte';
 	import * as Command from '$lib/components/ui/command/index.js';
-	import * as Popover from '$lib/components/ui/popover/index.js';
 	import CreateAccountModal from '$lib/components/CreateAccountModal.svelte';
 	import { entryModal, closeEntryModal, incrementSession, setLastAccount } from '$lib/stores/entry-modal';
 	import type { TrackedAccount } from '$lib/transactions/types';
@@ -47,11 +44,13 @@
 	/* ── Tracked-account combobox ── */
 	let acctOpen = false;
 	let acctQuery = '';
-	let acctTriggerRef: HTMLButtonElement | null = null;
+	let acctInputEl: HTMLInputElement | null = null;
+	let acctPanelEl: HTMLDivElement | null = null;
+	let acctBlurTimer: ReturnType<typeof setTimeout> | null = null;
 
 	$: filteredTracked = filterTracked(trackedAccounts, acctQuery);
 	$: selectedAccount = trackedAccounts.find((a) => a.id === selectedAccountId) ?? null;
-	$: if (!acctOpen) acctQuery = '';
+	$: acctDisplayValue = acctOpen ? acctQuery : (selectedAccount ? acctLabel(selectedAccount) : '');
 
 	function filterTracked(items: TrackedAccount[], search: string): TrackedAccount[] {
 		const normalized = search.trim().toLowerCase();
@@ -63,12 +62,65 @@
 		return a.displayName + (a.last4 ? ` (...${a.last4})` : '');
 	}
 
-	async function selectTrackedAccount(a: TrackedAccount) {
+	function selectTrackedAccount(a: TrackedAccount) {
 		selectedAccountId = a.id;
 		acctQuery = '';
 		acctOpen = false;
-		await tick();
-		acctTriggerRef?.focus();
+	}
+
+	function handleAcctFocus() {
+		if (acctBlurTimer) { clearTimeout(acctBlurTimer); acctBlurTimer = null; }
+		acctQuery = '';
+		acctOpen = true;
+	}
+
+	function handleAcctBlur() {
+		acctBlurTimer = setTimeout(() => {
+			acctOpen = false;
+			acctQuery = '';
+			acctBlurTimer = null;
+		}, 200);
+	}
+
+	function handleAcctKeydown(event: KeyboardEvent) {
+		if (event.key === 'Escape') {
+			event.preventDefault();
+			acctOpen = false;
+			acctQuery = '';
+			acctInputEl?.blur();
+			return;
+		}
+		if (event.key === 'Tab') {
+			acctOpen = false;
+			acctQuery = '';
+			return;
+		}
+		if (event.key === 'Enter') {
+			event.preventDefault();
+			event.stopPropagation();
+			if (filteredTracked.length > 0) {
+				const selectedEl = acctPanelEl?.querySelector('[aria-selected="true"]');
+				const selectedValue = selectedEl?.getAttribute('data-value');
+				const match = filteredTracked.find((a) => a.id === selectedValue);
+				selectTrackedAccount(match ?? filteredTracked[0]);
+			}
+			return;
+		}
+		if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+			event.preventDefault();
+			if (!acctOpen) { acctOpen = true; return; }
+			const items = acctPanelEl ? Array.from(acctPanelEl.querySelectorAll('[data-slot="command-item"]')) : [];
+			if (items.length === 0) return;
+			const current = items.findIndex((el) => el.getAttribute('aria-selected') === 'true');
+			let next: number;
+			if (event.key === 'ArrowDown') {
+				next = current < items.length - 1 ? current + 1 : 0;
+			} else {
+				next = current > 0 ? current - 1 : items.length - 1;
+			}
+			items.forEach((el, i) => el.setAttribute('aria-selected', i === next ? 'true' : 'false'));
+			items[next]?.scrollIntoView({ block: 'nearest' });
+		}
 	}
 
 	function todayISO(): string {
@@ -297,33 +349,44 @@
 						</div>
 					</div>
 
-					<div class="field">
-						<!-- svelte-ignore a11y_label_has_associated_control -->
-						<label id="e-acct-label">Account</label>
-						<Popover.Root bind:open={acctOpen}>
-							<Popover.Trigger
-								bind:ref={acctTriggerRef}
-								class={cn(
-									'flex w-full min-w-0 items-center justify-between gap-2 rounded-md border border-input bg-background px-3 py-2 text-left text-sm shadow-xs outline-hidden transition-[color,box-shadow] hover:bg-accent hover:text-accent-foreground focus-visible:ring-2 focus-visible:ring-ring',
-									!selectedAccount && 'text-muted-foreground'
-								)}
-								role="combobox"
-								aria-labelledby="e-acct-label"
-								aria-expanded={acctOpen}
+					<div class="field relative">
+						<label for="e-acct">Account</label>
+						<input
+							id="e-acct"
+							bind:this={acctInputEl}
+							type="text"
+							role="combobox"
+							autocomplete="off"
+							aria-expanded={acctOpen}
+							aria-controls="e-acct-list"
+							aria-autocomplete="list"
+							class={cn(
+								'flex w-full min-w-0 rounded-md border border-input bg-background px-3 py-2 text-sm shadow-xs outline-hidden transition-[color,box-shadow] focus-visible:ring-2 focus-visible:ring-ring',
+								!selectedAccount && !acctOpen && 'text-muted-foreground'
+							)}
+							value={acctDisplayValue}
+							placeholder="Select account..."
+							on:focus={handleAcctFocus}
+							on:blur={handleAcctBlur}
+							on:input={(e) => { acctQuery = e.currentTarget.value; if (!acctOpen) acctOpen = true; }}
+							on:keydown={handleAcctKeydown}
+						/>
+						{#if acctOpen}
+							<!-- svelte-ignore a11y_no_static_element_interactions -->
+							<div
+								bind:this={acctPanelEl}
+								id="e-acct-list"
+								class="absolute top-full left-0 z-50 mt-1 w-full rounded-md border bg-popover text-popover-foreground shadow-md"
+								on:pointerdown|preventDefault
 							>
-								<span class="truncate">{selectedAccount ? acctLabel(selectedAccount) : 'Select account...'}</span>
-								<ChevronsUpDownIcon class="size-4 shrink-0 opacity-50" />
-							</Popover.Trigger>
-							<Popover.Content class="w-72 max-w-[calc(100vw-2rem)] p-0" align="start">
 								<Command.Root shouldFilter={false}>
-									<Command.Input bind:value={acctQuery} placeholder="Search account..." />
 									<Command.List>
 										{#if filteredTracked.length === 0}
 											<Command.Empty>No account found.</Command.Empty>
 										{:else}
 											<Command.Group>
 												{#each filteredTracked as a (a.id)}
-													<Command.Item value={a.id} onSelect={() => void selectTrackedAccount(a)}>
+													<Command.Item value={a.id} onSelect={() => selectTrackedAccount(a)}>
 														<CheckIcon class={cn('size-4', selectedAccountId !== a.id && 'text-transparent')} />
 														<span class="truncate">{acctLabel(a)}</span>
 													</Command.Item>
@@ -332,8 +395,8 @@
 										{/if}
 									</Command.List>
 								</Command.Root>
-							</Popover.Content>
-						</Popover.Root>
+							</div>
+						{/if}
 					</div>
 
 					{#if showNotes}
