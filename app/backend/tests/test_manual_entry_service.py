@@ -7,6 +7,7 @@ from services.manual_entry_service import (
     find_match_candidates,
     has_manual_tag,
     populate_match_candidates,
+    TIER_SCORES,
 )
 from services.unknowns_service import apply_unknown_mappings, scan_unknowns
 
@@ -197,7 +198,7 @@ def test_find_match_candidates_exact_date_amount(tmp_path: Path) -> None:
 
 
 def test_find_match_candidates_close_amount_within_tolerance(tmp_path: Path) -> None:
-    """$45.95 vs $46.00 — small delta within tolerance, should match."""
+    """$45.95 vs $46.00 — small delta within +35% tolerance, should match as Tier 2."""
     journal_lines = [
         "2026/03/28 Uber",
         "    ; :manual:",
@@ -212,11 +213,12 @@ def test_find_match_candidates_close_amount_within_tolerance(tmp_path: Path) -> 
         "Assets:Bank:Checking",
     )
     assert len(candidates) == 1
-    assert candidates[0]["matchQuality"] in ("strong", "likely")
+    assert candidates[0]["matchTier"] == 2
+    assert candidates[0]["matchQuality"] == "strong"
 
 
-def test_find_match_candidates_large_amount_delta_rejected(tmp_path: Path) -> None:
-    """$45.95 vs $47.95 — $2 delta is ~4.3% of $45.95, within 5% tolerance."""
+def test_find_match_candidates_moderate_amount_delta(tmp_path: Path) -> None:
+    """$45.95 vs $47.95 — $2 delta is ~4.3%, well within +35% tolerance → Tier 2."""
     journal_lines = [
         "2026/03/28 Uber",
         "    ; :manual:",
@@ -230,14 +232,14 @@ def test_find_match_candidates_large_amount_delta_rejected(tmp_path: Path) -> No
         "Uber",
         "Assets:Bank:Checking",
     )
-    # $2 delta on $45.95 is ~4.3%, within the 5% tolerance
     assert len(candidates) == 1
+    assert candidates[0]["matchTier"] == 2
 
 
-def test_find_match_candidates_huge_amount_delta_weak(tmp_path: Path) -> None:
-    """$45.95 vs $500, same payee, same day — amount fails but payee+date survive.
+def test_find_match_candidates_huge_amount_delta_tier5(tmp_path: Path) -> None:
+    """$45.95 vs $500, same payee, same day — amount way off but payee carries → Tier 5.
 
-    Surfaces as a weak candidate, never as strong or auto-suggested.
+    Surfaces as a weak candidate (possible), never auto-suggested.
     """
     journal_lines = [
         "2026/03/28 Uber",
@@ -252,14 +254,13 @@ def test_find_match_candidates_huge_amount_delta_weak(tmp_path: Path) -> None:
         "Uber",
         "Assets:Bank:Checking",
     )
-    if candidates:
-        assert candidates[0]["matchQuality"] != "strong"
-        from services.manual_entry_service import AUTO_SUGGEST_THRESHOLD
-        assert candidates[0]["matchScore"] < AUTO_SUGGEST_THRESHOLD
+    assert len(candidates) == 1
+    assert candidates[0]["matchTier"] == 5
+    assert candidates[0]["matchQuality"] == "possible"
 
 
-def test_find_match_candidates_outside_date_window_exact_amount() -> None:
-    """Exact amount match survives even outside the date window — amount is the strongest signal."""
+def test_find_match_candidates_outside_date_window_rejected() -> None:
+    """Outside the 3-day window → no candidates regardless of amount/payee."""
     journal_lines = [
         "2026/03/20 Uber",
         "    ; :manual:",
@@ -273,9 +274,8 @@ def test_find_match_candidates_outside_date_window_exact_amount() -> None:
         "Something Else",
         "Assets:Bank:Checking",
     )
-    # Exact amount (score 0.5) exceeds threshold even with 0 date + 0 payee.
-    assert len(candidates) == 1
-    assert candidates[0]["matchQuality"] in ("likely", "possible")
+    # 8 days apart — outside the 3-day window, no tier applies
+    assert len(candidates) == 0
 
 
 def test_find_match_candidates_outside_window_no_signal() -> None:
@@ -297,10 +297,7 @@ def test_find_match_candidates_outside_window_no_signal() -> None:
 
 
 def test_find_match_candidates_payee_only_outside_window_rejected() -> None:
-    """Different amount + outside date window → no match even with good payee.
-
-    Payee score alone (max 0.35) cannot clear MIN_MATCH_SCORE (0.40).
-    """
+    """Outside date window → no match even with good payee (window is a hard gate)."""
     journal_lines = [
         "2026/03/20 Uber",
         "    ; :manual:",

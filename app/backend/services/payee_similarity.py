@@ -12,19 +12,11 @@ from difflib import SequenceMatcher
 PAYEE_NOISE_WORDS = {"manual", "imported", "copy", "online", "mobile"}
 
 
-def _normalize_payee_token(token: str) -> str:
-    if token.endswith("ies") and len(token) > 4:
-        return token[:-3] + "y"
-    if token.endswith("s") and len(token) > 4:
-        return token[:-1]
-    return token
-
-
 def normalize_payee(value: str) -> str:
-    """Lowercase, strip punctuation, remove noise words, normalize plurals."""
+    """Lowercase, strip punctuation, remove noise words."""
     normalized = re.sub(r"[^a-z0-9]+", " ", value.lower()).strip()
     tokens = [
-        _normalize_payee_token(token)
+        token
         for token in normalized.split()
         if token not in PAYEE_NOISE_WORDS
     ]
@@ -34,8 +26,8 @@ def normalize_payee(value: str) -> str:
 def payee_similarity(left: str, right: str) -> float:
     """Return 0.0–1.0 similarity between two payee strings.
 
-    Uses token-set ratio with noise-word removal, plural normalization,
-    and a single-token SequenceMatcher fallback (≥ 0.92 threshold).
+    Uses token-set ratio with noise-word removal and a single-token
+    SequenceMatcher fallback (≥ 0.92 threshold).
     """
     left_norm = normalize_payee(left)
     right_norm = normalize_payee(right)

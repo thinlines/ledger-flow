@@ -538,6 +538,16 @@
       }
     }
 
+    // Default to Match mode when candidates exist (even without auto-suggest).
+    // This ensures the user sees manual entry candidates before being offered a category.
+    if (candidates.length > 0) {
+      return {
+        selectionType: 'match',
+        matchedManualTxnId: candidates[0]?.manualTxnId ?? '',
+        matchedManualLineRange: candidates[0] ? [candidates[0].lineStart, candidates[0].lineEnd] : undefined
+      };
+    }
+
     return {
       selectionType: 'category',
       categoryAccount: (group.suggestedAccount ?? '').trim()
@@ -1799,8 +1809,6 @@
                     class="btn btn-small"
                     type="button"
                     class:active-filter={row.selectionType === 'match'}
-                    disabled={row.matchCandidates.length === 0}
-                    title={row.matchCandidates.length === 0 ? 'No manual entries found for this account.' : ''}
                     on:click={() => setRowMode(row.group, row.txn, 'match')}
                   >
                     Match
