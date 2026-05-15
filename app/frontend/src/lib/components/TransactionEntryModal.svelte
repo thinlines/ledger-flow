@@ -9,6 +9,7 @@
 	import CreateAccountModal from '$lib/components/CreateAccountModal.svelte';
 	import { entryModal, closeEntryModal, incrementSession, setLastAccount } from '$lib/stores/entry-modal';
 	import type { TrackedAccount } from '$lib/transactions/types';
+	import { cn } from '$lib/utils.js';
 
 	let trackedAccounts: TrackedAccount[] = [];
 	let allAccounts: string[] = [];
@@ -38,6 +39,110 @@
 
 	let payeeEl: HTMLInputElement | null = null;
 	let notesEl: HTMLTextAreaElement | null = null;
+
+	/* ── Tracked-account combobox ── */
+	let acctOpen = false;
+	let acctQuery = '';
+	let acctInputEl: HTMLInputElement | null = null;
+	let acctBlurTimer: ReturnType<typeof setTimeout> | null = null;
+	let acctHighlightedIndex = -1;
+	let acctDropY = 0, acctDropX = 0, acctDropW = 0;
+
+	$: filteredTracked = filterTracked(trackedAccounts, acctQuery, selectedAccount);
+	$: selectedAccount = trackedAccounts.find((a) => a.id === selectedAccountId) ?? null;
+	$: acctDisplayValue = acctOpen ? acctQuery : (selectedAccount ? acctLabel(selectedAccount) : '');
+	$: if (acctOpen && acctHighlightedIndex >= filteredTracked.length) acctHighlightedIndex = filteredTracked.length - 1;
+
+	function filterTracked(items: TrackedAccount[], search: string, selected: TrackedAccount | null): TrackedAccount[] {
+		const normalized = search.trim().toLowerCase();
+		if (!normalized) return items;
+		if (selected && normalized === acctLabel(selected).toLowerCase()) return items;
+		return items.filter((a) => a.displayName.toLowerCase().includes(normalized));
+	}
+
+	function acctLabel(a: TrackedAccount): string {
+		return a.displayName + (a.last4 ? ` (...${a.last4})` : '');
+	}
+
+	function acctUpdatePos() {
+		if (!acctInputEl) return;
+		const r = acctInputEl.getBoundingClientRect();
+		acctDropY = r.bottom + 4;
+		acctDropX = r.left;
+		acctDropW = r.width;
+	}
+
+	function selectTrackedAccount(a: TrackedAccount) {
+		selectedAccountId = a.id;
+		acctQuery = '';
+		acctOpen = false;
+		acctHighlightedIndex = -1;
+	}
+
+	function handleAcctFocus() {
+		if (acctBlurTimer) { clearTimeout(acctBlurTimer); acctBlurTimer = null; }
+		acctQuery = selectedAccount ? acctLabel(selectedAccount) : '';
+		acctUpdatePos();
+		acctOpen = true;
+		acctHighlightedIndex = -1;
+		requestAnimationFrame(() => acctInputEl?.select());
+	}
+
+	function handleAcctBlur() {
+		acctBlurTimer = setTimeout(() => {
+			acctOpen = false;
+			acctQuery = '';
+			acctHighlightedIndex = -1;
+			acctBlurTimer = null;
+		}, 150);
+	}
+
+	function handleAcctKeydown(event: KeyboardEvent) {
+		if (event.key === 'Escape') {
+			event.preventDefault();
+			event.stopPropagation();
+			acctOpen = false;
+			acctQuery = '';
+			acctHighlightedIndex = -1;
+			acctInputEl?.blur();
+			return;
+		}
+		if (event.key === 'Tab') {
+			if (acctOpen && filteredTracked.length > 0) {
+				selectTrackedAccount(filteredTracked[acctHighlightedIndex >= 0 ? acctHighlightedIndex : 0]);
+			}
+			return; // don't preventDefault — let Tab move focus naturally
+		}
+		if (event.key === 'Enter') {
+			event.preventDefault();
+			event.stopPropagation();
+			if (filteredTracked.length > 0) {
+				selectTrackedAccount(filteredTracked[acctHighlightedIndex >= 0 ? acctHighlightedIndex : 0]);
+			}
+			return;
+		}
+		if (event.key === 'ArrowDown') {
+			event.preventDefault();
+			if (!acctOpen) { acctUpdatePos(); acctOpen = true; acctHighlightedIndex = 0; return; }
+			acctHighlightedIndex = acctHighlightedIndex < filteredTracked.length - 1 ? acctHighlightedIndex + 1 : 0;
+			return;
+		}
+		if (event.key === 'ArrowUp') {
+			event.preventDefault();
+			if (!acctOpen) { acctUpdatePos(); acctOpen = true; acctHighlightedIndex = filteredTracked.length - 1; return; }
+			acctHighlightedIndex = acctHighlightedIndex > 0 ? acctHighlightedIndex - 1 : filteredTracked.length - 1;
+			return;
+		}
+	}
+
+	function acctPortal(node: HTMLElement) {
+		document.body.appendChild(node);
+		return {
+			destroy() {
+				if (node.parentNode) node.parentNode.removeChild(node);
+			}
+		};
+	}
 
 	function todayISO(): string {
 		const d = new Date();
@@ -232,15 +337,6 @@
 
 				<!-- Fields -->
 				<div class="e-fields">
-					<div class="field">
-						<label for="e-acct">Account</label>
-						<select id="e-acct" bind:value={selectedAccountId}>
-							{#each trackedAccounts as a (a.id)}
-								<option value={a.id}>{a.displayName}{a.last4 ? ` (...${a.last4})` : ''}</option>
-							{/each}
-						</select>
-					</div>
-
 					<div class="e-row">
 						<div class="field e-date-field">
 							<label for="e-date">Date</label>
@@ -272,6 +368,61 @@
 								accounts={allAccounts} value={category} placeholder="e.g. Expenses:Food"
 								onChange={(v) => { category = v; }} onCreate={(s) => openCreateModal(s)} />
 						</div>
+					</div>
+
+					<div class="field">
+						<label for="e-acct">Account</label>
+						<input
+							id="e-acct"
+							bind:this={acctInputEl}
+							type="text"
+							role="combobox"
+							autocomplete="off"
+							aria-expanded={acctOpen}
+							aria-controls="e-acct-list"
+							aria-autocomplete="list"
+							class={cn(
+								'flex w-full min-w-0 rounded-md border border-input bg-background px-3 py-2 text-sm shadow-xs outline-hidden transition-[color,box-shadow] focus-visible:ring-2 focus-visible:ring-ring',
+								!selectedAccount && !acctOpen && 'text-muted-foreground'
+							)}
+							value={acctDisplayValue}
+							placeholder="Select account..."
+							on:focus={handleAcctFocus}
+							on:blur={handleAcctBlur}
+							on:input={(e) => { acctQuery = e.currentTarget.value; if (!acctOpen) { acctUpdatePos(); acctOpen = true; } acctHighlightedIndex = -1; }}
+							on:keydown={handleAcctKeydown}
+						/>
+						{#if acctOpen}
+							<div
+								use:acctPortal
+								id="e-acct-list"
+								role="listbox"
+								class="rounded-md border border-border bg-popover py-1 shadow-md"
+								style="position: fixed; z-index: 9999; top: {acctDropY}px; left: {acctDropX}px; width: {acctDropW}px; max-height: 300px; overflow-y: auto;"
+							>
+								{#if filteredTracked.length === 0}
+									<div class="px-2 py-1.5 text-sm text-muted-foreground">No account found.</div>
+								{:else}
+									{#each filteredTracked as a, i (a.id)}
+										<button
+											type="button"
+											role="option"
+											aria-selected={i === acctHighlightedIndex}
+											class={cn(
+												'flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-sm text-left',
+												i === acctHighlightedIndex
+													? 'bg-accent text-accent-foreground'
+													: 'hover:bg-accent hover:text-accent-foreground'
+											)}
+											on:pointerdown|preventDefault={() => selectTrackedAccount(a)}
+										>
+											<CheckIcon class={cn('size-4 shrink-0', selectedAccountId !== a.id && 'text-transparent')} />
+											<span class="truncate">{acctLabel(a)}</span>
+										</button>
+									{/each}
+								{/if}
+							</div>
+						{/if}
 					</div>
 
 					{#if showNotes}

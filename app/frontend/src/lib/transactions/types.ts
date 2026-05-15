@@ -25,6 +25,7 @@ export type TrackedAccount = {
   openingBalanceDate?: string | null;
   reconciliationStatus?: ReconciliationStatus;
   lastReconciledDate?: string | null;
+  transactionCount?: number;
 };
 
 /** @deprecated Used by ManualResolutionDialog during transition to TransactionRow */
