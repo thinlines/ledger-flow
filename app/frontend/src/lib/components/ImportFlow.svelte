@@ -750,6 +750,13 @@
       <p class="error-text m-0">{error}</p>
     {/if}
 
+    {#if mode !== 'setup'}
+      <section class="view-card">
+        <p class="eyebrow">Import</p>
+        <h2 class="page-title">Import transactions</h2>
+      </section>
+    {/if}
+
     <!-- Drop zone hero -->
     <div
       class="drop-zone"
@@ -779,7 +786,7 @@
         </button>
 
         {#if dropError}
-          <p class="text-sm text-red-600 m-0 mt-1">{dropError}</p>
+          <p class="error-text text-sm m-0 mt-1">{dropError}</p>
         {/if}
       </div>
 
@@ -819,7 +826,7 @@
 
     <!-- Inbox list -->
     {#if candidates.length > 0}
-      <section class="grid gap-2">
+      <section class="view-card grid gap-3">
         <div class="flex justify-between items-center">
           <h3 class="m-0 text-sm font-semibold text-muted-foreground uppercase tracking-wide">Inbox</h3>
           <span class="text-xs text-muted-foreground">{candidates.length} waiting</span>
@@ -919,7 +926,7 @@
 
     <!-- Compact history -->
     {#if historyEntries.length > 0}
-      <section class="grid gap-2 mt-2">
+      <section class="view-card grid gap-3">
         <h3 class="m-0 text-sm font-semibold text-muted-foreground uppercase tracking-wide">History</h3>
 
         <div class="history-compact">
