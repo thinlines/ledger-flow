@@ -750,23 +750,22 @@
       <p class="error-text m-0">{error}</p>
     {/if}
 
-    {#if mode !== 'setup'}
-      <section class="view-card">
-        <p class="eyebrow">Import</p>
-        <h2 class="page-title">Import transactions</h2>
-      </section>
-    {/if}
-
-    <!-- Drop zone hero -->
-    <div
-      class="drop-zone"
+    <!-- Drop zone hero card -->
+    <section
+      class="view-card import-hero"
       class:drop-zone-active={dropZoneActive}
       on:dragover={onDragOver}
       on:dragleave={onDragLeave}
       on:drop={onDrop}
-      role="region"
       aria-label="File drop zone"
     >
+      {#if mode !== 'setup'}
+        <p class="eyebrow">Import</p>
+        <h2 class="page-title">Import transactions</h2>
+      {:else}
+        <p class="muted text-sm m-0">Pick the account, then drop in a CSV. We add new transactions, skip ones already imported, and pause only if something would change a balance you've already reconciled.</p>
+      {/if}
+
       <input
         bind:this={statementFileInput}
         type="file"
@@ -790,7 +789,6 @@
         {/if}
       </div>
 
-      <!-- Account selector inside drop zone -->
       {#if importAccounts.length > 1}
         <div class="drop-zone-account">
           <select
@@ -805,11 +803,7 @@
           </select>
         </div>
       {/if}
-    </div>
-
-    {#if mode === 'setup'}
-      <p class="muted text-sm m-0">Pick the account, then drop in a CSV. We add new transactions, skip ones already imported, and pause only if something would change a balance you've already reconciled.</p>
-    {/if}
+    </section>
 
     <!-- Recovery state -->
     {#if recoveryState}
@@ -1007,28 +1001,24 @@
 </div>
 
 <style>
-  /* ── Drop zone (hero) ── */
+  /* ── Drop zone hero card ── */
 
-  .drop-zone {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
+  .import-hero {
+    background:
+      radial-gradient(circle at top left, rgba(214, 235, 220, 0.86), transparent 34%),
+      linear-gradient(155deg, #fbfdf8 0%, #f6fbff 60%, #eef6f3 100%);
+    display: grid;
     gap: 1rem;
-    min-height: 160px;
-    border: 2px dashed rgba(10, 61, 89, 0.18);
-    border-radius: 16px;
-    background: rgba(255, 255, 255, 0.5);
-    padding: 2rem 1.5rem;
     transition:
       border-color 0.18s ease,
       background-color 0.18s ease;
   }
 
   .drop-zone-active {
-    border-color: var(--brand);
-    border-style: solid;
-    background: rgba(13, 127, 88, 0.04);
+    border-color: rgba(13, 127, 88, 0.45);
+    background:
+      radial-gradient(circle at top left, rgba(13, 127, 88, 0.07), transparent 34%),
+      linear-gradient(155deg, #f5fdf8 0%, #edf8f2 60%, #e8f5ef 100%);
   }
 
   .drop-zone-content {
@@ -1036,6 +1026,18 @@
     flex-direction: column;
     align-items: center;
     gap: 0.5rem;
+    border: 2px dashed rgba(10, 61, 89, 0.18);
+    border-radius: 12px;
+    padding: 2rem 1.5rem;
+    min-height: 140px;
+    justify-content: center;
+    background: rgba(255, 255, 255, 0.42);
+  }
+
+  .drop-zone-active .drop-zone-content {
+    border-color: rgba(13, 127, 88, 0.5);
+    border-style: solid;
+    background: rgba(255, 255, 255, 0.6);
   }
 
   .drop-zone-icon {
