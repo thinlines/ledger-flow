@@ -1,8 +1,6 @@
 <script lang="ts">
   import CheckIcon from '@lucide/svelte/icons/check';
   import PlusIcon from '@lucide/svelte/icons/plus';
-  import * as Command from '$lib/components/ui/command/index.js';
-  import * as Popover from '$lib/components/ui/popover/index.js';
   import { cn } from '$lib/utils.js';
 
   export let accounts: string[] = [];
@@ -13,19 +11,30 @@
   export let onChange: (account: string) => void = () => {};
   export let onCreate: (seed: string) => void = () => {};
 
+  let inputEl: HTMLInputElement | null = null;
   let open = false;
   let query = '';
-  let inputEl: HTMLInputElement | null = null;
+  let highlightedIndex = -1;
   let blurTimer: ReturnType<typeof setTimeout> | null = null;
+  let dropY = 0, dropX = 0, dropW = 0;
   const listId = `acct-combo-${Math.random().toString(36).slice(2, 8)}`;
 
   $: filteredAccounts = filterAccounts(accounts, query, value);
   $: displayValue = open ? query : (value || '');
+  $: if (open && highlightedIndex >= filteredAccounts.length) highlightedIndex = filteredAccounts.length - 1;
 
   function filterAccounts(items: string[], search: string, selected: string): string[] {
     const normalized = search.trim().toLowerCase();
     if (!normalized || normalized === selected.toLowerCase()) return items.slice(0, 50);
-    return items.filter((account) => account.toLowerCase().includes(normalized)).slice(0, 50);
+    return items.filter((a) => a.toLowerCase().includes(normalized)).slice(0, 50);
+  }
+
+  function updatePos() {
+    if (!inputEl) return;
+    const r = inputEl.getBoundingClientRect();
+    dropY = r.bottom + 4;
+    dropX = r.left;
+    dropW = r.width;
   }
 
   function selectAccount(account: string) {
@@ -33,6 +42,7 @@
     onChange(account);
     query = '';
     open = false;
+    highlightedIndex = -1;
   }
 
   function requestCreate() {
@@ -40,25 +50,16 @@
     const seed = query.trim();
     query = '';
     open = false;
+    highlightedIndex = -1;
     onCreate(seed);
-  }
-
-  function selectHighlightedOrFirst() {
-    if (filteredAccounts.length === 0) return;
-    const popoverEl = document.getElementById(listId);
-    const selectedEl = popoverEl?.querySelector('[aria-selected="true"]');
-    const selectedValue = selectedEl?.getAttribute('data-value');
-    if (selectedValue && accounts.includes(selectedValue)) {
-      selectAccount(selectedValue);
-    } else {
-      selectAccount(filteredAccounts[0]);
-    }
   }
 
   function handleFocus() {
     if (blurTimer) { clearTimeout(blurTimer); blurTimer = null; }
     query = value || '';
+    updatePos();
     open = true;
+    highlightedIndex = -1;
     requestAnimationFrame(() => inputEl?.select());
   }
 
@@ -66,54 +67,58 @@
     blurTimer = setTimeout(() => {
       open = false;
       query = '';
+      highlightedIndex = -1;
       blurTimer = null;
-    }, 200);
-  }
-
-  function handleOpenChange(isOpen: boolean) {
-    if (!isOpen) { open = false; query = ''; }
+    }, 150);
   }
 
   function handleInputKeydown(event: KeyboardEvent) {
     if (event.key === 'Escape') {
       event.preventDefault();
+      event.stopPropagation();
       open = false;
       query = '';
+      highlightedIndex = -1;
       inputEl?.blur();
       return;
     }
     if (event.key === 'Tab') {
       if (open && filteredAccounts.length > 0) {
-        selectHighlightedOrFirst();
+        selectAccount(filteredAccounts[highlightedIndex >= 0 ? highlightedIndex : 0]);
       }
-      return;
+      return; // don't preventDefault — let Tab move focus naturally
     }
     if (event.key === 'Enter') {
       event.preventDefault();
       event.stopPropagation();
       if (filteredAccounts.length > 0) {
-        selectHighlightedOrFirst();
+        selectAccount(filteredAccounts[highlightedIndex >= 0 ? highlightedIndex : 0]);
       } else if (allowCreate && query.trim()) {
         requestCreate();
       }
       return;
     }
-    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+    if (event.key === 'ArrowDown') {
       event.preventDefault();
-      if (!open) { open = true; return; }
-      const popoverEl = document.getElementById(listId);
-      const items = popoverEl ? Array.from(popoverEl.querySelectorAll('[data-slot="command-item"]')) : [];
-      if (items.length === 0) return;
-      const current = items.findIndex((el) => el.getAttribute('aria-selected') === 'true');
-      let next: number;
-      if (event.key === 'ArrowDown') {
-        next = current < items.length - 1 ? current + 1 : 0;
-      } else {
-        next = current > 0 ? current - 1 : items.length - 1;
-      }
-      items.forEach((el, i) => el.setAttribute('aria-selected', i === next ? 'true' : 'false'));
-      items[next]?.scrollIntoView({ block: 'nearest' });
+      if (!open) { updatePos(); open = true; highlightedIndex = 0; return; }
+      highlightedIndex = highlightedIndex < filteredAccounts.length - 1 ? highlightedIndex + 1 : 0;
+      return;
     }
+    if (event.key === 'ArrowUp') {
+      event.preventDefault();
+      if (!open) { updatePos(); open = true; highlightedIndex = filteredAccounts.length - 1; return; }
+      highlightedIndex = highlightedIndex > 0 ? highlightedIndex - 1 : filteredAccounts.length - 1;
+      return;
+    }
+  }
+
+  function portal(node: HTMLElement) {
+    document.body.appendChild(node);
+    return {
+      destroy() {
+        if (node.parentNode) node.parentNode.removeChild(node);
+      }
+    };
   }
 </script>
 
@@ -135,62 +140,62 @@
     {placeholder}
     on:focus={handleFocus}
     on:blur={handleBlur}
-    on:input={(e) => { query = e.currentTarget.value; if (!open) open = true; }}
+    on:input={(e) => { query = e.currentTarget.value; if (!open) { updatePos(); open = true; } highlightedIndex = -1; }}
     on:keydown={handleInputKeydown}
   />
 
-  <Popover.Root bind:open onOpenChange={handleOpenChange}>
-    <Popover.Trigger class="absolute inset-0 -z-10" tabindex={-1} aria-hidden="true">
-      <span class="sr-only">anchor</span>
-    </Popover.Trigger>
-    <Popover.Content
+  {#if open}
+    <div
+      use:portal
       id={listId}
-      class="w-(--bits-popover-anchor-width) max-w-[calc(100vw-2rem)] p-0"
-      align="start"
-      sideOffset={4}
+      role="listbox"
+      class="rounded-md border border-border bg-popover py-1 shadow-md"
+      style="position: fixed; z-index: 9999; top: {dropY}px; left: {dropX}px; width: {dropW}px; max-height: 300px; overflow-y: auto;"
     >
-      <Command.Root shouldFilter={false}>
-        <Command.List>
-          {#if filteredAccounts.length === 0 && !allowCreate}
-            <Command.Empty>No account found.</Command.Empty>
-          {:else if filteredAccounts.length === 0 && allowCreate && query.trim()}
-            <div class="p-1">
-              <button
-                type="button"
-                class="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-sm hover:bg-accent hover:text-accent-foreground"
-                on:pointerdown|preventDefault={() => requestCreate()}
-              >
-                <PlusIcon class="size-4" />
-                Add "{query.trim()}"
-              </button>
-            </div>
-          {:else}
-            <Command.Group>
-              {#each filteredAccounts as account (account)}
-                <Command.Item
-                  value={account}
-                  onSelect={() => selectAccount(account)}
-                >
-                  <CheckIcon class={cn('size-4', value !== account && 'text-transparent')} />
-                  <span class="truncate">{account}</span>
-                </Command.Item>
-              {/each}
-            </Command.Group>
-            {#if allowCreate}
-              <div class="border-t p-1">
-                <button
-                  type="button"
-                  class="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-sm hover:bg-accent hover:text-accent-foreground"
-                  on:pointerdown|preventDefault={() => requestCreate()}
-                >
-                  <PlusIcon class="size-4" />
-                  Add account
-                </button>
-              </div>
-            {/if}
-          {/if}
-        </Command.List>
-      </Command.Root>
-    </Popover.Content>
-  </Popover.Root>
+      {#if filteredAccounts.length === 0}
+        {#if allowCreate && query.trim()}
+          <button
+            type="button"
+            class="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-sm hover:bg-accent hover:text-accent-foreground"
+            on:pointerdown|preventDefault={() => requestCreate()}
+          >
+            <PlusIcon class="size-4" />
+            Add "{query.trim()}"
+          </button>
+        {:else}
+          <div class="px-2 py-1.5 text-sm text-muted-foreground">No account found.</div>
+        {/if}
+      {:else}
+        {#each filteredAccounts as account, i (account)}
+          <button
+            type="button"
+            role="option"
+            aria-selected={i === highlightedIndex}
+            class={cn(
+              'flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-sm text-left',
+              i === highlightedIndex
+                ? 'bg-accent text-accent-foreground'
+                : 'hover:bg-accent hover:text-accent-foreground'
+            )}
+            on:pointerdown|preventDefault={() => selectAccount(account)}
+          >
+            <CheckIcon class={cn('size-4 shrink-0', value !== account && 'text-transparent')} />
+            <span class="truncate">{account}</span>
+          </button>
+        {/each}
+        {#if allowCreate}
+          <div class="border-t pt-1">
+            <button
+              type="button"
+              class="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-sm hover:bg-accent hover:text-accent-foreground"
+              on:pointerdown|preventDefault={() => requestCreate()}
+            >
+              <PlusIcon class="size-4" />
+              Add account
+            </button>
+          </div>
+        {/if}
+      {/if}
+    </div>
+  {/if}
 </div>

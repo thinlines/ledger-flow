@@ -6,8 +6,6 @@
 	import { apiGet, apiPost } from '$lib/api';
 	import { showUndoToast } from '$lib/undo-toast';
 	import AccountCombobox from '$lib/components/AccountCombobox.svelte';
-	import * as Command from '$lib/components/ui/command/index.js';
-	import * as Popover from '$lib/components/ui/popover/index.js';
 	import CreateAccountModal from '$lib/components/CreateAccountModal.svelte';
 	import { entryModal, closeEntryModal, incrementSession, setLastAccount } from '$lib/stores/entry-modal';
 	import type { TrackedAccount } from '$lib/transactions/types';
@@ -47,10 +45,13 @@
 	let acctQuery = '';
 	let acctInputEl: HTMLInputElement | null = null;
 	let acctBlurTimer: ReturnType<typeof setTimeout> | null = null;
+	let acctHighlightedIndex = -1;
+	let acctDropY = 0, acctDropX = 0, acctDropW = 0;
 
 	$: filteredTracked = filterTracked(trackedAccounts, acctQuery, selectedAccount);
 	$: selectedAccount = trackedAccounts.find((a) => a.id === selectedAccountId) ?? null;
 	$: acctDisplayValue = acctOpen ? acctQuery : (selectedAccount ? acctLabel(selectedAccount) : '');
+	$: if (acctOpen && acctHighlightedIndex >= filteredTracked.length) acctHighlightedIndex = filteredTracked.length - 1;
 
 	function filterTracked(items: TrackedAccount[], search: string, selected: TrackedAccount | null): TrackedAccount[] {
 		const normalized = search.trim().toLowerCase();
@@ -63,25 +64,27 @@
 		return a.displayName + (a.last4 ? ` (...${a.last4})` : '');
 	}
 
+	function acctUpdatePos() {
+		if (!acctInputEl) return;
+		const r = acctInputEl.getBoundingClientRect();
+		acctDropY = r.bottom + 4;
+		acctDropX = r.left;
+		acctDropW = r.width;
+	}
+
 	function selectTrackedAccount(a: TrackedAccount) {
 		selectedAccountId = a.id;
 		acctQuery = '';
 		acctOpen = false;
-	}
-
-	function acctSelectHighlightedOrFirst() {
-		if (filteredTracked.length === 0) return;
-		const popoverEl = document.getElementById('e-acct-list');
-		const selectedEl = popoverEl?.querySelector('[aria-selected="true"]');
-		const selectedValue = selectedEl?.getAttribute('data-value');
-		const match = filteredTracked.find((a) => a.id === selectedValue);
-		selectTrackedAccount(match ?? filteredTracked[0]);
+		acctHighlightedIndex = -1;
 	}
 
 	function handleAcctFocus() {
 		if (acctBlurTimer) { clearTimeout(acctBlurTimer); acctBlurTimer = null; }
 		acctQuery = selectedAccount ? acctLabel(selectedAccount) : '';
+		acctUpdatePos();
 		acctOpen = true;
+		acctHighlightedIndex = -1;
 		requestAnimationFrame(() => acctInputEl?.select());
 	}
 
@@ -89,52 +92,56 @@
 		acctBlurTimer = setTimeout(() => {
 			acctOpen = false;
 			acctQuery = '';
+			acctHighlightedIndex = -1;
 			acctBlurTimer = null;
-		}, 200);
-	}
-
-	function handleAcctOpenChange(isOpen: boolean) {
-		if (!isOpen) { acctOpen = false; acctQuery = ''; }
+		}, 150);
 	}
 
 	function handleAcctKeydown(event: KeyboardEvent) {
 		if (event.key === 'Escape') {
 			event.preventDefault();
+			event.stopPropagation();
 			acctOpen = false;
 			acctQuery = '';
+			acctHighlightedIndex = -1;
 			acctInputEl?.blur();
 			return;
 		}
 		if (event.key === 'Tab') {
 			if (acctOpen && filteredTracked.length > 0) {
-				acctSelectHighlightedOrFirst();
+				selectTrackedAccount(filteredTracked[acctHighlightedIndex >= 0 ? acctHighlightedIndex : 0]);
 			}
-			return;
+			return; // don't preventDefault — let Tab move focus naturally
 		}
 		if (event.key === 'Enter') {
 			event.preventDefault();
 			event.stopPropagation();
 			if (filteredTracked.length > 0) {
-				acctSelectHighlightedOrFirst();
+				selectTrackedAccount(filteredTracked[acctHighlightedIndex >= 0 ? acctHighlightedIndex : 0]);
 			}
 			return;
 		}
-		if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+		if (event.key === 'ArrowDown') {
 			event.preventDefault();
-			if (!acctOpen) { acctOpen = true; return; }
-			const popoverEl = document.getElementById('e-acct-list');
-			const items = popoverEl ? Array.from(popoverEl.querySelectorAll('[data-slot="command-item"]')) : [];
-			if (items.length === 0) return;
-			const current = items.findIndex((el) => el.getAttribute('aria-selected') === 'true');
-			let next: number;
-			if (event.key === 'ArrowDown') {
-				next = current < items.length - 1 ? current + 1 : 0;
-			} else {
-				next = current > 0 ? current - 1 : items.length - 1;
-			}
-			items.forEach((el, i) => el.setAttribute('aria-selected', i === next ? 'true' : 'false'));
-			items[next]?.scrollIntoView({ block: 'nearest' });
+			if (!acctOpen) { acctUpdatePos(); acctOpen = true; acctHighlightedIndex = 0; return; }
+			acctHighlightedIndex = acctHighlightedIndex < filteredTracked.length - 1 ? acctHighlightedIndex + 1 : 0;
+			return;
 		}
+		if (event.key === 'ArrowUp') {
+			event.preventDefault();
+			if (!acctOpen) { acctUpdatePos(); acctOpen = true; acctHighlightedIndex = filteredTracked.length - 1; return; }
+			acctHighlightedIndex = acctHighlightedIndex > 0 ? acctHighlightedIndex - 1 : filteredTracked.length - 1;
+			return;
+		}
+	}
+
+	function acctPortal(node: HTMLElement) {
+		document.body.appendChild(node);
+		return {
+			destroy() {
+				if (node.parentNode) node.parentNode.removeChild(node);
+			}
+		};
 	}
 
 	function todayISO(): string {
@@ -363,7 +370,7 @@
 						</div>
 					</div>
 
-					<div class="field relative">
+					<div class="field">
 						<label for="e-acct">Account</label>
 						<input
 							id="e-acct"
@@ -382,37 +389,40 @@
 							placeholder="Select account..."
 							on:focus={handleAcctFocus}
 							on:blur={handleAcctBlur}
-							on:input={(e) => { acctQuery = e.currentTarget.value; if (!acctOpen) acctOpen = true; }}
+							on:input={(e) => { acctQuery = e.currentTarget.value; if (!acctOpen) { acctUpdatePos(); acctOpen = true; } acctHighlightedIndex = -1; }}
 							on:keydown={handleAcctKeydown}
 						/>
-						<Popover.Root bind:open={acctOpen} onOpenChange={handleAcctOpenChange}>
-							<Popover.Trigger class="absolute inset-0 -z-10" tabindex={-1} aria-hidden="true">
-								<span class="sr-only">anchor</span>
-							</Popover.Trigger>
-							<Popover.Content
+						{#if acctOpen}
+							<div
+								use:acctPortal
 								id="e-acct-list"
-								class="w-(--bits-popover-anchor-width) max-w-[calc(100vw-2rem)] p-0"
-								align="start"
-								sideOffset={4}
+								role="listbox"
+								class="rounded-md border border-border bg-popover py-1 shadow-md"
+								style="position: fixed; z-index: 9999; top: {acctDropY}px; left: {acctDropX}px; width: {acctDropW}px; max-height: 300px; overflow-y: auto;"
 							>
-								<Command.Root shouldFilter={false}>
-									<Command.List>
-										{#if filteredTracked.length === 0}
-											<Command.Empty>No account found.</Command.Empty>
-										{:else}
-											<Command.Group>
-												{#each filteredTracked as a (a.id)}
-													<Command.Item value={a.id} onSelect={() => selectTrackedAccount(a)}>
-														<CheckIcon class={cn('size-4', selectedAccountId !== a.id && 'text-transparent')} />
-														<span class="truncate">{acctLabel(a)}</span>
-													</Command.Item>
-												{/each}
-											</Command.Group>
-										{/if}
-									</Command.List>
-								</Command.Root>
-							</Popover.Content>
-						</Popover.Root>
+								{#if filteredTracked.length === 0}
+									<div class="px-2 py-1.5 text-sm text-muted-foreground">No account found.</div>
+								{:else}
+									{#each filteredTracked as a, i (a.id)}
+										<button
+											type="button"
+											role="option"
+											aria-selected={i === acctHighlightedIndex}
+											class={cn(
+												'flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-sm text-left',
+												i === acctHighlightedIndex
+													? 'bg-accent text-accent-foreground'
+													: 'hover:bg-accent hover:text-accent-foreground'
+											)}
+											on:pointerdown|preventDefault={() => selectTrackedAccount(a)}
+										>
+											<CheckIcon class={cn('size-4 shrink-0', selectedAccountId !== a.id && 'text-transparent')} />
+											<span class="truncate">{acctLabel(a)}</span>
+										</button>
+									{/each}
+								{/if}
+							</div>
+						{/if}
 					</div>
 
 					{#if showNotes}
