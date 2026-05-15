@@ -253,3 +253,11 @@ Single column, no right-rail:
 - Review page Match button fix (separate task).
 - Virtualization for large history lists.
 - Mobile bottom sheet.
+
+**Status: COMPLETED — 2026-05-15**
+
+## Delivery Notes
+
+- QA: PASS WITH FINDINGS — visual inspection confirmed one-column layout, drop zone hero, animated preview slot, trash icon, compact history, and confirm-before-apply flow all working.
+- Review: SHIP WITH NOTES — `error-text` class used consistently; `view-card` framing restored across all sections.
+- Fix cycles: 2 — (1) restored page header and view-card section backgrounds stripped during chrome removal; (2) merged header + drop zone into unified gradient hero card matching app aesthetic.
