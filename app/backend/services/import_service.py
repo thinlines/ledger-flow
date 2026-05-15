@@ -44,6 +44,8 @@ class ImportCandidate:
     detected_import_account_id: str | None
     detected_institution_id: str | None
     is_configured_import_account: bool
+    transaction_count: int | None = None
+    date_range: tuple[str, str] | None = None
 
 
 class ImportPreviewBlockedError(Exception):
@@ -77,6 +79,58 @@ class ImportPreviewBlockedError(Exception):
         return detail
 
 
+def _scan_csv_stats(
+    config: AppConfig, csv_path: Path, account_cfg: dict
+) -> tuple[int, tuple[str, str]] | tuple[None, None]:
+    """Return (transaction_count, (min_date, max_date)) for a CSV file.
+
+    Parses the file lightly using the existing adapter/profile infrastructure.
+    Returns (None, None) on any failure so the caller can treat errors silently.
+    """
+    import csv as _csv
+
+    try:
+        source = resolve_import_source(config, account_cfg)
+        dates: list[str] = []
+
+        if source["mode"] == "custom":
+            from .custom_csv_service import normalize_custom_csv_to_intermediate
+
+            intermediate_text = normalize_custom_csv_to_intermediate(csv_path, source["profile"])
+            reader = _csv.DictReader(intermediate_text.splitlines())
+            for row in reader:
+                d = (row.get("date") or "").strip()
+                if d:
+                    dates.append(d)
+        else:
+            from .parsers import registry
+
+            institution_template_id = str(source["institution_id"])
+            inst_cfg = config.institution_templates[institution_template_id]
+            head = int(inst_cfg.get("head", 0))
+            tail_cfg = inst_cfg.get("tail", 0)
+            tail = int(tail_cfg) if tail_cfg else 0
+            encoding = str(inst_cfg.get("encoding", "utf-8"))
+
+            with csv_path.open("r", encoding=encoding) as f:
+                lines = f.readlines()
+
+            end_idx = -tail if tail else len(lines)
+            sliced = lines[head:end_idx]
+
+            registry.discover()
+            adapter = registry.get_adapter(institution_template_id)
+            records = list(adapter.parse("".join(sliced)))
+            dates = [r.date.isoformat() for r in records]
+
+        if not dates:
+            return None, None
+
+        return len(dates), (min(dates), max(dates))
+    except Exception:
+        return None, None
+
+
 def scan_candidates(config: AppConfig) -> list[ImportCandidate]:
     rows: list[ImportCandidate] = []
     for csv_path in sorted(config.csv_dir.glob("*.csv")):
@@ -85,8 +139,11 @@ def scan_candidates(config: AppConfig) -> list[ImportCandidate]:
         detected_import_account_id = m.group("import_account_id") if m else None
         account_cfg = config.import_accounts.get(detected_import_account_id or "")
         detected_institution_id = None
+        transaction_count = None
+        date_range = None
         if account_cfg:
             detected_institution_id = import_source_summary(config, account_cfg).get("institution_id")
+            transaction_count, date_range = _scan_csv_stats(config, csv_path, account_cfg)
         rows.append(
             ImportCandidate(
                 file_name=csv_path.name,
@@ -99,6 +156,8 @@ def scan_candidates(config: AppConfig) -> list[ImportCandidate]:
                 is_configured_import_account=detected_import_account_id in config.import_accounts
                 if detected_import_account_id
                 else False,
+                transaction_count=transaction_count,
+                date_range=date_range,
             )
         )
     return rows

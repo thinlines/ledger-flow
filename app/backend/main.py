@@ -1790,6 +1790,8 @@ def import_candidates() -> dict:
         row["detected_institution_display_name"] = (
             import_source_summary(config, account_cfg).get("display_name") if account_cfg else None
         )
+        dr = row.get("date_range")
+        row["date_range"] = {"start": dr[0], "end": dr[1]} if dr else None
         rows.append(row)
 
     import_accounts = [
