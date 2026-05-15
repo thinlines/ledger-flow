@@ -21,7 +21,7 @@
 </script>
 
 {#if categories.length > 0}
-  <div class="ribbon-scroll flex gap-3 overflow-x-auto pb-2" style="scroll-snap-type: x mandatory; -webkit-overflow-scrolling: touch;">
+  <div class="ribbon-scroll flex gap-3 overflow-x-auto py-1" style="scroll-snap-type: x mandatory; -webkit-overflow-scrolling: touch;">
     {#each categories as row}
       <a
         href={categoryHref(row.category)}
