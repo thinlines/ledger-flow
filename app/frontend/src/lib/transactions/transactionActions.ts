@@ -66,6 +66,28 @@ export async function recategorize(
   }
 }
 
+export async function reassignAccount(
+  row: TransactionRow,
+  newAccountLedgerName: string,
+  reload: () => Promise<void>
+): Promise<ActionResult> {
+  const leg = row.legs[0];
+  if (!leg?.headerLine || !leg?.journalPath) return { success: false, error: 'Missing journal data' };
+  try {
+    const res = await apiPost<{ success: boolean; eventId: string | null }>('/api/transactions/reassign-account', {
+      journalPath: leg.journalPath,
+      headerLine: leg.headerLine,
+      lineNumber: leg.lineNumber,
+      newAccountLedgerName,
+    });
+    if (res.eventId) showUndoToast(res.eventId, `Reassigned account on ${row.payee}`, reload);
+    await reload();
+    return { success: true };
+  } catch (e) {
+    return { success: false, error: String(e) };
+  }
+}
+
 export async function unmatchTransaction(
   row: TransactionRow,
   reload: () => Promise<void>

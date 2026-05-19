@@ -21,7 +21,7 @@
   import { filtersFromUrl, filtersToUrl, filtersToApiParams, EMPTY_FILTERS } from '$lib/transactions/transactionFilters';
   import { loadTransactions } from '$lib/transactions/loadTransactions';
   import {
-    deleteTransaction, resetCategory, recategorize,
+    deleteTransaction, resetCategory, recategorize, reassignAccount,
     unmatchTransaction, toggleClearing
   } from '$lib/transactions/transactionActions';
 
@@ -353,9 +353,17 @@
     await loadData();
   }
 
+  async function doReassignAccount(row: TxRow, ledgerName: string) {
+    actionBusy = true; actionError = '';
+    const r = await reassignAccount(row, ledgerName, loadData);
+    if (r.success) selectedRow = null; else actionError = r.error ?? '';
+    actionBusy = false;
+  }
+
   function handleSheetDelete(row: TxRow) { selectedRow = null; confirmDeleteRow = row; }
   function handleSheetResetCat(row: TxRow) { void doResetCat(row); }
   function handleSheetRecat(row: TxRow, cat: string) { void doRecat(row, cat); }
+  function handleSheetReassign(row: TxRow, ledgerName: string) { void doReassignAccount(row, ledgerName); }
   function handleSheetUnmatch(row: TxRow) { selectedRow = null; confirmUnmatchRow = row; }
   function handleFilterApply(next: TransactionFilters) { filterDialogOpen = false; changeFilters(next); }
   function clearAll() { changeFilters({ ...EMPTY_FILTERS }); }
@@ -513,7 +521,7 @@
   </section>
 {/if}
 
-<TransactionDetailSheet row={selectedRow} {baseCurrency} accounts={allAccounts} accountKind={selectedRow ? rowAccountKind(selectedRow) : null} {actionError} onDelete={handleSheetDelete} onResetCategory={handleSheetResetCat} onRecategorize={handleSheetRecat} onUnmatch={handleSheetUnmatch} onClose={() => (selectedRow = null)} reload={loadData} />
+<TransactionDetailSheet row={selectedRow} {baseCurrency} accounts={allAccounts} {trackedAccounts} accountKind={selectedRow ? rowAccountKind(selectedRow) : null} {actionError} onDelete={handleSheetDelete} onResetCategory={handleSheetResetCat} onRecategorize={handleSheetRecat} onReassignAccount={handleSheetReassign} onUnmatch={handleSheetUnmatch} onClose={() => (selectedRow = null)} reload={loadData} />
 <ManualResolutionDialog bind:entry={manualResolutionEntry} bind:baseCurrency onResolved={handleResolved} />
 <TransactionsFilterDialog bind:open={filterDialogOpen} {filters} {trackedAccounts} {allAccounts} onApply={handleFilterApply} onClose={() => (filterDialogOpen = false)} />
 

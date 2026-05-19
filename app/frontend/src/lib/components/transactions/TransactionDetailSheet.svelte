@@ -8,7 +8,7 @@
   import * as Popover from '$lib/components/ui/popover/index.js';
   import * as Command from '$lib/components/ui/command/index.js';
   import ArrowLeftRightIcon from '@lucide/svelte/icons/arrow-left-right';
-  import type { TransactionRow } from '$lib/transactions/types';
+  import type { TransactionRow, TrackedAccount } from '$lib/transactions/types';
   import { formatCurrency, goodChangeTone, shortDate, type AccountKind } from '$lib/format';
   import { canDeleteRow, canRecategorizeRow, canUnmatchRow } from '$lib/transactions/helpers';
   import { apiPost } from '$lib/api';
@@ -18,11 +18,13 @@
   export let row: TransactionRow | null = null;
   export let baseCurrency: string;
   export let accounts: string[] = [];
+  export let trackedAccounts: TrackedAccount[] = [];
   export let accountKind: AccountKind | null = null;
   export let actionError: string = '';
   export let onDelete: (row: TransactionRow) => void = () => {};
   export let onResetCategory: (row: TransactionRow) => void = () => {};
   export let onRecategorize: (row: TransactionRow, newCategory: string) => void = () => {};
+  export let onReassignAccount: (row: TransactionRow, newAccountLedgerName: string) => void = () => {};
   export let onUnmatch: (row: TransactionRow) => void = () => {};
   export let onClose: () => void = () => {};
   export let reload: () => Promise<void> = async () => {};
@@ -65,10 +67,16 @@
         accountKind: amountKind
       });
 
-  // Category combobox: show for non-opening-balance, non-transfer, non-split rows
-  $: showCategoryCombobox = row
-    ? !row.isOpeningBalance && !row.isTransfer && row.categories.length <= 1
+  // Unified combobox: show for manual, non-opening-balance, non-split rows.
+  // Manual transfers can reassign the source account (but not recategorize).
+  $: showUnifiedCombobox = row
+    ? row.isManual && !row.isOpeningBalance && row.categories.length <= 1
     : false;
+  // Whether category items are selectable (not for transfers — destination is tracked).
+  $: categoriesActionable = row ? !row.isTransfer : false;
+
+  // Build a ledgerAccount→TrackedAccount lookup for routing selections.
+  $: trackedLedgerSet = new Set(trackedAccounts.map((a) => a.ledgerAccount));
 
   // Journal path from first leg (for notes, actions)
   $: leg = row?.legs?.[0] ?? null;
@@ -85,12 +93,19 @@
   // Reset category query when popover closes
   $: if (!categoryOpen) categoryQuery = '';
 
-  $: filteredAccounts = filterCategoryAccounts(accounts, categoryQuery);
+  $: filteredCategories = filterByQuery(accounts, categoryQuery);
+  $: filteredTracked = filterTrackedByQuery(trackedAccounts, categoryQuery);
 
-  function filterCategoryAccounts(items: string[], search: string): string[] {
+  function filterByQuery(items: string[], search: string): string[] {
     const normalized = search.trim().toLowerCase();
     if (!normalized) return items.slice(0, 50);
     return items.filter((account) => account.toLowerCase().includes(normalized)).slice(0, 50);
+  }
+
+  function filterTrackedByQuery(items: TrackedAccount[], search: string): TrackedAccount[] {
+    const normalized = search.trim().toLowerCase();
+    if (!normalized) return items;
+    return items.filter((a) => a.displayName.toLowerCase().includes(normalized) || a.ledgerAccount.toLowerCase().includes(normalized));
   }
 
   function handleOpenChange(nextOpen: boolean) {
@@ -125,9 +140,13 @@
     categoryTriggerRef?.focus();
   }
 
-  async function selectCategory(account: string) {
+  async function selectItem(value: string) {
     if (!row) return;
-    onRecategorize(row, account);
+    if (trackedLedgerSet.has(value)) {
+      onReassignAccount(row, value);
+    } else {
+      onRecategorize(row, value);
+    }
     categoryQuery = '';
     await closeCategoryAndFocus();
   }
@@ -136,9 +155,12 @@
     if (event.key !== 'Enter') return;
     event.preventDefault();
     event.stopPropagation();
-    const topMatch = filteredAccounts[0];
+    // Prefer tracked account match first, then category.
+    const topTracked = filteredTracked[0];
+    const topCategory = filteredCategories[0];
+    const topMatch = topTracked?.ledgerAccount ?? topCategory;
     if (topMatch) {
-      void selectCategory(topMatch);
+      void selectItem(topMatch);
     }
   }
 
@@ -266,10 +288,10 @@
                 <p class="mt-0.5 text-sm">{shortDate(row.date)}</p>
               </div>
 
-              <!-- Category — combobox or read-only -->
+              <!-- Category / Account — unified combobox or read-only -->
               <div>
                 <p class="eyebrow">Category</p>
-                {#if showCategoryCombobox}
+                {#if showUnifiedCombobox}
                   <Popover.Root bind:open={categoryOpen}>
                     <Popover.Trigger
                       bind:ref={categoryTriggerRef}
@@ -286,20 +308,32 @@
                     <Popover.Content class="w-72 max-w-[calc(100vw-2rem)] p-0" align="start">
                       <Command.Root shouldFilter={false}>
                         <div role="presentation" on:keydown={handleCategoryInputKeydown}>
-                          <Command.Input bind:value={categoryQuery} placeholder="Search category..." />
+                          <Command.Input bind:value={categoryQuery} placeholder="Search..." />
                         </div>
                         <Command.List>
-                          {#if filteredAccounts.length === 0}
-                            <Command.Empty>No account found.</Command.Empty>
+                          {#if filteredTracked.length === 0 && filteredCategories.length === 0}
+                            <Command.Empty>No match found.</Command.Empty>
                           {:else}
-                            <Command.Group value="categories">
-                              {#each filteredAccounts as account (account)}
-                                <Command.Item value={account} onSelect={() => void selectCategory(account)}>
-                                  <CheckIcon class={cn('size-4', row?.categories[0]?.account !== account && 'text-transparent')} />
-                                  <span class="truncate">{account}</span>
-                                </Command.Item>
-                              {/each}
-                            </Command.Group>
+                            {#if filteredTracked.length > 0}
+                              <Command.Group heading="Accounts">
+                                {#each filteredTracked as ta (ta.id)}
+                                  <Command.Item value={ta.ledgerAccount} onSelect={() => void selectItem(ta.ledgerAccount)}>
+                                    <CheckIcon class={cn('size-4', row?.account.id !== ta.id && 'text-transparent')} />
+                                    <span class="truncate">{ta.displayName}</span>
+                                  </Command.Item>
+                                {/each}
+                              </Command.Group>
+                            {/if}
+                            {#if filteredCategories.length > 0 && categoriesActionable}
+                              <Command.Group heading="Categories">
+                                {#each filteredCategories as account (account)}
+                                  <Command.Item value={account} onSelect={() => void selectItem(account)}>
+                                    <CheckIcon class={cn('size-4', row?.categories[0]?.account !== account && 'text-transparent')} />
+                                    <span class="truncate">{account}</span>
+                                  </Command.Item>
+                                {/each}
+                              </Command.Group>
+                            {/if}
                           {/if}
                         </Command.List>
                       </Command.Root>
