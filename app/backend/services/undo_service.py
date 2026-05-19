@@ -272,6 +272,52 @@ def _undo_transaction_recategorized(workspace_path: Path, event: dict) -> dict[s
     return {journal_rel: hash_file(journal_path)}
 
 
+def _undo_transaction_account_reassigned(workspace_path: Path, event: dict) -> dict[str, str]:
+    """Restore the previous source account on a reassigned transaction."""
+    payload = event.get("payload", {})
+    journal_rel = payload.get("journal_path", "")
+    header_line = payload.get("header_line", "")
+    previous_account = payload.get("previous_account", "")
+    new_account = payload.get("new_account", "")
+
+    if not journal_rel or not header_line or not previous_account:
+        raise UndoFailedError("Incomplete event payload")
+
+    journal_path = workspace_path / journal_rel
+    text = journal_path.read_text(encoding="utf-8")
+    lines = text.splitlines()
+
+    try:
+        header_idx = locate_header(lines, header_line)
+    except (HeaderNotFoundError, AmbiguousHeaderError) as exc:
+        raise UndoFailedError(str(exc)) from exc
+
+    block_start, block_end = find_transaction_block(lines, header_idx)
+
+    backup_file(journal_path, "undo")
+
+    # Find the posting with new_account and rewrite it back.
+    found = False
+    for i in range(block_start + 1, block_end):
+        stripped = lines[i].strip()
+        if stripped.startswith(";") or stripped == "":
+            continue
+        m = ACCOUNT_LINE_RE.match(lines[i]) or ACCOUNT_ONLY_RE.match(lines[i])
+        if m and m.group(2).strip() == new_account:
+            new_line, changed = rewrite_posting_account(lines[i], previous_account)
+            if changed:
+                lines[i] = new_line
+                found = True
+                break
+
+    if not found:
+        raise UndoFailedError(f"Source account {new_account} not found on transaction")
+
+    journal_path.write_text("\n".join(lines) + ("\n" if text.endswith("\n") else ""), encoding="utf-8")
+
+    return {journal_rel: hash_file(journal_path)}
+
+
 def _undo_transaction_status_toggled(workspace_path: Path, event: dict) -> dict[str, str]:
     """Restore the previous clearing status on a toggled transaction."""
     payload = event.get("payload", {})
@@ -532,6 +578,7 @@ def _undo_transaction_notes_updated(workspace_path: Path, event: dict) -> dict[s
 _HANDLERS: dict[str, HandlerFn] = {
     "transaction.deleted.v1": _undo_transaction_deleted,
     "transaction.recategorized.v1": _undo_transaction_recategorized,
+    "transaction.account_reassigned.v1": _undo_transaction_account_reassigned,
     "transaction.status_toggled.v1": _undo_transaction_status_toggled,
     "manual_entry.created.v1": _undo_manual_entry_created,
     "transaction.unmatched.v1": _undo_transaction_unmatched,

@@ -215,6 +215,13 @@ class RecategorizeTransactionRequest(BaseModel):
     newCategory: str | None = None
 
 
+class ReassignAccountRequest(BaseModel):
+    journalPath: str
+    headerLine: str
+    lineNumber: int
+    newAccountLedgerName: str
+
+
 class UnmatchTransactionRequest(BaseModel):
     journalPath: str
     headerLine: str

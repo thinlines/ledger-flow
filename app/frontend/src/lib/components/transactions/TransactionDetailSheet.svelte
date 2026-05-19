@@ -8,7 +8,7 @@
   import * as Popover from '$lib/components/ui/popover/index.js';
   import * as Command from '$lib/components/ui/command/index.js';
   import ArrowLeftRightIcon from '@lucide/svelte/icons/arrow-left-right';
-  import type { TransactionRow } from '$lib/transactions/types';
+  import type { TransactionRow, TrackedAccount } from '$lib/transactions/types';
   import { formatCurrency, goodChangeTone, shortDate, type AccountKind } from '$lib/format';
   import { canDeleteRow, canRecategorizeRow, canUnmatchRow } from '$lib/transactions/helpers';
   import { apiPost } from '$lib/api';
@@ -18,11 +18,13 @@
   export let row: TransactionRow | null = null;
   export let baseCurrency: string;
   export let accounts: string[] = [];
+  export let trackedAccounts: TrackedAccount[] = [];
   export let accountKind: AccountKind | null = null;
   export let actionError: string = '';
   export let onDelete: (row: TransactionRow) => void = () => {};
   export let onResetCategory: (row: TransactionRow) => void = () => {};
   export let onRecategorize: (row: TransactionRow, newCategory: string) => void = () => {};
+  export let onReassignAccount: (row: TransactionRow, newAccountLedgerName: string) => void = () => {};
   export let onUnmatch: (row: TransactionRow) => void = () => {};
   export let onClose: () => void = () => {};
   export let reload: () => Promise<void> = async () => {};
@@ -31,6 +33,9 @@
   let categoryOpen = false;
   let categoryQuery = '';
   let categoryTriggerRef: HTMLButtonElement | null = null;
+  let accountPickerOpen = false;
+  let accountPickerQuery = '';
+  let accountPickerTriggerRef: HTMLButtonElement | null = null;
   let notesValue = '';
   let notesSaveState: 'idle' | 'saving' | 'saved' | 'error' = 'idle';
   let notesSaveTimer: ReturnType<typeof setTimeout> | null = null;
@@ -65,9 +70,14 @@
         accountKind: amountKind
       });
 
-  // Category combobox: show for non-opening-balance, non-transfer, non-split rows
+  // Category combobox: show for non-opening-balance, non-transfer, non-split rows.
   $: showCategoryCombobox = row
     ? !row.isOpeningBalance && !row.isTransfer && row.categories.length <= 1
+    : false;
+
+  // Account picker: manual transactions only, non-opening, non-split.
+  $: showAccountPicker = row
+    ? row.isManual && !row.isOpeningBalance && row.categories.length <= 1
     : false;
 
   // Journal path from first leg (for notes, actions)
@@ -82,10 +92,12 @@
     notesErrorMsg = '';
   }
 
-  // Reset category query when popover closes
+  // Reset queries when popovers close
   $: if (!categoryOpen) categoryQuery = '';
+  $: if (!accountPickerOpen) accountPickerQuery = '';
 
   $: filteredAccounts = filterCategoryAccounts(accounts, categoryQuery);
+  $: filteredTracked = filterTrackedAccounts(trackedAccounts, accountPickerQuery);
 
   function filterCategoryAccounts(items: string[], search: string): string[] {
     const normalized = search.trim().toLowerCase();
@@ -93,10 +105,17 @@
     return items.filter((account) => account.toLowerCase().includes(normalized)).slice(0, 50);
   }
 
+  function filterTrackedAccounts(items: TrackedAccount[], search: string): TrackedAccount[] {
+    const normalized = search.trim().toLowerCase();
+    if (!normalized) return items;
+    return items.filter((a) => a.displayName.toLowerCase().includes(normalized) || a.ledgerAccount.toLowerCase().includes(normalized));
+  }
+
   function handleOpenChange(nextOpen: boolean) {
     if (!nextOpen) {
       menuOpen = false;
       categoryOpen = false;
+      accountPickerOpen = false;
       onClose();
     }
   }
@@ -125,11 +144,24 @@
     categoryTriggerRef?.focus();
   }
 
+  async function closeAccountPickerAndFocus() {
+    accountPickerOpen = false;
+    await tick();
+    accountPickerTriggerRef?.focus();
+  }
+
   async function selectCategory(account: string) {
     if (!row) return;
     onRecategorize(row, account);
     categoryQuery = '';
     await closeCategoryAndFocus();
+  }
+
+  async function selectTrackedAccount(ledgerAccount: string) {
+    if (!row) return;
+    onReassignAccount(row, ledgerAccount);
+    accountPickerQuery = '';
+    await closeAccountPickerAndFocus();
   }
 
   function handleCategoryInputKeydown(event: KeyboardEvent) {
@@ -139,6 +171,16 @@
     const topMatch = filteredAccounts[0];
     if (topMatch) {
       void selectCategory(topMatch);
+    }
+  }
+
+  function handleAccountPickerKeydown(event: KeyboardEvent) {
+    if (event.key !== 'Enter') return;
+    event.preventDefault();
+    event.stopPropagation();
+    const topMatch = filteredTracked[0];
+    if (topMatch) {
+      void selectTrackedAccount(topMatch.ledgerAccount);
     }
   }
 
@@ -320,10 +362,48 @@
                 </div>
               {/if}
 
-              <!-- Account (multi-account context) -->
+              <!-- Account — picker for manual rows, read-only otherwise -->
               <div>
                 <p class="eyebrow">Account</p>
-                <p class="mt-0.5 text-sm">{row.account.label}</p>
+                {#if showAccountPicker}
+                  <Popover.Root bind:open={accountPickerOpen}>
+                    <Popover.Trigger
+                      bind:ref={accountPickerTriggerRef}
+                      class={cn(
+                        'mt-1 flex w-full min-w-0 items-center justify-between gap-2 rounded-md border border-input bg-background px-3 py-2 text-left text-sm shadow-xs outline-hidden transition-[color,box-shadow] hover:bg-accent hover:text-accent-foreground focus-visible:ring-2 focus-visible:ring-ring'
+                      )}
+                      role="combobox"
+                      aria-expanded={accountPickerOpen}
+                    >
+                      <span class="truncate">{row.account.label}</span>
+                      <ChevronsUpDownIcon class="size-4 shrink-0 opacity-50" />
+                    </Popover.Trigger>
+
+                    <Popover.Content class="w-72 max-w-[calc(100vw-2rem)] p-0" align="start">
+                      <Command.Root shouldFilter={false}>
+                        <div role="presentation" on:keydown={handleAccountPickerKeydown}>
+                          <Command.Input bind:value={accountPickerQuery} placeholder="Search account..." />
+                        </div>
+                        <Command.List>
+                          {#if filteredTracked.length === 0}
+                            <Command.Empty>No account found.</Command.Empty>
+                          {:else}
+                            <Command.Group value="accounts">
+                              {#each filteredTracked as ta (ta.id)}
+                                <Command.Item value={ta.ledgerAccount} onSelect={() => void selectTrackedAccount(ta.ledgerAccount)}>
+                                  <CheckIcon class={cn('size-4', row?.account.id !== ta.id && 'text-transparent')} />
+                                  <span class="truncate">{ta.displayName}</span>
+                                </Command.Item>
+                              {/each}
+                            </Command.Group>
+                          {/if}
+                        </Command.List>
+                      </Command.Root>
+                    </Popover.Content>
+                  </Popover.Root>
+                {:else}
+                  <p class="mt-0.5 text-sm">{row.account.label}</p>
+                {/if}
               </div>
             </div>
 
