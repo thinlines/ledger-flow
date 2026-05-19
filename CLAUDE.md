@@ -15,6 +15,8 @@ When the user asks to implement, build, ship, finish, or work on a task — or r
 | `hypatia` | `.claude/worktrees/hypatia` |
 | `spinoza` | `.claude/worktrees/spinoza` |
 
+Use the justfile command `just worktree-servers $worktree_name` with the active worktree to start both the front and backend servers. 
+
 Ship-task picks an available slot, creates a per-task branch with `git -C <slot> checkout -b <branch> master` at Phase 0, and resets it back to detached master at Phase 5. **Never create new worktrees** — use only these pool slots. If all slots are occupied, wait for one to free up.
 
 ## Pipeline scope enforcement
