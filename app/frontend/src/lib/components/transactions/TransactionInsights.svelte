@@ -183,7 +183,8 @@
   }
 
   type MerchantTotal = { payee: string; amount: number; count: number };
-  function topMerchants(rows: TransactionRow[], dir: DirectionMode, limit: number): MerchantTotal[] {
+  type MerchantSort = 'amount' | 'count';
+  function allMerchants(rows: TransactionRow[], dir: DirectionMode, sort: MerchantSort): MerchantTotal[] {
     const map = new Map<string, MerchantTotal>();
     for (const r of rows) {
       const v = dir === 'net' ? Math.abs(r.amount) : Math.abs(r.amount);
@@ -191,7 +192,10 @@
       if (cur) { cur.amount += v; cur.count += 1; }
       else map.set(r.payee, { payee: r.payee, amount: v, count: 1 });
     }
-    return Array.from(map.values()).sort((a, b) => b.amount - a.amount).slice(0, limit);
+    const cmp = sort === 'count'
+      ? (a: MerchantTotal, b: MerchantTotal) => b.count - a.count || b.amount - a.amount
+      : (a: MerchantTotal, b: MerchantTotal) => b.amount - a.amount;
+    return Array.from(map.values()).sort(cmp);
   }
 
   type CategoryTotal = { account: string; label: string; amount: number; count: number };
@@ -384,8 +388,14 @@
   $: rollingIncomeAvg = avgFromBuckets(pairedHighlight.income, rollingMonths);
   $: rollingSpendAvg = avgFromBuckets(pairedHighlight.spending, rollingMonths);
 
-  $: merchants = topMerchants(visibleCurrent, dir, 6);
-  $: merchantMax = maxOrZero(merchants.map((m) => m.amount));
+  let merchantSort: MerchantSort = 'amount';
+  let merchantExpanded = false;
+  const MERCHANT_COLLAPSED = 6;
+  $: allMerchantList = allMerchants(visibleCurrent, dir, merchantSort);
+  $: merchants = merchantExpanded ? allMerchantList : allMerchantList.slice(0, MERCHANT_COLLAPSED);
+  $: merchantMaxAmount = maxOrZero(merchants.map((m) => m.amount));
+  $: merchantMaxCount = maxOrZero(merchants.map((m) => m.count));
+  $: merchantHasMore = allMerchantList.length > MERCHANT_COLLAPSED;
 
   $: subcats = filters.category ? subcategorySplit(visibleCurrent, filters.category, dir) : [];
   $: subTotal = subcats.reduce((s, c) => s + c.amount, 0);
@@ -856,27 +866,42 @@
           <p class="eyebrow">Where it went</p>
           <h2 class="dossier-card-title">Top {dir === 'income' ? 'sources' : 'merchants'}</h2>
         </div>
-        <p class="dossier-card-aux">In {periodLabel(filters.month, filters.period).toLowerCase()}</p>
+        <div class="merchant-controls">
+          <span class="sort-label">Sort</span>
+          <button
+            class="sort-btn" class:sort-btn-active={merchantSort === 'amount'}
+            type="button" on:click={() => merchantSort = 'amount'}>Amount</button>
+          <button
+            class="sort-btn" class:sort-btn-active={merchantSort === 'count'}
+            type="button" on:click={() => merchantSort = 'count'}>Visits</button>
+        </div>
       </div>
       {#if merchants.length === 0}
         <p class="dossier-empty">No transactions in this slice.</p>
       {:else}
         <ul class="merchant-list">
           {#each merchants as m, i}
-            {@const pct = merchantMax > 0 ? (m.amount / merchantMax) * 100 : 0}
+            {@const pct = merchantSort === 'count'
+              ? (merchantMaxCount > 0 ? (m.count / merchantMaxCount) * 100 : 0)
+              : (merchantMaxAmount > 0 ? (m.amount / merchantMaxAmount) * 100 : 0)}
             <li class="merchant-row">
               <span class="merchant-rank">{String(i + 1).padStart(2, '0')}</span>
               <div class="merchant-body">
                 <div class="merchant-line">
                   <span class="merchant-name" title={m.payee}>{truncatePayee(m.payee, 28)}</span>
-                  <span class="merchant-amount">{fmt(m.amount)}</span>
+                  <span class="merchant-amount">{merchantSort === 'count' ? `${m.count} visits` : fmt(m.amount)}</span>
                 </div>
                 <div class="merchant-bar"><span style="--w: {pct}%"></span></div>
-                <p class="merchant-meta">{m.count} {m.count === 1 ? 'visit' : 'visits'} · avg {fmt(m.amount / m.count)}</p>
+                <p class="merchant-meta">{merchantSort === 'count' ? fmt(m.amount) : `${m.count} ${m.count === 1 ? 'visit' : 'visits'}`} · avg {fmt(m.amount / m.count)}</p>
               </div>
             </li>
           {/each}
         </ul>
+        {#if merchantHasMore}
+          <button class="merchant-expand" type="button" on:click={() => merchantExpanded = !merchantExpanded}>
+            {merchantExpanded ? 'Show less' : `Show all ${allMerchantList.length}`}
+          </button>
+        {/if}
       {/if}
     </div>
 
@@ -1213,6 +1238,31 @@
     border-radius: 999px;
   }
   .merchant-meta { margin: 0; font-size: 0.74rem; color: rgba(10, 61, 89, 0.5); }
+  .merchant-controls {
+    display: flex; align-items: center; gap: 0.3rem; flex-shrink: 0;
+  }
+  .sort-label {
+    font-size: 0.7rem; font-weight: 600; text-transform: uppercase;
+    letter-spacing: 0.08em; color: rgba(10, 61, 89, 0.4); margin-right: 0.15rem;
+  }
+  .sort-btn {
+    background: none; border: 1px solid rgba(10, 61, 89, 0.1);
+    border-radius: 999px; padding: 0.2rem 0.6rem;
+    font-size: 0.72rem; font-weight: 600; color: rgba(10, 61, 89, 0.5);
+    cursor: pointer; transition: all 0.15s;
+  }
+  .sort-btn:hover { color: var(--brand-strong); border-color: rgba(10, 61, 89, 0.2); }
+  .sort-btn-active {
+    background: rgba(10, 61, 89, 0.06); color: var(--brand-strong);
+    border-color: rgba(10, 61, 89, 0.18);
+  }
+  .merchant-expand {
+    display: block; width: 100%; margin-top: 0.85rem; padding: 0.45rem 0;
+    background: none; border: none; border-top: 1px solid rgba(10, 61, 89, 0.06);
+    color: rgba(10, 61, 89, 0.55); font-size: 0.8rem; font-weight: 600;
+    cursor: pointer; text-align: center; transition: color 0.15s;
+  }
+  .merchant-expand:hover { color: var(--brand); }
 
   /* SPLIT */
   .split-stack {
