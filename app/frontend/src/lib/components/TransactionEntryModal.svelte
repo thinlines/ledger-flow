@@ -113,7 +113,7 @@
 			}
 			return; // don't preventDefault — let Tab move focus naturally
 		}
-		if (event.key === 'Enter') {
+		if (event.key === 'Enter' && !event.ctrlKey && !event.metaKey) {
 			event.preventDefault();
 			event.stopPropagation();
 			if (filteredTracked.length > 0) {
