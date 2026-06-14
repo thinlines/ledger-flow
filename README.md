@@ -44,6 +44,8 @@ Using `just`:
 ```sh
 just app-backend
 just app-frontend
+# Or start both
+just start-servers
 ```
 
 Without `just`:
