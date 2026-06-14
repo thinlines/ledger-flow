@@ -9,7 +9,7 @@ app-frontend:
 # Start frontend + backend servers for a named worktree slot (aristotle | hypatia | spinoza).
 # Each slot gets fixed ports so they don't collide with the main dev server.
 [group("App commands")]
-start-servers worktree_name:
+start-servers worktree_name="main":
     #!/usr/bin/env bash
     set -e
     case "{{worktree_name}}" in
@@ -17,6 +17,7 @@ start-servers worktree_name:
       hypatia)   backend_port=8002; frontend_port=5175 ;;
       spinoza)   backend_port=8003; frontend_port=5176 ;;
       main)      backend_port=8000; frontend_port=5173 ;;
+      "")        backend_port=8000; frontend_port=5173 ;;
       *) echo "Unknown worktree: {{worktree_name}} (expected aristotle | hypatia | spinoza)"; exit 1 ;;
     esac
     if [ "{{worktree_name}}" == main ]; then
