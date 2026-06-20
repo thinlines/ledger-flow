@@ -399,3 +399,66 @@
   locate + posting-rewrite + write + emit). Pre-block validation will include
   the "uncategorized" / "transfer" / "split-transaction" 422 checks; the
   posting-rewrite and journal write happen inside `mutate`.
+
+2026-06-20 — PR 2 sweep step 9: converted transactions_recategorize route.
+
+  Route: app/backend/main.py — transactions_recategorize
+    - Wrapped read + header locate + block find + posting walk + rewrite +
+      write in `with journal_writer.mutate(config=config, paths=[journal_path],
+      tag="recategorize", event_type="transaction.recategorized.v1") as mut:`.
+    - Pre-block validation stays outside `mutate`:
+        * journal file existence (404 if not a file).
+        * `parse_header(req.headerLine)` for summary payee/date_str (no rejection;
+          falls back to a 60-char slice on parse miss).
+        * tracked-account ledger-name collection from `config.tracked_accounts`
+          (config-only; used inside the block to skip source postings).
+    - File-content-dependent rejections stay **inside** the block — design
+      decision: these checks require reading the journal and walking postings,
+      so they can't be moved outside. They raise `HTTPException`, escape the
+      block, and the writer rolls back from backup. The restore is a no-op
+      against disk state (every 422 fires before the `journal_path.write_text`
+      call), but backup is captured pre-mutation so rollback is correct in
+      principle. No compensating event is emitted on rejection.
+      In-block rejections:
+        * 422 "Transaction is already uncategorized" — destination posting is
+          already Expenses:Unknown and no new category was provided.
+        * 422 "Cannot re-categorize a split transaction" — multiple non-source
+          postings detected during the block walk.
+        * 422 "Cannot re-categorize a transfer" — no destination posting found
+          (all non-tracked postings absent).
+        * 422 "Transaction already has this category" — previous_account equals
+          target_account.
+        * 500 "Failed to rewrite posting account" — `rewrite_posting_account`
+          returned `changed=False`.
+        * 404 from `_locate_header` (header not found in file).
+    - Inside the block: read, header locate, block parse, posting walk (with
+      the four 422 checks), `rewrite_posting_account` (500 on failure), write.
+    - Removed `check_drift`, `backup_file(journal_path, "recategorize")`, and
+      `hash_file` calls — writer owns all three.
+    - Removed `emit_event` call + its swallowed-exception try/except — the
+      writer is the sole emitter on this path, and emission failure is now a
+      real error rather than a silent log line. Returns `mut.event_id`.
+    - Payload shape unchanged (journal_path + header_line + previous_account +
+      new_account), which keeps `_undo_transaction_recategorized` reading the
+      same fields.
+    - Captured local variables `previous_account` and `target_account` are
+      hoisted before the `with` block so the `return` statement after the block
+      can reference them; they're populated inside the block before the journal
+      write.
+
+  Imports: no new imports needed. `backup_file`, `check_drift`, `hash_file`,
+  `rel_path` remain imported in main.py — still used by the ~11 unconverted
+  routes (reassign-account/notes/unmatch/manual-create/import-apply/
+  unknowns-apply/rule-history-apply/etc).
+
+  Tests: tests/test_notes_and_recategorize.py and tests/test_transaction_
+  actions.py both pass unchanged (the notes_and_recategorize file's
+  recategorize-related tests exercise the underlying parser components, not
+  the route directly, so they're orthogonal). The
+  `_undo_transaction_recategorized` round-trip test exercises the
+  recategorize→undo path end-to-end and continues to pass. Full backend suite:
+  804 passed, 0 failures.
+
+  Next: convert transactions_reassign_account route (same posting-rewrite
+  shape as recategorize but rewrites the source/tracked posting; pre-block
+  validation includes the "not a tracked account" 422 check).

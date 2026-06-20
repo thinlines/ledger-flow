@@ -817,13 +817,9 @@ def transactions_recategorize(req: RecategorizeTransactionRequest) -> dict:
     if not journal_path.is_file():
         raise HTTPException(status_code=404, detail="Journal file not found")
 
-    hash_before = check_drift(config.root_dir, journal_path)
-    backup_file(journal_path, "recategorize")
-
-    text = journal_path.read_text(encoding="utf-8")
-    lines = text.splitlines()
-    header_idx = _locate_header(lines, req.lineNumber, req.headerLine)
-    block_start, block_end = find_transaction_block(lines, header_idx)
+    parsed = parse_header(req.headerLine)
+    payee = parsed.payee if parsed else req.headerLine[:60]
+    date_str = parsed.date if parsed else ""
 
     # Collect tracked account ledger names for distinguishing categories from
     # tracked accounts (transfers).
@@ -833,71 +829,66 @@ def transactions_recategorize(req: RecategorizeTransactionRequest) -> dict:
         if la:
             tracked_ledger_accounts.add(la)
 
-    # Find the single destination posting to rewrite.
-    destination_idx: int | None = None
     previous_account: str | None = None
-    for i in range(block_start + 1, block_end):
-        line = lines[i]
-        # Skip metadata comments and blank lines.
-        stripped = line.strip()
-        if stripped.startswith(";") or stripped == "":
-            continue
-        # Parse the posting account.
-        m = ACCOUNT_LINE_RE.match(line) or ACCOUNT_ONLY_RE.match(line)
-        if m:
-            account = m.group(2).strip()
-            if account in tracked_ledger_accounts:
-                continue  # Source (tracked) account — skip.
-            if account == "Expenses:Unknown" and not (req.newCategory and req.newCategory.strip()):
-                raise HTTPException(status_code=422, detail="Transaction is already uncategorized")
-            if destination_idx is not None:
-                # Multiple non-source postings — split transaction, not supported.
-                raise HTTPException(status_code=422, detail="Cannot re-categorize a split transaction")
-            destination_idx = i
-            previous_account = account
+    target_account: str = ""
 
-    if destination_idx is None:
-        raise HTTPException(status_code=422, detail="Cannot re-categorize a transfer")
+    with journal_writer.mutate(
+        config=config,
+        paths=[journal_path],
+        tag="recategorize",
+        event_type="transaction.recategorized.v1",
+    ) as mut:
+        text = journal_path.read_text(encoding="utf-8")
+        lines = text.splitlines()
+        header_idx = _locate_header(lines, req.lineNumber, req.headerLine)
+        block_start, block_end = find_transaction_block(lines, header_idx)
 
-    target_account = req.newCategory.strip() if req.newCategory and req.newCategory.strip() else "Expenses:Unknown"
+        # Find the single destination posting to rewrite.
+        destination_idx: int | None = None
+        for i in range(block_start + 1, block_end):
+            line = lines[i]
+            # Skip metadata comments and blank lines.
+            stripped = line.strip()
+            if stripped.startswith(";") or stripped == "":
+                continue
+            # Parse the posting account.
+            m = ACCOUNT_LINE_RE.match(line) or ACCOUNT_ONLY_RE.match(line)
+            if m:
+                account = m.group(2).strip()
+                if account in tracked_ledger_accounts:
+                    continue  # Source (tracked) account — skip.
+                if account == "Expenses:Unknown" and not (req.newCategory and req.newCategory.strip()):
+                    raise HTTPException(status_code=422, detail="Transaction is already uncategorized")
+                if destination_idx is not None:
+                    # Multiple non-source postings — split transaction, not supported.
+                    raise HTTPException(status_code=422, detail="Cannot re-categorize a split transaction")
+                destination_idx = i
+                previous_account = account
 
-    if previous_account == target_account:
-        raise HTTPException(status_code=422, detail="Transaction already has this category")
+        if destination_idx is None:
+            raise HTTPException(status_code=422, detail="Cannot re-categorize a transfer")
 
-    new_line, changed = rewrite_posting_account(lines[destination_idx], target_account)
-    if not changed:
-        raise HTTPException(status_code=500, detail="Failed to rewrite posting account")
-    lines[destination_idx] = new_line
+        target_account = req.newCategory.strip() if req.newCategory and req.newCategory.strip() else "Expenses:Unknown"
 
-    journal_path.write_text("\n".join(lines) + ("\n" if text.endswith("\n") else ""), encoding="utf-8")
+        if previous_account == target_account:
+            raise HTTPException(status_code=422, detail="Transaction already has this category")
 
-    parsed = parse_header(req.headerLine)
-    payee = parsed.payee if parsed else req.headerLine[:60]
-    date_str = parsed.date if parsed else ""
+        new_line, changed = rewrite_posting_account(lines[destination_idx], target_account)
+        if not changed:
+            raise HTTPException(status_code=500, detail="Failed to rewrite posting account")
+        lines[destination_idx] = new_line
 
-    event_id = None
-    try:
-        hash_after = hash_file(journal_path)
-        event_id = emit_event(
-            config.root_dir,
-            event_type="transaction.recategorized.v1",
-            summary=f"Recategorized: {payee} on {date_str} ({previous_account} → {target_account})",
-            payload={
-                "journal_path": rel_path(journal_path, config.root_dir),
-                "header_line": req.headerLine,
-                "previous_account": previous_account,
-                "new_account": target_account,
-            },
-            journal_refs=[{
-                "path": rel_path(journal_path, config.root_dir),
-                "hash_before": hash_before,
-                "hash_after": hash_after,
-            }],
-        )
-    except Exception:
-        _log.error("Event emission failed for recategorize", exc_info=True)
+        journal_path.write_text("\n".join(lines) + ("\n" if text.endswith("\n") else ""), encoding="utf-8")
 
-    return {"success": True, "previousAccount": previous_account, "newAccount": target_account, "eventId": event_id}
+        mut.summary = f"Recategorized: {payee} on {date_str} ({previous_account} → {target_account})"
+        mut.payload = {
+            "journal_path": rel_path(journal_path, config.root_dir),
+            "header_line": req.headerLine,
+            "previous_account": previous_account,
+            "new_account": target_account,
+        }
+
+    return {"success": True, "previousAccount": previous_account, "newAccount": target_account, "eventId": mut.event_id}
 
 
 # ---------------------------------------------------------------------------
