@@ -524,3 +524,47 @@
   Next: convert transactions_notes route (notes update — same single-file
   header-locate + line-edit shape as toggle-status, with the `; notes:`
   comment-line set/insert/remove logic mirroring the undo handler).
+
+2026-06-20 — PR 2 sweep step 11: converted transactions_notes route.
+
+  Route: app/backend/main.py — transactions_notes
+    - Wrapped read + header locate + block find + notes-line search + set/
+      insert/remove of the `; notes:` comment line + write in
+      `with journal_writer.mutate(config=config, paths=[journal_path],
+      tag="notes", event_type="transaction.notes_updated.v1") as mut:`.
+    - Pre-block validation stays outside `mutate`:
+        * journal file existence (404 if not a file).
+        * `parse_header(req.headerLine)` for summary payee/date_str (no
+          rejection; falls back to a 60-char slice on parse miss).
+    - Inside the block: read journal, `_locate_header`, `find_transaction_block`,
+      walk the block for an existing `; notes:` line (capturing
+      `previous_notes` if present), then:
+        * non-empty `req.notes` → overwrite if present or insert after the
+          header line;
+        * empty `req.notes` → delete the existing notes line if present;
+        * no-op if empty and no existing line.
+      Write the journal. `_locate_header` raises HTTPException(404) on miss —
+      that escapes the block and the writer rolls back.
+    - Removed `check_drift`, `backup_file(journal_path, "notes")`, and
+      `hash_file` calls — writer owns all three.
+    - Removed `emit_event` call + its swallowed-exception try/except — the
+      writer is the sole emitter on this path, and emission failure is now a
+      real error rather than a silent log line. Returns `mut.event_id`.
+    - Payload shape unchanged (journal_path + header_line + notes +
+      previous_notes), which keeps `_undo_transaction_notes_updated` reading
+      the same fields.
+
+  Imports: no new imports needed. `backup_file`, `check_drift`, `hash_file`,
+  `rel_path` remain imported in main.py — still used by the ~9 unconverted
+  routes (unmatch/manual-create/import-apply/unknowns-apply/rule-history-apply/
+  manual-transfer-resolution/etc).
+
+  Tests: focused undo + journal_writer suite (43 tests) passes; full backend
+  suite — 804 passed, 0 failures. The TestUndoNotesUpdated round-trip tests
+  exercise the notes→undo symmetric path end-to-end and continue to pass; no
+  test was shape-changed.
+
+  Next: convert transactions_unmatch route (multi-file mutation — main journal
+  + archived-manual.journal; pressure-tests forward-route use of the writer's
+  `paths=[journal, archive]` contract that was first exercised by the
+  _undo_transaction_unmatched conversion).

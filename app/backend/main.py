@@ -985,65 +985,54 @@ def transactions_notes(req: UpdateNotesRequest) -> dict:
     if not journal_path.is_file():
         raise HTTPException(status_code=404, detail="Journal file not found")
 
-    hash_before = check_drift(config.root_dir, journal_path)
-    backup_file(journal_path, "notes")
-
-    text = journal_path.read_text(encoding="utf-8")
-    lines = text.splitlines()
-    header_idx = _locate_header(lines, req.lineNumber, req.headerLine)
-    block_start, block_end = find_transaction_block(lines, header_idx)
-
-    # Find existing notes line within the block and capture its prior value.
-    notes_idx: int | None = None
-    previous_notes = ""
-    for i in range(block_start + 1, block_end):
-        m = _NOTES_RE.match(lines[i])
-        if m:
-            notes_idx = i
-            previous_notes = m.group(2).strip()
-            break
-
-    if req.notes:
-        new_notes_line = f"    ; notes: {req.notes}"
-        if notes_idx is not None:
-            lines[notes_idx] = new_notes_line
-        else:
-            # Insert after the header line.
-            lines.insert(block_start + 1, new_notes_line)
-    else:
-        # Empty notes — remove the line if it exists.
-        if notes_idx is not None:
-            del lines[notes_idx]
-
-    journal_path.write_text("\n".join(lines) + ("\n" if text.endswith("\n") else ""), encoding="utf-8")
-
     parsed = parse_header(req.headerLine)
     payee = parsed.payee if parsed else req.headerLine[:60]
     date_str = parsed.date if parsed else ""
 
-    event_id = None
-    try:
-        hash_after = hash_file(journal_path)
-        event_id = emit_event(
-            config.root_dir,
-            event_type="transaction.notes_updated.v1",
-            summary=f"Notes updated: {payee} on {date_str}",
-            payload={
-                "journal_path": rel_path(journal_path, config.root_dir),
-                "header_line": req.headerLine,
-                "notes": req.notes,
-                "previous_notes": previous_notes,
-            },
-            journal_refs=[{
-                "path": rel_path(journal_path, config.root_dir),
-                "hash_before": hash_before,
-                "hash_after": hash_after,
-            }],
-        )
-    except Exception:
-        _log.error("Event emission failed for notes update", exc_info=True)
+    with journal_writer.mutate(
+        config=config,
+        paths=[journal_path],
+        tag="notes",
+        event_type="transaction.notes_updated.v1",
+    ) as mut:
+        text = journal_path.read_text(encoding="utf-8")
+        lines = text.splitlines()
+        header_idx = _locate_header(lines, req.lineNumber, req.headerLine)
+        block_start, block_end = find_transaction_block(lines, header_idx)
 
-    return {"success": True, "eventId": event_id}
+        # Find existing notes line within the block and capture its prior value.
+        notes_idx: int | None = None
+        previous_notes = ""
+        for i in range(block_start + 1, block_end):
+            m = _NOTES_RE.match(lines[i])
+            if m:
+                notes_idx = i
+                previous_notes = m.group(2).strip()
+                break
+
+        if req.notes:
+            new_notes_line = f"    ; notes: {req.notes}"
+            if notes_idx is not None:
+                lines[notes_idx] = new_notes_line
+            else:
+                # Insert after the header line.
+                lines.insert(block_start + 1, new_notes_line)
+        else:
+            # Empty notes — remove the line if it exists.
+            if notes_idx is not None:
+                del lines[notes_idx]
+
+        journal_path.write_text("\n".join(lines) + ("\n" if text.endswith("\n") else ""), encoding="utf-8")
+
+        mut.summary = f"Notes updated: {payee} on {date_str}"
+        mut.payload = {
+            "journal_path": rel_path(journal_path, config.root_dir),
+            "header_line": req.headerLine,
+            "notes": req.notes,
+            "previous_notes": previous_notes,
+        }
+
+    return {"success": True, "eventId": mut.event_id}
 
 
 @app.post("/api/transactions/unmatch")
