@@ -602,49 +602,39 @@ def transactions_create(req: ManualTransactionRequest) -> dict:
     journal_path = config.journal_dir / f"{year}.journal"
     accounts_dat = config.init_dir / "10-accounts.dat"
     currency = str(config.workspace.get("base_currency", "USD"))
+    source_account = tracked_account_cfg.get("name", req.trackedAccountId)
 
-    hash_before = check_drift(config.root_dir, journal_path)
+    result: dict
+    with journal_writer.mutate(
+        config=config,
+        paths=[journal_path],
+        tag="manual-entry",
+        event_type="manual_entry.created.v1",
+    ) as mut:
+        try:
+            result = create_manual_transaction(
+                journal_path=journal_path,
+                accounts_dat=accounts_dat,
+                tracked_account_cfg=tracked_account_cfg,
+                txn_date=req.date,
+                payee=req.payee,
+                amount_str=req.amount,
+                destination_account=req.destinationAccount,
+                currency=currency,
+            )
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        mut.summary = f"Created manual entry: {req.payee or '(no payee)'} {req.amount} {currency}"
+        mut.payload = {
+            "date": req.date,
+            "payee": req.payee or "",
+            "amount": req.amount,
+            "currency": currency,
+            "destination_account": req.destinationAccount,
+            "source_account": source_account,
+        }
 
-    try:
-        result = create_manual_transaction(
-            journal_path=journal_path,
-            accounts_dat=accounts_dat,
-            tracked_account_cfg=tracked_account_cfg,
-            txn_date=req.date,
-            payee=req.payee,
-            amount_str=req.amount,
-            destination_account=req.destinationAccount,
-            currency=currency,
-        )
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
-
-    event_id = None
-    try:
-        hash_after = hash_file(journal_path)
-        source_account = tracked_account_cfg.get("name", req.trackedAccountId)
-        event_id = emit_event(
-            config.root_dir,
-            event_type="manual_entry.created.v1",
-            summary=f"Created manual entry: {req.payee or '(no payee)'} {req.amount} {currency}",
-            payload={
-                "date": req.date,
-                "payee": req.payee or "",
-                "amount": req.amount,
-                "currency": currency,
-                "destination_account": req.destinationAccount,
-                "source_account": source_account,
-            },
-            journal_refs=[{
-                "path": rel_path(journal_path, config.root_dir),
-                "hash_before": hash_before,
-                "hash_after": hash_after,
-            }],
-        )
-    except Exception:
-        _log.error("Event emission failed for transactions_create", exc_info=True)
-
-    return {**result, "eventId": event_id}
+    return {**result, "eventId": mut.event_id}
 
 
 @app.post("/api/transactions/manual-transfer-resolution/preview")

@@ -660,3 +660,68 @@
   manual-transfer-resolution, etc). After the route sweep is complete,
   drop backup_service.py, drop restore_from_backup from event_log_service
   exports, and drop the legacy-handler branch from undo_event.
+
+2026-06-20 — PR 2 sweep step 13: converted transactions_create route (manual
+  entry creation; first route conversion where the target journal file may
+  not exist pre-mutation).
+
+  Route: app/backend/main.py — transactions_create
+    - Wrapped the call to `create_manual_transaction(...)` in
+      `with journal_writer.mutate(config=config, paths=[journal_path],
+      tag="manual-entry", event_type="manual_entry.created.v1") as mut:`.
+    - First conversion where the target journal file may not exist
+      pre-mutation: when the user creates the first transaction of a new
+      year, `<year>.journal` is born by this route. The writer's existing
+      `pre_existed` / `hash_before == "sha256:none"` bookkeeping handles
+      that case, and rollback policy for not-pre-existed paths is to delete
+      the file if the block created it — matching the legacy "no journal
+      should exist if create failed" semantics.
+    - Pre-block validation stays outside `mutate`:
+        * tracked-account existence (404 if `config.tracked_accounts.get(
+          req.trackedAccountId)` is None) — config-only payload-shape check;
+          neither backs up nor emits.
+        * year extraction + journal_path / accounts_dat / currency /
+          source_account derivation — pure value extraction, no I/O.
+    - `ValueError` from `create_manual_transaction` (invalid amount string
+      via `_parse_amount_str`, missing tracked ledger account) stays **inside**
+      the block — caught and re-raised as `HTTPException(400)`, escapes the
+      block, and the writer rolls back (no-op against disk because both
+      ValueError paths fire before the in-service `journal_path.write_text`).
+      Backup is captured pre-mutation so rollback is correct in principle.
+      No event is emitted on rejection.
+    - Inside the block: `create_manual_transaction(...)` (which handles its
+      own parent.mkdir, optional `""` write to ensure file exists, read +
+      block insertion + write), then sets `mut.summary` and `mut.payload`.
+    - Removed `check_drift(config.root_dir, journal_path)` call — writer
+      owns drift detection.
+    - Removed `hash_file(journal_path)` call and the manual `journal_refs`
+      assembly — writer assembles journal_refs from path-set hash deltas.
+    - Removed `emit_event` call + its swallowed-exception try/except — the
+      writer is the sole emitter on this path, and emission failure is now
+      a real error rather than a silent log line. Returns `mut.event_id`.
+    - Payload shape unchanged (date / payee / amount / currency /
+      destination_account / source_account), which keeps
+      `_undo_manual_entry_created` reading the same fields.
+    - `result: dict` declared before the `with` block so the `return`
+      statement after the block can reference it; populated inside the
+      block before the journal write returns.
+
+  Imports: no new imports needed (`journal_writer` was already imported).
+  `backup_file`, `check_drift`, `hash_file`, `rel_path` remain imported in
+  main.py — still used by the ~7 unconverted routes (manual-transfer-
+  resolution / import-apply / import-undo / unknowns-apply /
+  rule-history-apply).
+
+  Tests: focused suite (test_manual_entry_service + test_undo_service +
+  test_journal_writer): 65 passed, 0 failures. The
+  TestUndoManualEntryCreated round-trip test exercises the create→undo
+  symmetric path end-to-end at the service layer and continues to pass.
+  Full backend suite: 804 passed, 0 failures. No existing test was
+  shape-changed.
+
+  Next: continue the route sweep — the remaining ~7 mutation routes
+  (manual-transfer-resolution is being removed in PR 3 so it can be
+  skipped; import-apply, import-undo, unknowns-apply, rule-history-apply
+  remain). After the route sweep is complete, drop backup_service.py,
+  drop restore_from_backup from event_log_service exports, and drop the
+  legacy-handler branch from undo_event.
