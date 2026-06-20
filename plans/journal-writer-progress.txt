@@ -362,3 +362,40 @@
 
   Next: convert transactions_delete route (next-simplest single-file mutation,
   same shape — read + header locate + block-find + write + emit).
+
+2026-06-20 — PR 2 sweep step 8: converted transactions_delete route.
+
+  Route: app/backend/main.py — transactions_delete
+    - Wrapped read + header locate + block find + splice + write in
+      `with journal_writer.mutate(config=config, paths=[journal_path],
+      tag="delete", event_type="transaction.deleted.v1") as mut:`.
+    - Pre-block validation stays outside `mutate`:
+        * journal file existence (404 if not a file).
+        * `parse_header(req.headerLine)` — for the summary payee/date only;
+          missing header parse falls back to a header-line slice (no rejection).
+    - Inside the block: read journal, `_locate_header`, `find_transaction_block`,
+      capture deleted_block text, consume a preceding blank line to avoid
+      double-blank-line gaps, splice it out, write the journal.
+      `_locate_header` raises HTTPException(404) on miss — that escapes the
+      block and the writer rolls back.
+    - Removed `check_drift`, `backup_file(journal_path, "delete")`, and
+      `hash_file` calls — writer owns all three.
+    - Removed `emit_event` call + its swallowed-exception try/except — the
+      writer is the sole emitter on this path, and emission failure is now a
+      real error rather than a silent log line. Returns `mut.event_id`.
+    - Payload shape unchanged (journal_path + header_line + deleted_block),
+      which keeps `_undo_transaction_deleted` reading the same fields.
+
+  Imports: no new imports needed. `backup_file`, `check_drift`, `hash_file`,
+  `rel_path` remain imported in main.py — still used by the ~12 unconverted
+  routes.
+
+  Tests: full backend suite — 804 passed, 0 failures. The
+  TestReconcileDeleteRoundTrip.test_reconcile_then_delete_yields_byte_equivalent
+  _journal test (which exercises this route end-to-end after a reconcile)
+  passes unchanged.
+
+  Next: convert transactions_recategorize route (similar shape — read + header
+  locate + posting-rewrite + write + emit). Pre-block validation will include
+  the "uncategorized" / "transfer" / "split-transaction" 422 checks; the
+  posting-rewrite and journal write happen inside `mutate`.

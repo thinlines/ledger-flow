@@ -777,49 +777,37 @@ def transactions_delete(req: DeleteTransactionRequest) -> dict:
     if not journal_path.is_file():
         raise HTTPException(status_code=404, detail="Journal file not found")
 
-    hash_before = check_drift(config.root_dir, journal_path)
-    backup_file(journal_path, "delete")
-
-    text = journal_path.read_text(encoding="utf-8")
-    lines = text.splitlines()
-    header_idx = _locate_header(lines, req.lineNumber, req.headerLine)
-    block_start, block_end = find_transaction_block(lines, header_idx)
-    deleted_block = "\n".join(lines[block_start:block_end])
-
-    # Parse date and payee for the event summary.
     parsed = parse_header(req.headerLine)
     payee = parsed.payee if parsed else req.headerLine[:60]
     date_str = parsed.date if parsed else ""
 
-    # Also consume a preceding blank line to avoid double-blank-line gaps.
-    remove_start = block_start
-    if remove_start > 0 and lines[remove_start - 1].strip() == "":
-        remove_start -= 1
-    new_lines = lines[:remove_start] + lines[block_end:]
-    journal_path.write_text("\n".join(new_lines) + ("\n" if text.endswith("\n") else ""), encoding="utf-8")
+    with journal_writer.mutate(
+        config=config,
+        paths=[journal_path],
+        tag="delete",
+        event_type="transaction.deleted.v1",
+    ) as mut:
+        text = journal_path.read_text(encoding="utf-8")
+        lines = text.splitlines()
+        header_idx = _locate_header(lines, req.lineNumber, req.headerLine)
+        block_start, block_end = find_transaction_block(lines, header_idx)
+        deleted_block = "\n".join(lines[block_start:block_end])
 
-    event_id = None
-    try:
-        hash_after = hash_file(journal_path)
-        event_id = emit_event(
-            config.root_dir,
-            event_type="transaction.deleted.v1",
-            summary=f"Deleted transaction: {payee} on {date_str}",
-            payload={
-                "journal_path": rel_path(journal_path, config.root_dir),
-                "header_line": req.headerLine,
-                "deleted_block": deleted_block,
-            },
-            journal_refs=[{
-                "path": rel_path(journal_path, config.root_dir),
-                "hash_before": hash_before,
-                "hash_after": hash_after,
-            }],
-        )
-    except Exception:
-        _log.error("Event emission failed for delete", exc_info=True)
+        # Also consume a preceding blank line to avoid double-blank-line gaps.
+        remove_start = block_start
+        if remove_start > 0 and lines[remove_start - 1].strip() == "":
+            remove_start -= 1
+        new_lines = lines[:remove_start] + lines[block_end:]
+        journal_path.write_text("\n".join(new_lines) + ("\n" if text.endswith("\n") else ""), encoding="utf-8")
 
-    return {"success": True, "eventId": event_id}
+        mut.summary = f"Deleted transaction: {payee} on {date_str}"
+        mut.payload = {
+            "journal_path": rel_path(journal_path, config.root_dir),
+            "header_line": req.headerLine,
+            "deleted_block": deleted_block,
+        }
+
+    return {"success": True, "eventId": mut.event_id}
 
 
 @app.post("/api/transactions/recategorize")
