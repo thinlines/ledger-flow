@@ -14,12 +14,9 @@ from .journal_query_service import (
     pretty_account_name,
 )
 from .transfer_service import (
-    MANUAL_TRANSFER_RESOLUTION_METADATA_KEY,
-    MANUAL_TRANSFER_RESOLUTION_METADATA_VALUE,
     MAX_TRANSFER_MATCH_DAYS,
     TRANSFER_STATE_BILATERAL_MATCH,
     TRANSFER_STATE_SETTLED_GROUPED,
-    build_manual_transfer_resolution_token,
     is_transfer_account,
     parse_transfer_metadata,
     transfer_pair_account,
@@ -43,8 +40,6 @@ class RegisterEvent:
     transfer_state: str | None = None
     transfer_peer_account_id: str | None = None
     transfer_peer_account_name: str | None = None
-    manual_resolution_token: str | None = None
-    manual_resolution_note: str | None = None
     clearing_status: str = "unmarked"
     header_line: str = ""
     journal_path: str = ""
@@ -440,48 +435,6 @@ def bilateral_matched_pending_transfer_orders(
     return bilateral_orders
 
 
-def manual_resolution_token(
-    config: AppConfig,
-    transaction,
-    *,
-    grouped_settled: bool,
-) -> str | None:
-    if grouped_settled:
-        return None
-
-    transfer = parse_transfer_metadata(transaction.metadata, config.tracked_accounts)
-    if not transfer.is_import_match or not transfer.is_pending:
-        return None
-
-    source_identity = str(transaction.metadata.get("source_identity") or "").strip()
-    import_account_id = str(transaction.metadata.get("import_account_id") or "").strip()
-    transfer_id = str(transfer.transfer_id or "").strip()
-    peer_account_id = str(transfer.peer_account_id or "").strip()
-    if not source_identity or not import_account_id or not transfer_id or not peer_account_id:
-        return None
-
-    peer_account = config.tracked_accounts.get(peer_account_id)
-    peer_import_account_id = str(peer_account.get("import_account_id") or "").strip() if peer_account else ""
-    if not peer_import_account_id:
-        return None
-
-    return build_manual_transfer_resolution_token(
-        import_account_id=import_account_id,
-        source_identity=source_identity,
-        transfer_id=transfer_id,
-        peer_account_id=peer_account_id,
-    )
-
-
-def manual_resolution_note(transaction) -> str | None:
-    if (
-        str(transaction.metadata.get(MANUAL_TRANSFER_RESOLUTION_METADATA_KEY) or "").strip()
-        != MANUAL_TRANSFER_RESOLUTION_METADATA_VALUE
-    ):
-        return None
-    return "The missing side was added manually because no imported counterpart was expected."
-
-
 def other_tracked_posting_details(
     config: AppConfig,
     postings,
@@ -644,11 +597,6 @@ def pending_transfer_event_for_peer_account(
         return None
 
     label = source_name or pretty_account_name(source_ledger_account)
-    token = manual_resolution_token(
-        config,
-        transaction,
-        grouped_settled=order in grouped_settled_orders,
-    )
     return RegisterEvent(
         posted_on=transaction.posted_on,
         order=order,
@@ -668,8 +616,6 @@ def pending_transfer_event_for_peer_account(
         transfer_state=transfer.transfer_state_for_ui,
         transfer_peer_account_id=source_account_id,
         transfer_peer_account_name=source_name or label,
-        manual_resolution_token=token,
-        manual_resolution_note=manual_resolution_note(transaction),
         clearing_status=transaction.status.value,
         header_line=transaction.header_line,
         journal_path=transaction.source_journal,

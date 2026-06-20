@@ -18,7 +18,6 @@ from models import (
     ImportPreviewRequest,
     ImportUndoRequest,
     ManualTransactionRequest,
-    ManualTransferResolutionRequest,
     PayeeRuleRequest,
     ReassignAccountRequest,
     RecategorizeTransactionRequest,
@@ -41,9 +40,8 @@ from models import (
     WorkspaceBootstrapRequest,
     WorkspaceSelectRequest,
 )
-from services.backup_service import backup_file
 from services.category_suggestion_service import suggest_category
-from services.event_log_service import check_drift, check_startup_drift, emit_event, hash_file, rel_path
+from services.event_log_service import check_startup_drift, rel_path
 from services.git_snapshot_service import hours_since_last_snapshot, snapshot_commit
 from services.header_parser import TransactionStatus, parse_header, set_header_status, HEADER_RE as _HEADER_RE
 from services import journal_writer
@@ -77,10 +75,6 @@ from services.import_service import (
     scan_candidates,
 )
 from services.manual_entry_service import create_manual_transaction
-from services.manual_transfer_resolution_service import (
-    apply_manual_transfer_resolution,
-    preview_manual_transfer_resolution,
-)
 from services.import_profile_service import import_source_summary
 from services.institution_registry import canonical_template_id, display_name_for, list_templates
 from services.ledger_runner import CommandError, run_cmd
@@ -635,59 +629,6 @@ def transactions_create(req: ManualTransactionRequest) -> dict:
         }
 
     return {**result, "eventId": mut.event_id}
-
-
-@app.post("/api/transactions/manual-transfer-resolution/preview")
-def transactions_manual_transfer_resolution_preview(req: ManualTransferResolutionRequest) -> dict:
-    config = _require_workspace_config()
-    try:
-        return preview_manual_transfer_resolution(config, req.resolutionToken)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
-
-
-@app.post("/api/transactions/manual-transfer-resolution/apply")
-def transactions_manual_transfer_resolution_apply(req: ManualTransferResolutionRequest) -> dict:
-    config = _require_workspace_config()
-
-    # Pre-hash all journals — we can't know which one will be written until
-    # the service resolves the token internally.
-    journal_hashes: dict[str, str] = {}
-    if config.journal_dir.is_dir():
-        for jf in config.journal_dir.glob("*.journal"):
-            journal_hashes[str(jf.resolve())] = check_drift(config.root_dir, jf)
-
-    try:
-        result = apply_manual_transfer_resolution(config, req.resolutionToken)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
-
-    try:
-        journal_path = Path(result["journalPath"])
-        hash_before = journal_hashes.get(str(journal_path.resolve()), hash_file(Path(result["backupPath"])))
-        hash_after = hash_file(journal_path)
-        emit_event(
-            config.root_dir,
-            event_type="transfer_resolution.applied.v1",
-            summary=f"Transfer resolution: {result.get('payee', '')} {result.get('amount', '')}",
-            payload={
-                "journal_path": rel_path(journal_path, config.root_dir),
-                "date": result.get("date", ""),
-                "payee": result.get("payee", ""),
-                "source_account": result.get("sourceAccountName", ""),
-                "destination_account": result.get("destinationAccountName", ""),
-                "amount": str(result.get("amount", "")),
-            },
-            journal_refs=[{
-                "path": rel_path(journal_path, config.root_dir),
-                "hash_before": hash_before,
-                "hash_after": hash_after,
-            }],
-        )
-    except Exception:
-        _log.error("Event emission failed for transfer_resolution_apply", exc_info=True)
-
-    return result
 
 
 _STATUS_CYCLE = {

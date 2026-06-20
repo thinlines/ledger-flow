@@ -7,11 +7,7 @@ import pytest
 from services.account_register_service import build_account_register
 from services.commodity_service import CommodityMismatchError
 from services.config_service import AppConfig
-from services.transfer_service import (
-    MANUAL_TRANSFER_RESOLUTION_METADATA_KEY,
-    MANUAL_TRANSFER_RESOLUTION_METADATA_VALUE,
-    transfer_pair_account,
-)
+from services.transfer_service import transfer_pair_account
 from services.workspace_service import ensure_workspace_journal_includes
 
 
@@ -354,76 +350,6 @@ def test_account_register_shows_pending_transfer_on_peer_account_without_changin
             "kind": "asset",
         }
     ]
-
-
-def test_account_register_exposes_same_manual_resolution_token_on_source_and_peer_pending_rows(tmp_path: Path) -> None:
-    config = _make_config(tmp_path / "workspace")
-    _write_year_journal(
-        config,
-        """
-2026/02/04 Transfer to savings
-    ; import_account_id: checking
-    ; source_identity: tx-checking
-    ; transfer_id: transfer-1
-    ; transfer_type: import_match
-    ; transfer_match_state: pending
-    ; transfer_peer_account_id: savings
-    Assets:Transfers:checking__savings  $30.00
-    Assets:Bank:Checking
-""".strip()
-        + "\n",
-    )
-
-    checking_register = build_account_register(config, "checking")
-    savings_register = build_account_register(config, "savings")
-
-    checking_entry = checking_register["entries"][0]
-    savings_entry = savings_register["entries"][0]
-
-    assert checking_entry["manualResolutionToken"]
-    assert savings_entry["manualResolutionToken"] == checking_entry["manualResolutionToken"]
-
-
-def test_account_register_adds_manual_resolution_note_for_resolved_transfer_rows(tmp_path: Path) -> None:
-    config = _make_config(tmp_path / "workspace")
-    transfer_account = transfer_pair_account("checking", "savings")
-    _write_year_journal(
-        config,
-        f"""
-2026/03/12 Transfer out
-    ; import_account_id: checking
-    ; source_identity: tx-checking
-    ; transfer_id: transfer-1
-    ; transfer_type: import_match
-    ; transfer_match_state: matched
-    ; transfer_peer_account_id: savings
-    ; {MANUAL_TRANSFER_RESOLUTION_METADATA_KEY}: {MANUAL_TRANSFER_RESOLUTION_METADATA_VALUE}
-    {transfer_account}  $30.00
-    Assets:Bank:Checking  $-30.00
-
-2026/03/12 Transfer in
-    ; import_account_id: savings
-    ; source_identity: tx-savings
-    ; transfer_id: transfer-1
-    ; transfer_type: import_match
-    ; transfer_match_state: matched
-    ; transfer_peer_account_id: checking
-    ; {MANUAL_TRANSFER_RESOLUTION_METADATA_KEY}: {MANUAL_TRANSFER_RESOLUTION_METADATA_VALUE}
-    {transfer_account}  $-30.00
-    Assets:Bank:Savings  $30.00
-""".strip()
-        + "\n",
-    )
-
-    checking_register = build_account_register(config, "checking")
-    savings_register = build_account_register(config, "savings")
-
-    assert checking_register["entries"][0]["manualResolutionNote"] == (
-        "The missing side was added manually because no imported counterpart was expected."
-    )
-    assert savings_register["entries"][0]["manualResolutionNote"] == (
-        "The missing side was added manually because no imported counterpart was expected."
-    )
 
 
 def test_account_register_shows_pending_transfer_on_liability_peer_account_without_changing_balance(tmp_path: Path) -> None:
@@ -888,7 +814,6 @@ def test_bilateral_match_excludes_both_from_pending_and_shows_as_posted(tmp_path
     assert checking_entry["amount"] == -2000.0
     assert checking_entry["transferState"] == "bilateral_match"
     assert checking_entry["transferPeerAccountId"] == "savings"
-    assert checking_entry["manualResolutionToken"] is None
     assert "(Pending)" not in checking_entry["summary"]
 
     savings_register = build_account_register(config, "savings")
@@ -899,7 +824,6 @@ def test_bilateral_match_excludes_both_from_pending_and_shows_as_posted(tmp_path
     assert savings_entry["amount"] == 2000.0
     assert savings_entry["transferState"] == "bilateral_match"
     assert savings_entry["transferPeerAccountId"] == "checking"
-    assert savings_entry["manualResolutionToken"] is None
     assert "(Pending)" not in savings_entry["summary"]
 
 
@@ -1107,7 +1031,6 @@ def test_bilateral_match_single_sided_pending_still_shows_synthetic_peer(tmp_pat
     checking_entry = checking_register["entries"][0]
     assert checking_entry["transferState"] is None
     assert "(Pending)" in checking_entry["summary"]
-    assert checking_entry["manualResolutionToken"] is not None
 
     # Savings register should show the synthetic peer event
     savings_register = build_account_register(config, "savings")

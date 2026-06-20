@@ -1147,3 +1147,147 @@
   reconciliation_service.write_assertion_transaction and
   import_history_service.undo_import are harmless duplicate backups that
   get cleaned up alongside backup_service.py.)
+
+2026-06-20 — PR 3 cleanup: removed the manual transfer resolution feature
+  end-to-end and recorded DECISIONS §22. This unblocks the remaining two
+  PR 2 cleanups (backup_service.py deletion + restore_from_backup export
+  trim), which were gated on this feature's removal as the last forward
+  caller of `backup_file` outside writer blocks.
+
+  Files deleted in full:
+    - app/backend/services/manual_transfer_resolution_service.py (340 lines)
+    - app/backend/tests/test_manual_transfer_resolution_service.py (279 lines)
+    - app/frontend/src/lib/components/transactions/ManualResolutionDialog.svelte (233 lines)
+
+  Backend surface trimmed:
+    - main.py: dropped both route handlers
+      (/api/transactions/manual-transfer-resolution/preview, /apply),
+      the `ManualTransferResolutionRequest` import, and the
+      `apply_manual_transfer_resolution` / `preview_manual_transfer_resolution`
+      imports. With the apply route gone, four event-log/backup helpers
+      lost their last main.py consumer and were dropped from the imports:
+      `backup_file` (from services.backup_service), and `check_drift`,
+      `emit_event`, `hash_file` (from services.event_log_service).
+      `rel_path` and `check_startup_drift` remain in active use.
+    - models.py: dropped `ManualTransferResolutionRequest` pydantic class.
+    - services/transfer_service.py: dropped the four manual-resolution
+      constants (`MANUAL_TRANSFER_RESOLUTION_METADATA_KEY`,
+      `MANUAL_TRANSFER_RESOLUTION_METADATA_VALUE`,
+      `MANUAL_TRANSFER_RESOLUTION_TOKEN_KIND`,
+      `MANUAL_TRANSFER_RESOLUTION_TOKEN_VERSION`) and both token helpers
+      (`build_manual_transfer_resolution_token`,
+      `parse_manual_transfer_resolution_token`). Because those helpers
+      were the only consumers of `base64` and `json` in this module, both
+      module-level imports were dropped. The `transfer_pair_account` /
+      `parse_transfer_metadata` / `is_transfer_account` exports survive
+      unchanged — used by `transaction_helpers` and elsewhere.
+    - services/transaction_helpers.py: dropped the
+      `MANUAL_TRANSFER_RESOLUTION_METADATA_KEY/VALUE` +
+      `build_manual_transfer_resolution_token` imports from
+      `transfer_service`. Dropped the `manual_resolution_token` and
+      `manual_resolution_note` fields from the `RegisterEvent` dataclass.
+      Dropped both module-level helper functions
+      (`manual_resolution_token(config, transaction, *, grouped_settled)`,
+      `manual_resolution_note(transaction)`). Removed the corresponding
+      `token = manual_resolution_token(...)` + `manual_resolution_token=token,
+      manual_resolution_note=manual_resolution_note(transaction)` lines from
+      `pending_transfer_event_for_peer_account`.
+    - services/account_register_service.py: dropped
+      `manual_resolution_token` / `manual_resolution_note` imports, the
+      `token = None` initializer + `token = manual_resolution_token(...)`
+      branch in the per-transaction loop, and the
+      `manual_resolution_token=token,
+      manual_resolution_note=manual_resolution_note(transaction),`
+      keyword args on the `RegisterEvent` constructor. Dropped the
+      `manualResolutionToken` / `manualResolutionNote` keys from the
+      per-entry response dict.
+    - services/unified_transactions_service.py: same shape of cleanup as
+      `account_register_service` — dropped the two helper imports, the
+      `token = None` initializer + `token = manual_resolution_token(...)`
+      branch, the two `RegisterEvent(...)` keyword args, and the two
+      response-dict keys.
+
+  Backend tests trimmed:
+    - tests/test_account_register_service.py: dropped the
+      `MANUAL_TRANSFER_RESOLUTION_METADATA_KEY/VALUE` imports from the
+      `services.transfer_service` import block. Removed the two
+      feature-specific tests
+      (`test_account_register_exposes_same_manual_resolution_token_on_source_and_peer_pending_rows`,
+      `test_account_register_adds_manual_resolution_note_for_resolved_transfer_rows`).
+      Pruned the residual `manualResolutionToken is None` /
+      `manualResolutionToken is not None` assertions from the surviving
+      bilateral-match tests (the field no longer exists on the response
+      shape). `transfer_pair_account` import remains — still used by
+      every other transfer-related test in the file.
+
+  Frontend surface trimmed:
+    - routes/transactions/+page.svelte: dropped the `ManualResolutionDialog`
+      import, the `ManualResolutionApplyResult` type import, the
+      `manualResolutionEntry` / `manualResolutionSuccess` reactive
+      variables, the `openManualRes` and `handleResolved` handlers, the
+      `{#if manualResolutionSuccess}` "Resolved" success card, and the
+      `<ManualResolutionDialog ... />` mount. In the pending-transfers
+      list, the pending-details-note collapses from the
+      `row.manualResolutionToken ? '…' : 'Waiting for the imported
+      transaction to land.'` conditional down to the single
+      "Waiting for the imported transaction to land." copy, and the
+      `{#if row.manualResolutionToken}` "Resolve manually" affordance is
+      gone. (Most of these edits were applied automatically by the
+      editor's svelte-aware linter once the dialog import and entry-type
+      reference disappeared; the manual deletions covered the dialog
+      mount, the success card, and the pending-list button.)
+    - lib/transactions/types.ts: dropped the deprecated `RegisterEntry`
+      type (its only consumers were `ManualResolutionDialog` and the
+      now-removed `manualResolutionEntry` binding in the transactions
+      route), the `ManualResolutionPreview` type, the
+      `ManualResolutionApplyResult` type, and the
+      `manualResolutionToken` / `manualResolutionNote` fields on
+      `TransactionRow`.
+    - lib/components/transactions/TransactionDetailSheet.svelte: dropped
+      the `{#if row.manualResolutionNote} <p>{row.manualResolutionNote}
+      </p> {/if}` informational block that displayed the
+      "missing-import-counterpart" note on resolved transfer rows. The
+      `settled_grouped` informational block above it is untouched.
+
+  DECISIONS.md: §22 already present (auto-added or pre-existing in the
+  working tree at the time of cleanup; verified to match the PRD's
+  required shape: states the decision, the load-bearing reason — writer
+  requires `paths` up front and previous design required discover-after
+  glob-all-journals path resolution incompatible with that contract,
+  the constraint on any future reintroduction — pre-resolve target path
+  outside the writer and be motivated by a real-world workflow — and
+  links back to `plans/journal-writer-prd.md`). No edit needed.
+
+  Tests: full backend suite: 796 passed, 0 failures (was 804; 8 fewer
+  matches the deleted-test count — 6 from the deleted service test +
+  the 2 manual-resolution tests pruned from
+  `test_account_register_service.py`). Frontend type check
+  (svelte-check): 870 files, 0 errors, 0 warnings.
+
+  No grep hits remain in non-archived source for `manual_transfer_resolution`,
+  `ManualTransferResolution`, `manual-transfer-resolution`,
+  `MANUAL_TRANSFER_RESOLUTION_*`, `manualResolutionToken`,
+  `manualResolutionNote`, `manual_resolution_token`,
+  `manual_resolution_note`, `build_manual_transfer_resolution_token`,
+  `parse_manual_transfer_resolution_token`, `openManualRes`,
+  `handleResolved`, `RegisterEntry`, or `transfer_resolution.applied`.
+  Remaining hits live only in `.svelte-kit/output/` (generated build
+  artifacts; regenerated on next build), `worktrees/yolo/` (snapshot
+  of stale work), `plans/transaction-identity-fix.md`,
+  `plans/transactions-rethink.md`,
+  `plans/transactions-decomposition.md` (historical planning docs),
+  this progress log, the PRD, and the closed issue file
+  `issues/003-remove-manual-transfer-resolution-and-record-decisions-22.md`.
+
+  Next: with manual-transfer-resolution gone, the final two PR 2
+  cleanups can land — delete `services/backup_service.py` and drop
+  `restore_from_backup` from `services/reconciliation_service`'s
+  public exports. `backup_file` still has a few in-tree call sites
+  (`reconciliation_service.write_assertion_transaction` and
+  `import_history_service.undo_import` each call it redundantly
+  inside a writer block; a few backend tests still construct backups
+  directly). `restore_from_backup` no longer has any production
+  consumers (route rollback is handled by the writer); the only
+  remaining reference is `test_reconciliation_service.py` exercising
+  byte-identity round-trip — that test plus the public export can go.
+

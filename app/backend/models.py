@@ -35,10 +35,6 @@ class ImportUndoRequest(BaseModel):
     historyId: str
 
 
-class ManualTransferResolutionRequest(BaseModel):
-    resolutionToken: str
-
-
 class ImportCandidateRemoveRequest(BaseModel):
     csvPath: str
 

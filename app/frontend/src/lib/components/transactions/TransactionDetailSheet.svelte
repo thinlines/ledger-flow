@@ -443,12 +443,6 @@
               </p>
             {/if}
 
-            {#if row.manualResolutionNote}
-              <p class="rounded-xl border border-brand/15 bg-brand/4 px-3 py-2.5 text-sm text-brand-strong">
-                {row.manualResolutionNote}
-              </p>
-            {/if}
-
             <!-- Detail lines -->
             {#if row.detailLines && row.detailLines.length > 0}
               <div>

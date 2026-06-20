@@ -4,7 +4,6 @@
   import { onDestroy, onMount } from 'svelte';
   import { apiGet } from '$lib/api';
   import AddTransactionForm from '$lib/components/transactions/AddTransactionForm.svelte';
-  import ManualResolutionDialog from '$lib/components/transactions/ManualResolutionDialog.svelte';
   import TransactionDayGroup from '$lib/components/transactions/TransactionDayGroup.svelte';
   import TransactionRow from '$lib/components/transactions/TransactionRow.svelte';
   import TransactionDetailSheet from '$lib/components/transactions/TransactionDetailSheet.svelte';
@@ -14,7 +13,7 @@
   import TransactionsFilterDialog from '$lib/components/transactions/TransactionsFilterDialog.svelte';
   import type {
     TrackedAccount, TransactionRow as TxRow, TransactionsResponse,
-    TransactionFilters, ManualResolutionApplyResult
+    TransactionFilters
   } from '$lib/transactions/types';
   import { formatCurrency, shortDate, type AccountKind } from '$lib/format';
   import { groupByDate, CLEARING_TOOLTIPS } from '$lib/transactions/helpers';
@@ -50,8 +49,6 @@
     lastSelectedRowId = selectedRow?.id ?? null;
     actionError = '';
   }
-  let manualResolutionEntry: import('$lib/transactions/types').RegisterEntry | null = null;
-  let manualResolutionSuccess = '';
   let showAddForm = false;
   let addSuccess = '';
   let filterDialogOpen = false;
@@ -323,26 +320,6 @@
     result = result ? { ...result } : result;
   }
 
-  function openManualRes(row: TxRow) {
-    if (!row.manualResolutionToken) return;
-    const leg = row.legs[0];
-    manualResolutionSuccess = '';
-    manualResolutionEntry = {
-      id: row.id, date: row.date, payee: row.payee, summary: row.categories[0]?.label ?? '',
-      amount: row.amount, runningBalance: row.runningBalance ?? 0, isUnknown: row.isUnknown,
-      isOpeningBalance: row.isOpeningBalance, detailLines: row.detailLines,
-      manualResolutionToken: row.manualResolutionToken, manualResolutionNote: row.manualResolutionNote ?? null,
-      clearingStatus: row.status, headerLine: leg?.headerLine, journalPath: leg?.journalPath,
-      lineNumber: leg?.lineNumber ?? null,
-      matchId: row.matchId ?? null, notes: row.notes ?? null, transferState: row.transferState ?? null,
-    };
-  }
-
-  async function handleResolved(r: ManualResolutionApplyResult) {
-    manualResolutionSuccess = `Resolved: ${r.sourceAccountName} to ${r.destinationAccountName}.`;
-    await loadData();
-  }
-
   async function handleAddSuccess(r: { payee: string; date: string; warning: string | null; eventId: string | null }) {
     addSuccess = `Added: ${r.payee} on ${r.date}${r.warning ? ` (${r.warning})` : ''}`;
     showAddForm = false;
@@ -423,13 +400,6 @@
     />
   {/if}
 
-  {#if manualResolutionSuccess}
-    <section class="view-card result-card grid gap-2">
-      <p class="eyebrow">Resolved</p>
-      <h3 class="m-0 font-display text-xl">Transfer resolved manually</h3>
-      <p class="m-0 text-muted-foreground text-sm">{manualResolutionSuccess}</p>
-    </section>
-  {/if}
   {#if addSuccess}
     <section class="view-card result-card grid gap-2">
       <p class="eyebrow">Transaction Added</p>
@@ -464,10 +434,7 @@
               <div class="text-right"><p class:positive={filteredAccountKind && row.amount > 0 && !row.isTransfer} class="font-bold">{row.isTransfer ? formatCurrency(Math.abs(row.amount), baseCurrency, { signMode: 'negative-only' }) : formatCurrency(row.amount, baseCurrency, { signMode: filteredAccountKind ? 'good-change-plus' : 'negative-only', accountKind: filteredAccountKind ?? undefined })}</p></div>
             </summary>
             <div class="px-4 pb-4 grid gap-3">
-              <p class="text-muted-foreground text-sm pending-details-note">{row.manualResolutionToken ? 'Resolve manually when no imported counterpart is expected.' : 'Waiting for the imported transaction to land.'}</p>
-              {#if row.manualResolutionToken}
-                <button class="btn pending-secondary-action" type="button" on:click={() => openManualRes(row)}>Resolve manually</button>
-              {/if}
+              <p class="text-muted-foreground text-sm pending-details-note">Waiting for the imported transaction to land.</p>
             </div>
           </details>
         {/each}
@@ -522,7 +489,6 @@
 {/if}
 
 <TransactionDetailSheet row={selectedRow} {baseCurrency} accounts={allAccounts} {trackedAccounts} accountKind={selectedRow ? rowAccountKind(selectedRow) : null} {actionError} onDelete={handleSheetDelete} onResetCategory={handleSheetResetCat} onRecategorize={handleSheetRecat} onReassignAccount={handleSheetReassign} onUnmatch={handleSheetUnmatch} onClose={() => (selectedRow = null)} reload={loadData} />
-<ManualResolutionDialog bind:entry={manualResolutionEntry} bind:baseCurrency onResolved={handleResolved} />
 <TransactionsFilterDialog bind:open={filterDialogOpen} {filters} {trackedAccounts} {allAccounts} onApply={handleFilterApply} onClose={() => (filterDialogOpen = false)} />
 
 {#if confirmDeleteRow}

@@ -21,8 +21,6 @@ from .transaction_helpers import (
     detail_lines,
     direct_transfer_event_for_peer_account,
     grouped_settled_pending_transfer_orders,
-    manual_resolution_note,
-    manual_resolution_token,
     opening_balance_detail_line,
     pending_transfer_event_for_peer_account,
     source_tracked_account_details,
@@ -186,7 +184,6 @@ def build_unified_transactions(
             is_generated_opening = is_generated_opening_balance_transaction(transaction)
             opening_account_id = str(transaction.metadata.get("tracked_account_id", "")).strip() or None
             is_primary_opening = is_generated_opening and opening_account_id == acct_id
-            token = None
 
             if is_primary_opening:
                 offset_account = other_postings[0].account if other_postings else ""
@@ -197,11 +194,6 @@ def build_unified_transactions(
                 transfer_peer_name = None
                 dl = [opening_balance_detail_line(config, offset_account)]
             else:
-                token = manual_resolution_token(
-                    config,
-                    transaction,
-                    grouped_settled=order in pending_excluded_orders,
-                )
                 summary, is_unknown, transfer_state, transfer_peer_account_id, transfer_peer_name = transaction_summary(
                     config,
                     transaction,
@@ -241,8 +233,6 @@ def build_unified_transactions(
                 transfer_state=transfer_state,
                 transfer_peer_account_id=transfer_peer_account_id,
                 transfer_peer_account_name=transfer_peer_name,
-                manual_resolution_token=token,
-                manual_resolution_note=manual_resolution_note(transaction),
                 clearing_status=transaction.status.value,
                 header_line=transaction.header_line,
                 journal_path=transaction.source_journal,
@@ -542,8 +532,6 @@ def _compute_rows_with_balance(
             }],
             "matchId": ev.match_id,
             "transferState": ev.transfer_state,
-            "manualResolutionToken": ev.manual_resolution_token,
-            "manualResolutionNote": ev.manual_resolution_note,
             "detailLines": ev.detail_lines,
             "notes": ev.notes,
         })

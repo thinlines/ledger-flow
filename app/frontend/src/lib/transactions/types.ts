@@ -28,34 +28,6 @@ export type TrackedAccount = {
   transactionCount?: number;
 };
 
-/** @deprecated Used by ManualResolutionDialog during transition to TransactionRow */
-export type RegisterEntry = {
-  id: string;
-  date: string;
-  payee: string;
-  summary: string;
-  amount: number;
-  runningBalance: number;
-  isUnknown: boolean;
-  isOpeningBalance: boolean;
-  transferState?: string | null;
-  detailLines: Array<{
-    label: string;
-    account: string;
-    kind: string;
-  }>;
-  manualResolutionToken?: string | null;
-  manualResolutionNote?: string | null;
-  clearingStatus?: 'unmarked' | 'pending' | 'cleared';
-  headerLine?: string;
-  journalPath?: string;
-  // Companion to headerLine/journalPath for position-based identity. Null for
-  // legacy row shapes that never flow into a mutation request.
-  lineNumber?: number | null;
-  matchId?: string | null;
-  notes?: string | null;
-};
-
 /** @deprecated Used by TransactionsExplanationHeader during transition to TransactionRow */
 export type ActivityTransaction = {
   date: string;
@@ -89,36 +61,6 @@ export type ActivitySummary = {
   topTransaction: ActivityTopTransaction | null;
 };
 
-export type ManualResolutionPreview = {
-  resolutionToken: string;
-  date: string;
-  payee: string;
-  amount: number;
-  baseCurrency: string;
-  sourceAccountId: string;
-  sourceAccountName: string;
-  destinationAccountId: string;
-  destinationAccountName: string;
-  fromAccountId: string;
-  fromAccountName: string;
-  toAccountId: string;
-  toAccountName: string;
-  warning: string;
-};
-
-export type ManualResolutionApplyResult = {
-  applied: boolean;
-  backupPath: string;
-  journalPath: string;
-  date: string;
-  payee: string;
-  amount: number;
-  sourceAccountId: string;
-  sourceAccountName: string;
-  destinationAccountId: string;
-  destinationAccountName: string;
-};
-
 // --- Unified transactions types (Phase 4b) ---
 
 export type TransactionRow = {
@@ -139,8 +81,6 @@ export type TransactionRow = {
   legs: Array<{ journalPath: string; headerLine: string; lineNumber: number }>;
   matchId?: string | null;
   transferState?: string | null;
-  manualResolutionToken?: string | null;
-  manualResolutionNote?: string | null;
   detailLines: Array<{ label: string; account: string; kind: string }>;
   notes?: string | null;
 };
