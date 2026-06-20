@@ -1988,66 +1988,57 @@ def import_apply(req: StageApplyRequest) -> dict:
         return stage
 
     journal = Path(stage["targetJournalPath"])
-    hash_before = check_drift(config.root_dir, journal)
-    backup = backup_file(journal, "import") if journal.exists() else None
 
-    try:
-        journal_path, appended_count, skipped_duplicate_count, conflicts = apply_import(config, stage)
-    except CommandError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
+    with journal_writer.mutate(
+        config=config,
+        paths=[journal],
+        tag="import",
+        event_type="import.applied.v1",
+    ) as mut:
+        try:
+            journal_path, appended_count, skipped_duplicate_count, conflicts = apply_import(config, stage)
+        except CommandError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
 
-    archived_csv_path = None
-    source_csv_warning = None
-    try:
-        archived_csv_path = archive_inbox_csv(
-            config,
-            Path(stage["csvPath"]),
-            stage["year"],
-            stage["importAccountId"],
-            stage.get("sourceFileSha256", ""),
-        )
-    except OSError as e:
-        source_csv_warning = f"Imported successfully, but source CSV could not be archived: {e}"
+        archived_csv_path = None
+        source_csv_warning = None
+        try:
+            archived_csv_path = archive_inbox_csv(
+                config,
+                Path(stage["csvPath"]),
+                stage["year"],
+                stage["importAccountId"],
+                stage.get("sourceFileSha256", ""),
+            )
+        except OSError as e:
+            source_csv_warning = f"Imported successfully, but source CSV could not be archived: {e}"
 
-    stage["status"] = "applied"
-    stage["result"] = {
-        "applied": True,
-        "backupPath": str(backup.resolve()) if backup else None,
-        "journalPath": journal_path,
-        "appendedTxnCount": appended_count,
-        "skippedDuplicateCount": skipped_duplicate_count,
-        "conflicts": conflicts,
-        "archivedCsvPath": archived_csv_path,
-        "sourceCsvWarning": source_csv_warning,
-    }
-    history_entry = record_applied_import(config, stage)
-    stage["result"]["historyId"] = history_entry["id"]
-    stages.save(req.stageId, stage)
+        stage["status"] = "applied"
+        stage["result"] = {
+            "applied": True,
+            "backupPath": None,
+            "journalPath": journal_path,
+            "appendedTxnCount": appended_count,
+            "skippedDuplicateCount": skipped_duplicate_count,
+            "conflicts": conflicts,
+            "archivedCsvPath": archived_csv_path,
+            "sourceCsvWarning": source_csv_warning,
+        }
+        history_entry = record_applied_import(config, stage)
+        stage["result"]["historyId"] = history_entry["id"]
+        stages.save(req.stageId, stage)
 
-    try:
-        hash_after = hash_file(journal)
         source_file = Path(stage.get("csvPath", "")).name
-        emit_event(
-            config.root_dir,
-            event_type="import.applied.v1",
-            summary=f"Imported {appended_count} transactions from {source_file}",
-            payload={
-                "journal_path": rel_path(journal, config.root_dir),
-                "source_file": source_file,
-                "account_id": stage.get("importAccountId", ""),
-                "transactions_added": appended_count,
-                "duplicates_skipped": skipped_duplicate_count,
-                "conflicts": conflicts,
-                "history_id": history_entry["id"],
-            },
-            journal_refs=[{
-                "path": rel_path(journal, config.root_dir),
-                "hash_before": hash_before,
-                "hash_after": hash_after,
-            }],
-        )
-    except Exception:
-        _log.error("Event emission failed for import_apply", exc_info=True)
+        mut.summary = f"Imported {appended_count} transactions from {source_file}"
+        mut.payload = {
+            "journal_path": rel_path(journal, config.root_dir),
+            "source_file": source_file,
+            "account_id": stage.get("importAccountId", ""),
+            "transactions_added": appended_count,
+            "duplicates_skipped": skipped_duplicate_count,
+            "conflicts": conflicts,
+            "history_id": history_entry["id"],
+        }
 
     return stage
 

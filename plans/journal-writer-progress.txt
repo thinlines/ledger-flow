@@ -725,3 +725,86 @@
   remain). After the route sweep is complete, drop backup_service.py,
   drop restore_from_backup from event_log_service exports, and drop the
   legacy-handler branch from undo_event.
+
+2026-06-20 — PR 2 sweep step 14: converted import_apply route (CSV-derived bulk
+  append; first conversion of a route whose mutation drives the import history
+  index and stage store as side effects).
+
+  Route: app/backend/main.py — import_apply
+    - Wrapped apply_import(config, stage) + archive_inbox_csv + stage status/
+      result mutation + record_applied_import + stages.save in
+      `with journal_writer.mutate(config=config, paths=[journal], tag="import",
+      event_type="import.applied.v1") as mut:`.
+    - Pre-block validation stays outside `mutate`:
+        * stage lookup (404 on FileNotFoundError from stages.load).
+        * stage kind mismatch (400 if stage["kind"] \!= "import").
+        * idempotent early return when stage["status"] == "applied" — the route
+          must not double-back-up nor double-emit when called a second time.
+        * Path extraction for `journal` (pure value derivation, no I/O).
+    - Like transactions_create, the target journal may not exist pre-mutation
+      (bulk-append into a new <year>.journal). The writer's
+      `pre_existed`/`hash_before == "sha256:none"` bookkeeping handles that
+      case, and rollback policy for not-pre-existed paths is to delete the
+      file if the block created it.
+    - In-block error handling:
+        * `CommandError` from `apply_import` — caught and re-raised as
+          `HTTPException(400)`. Escapes the block; writer rolls back (deletes
+          journal if newly created, restores from backup otherwise). No event
+          is emitted on rejection.
+        * `OSError` from `archive_inbox_csv` — caught locally and captured to
+          `source_csv_warning`. Does NOT escape the block. Per PRD §6 "Scope —
+          journal-class only" and the explicit "Out of Scope" note on
+          archive CSV moves, the archive operation is intentionally outside
+          the writer's transactional boundary: a failure to move the inbox
+          CSV must not roll back the journal write (the import is successful;
+          the user is simply warned that the source CSV stayed in inbox).
+    - `record_applied_import` + `stages.save` stay **inside** the block:
+        * Ordering: `record_applied_import` must happen before `mut.payload`
+          assembly because the payload references `history_entry["id"]`.
+        * Failure semantics: if either raises, the journal rolls back —
+          we don't want a journal-with-imports + stage-says-staged state.
+          (The history JSON / state.db could be in a partial state on
+          failure, but that is no worse than the legacy code which had no
+          rollback at all for these side effects.)
+    - `mut.payload` mirrors the legacy `emit_event` payload (journal_path,
+      source_file, account_id, transactions_added, duplicates_skipped,
+      conflicts, history_id). The writer assembles `journal_refs` from
+      path-set hash deltas — the manual `journal_refs=[{path, hash_before,
+      hash_after}]` argument is gone, and the local `hash_before` / `hash_after`
+      captures are no longer needed.
+    - `check_drift(config.root_dir, journal)`, `backup_file(journal, "import")`,
+      `hash_file(journal)` calls all removed — writer owns drift, hashing,
+      and backup.
+    - `emit_event` call + its swallowed-exception try/except dropped — the
+      writer is the sole emitter on this path, and emission failure is now a
+      real error rather than a silent log line.
+    - `stage["result"]["backupPath"]` set unconditionally to `None`. The
+      writer manages backups internally and intentionally does not surface
+      their paths — backups are an implementation detail of the rollback
+      mechanism, not a user-facing artifact. Verified consumers:
+        * `record_applied_import` reads `result.get("backupPath")` — None
+          passes through to the history entry without raising.
+        * Frontend ImportFlow.svelte renders `{#if entry.backupPath}` — null
+          is handled gracefully (the "Backup: …" line just no longer renders).
+        * No backend code reads the backupPath as a restore target (undo_import
+          builds its own undo backup via backup_file internally; the import
+          history entry's backupPath has been a forensic/display field only).
+
+  Imports: no new imports needed. `backup_file`, `check_drift`, `hash_file`,
+  `rel_path` remain imported in main.py — still used by the ~6 unconverted
+  routes (import-undo / unknowns-apply / rule-history-apply / manual-transfer-
+  resolution-apply / etc).
+
+  Tests: focused suite (test_import_archive + test_import_identity +
+  test_import_history_service + test_journal_writer): 55 passed, 0 failures.
+  The test_import_archive suite exercises `apply_import` directly at the
+  service layer (not via the HTTP route), so the route-level conversion
+  doesn't touch those assertions. Full backend suite: 804 passed, 0 failures.
+  No existing test was shape-changed.
+
+  Next: continue the route sweep — remaining ~6 mutation routes
+  (import_undo, unknown_apply, rules_history_apply, and a few others;
+  manual-transfer-resolution is being removed in PR 3 so it can be skipped).
+  After the route sweep is complete, drop backup_service.py, drop
+  restore_from_backup from event_log_service exports, and drop the
+  legacy-handler branch from undo_event.
