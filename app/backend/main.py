@@ -2160,69 +2160,46 @@ def unknown_apply(req: StageApplyRequest) -> dict:
     accounts_dat = config.init_dir / "10-accounts.dat"
     archived_manual = journal_path.parent / "archived-manual.journal"
 
-    # Pre-mutation hashes for all files that may be written.
-    journal_hash_before = check_drift(config.root_dir, journal_path)
-    accounts_hash_before = hash_file(accounts_dat)
-    archive_hash_before = hash_file(archived_manual)
+    with journal_writer.mutate(
+        config=config,
+        paths=[journal_path, accounts_dat, archived_manual],
+        tag="unknowns",
+        event_type="unknowns.applied.v1",
+    ) as mut:
+        try:
+            txn_updates, warnings = apply_unknown_mappings(
+                journal_path=journal_path,
+                accounts_dat=accounts_dat,
+                selections=selections,
+                scanned_groups=stage["groups"],
+                tracked_accounts=config.tracked_accounts,
+            )
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
 
-    journal_backup = backup_file(journal_path, "unknowns")
-    accounts_backup = backup_file(accounts_dat, "rules")
+        stage["status"] = "applied"
+        stage["result"] = {
+            "applied": True,
+            "backupPaths": None,
+            "updatedTxnCount": txn_updates,
+            "warnings": warnings,
+        }
+        stages.save(req.stageId, stage)
 
-    try:
-        txn_updates, warnings = apply_unknown_mappings(
-            journal_path=journal_path,
-            accounts_dat=accounts_dat,
-            selections=selections,
-            scanned_groups=stage["groups"],
-            tracked_accounts=config.tracked_accounts,
-        )
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
-
-    stage["status"] = "applied"
-    stage["result"] = {
-        "applied": True,
-        "backupPaths": [str(journal_backup.resolve()), str(accounts_backup.resolve())],
-        "updatedTxnCount": txn_updates,
-        "warnings": warnings,
-    }
-    stages.save(req.stageId, stage)
-
-    try:
-        journal_hash_after = hash_file(journal_path)
-        accounts_hash_after = hash_file(accounts_dat)
-        archive_hash_after = hash_file(archived_manual)
-
-        # Count match selections for payload.
         match_ids = [
             sel.get("matchId") or ""
             for sel in selections.values()
             if sel.get("selectionType") == "match"
         ]
-
-        refs = [
-            {"path": rel_path(journal_path, config.root_dir), "hash_before": journal_hash_before, "hash_after": journal_hash_after},
-            {"path": rel_path(accounts_dat, config.root_dir), "hash_before": accounts_hash_before, "hash_after": accounts_hash_after},
-        ]
-        if archive_hash_after != archive_hash_before:
-            refs.append({"path": rel_path(archived_manual, config.root_dir), "hash_before": archive_hash_before, "hash_after": archive_hash_after})
-
         mappings_applied = sum(1 for sel in selections.values() if sel.get("selectionType") == "category")
-        emit_event(
-            config.root_dir,
-            event_type="unknowns.applied.v1",
-            summary=f"Applied {mappings_applied} mappings and {len(match_ids)} matches",
-            payload={
-                "journal_path": rel_path(journal_path, config.root_dir),
-                "mappings_applied": mappings_applied,
-                "matches_applied": len(match_ids),
-                "match_ids": match_ids,
-                "warnings": warnings,
-            },
-            journal_refs=refs,
-        )
-    except Exception:
-        _log.error("Event emission failed for unknown_apply", exc_info=True)
+        mut.summary = f"Applied {mappings_applied} mappings and {len(match_ids)} matches"
+        mut.payload = {
+            "journal_path": rel_path(journal_path, config.root_dir),
+            "mappings_applied": mappings_applied,
+            "matches_applied": len(match_ids),
+            "match_ids": match_ids,
+            "warnings": warnings,
+        }
 
     return stage
 

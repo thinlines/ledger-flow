@@ -883,3 +883,121 @@
   complete, drop backup_service.py, drop restore_from_backup from
   event_log_service exports, and drop the legacy-handler branch from
   undo_event.
+
+2026-06-20 — PR 2 sweep step 16: converted unknown_apply route (first three-path
+  mutation; pressure-tests the writer's co-candidate scope from PRD §6).
+
+  Route: app/backend/main.py — unknown_apply
+    - Wrapped apply_unknown_mappings(...) + stage status/result mutation +
+      stages.save in `with journal_writer.mutate(config=config,
+      paths=[journal_path, accounts_dat, archived_manual], tag="unknowns",
+      event_type="unknowns.applied.v1") as mut:`. First three-path mutation —
+      pressure-tests PRD §6 ("Scope — journal-class only", co-candidates
+      `10-accounts.dat` and `archived-manual.journal` may ride along when an
+      op touches them alongside a year journal). The path-set check passes
+      because both journal_path (year journal) and archived_manual end in
+      `.journal`; accounts_dat is the co-candidate.
+    - Pre-block validation stays outside `mutate`:
+        * stage lookup (404 on FileNotFoundError from stages.load).
+        * stage kind mismatch (400 if stage["kind"] != "unknowns").
+        * idempotent early return when stage["status"] == "applied" — the route
+          must not double-back-up nor double-emit when called a second time.
+        * selections-empty (400 if no mappings staged).
+        * path derivation for journal_path / accounts_dat / archived_manual
+          (pure value extraction, no I/O).
+    - Pre-existence handling for the three paths is heterogeneous and the
+      writer's existing `pre_existed` / `hash_before == "sha256:none"`
+      bookkeeping covers all three cases uniformly:
+        * journal_path: must exist (the stage was built by scanning it).
+        * accounts_dat: must exist (rules engine couldn't have run otherwise).
+        * archived_manual: may or may not exist (it's lazily created the
+          first time a manual entry is archived during an unknowns match).
+          Rollback policy for not-pre-existed paths is to delete the file if
+          the block created it.
+    - In-block error handling:
+        * `ValueError` from `apply_unknown_mappings` (e.g. an unknown account
+          in `selections`) — caught and re-raised as `HTTPException(400)`.
+          Escapes the block; writer rolls back all three paths (journal +
+          accounts_dat byte-restore from their backups; archive deleted if
+          newly created, byte-restore if pre-existed). No event is emitted
+          on rejection.
+        * Any unexpected exception from `stages.save` — escapes the block
+          unwrapped; writer rolls back all three paths. The stage state in
+          `.workflow/state.db` may be in a partial state on failure (per
+          PRD §6, `.workflow/` mutations are out of the writer's scope), but
+          that is no worse than the legacy code which had no rollback at all
+          for stage state. Same trade-off documented for the import_apply
+          conversion.
+    - `stages.save` stays **inside** the block so a stages.save failure rolls
+      back the journal alongside — we don't want a journal-with-mappings-applied
+      state with a stage that says staged. Consistent with the ordering
+      decision documented for the import_apply conversion (`record_applied_
+      import` + `stages.save` inside the block).
+    - `mut.summary` and `mut.payload` mirror the legacy `emit_event` arguments
+      (mappings_applied, matches_applied, match_ids, warnings, journal_path).
+      Both are set inside the block after `apply_unknown_mappings` returns.
+    - Removed `check_drift(config.root_dir, journal_path)`,
+      `hash_file(accounts_dat)`, `hash_file(archived_manual)` (all three
+      pre-mutation hash captures) — writer captures hash_before for every
+      declared path on entry.
+    - Removed `backup_file(journal_path, "unknowns")` and
+      `backup_file(accounts_dat, "rules")` calls — writer owns backup for
+      every declared path. Note that the legacy code did **not** back up
+      archived_manual (it relied on `apply_unknown_mappings`'s inner
+      `rollback_archive` via archive_size_before for archive recovery). The
+      writer now backs up archived_manual when it pre-exists, providing a
+      uniform rollback story across all three paths. The inner
+      `rollback_archive` inside `apply_unknown_mappings` is left untouched —
+      harmless (in-place truncate is dominated by the writer's byte-restore
+      from its pre-mutation backup), and removed when PR 2 sweeps
+      `backup_service.py`.
+    - Removed the post-mutation `hash_file` calls (all three) and the manual
+      `refs` list assembly with the conditional archive append — writer
+      assembles `journal_refs` from path-set hash deltas directly.
+    - Removed `emit_event` call + its swallowed-exception try/except — the
+      writer is the sole emitter on this path, and emission failure is now
+      a real error rather than a silent log line.
+    - `stage["result"]["backupPaths"]` is now `None` (was a 2-element list
+      of journal_backup + accounts_backup resolve paths). The writer manages
+      backups internally and intentionally does not surface their paths.
+      Verified no consumer reads this field: zero references in
+      app/backend/tests/, zero references in app/frontend/, and the only
+      remaining backend reference is the assignment site itself.
+
+  Behavioral note (journal_refs filtering): The legacy route unconditionally
+  emitted both the `journal_path` ref and the `accounts_dat` ref (regardless
+  of whether accounts_dat actually changed — e.g. when all selections were
+  `match` not `category`, accounts_dat is untouched but its ref was still in
+  the event), and conditionally appended the `archive` ref only when its
+  hash changed. The writer's rule is path-set-agnostic: include any declared
+  path whose hash_after differs from hash_before. So the new behavior is:
+    * journal_path ref: included (always changes — at minimum a tag stamp).
+    * accounts_dat ref: included only when changed (matches with category
+      selections that touch payee rules; omitted for match-only applies).
+    * archive ref: included when its hash changes (same as legacy), with
+      the writer naturally handling the "archive newly created" case via
+      hash_before = "sha256:none".
+  This is more accurate (the legacy unconditionally-include-accounts_dat
+  ref implied a write that didn't happen). No test was shape-changed.
+
+  Imports: no new imports needed (`journal_writer` was already imported).
+  `backup_file`, `check_drift`, `hash_file`, `rel_path` remain imported in
+  main.py — still used by the ~3 unconverted routes (rules_history_apply
+  remains; manual-transfer-resolution-apply is being removed in PR 3).
+
+  Tests: focused suite (test_unknowns_service + test_unknown_stage_resume +
+  test_journal_writer + test_undo_service): 66 passed, 0 failures. The
+  test_unknowns_service suite exercises `apply_unknown_mappings` directly at
+  the service layer (not via the HTTP route), so the route-level conversion
+  doesn't touch those assertions. test_unknown_stage_resume exercises the
+  stage scan + resume flow at the HTTP level (via FastAPI's TestClient),
+  including the early-return path when status == "applied" — passes
+  unchanged. Full backend suite: 804 passed, 0 failures.
+
+  Next: continue the route sweep — remaining ~3 mutation routes
+  (rules_history_apply [single-file journal write with co-read of accounts_dat];
+  manual-transfer-resolution-apply is being removed in PR 3 so skipped;
+  there may be one or two more from the long tail). After the route sweep is
+  complete, drop backup_service.py, drop restore_from_backup from
+  event_log_service exports, and drop the legacy-handler branch from
+  undo_event.
