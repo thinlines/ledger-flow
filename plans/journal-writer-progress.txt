@@ -1088,3 +1088,62 @@
   _WRITER_HANDLERS). All three cleanups are gated on the manual-transfer-
   resolution-apply route either being converted or removed — leaving the
   legacy `backup_file` import live for one more PR is acceptable.
+
+2026-06-20 — PR 2 sweep step 18: dropped the legacy-handler branch from
+  undo_event. First of the three final PR 2 cleanups (the other two — delete
+  backup_service.py, drop restore_from_backup from public exports — remain
+  gated on PR 3's removal of manual_transfer_resolution_service).
+
+  Dispatcher: app/backend/services/undo_service.py — undo_event
+    - Removed the `if event_type in _WRITER_HANDLERS / else` discriminator
+      and the entire legacy branch (~20 lines): the legacy `handler(
+      workspace_path, forward) -> dict[str, str]` call, the manual
+      journal_refs assembly (pairing forward.journal_refs.hash_after with
+      handler-returned post-mutation hashes), and the dispatcher's direct
+      `emit_event(...)` call for legacy handlers. The dispatcher now always
+      calls `handler(config, forward)` and trusts the handler to have emitted
+      via journal_writer.
+    - Safe because every entry in `_HANDLERS` (transaction.deleted.v1,
+      transaction.recategorized.v1, transaction.account_reassigned.v1,
+      transaction.status_toggled.v1, manual_entry.created.v1,
+      transaction.unmatched.v1, transaction.notes_updated.v1) was also in
+      `_WRITER_HANDLERS` — the else branch was provably dead code.
+
+  Type system cleanup:
+    - Removed `_WRITER_HANDLERS: frozenset[str]` — no longer needed since
+      there's only one handler protocol.
+    - Removed `LegacyHandlerFn = Callable[[Path, dict], dict[str, str]]`
+      type alias.
+    - Collapsed `HandlerFn = LegacyHandlerFn | WriterHandlerFn` union into
+      a single `HandlerFn = Callable[[AppConfig, dict], str]`. Removed the
+      intermediate `WriterHandlerFn` name (redundant with the single
+      protocol).
+    - Dropped `from pathlib import Path` — only referenced by
+      `LegacyHandlerFn`, now unused.
+    - Dropped `emit_event` from the `services.event_log_service` import
+      (still imports `hash_file` for drift verification + `read_events` for
+      event log loading). The only `emit_event` caller in this module was
+      the legacy branch; every handler now emits inside its own
+      `journal_writer.mutate(...)` block.
+
+  Handler protocol simplification (docstring): the in-file commentary
+  describing the two-protocol world is gone; the surviving comment on
+  `HandlerFn` reads "handlers take ``(config, event)`` and own emission via
+  ``journal_writer.mutate``; they return the compensating event id."
+
+  Tests: focused suite (test_undo_service + test_journal_writer): 43 passed.
+  Full backend suite: 804 passed, 0 failures. No existing test was
+  shape-changed — the test_undo_service round-trip tests (TestUndoDeleted,
+  TestUndoRecategorized, TestUndoStatusToggled, TestUndoManualEntryCreated,
+  TestUndoNotesUpdated, TestUndoUnmatched) and the dispatcher tests
+  (TestUndoDispatcher: not_found, unsupported, already_compensated, drift)
+  all continue to pass against the unified writer-routed protocol.
+
+  Next: the remaining two PR 2 cleanups (delete backup_service.py, drop
+  restore_from_backup from reconciliation_service public exports) are
+  gated on PR 3's removal of manual_transfer_resolution_service.py — the
+  only forward-mutation caller of `backup_file` that is NOT a legacy
+  redundant call inside a writer block. (The redundant calls in
+  reconciliation_service.write_assertion_transaction and
+  import_history_service.undo_import are harmless duplicate backups that
+  get cleaned up alongside backup_service.py.)

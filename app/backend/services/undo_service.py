@@ -14,13 +14,12 @@ import logging
 import re
 from dataclasses import dataclass
 from enum import Enum
-from pathlib import Path
 from typing import Callable
 
 from services import journal_writer
 from services.archive_service import archive_manual_entry
 from services.config_service import AppConfig
-from services.event_log_service import emit_event, hash_file, read_events
+from services.event_log_service import hash_file, read_events
 from services.header_parser import TransactionStatus, parse_header, set_header_status
 from services.journal_block_service import (
     AmbiguousHeaderError,
@@ -63,17 +62,9 @@ class UndoFailedError(Exception):
     """Raised by a handler when the inverse mutation cannot be applied cleanly."""
 
 
-# Handler protocols.
-#
-# Legacy handlers (pre journal_writer sweep) take ``(workspace_path, event)``
-# and return ``dict[str, str]`` mapping journal-rel-path → post-mutation hash.
-# The dispatcher consumes those hashes to emit the compensating event itself.
-#
-# Writer-routed handlers take ``(config, event)`` and own emission via
-# ``journal_writer.mutate``; they return the compensating event id (a ``str``).
-LegacyHandlerFn = Callable[[Path, dict], dict[str, str]]
-WriterHandlerFn = Callable[[AppConfig, dict], str]
-HandlerFn = LegacyHandlerFn | WriterHandlerFn
+# Handler protocol: handlers take ``(config, event)`` and own emission via
+# ``journal_writer.mutate``; they return the compensating event id.
+HandlerFn = Callable[[AppConfig, dict], str]
 
 
 # ---------------------------------------------------------------------------
@@ -151,31 +142,10 @@ def undo_event(config: AppConfig, event_id: str) -> UndoResult:
                 event_id,
             )
 
-    # 5. Apply the compensating action.
+    # 5. Apply the compensating action. Handlers own emission via journal_writer.
     forward_summary = forward.get("summary", "")
     try:
-        if event_type in _WRITER_HANDLERS:
-            compensating_id = handler(config, forward)
-        else:
-            new_hashes = handler(workspace_path, forward)
-            # 6. Legacy handlers: dispatcher emits the compensating event.
-            journal_refs = []
-            for ref in forward.get("journal_refs", []):
-                ref_path = ref.get("path", "")
-                if ref_path and ref_path in new_hashes:
-                    journal_refs.append({
-                        "path": ref_path,
-                        "hash_before": ref.get("hash_after"),  # Our "before" is the forward's "after".
-                        "hash_after": new_hashes[ref_path],
-                    })
-            compensating_id = emit_event(
-                workspace_path,
-                event_type=f"{event_type}.compensated.v1",
-                summary=f"Undid: {forward_summary}",
-                payload={**forward.get("payload", {}), "compensated_event_id": event_id},
-                journal_refs=journal_refs,
-                compensates=event_id,
-            )
+        compensating_id = handler(config, forward)
     except UndoFailedError as exc:
         return UndoResult(UndoOutcome.FAILED, str(exc), None, event_id)
 
@@ -713,19 +683,6 @@ _HANDLERS: dict[str, HandlerFn] = {
     "transaction.unmatched.v1": _undo_transaction_unmatched,
     "transaction.notes_updated.v1": _undo_transaction_notes_updated,
 }
-
-# Event types whose handlers use the writer-routed protocol (return the
-# compensating event id; emission already happened inside the handler).
-# PR 2 will move every remaining entry from ``_HANDLERS`` into this set.
-_WRITER_HANDLERS: frozenset[str] = frozenset({
-    "transaction.deleted.v1",
-    "transaction.recategorized.v1",
-    "transaction.account_reassigned.v1",
-    "transaction.status_toggled.v1",
-    "manual_entry.created.v1",
-    "transaction.notes_updated.v1",
-    "transaction.unmatched.v1",
-})
 
 
 def is_undoable_type(event_type: str) -> bool:
