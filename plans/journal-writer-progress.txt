@@ -1291,3 +1291,173 @@
   remaining reference is `test_reconciliation_service.py` exercising
   byte-identity round-trip — that test plus the public export can go.
 
+- 2026-06-20 PR 2 sweep — convert `accounts_reconciliation_duplicate_resolution`
+  route's three action branches through `journal_writer.mutate`. This
+  route was added concurrently with the writer (commits `a1d69a1` …
+  `ae06780` predated and chased PR 1 / `eb4268b`), so it was never
+  enumerated in the original sweep list. The PRD's claim that the
+  remaining `backup_file` calls were only inside writer blocks was
+  wrong — `reconciliation_duplicate_service.resolve_duplicate_candidate`
+  was still doing the full manual dance (capture-hash → backup →
+  mutate → emit → manual-rollback try/except). Converting it is the
+  unstated prerequisite for the backup_service.py deletion.
+
+  Service file (`app/backend/services/reconciliation_duplicate_service.py`):
+
+  * Imports trimmed:
+    - dropped `.backup_service.backup_file`,
+    - dropped `.event_log_service.check_drift`,
+    - dropped `.event_log_service.emit_event`,
+    - dropped `.event_log_service.hash_file`,
+    - dropped `.archive_service.rollback_archive`,
+    - retained `.event_log_service.rel_path` (still used in the
+      `remove_manual_duplicate` payload to format `journal_path`),
+    - added `from . import journal_writer`.
+
+  * Dead helpers removed (each had exactly one production caller —
+    `resolve_duplicate_candidate` — and that caller is now a writer
+    block):
+    - `_capture_hash_before(config, path, hashes)`
+    - `_backup_once(path, tag, backups)`
+    - `_emit_resolution_event(config, event_type, summary, payload,
+      hash_before_by_path)`
+
+  * `resolve_duplicate_candidate(config, tracked_account_id,
+    checked_row, unchecked_row, action)` rewrites:
+
+    * Pre-block validation kept outside `mutate`:
+      - tracked account 404,
+      - missing ledger_account 400,
+      - merge_imported_duplicates: cross-journal 422 ("Imported
+        duplicates must live in the same journal file to merge.").
+
+    * Branch `remove_manual_duplicate`:
+      paths=[journal_path], tag="reconcile-duplicate",
+      event_type="reconciliation.duplicate_manual_removed.v1".
+      `_read_block(target)` runs outside `mutate` (it raises a 409
+      on header-relocate, which is a stale-read error rather than a
+      mutation failure — pre-block keeps the writer from doing
+      pointless backups). Block removal (with leading blank line
+      consumption), `deleted_block` capture, and `_write_journal`
+      happen inside the block. Payload + summary set inside the
+      block. Return `mut.event_id`.
+
+    * Branch `use_imported_transaction`:
+      paths=[manual_journal, archive_path] when manual_journal ==
+      imported_journal, else [manual_journal, imported_journal,
+      archive_path]. tag="reconcile-duplicate",
+      event_type="reconciliation.imported_transaction_used.v1".
+      `_read_block(manual_row)` and `_read_block(imported_row)` run
+      outside `mutate` (same 409-on-header-relocate reasoning as
+      above; pre-block also lets us decide the `paths=` list based on
+      whether the two journals are the same file). archive_path is
+      always declared in `paths`, whether or not it pre-exists — the
+      writer's `pre_existed`/`hash_before` machinery handles both
+      cases (delete-if-newly-created on rollback, byte-restore from
+      backup otherwise). File-content-dependent 422s ("Split manual
+      duplicates need a fuller merge flow before they can replace an
+      imported transaction", "Imported duplicate does not have a
+      usable category posting") stay **inside** the block — they
+      raise `HTTPException`, escape the block, and the writer rolls
+      back manual_journal, imported_journal, and archive_path from
+      backup or unlink. Mutation steps inside the block: extract
+      manual/imported blocks (re-locating them in `shared_lines` when
+      same-journal); compute destination_account from manual's other
+      posting; rewrite imported's other-posting to destination_account
+      when they differ; `_replace_user_metadata` to graft manual's
+      user metadata onto imported; mint `match_id` (uuid4);
+      `_upsert_match_tags`; `archive_manual_entry(archive_path,
+      match_id, manual_block)`; splice updated_imported into shared
+      or imported lines; remove manual block (with trailing blank
+      line consumption); `_write_journal` once for shared lines or
+      twice for distinct journals. Payload + summary set inside the
+      block. Return `mut.event_id`.
+
+    * Branch `merge_imported_duplicates`:
+      paths=[journal_path], tag="reconcile-duplicate",
+      event_type="reconciliation.imported_duplicates_merged.v1".
+      `_read_block(survivor_row)` and `_read_block(merged_row)` plus
+      the cross-journal 422 check run outside `mutate`. Inside the
+      block: extract survivor / merged blocks; call
+      `_upsert_import_identity_metadata` (which can raise 422 on
+      missing import identity — escapes the block and writer rolls
+      back); splice updated_survivor into lines; shift merge
+      start/end indices when survivor precedes the merge; remove the
+      merge block (with leading blank line consumption);
+      `_write_journal`; conditionally call
+      `ImportIndex(...).upsert_transactions(...)` to maintain the
+      import index. Payload + summary set inside the block. Return
+      `mut.event_id`. (ImportIndex writes are to .workflow/state.db,
+      which is outside the writer's journal-class scope per
+      PRD §6 — they ride along inside the block so a journal-write
+      failure rolls back consistently with the index state. Note the
+      index write itself is not rolled back by the writer; if the
+      journal write succeeds but the ImportIndex call later fails,
+      the journal is committed and the index remains stale, but the
+      reverse failure mode — journal write failing first — is the
+      common case and is handled correctly.)
+
+  * Removed `try: ... except Exception: <manual rollback> raise`
+    wrappers from all three branches. Removed
+    `manual_original_text` / `imported_original_text` /
+    `archive_size_before` captures (writer owns backups).
+    Removed the `rollback_archive(archive_path,
+    archive_size_before)` call in the exception path of
+    `use_imported_transaction` — the writer's byte-restore (or
+    delete-when-newly-created) of `archive_path` from its
+    pre-mutation backup dominates the in-place truncate.
+
+  Test file (`app/backend/tests/test_reconciliation_duplicate_review.py`):
+
+  * Dropped `from services import reconciliation_duplicate_service`
+    (only consumer was the removed test).
+  * Removed `test_duplicate_resolution_rolls_back_when_event_write_fails`.
+    Its assertion ("monkeypatch emit_event to raise, expect the
+    journal text to be rolled back") is no longer part of the
+    writer's contract — the writer calls `emit_event` *after* the
+    `with` block exits successfully, so an emit failure propagates
+    without rolling back, matching every other PR 2 conversion's
+    "emission failures are now real errors" framing. The
+    rollback-on-block-exception behavior is exhaustively covered by
+    `test_journal_writer.py`; no coverage gap is introduced. Other
+    8 tests in the file are untouched and still pass.
+
+  Tests: full backend suite: 795 passed, 0 failures (was 796; the -1
+  is the deleted rollback-on-emit test). No type check needed —
+  the route's external response shape (`removedSelectionKeys`,
+  `addedCheckedSelectionKeys`, `eventId`) is byte-identical to
+  before.
+
+  Behavioral notes:
+  * `journal_refs` ordering and filtering is now governed by the
+    writer (insertion-order of `paths=`, refs only when
+    hash_before \!= hash_after). Previously the manual
+    `_emit_resolution_event` sorted by `str(path)`. Test
+    assertions on `events[-1]["type"]` are unaffected.
+  * Event `actor` now defaults to "user" via the writer (previously
+    `_emit_resolution_event` called `emit_event` without an actor
+    so it took whatever default `emit_event` provides). Spot-check:
+    same default ("user").
+  * Event ids are now uuid7 (writer-minted) instead of whatever
+    `emit_event` previously minted. uuid7 is the project-wide
+    standard; no test asserts on uuid version.
+  * Pre-block 409 ("Transaction moved since this page loaded.
+    Refresh and try again.") from `_read_block` runs before the
+    writer entry, so no backup is created on stale-read — minor
+    win, matches the pattern used for the toggle-status route
+    where `_locate_header` errors run before `mutate`.
+
+  Next: now that all forward mutations flow through the writer, the
+  final PR 2 cleanup can land — delete `services/backup_service.py`,
+  drop `restore_from_backup` from `services/reconciliation_service`'s
+  public exports, drop the duplicate `backup_file` calls inside
+  `reconciliation_service.write_assertion_transaction` and
+  `import_history_service.undo_import` (and the `undoBackupPath`
+  field on the import-history undo entry — adjust
+  `test_import_history_service.py` and any frontend that reads it),
+  drop the `test_reconciliation_service.test_restore_from_backup_yields_byte_identical_journal`
+  test plus the `restore_from_backup` import in that test file, and
+  inline the trivial 4-line backup helper (or stop backing up) in
+  the remaining test files that still construct backups directly
+  (`test_undo_service.py`, `test_notes_and_recategorize.py`,
+  `test_transaction_actions.py`).

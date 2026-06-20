@@ -12,7 +12,6 @@ from models import (
 from services.config_service import AppConfig
 from services.event_log_service import read_events
 from services.import_service import _build_existing_map, _classify_transaction
-from services import reconciliation_duplicate_service
 
 
 def _make_config(workspace: Path) -> AppConfig:
@@ -291,48 +290,6 @@ class TestDuplicateResolution:
         assert "Manual rent copy" not in updated
         assert "Imported rent" in updated
         assert events[-1]["type"] == "reconciliation.duplicate_manual_removed.v1"
-
-    def test_duplicate_resolution_rolls_back_when_event_write_fails(
-        self, tmp_path: Path, monkeypatch
-    ) -> None:
-        config = _make_config(tmp_path / "workspace")
-        _seed_accounts_dat(config)
-        journal = _seed_journal(
-            config,
-            (
-                "2026-03-04 Imported rent\n"
-                "    ; import_account_id: checking\n"
-                "    ; source_identity: rent-1\n"
-                "    ; source_payload_hash: payload-rent-1\n"
-                "    Assets:Checking:Wells Fargo  $-900.00\n"
-                "    Expenses:Food:Dining\n"
-                "\n"
-                "2026-03-05 Manual rent copy\n"
-                "    ; :manual:\n"
-                "    Assets:Checking:Wells Fargo  $-900.00\n"
-                "    Expenses:Food:Dining\n"
-            ),
-        )
-        original = journal.read_text(encoding="utf-8")
-        rows = _context_rows(config, monkeypatch)
-        imported = _row_by_payee(rows, "Imported rent")
-        manual = _row_by_payee(rows, "Manual rent copy")
-
-        monkeypatch.setattr(reconciliation_duplicate_service, "emit_event", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("event failed")))
-
-        with pytest.raises(RuntimeError):
-            main.accounts_reconciliation_duplicate_resolution(
-                "checking",
-                ReconciliationDuplicateResolutionRequest(
-                    periodStart="2026-03-01",
-                    periodEnd="2026-03-31",
-                    checkedSelectionKey=imported["selectionKey"],
-                    uncheckedSelectionKey=manual["selectionKey"],
-                    action="remove_manual_duplicate",
-                ),
-            )
-
-        assert journal.read_text(encoding="utf-8") == original
 
     def test_merge_imported_duplicates_preserves_alternate_identity_for_future_dedupe(
         self, tmp_path: Path, monkeypatch
