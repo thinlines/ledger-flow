@@ -1461,3 +1461,117 @@
   the remaining test files that still construct backups directly
   (`test_undo_service.py`, `test_notes_and_recategorize.py`,
   `test_transaction_actions.py`).
+
+[2026-06-20 — backup_service.py deletion]
+
+  Closed the final PR 2 task: delete `backup_service.py` and drop
+  `restore_from_backup` from `reconciliation_service`'s public exports.
+  This was the last load-bearing cleanup gating PR 2's "writer is the
+  only place backups happen" claim.
+
+  Service deletions:
+  * `app/backend/services/backup_service.py` removed (4-line module:
+    `backup_file(path, tag)` → `Path` that timestamped + copied bytes).
+  * `services/reconciliation_service.restore_from_backup` removed —
+    4-line `shutil.copyfile(str(backup_path), str(journal_path))`
+    wrapper. The `shutil` import dropped (sole consumer).
+  * `services/reconciliation_service.write_assertion_transaction`
+    signature simplified from `tuple[AssertionWriteResult, Path]` to
+    just `AssertionWriteResult`. The function's inner
+    `from .backup_service import backup_file` local import + the
+    `backup_path = backup_file(journal_path, "reconcile")` call are
+    gone — these were a duplicate of the writer's pre-mutation backup
+    (the route wraps `write_assertion_transaction` in
+    `journal_writer.mutate(paths=[target_journal_path], ...)`, so the
+    writer captures hash_before, backs up the journal, then the inner
+    call would back it up again — harmless until now, removed
+    alongside the service deletion). Docstring updated to drop the
+    "Returns ``(result, backup_path)``" line and the
+    "caller is responsible for verifying ... and rolling back" note —
+    the writer owns both.
+  * `services/import_history_service.undo_import` drops
+    `undo_backup = backup_file(journal_path, "undo") if
+    journal_path.exists() else None` and the `undoBackupPath` field on
+    the entry's `undo` dict. The `from .backup_service import
+    backup_file` import dropped. This was a similar "duplicate backup
+    inside the writer block" — the route
+    `/api/imports/{id}/undo` wraps `undo_import` in
+    `journal_writer.mutate(paths=[journal_path], ...)`, so the writer's
+    backup dominates.
+
+  Main.py route updated:
+  * `accounts_reconcile`: `write_result, _backup =
+    write_assertion_transaction(...)` → `write_result =
+    write_assertion_transaction(...)`.
+
+  Frontend update:
+  * `app/frontend/src/lib/components/ImportFlow.svelte`: type
+    declaration for the import-history entry's `undo` dict loses the
+    `undoBackupPath?: string | null` field. (The field was never
+    displayed — only typed.)
+
+  Test updates:
+  * `app/backend/tests/test_reconciliation_service.py`:
+    - Dropped `restore_from_backup` from the `services.reconciliation_service`
+      import block.
+    - Removed `TestRollback.test_restore_from_backup_yields_byte_identical_journal`
+      (24 lines). The rollback-via-backup behavior it asserted lives in
+      the writer now and is covered by `test_journal_writer.py`.
+    - Updated 3 `result, _ = write_assertion_transaction(...)` calls
+      to `result = write_assertion_transaction(...)`. The other 3
+      `write_assertion_transaction` calls in the file already
+      discarded the result, so no tuple-unpack to update for those.
+  * `app/backend/tests/test_undo_service.py`: dropped 5 inline
+    `from services.backup_service import backup_file` + matching
+    `backup_file(journal, "delete"|"recategorize"|"toggle")` calls
+    in 5 tests (`test_already_compensated`, `test_drift_detected`,
+    `test_round_trip_delete_and_restore`,
+    `TestUndoRecategorized.test_round_trip_recategorize_and_restore`,
+    `TestUndoStatusToggled.test_round_trip_toggle_and_restore`). The
+    backups themselves were never read by any assertion — they were
+    warm-up calls modeling the legacy dance but the tests assert
+    against the event log, not the backup paths.
+  * `app/backend/tests/test_notes_and_recategorize.py`: dropped the
+    top-level `from services.backup_service import backup_file`
+    import and 3 `backup_file(journal, "recategorize"|"notes")` calls
+    in `TestRecategorizeWithNewCategory.test_sets_specific_category`,
+    `TestRecategorizeWithNewCategory.test_without_new_category_resets_to_unknown`,
+    and `TestSaveNotes.test_inserts_notes_line`. Same rationale —
+    backups were never read.
+  * `app/backend/tests/test_transaction_actions.py`: dropped 3 inline
+    `from services.backup_service import backup_file` imports +
+    matching `backup_file(...)` calls in
+    `TestDeleteTransaction.test_removes_transaction_block`,
+    `TestRecategorizeTransaction.test_rewrites_destination_to_unknown`,
+    and `TestUnmatchTransaction.test_restores_manual_entry_and_removes_tags`
+    (the unmatch test had two `backup_file` calls, one for each of
+    main journal + archive).
+  * `app/backend/tests/test_import_history_service.py`: dropped two
+    `assert Path(undone["undo"]["undoBackupPath"]).exists()` /
+    `.read_text(encoding="utf-8")` assertions on the
+    `test_undo_import_removes_only_imported_transactions` test (since
+    the `undoBackupPath` field no longer exists in the response).
+  * `app/backend/tests/test_journal_writer.py`: docstring updated to
+    refer to "the writer's internal backup helper" instead of the
+    deleted `backup_file`.
+
+  Tests: 794 passing (was 795 before this PR — the -1 is the deleted
+  `test_restore_from_backup_yields_byte_identical_journal`). Frontend
+  type check: 870 files, 0 errors, 0 warnings.
+
+  Cross-cutting check: `grep -RIn 'backup_service\|backup_file\|
+  restore_from_backup' app/backend app/frontend` after the edits
+  returns zero references in production code and zero references in
+  tests (excluding the documentation comment-mention in PRD / progress
+  notes). The `backup_service.py` deletion landed cleanly: no
+  consumer left, no test imports left.
+
+  PR 2 sweep status: **complete**. Every forward and undo journal
+  mutation in the app now flows through
+  `journal_writer.mutate(paths=[...], tag=..., event_type=...)`. The
+  legacy dance — `check_drift` + `backup_file` + `hash_file` +
+  `emit_event` — no longer exists anywhere outside the writer's body.
+  The PRD's leverage argument now holds end-to-end:
+  one grep target (`with journal_writer.mutate(`) lists every
+  mutation site, one module owns the seven-step ritual, and adding
+  a new mutation costs ~10 lines at the call site instead of ~30.

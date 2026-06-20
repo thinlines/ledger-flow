@@ -91,9 +91,6 @@ class TestUndoDispatcher:
         journal = _write_journal(workspace, "2026.journal", "2026-03-15 * Test\n    Assets:Bank:Checking  -$10.00\n    Expenses:Groceries  $10.00\n")
         hash_before = check_drift(workspace, journal)
 
-        from services.backup_service import backup_file
-        backup_file(journal, "delete")
-
         text = journal.read_text(encoding="utf-8")
         lines = text.splitlines()
         journal.write_text("", encoding="utf-8")
@@ -124,9 +121,6 @@ class TestUndoDispatcher:
         workspace = _setup_workspace(tmp_path)
         journal = _write_journal(workspace, "2026.journal", "2026-03-15 * Test\n    Assets:Bank:Checking  -$10.00\n    Expenses:Groceries  $10.00\n")
         hash_before = check_drift(workspace, journal)
-
-        from services.backup_service import backup_file
-        backup_file(journal, "delete")
 
         text = journal.read_text(encoding="utf-8")
         journal.write_text("", encoding="utf-8")
@@ -163,8 +157,6 @@ class TestUndoDeleted:
         journal = _write_journal(workspace, "2026.journal", original)
 
         hash_before = check_drift(workspace, journal)
-        from services.backup_service import backup_file
-        backup_file(journal, "delete")
 
         lines = journal.read_text(encoding="utf-8").splitlines()
         from services.journal_block_service import locate_header, find_transaction_block
@@ -243,9 +235,7 @@ class TestUndoRecategorized:
 
         # Recategorize to Unknown.
         hash_before = check_drift(workspace, journal)
-        from services.backup_service import backup_file
         from services.transfer_service import rewrite_posting_account
-        backup_file(journal, "recategorize")
 
         lines = journal.read_text(encoding="utf-8").splitlines()
         from services.journal_block_service import locate_header, find_transaction_block
@@ -303,9 +293,7 @@ class TestUndoStatusToggled:
 
         # Toggle to pending.
         hash_before = check_drift(workspace, journal)
-        from services.backup_service import backup_file
         from services.header_parser import set_header_status, TransactionStatus
-        backup_file(journal, "toggle")
 
         lines = journal.read_text(encoding="utf-8").splitlines()
         lines[0] = set_header_status(lines[0], TransactionStatus.pending)

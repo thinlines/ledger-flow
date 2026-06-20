@@ -244,8 +244,6 @@ def test_undo_import_removes_transactions_restores_source_csv_and_import_index(t
     assert undone["status"] == "undone"
     assert undone["canUndo"] is False
     assert "already undone" in undone["undoBlockedReason"].lower()
-    assert Path(undone["undo"]["undoBackupPath"]).exists()
-    assert "txn-undo" in Path(undone["undo"]["undoBackupPath"]).read_text(encoding="utf-8")
     assert undone["undo"]["removedTxnCount"] == 1
     assert index.get_identity_map("wf_checking") == {}
 

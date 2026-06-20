@@ -375,11 +375,9 @@ class TestDeleteTransaction:
 
         # Simulate the endpoint logic inline to test without the HTTP layer.
         from services.event_log_service import check_drift, hash_file, emit_event, rel_path
-        from services.backup_service import backup_file
 
         header_line = "2026-03-15 * Whole Foods"
         hash_before = check_drift(workspace, journal)
-        backup_file(journal, "delete")
 
         text = journal.read_text(encoding="utf-8")
         lines = text.splitlines()
@@ -443,12 +441,10 @@ class TestRecategorizeTransaction:
         journal = _write_journal(workspace, "2026.journal", SAMPLE_JOURNAL)
 
         from services.event_log_service import check_drift, hash_file, emit_event, rel_path
-        from services.backup_service import backup_file
         from services.transfer_service import ACCOUNT_LINE_RE, ACCOUNT_ONLY_RE, rewrite_posting_account
 
         header_line = "2026-03-15 * Whole Foods"
         hash_before = check_drift(workspace, journal)
-        backup_file(journal, "recategorize")
 
         text = journal.read_text(encoding="utf-8")
         lines = text.splitlines()
@@ -542,7 +538,6 @@ class TestUnmatchTransaction:
         archive.write_text(ARCHIVE_CONTENT, encoding="utf-8")
 
         from services.event_log_service import check_drift, hash_file, emit_event, rel_path
-        from services.backup_service import backup_file
         from services.transfer_service import ACCOUNT_LINE_RE, ACCOUNT_ONLY_RE, rewrite_posting_account
         from services.journal_query_service import TXN_START_RE
 
@@ -574,8 +569,6 @@ class TestUnmatchTransaction:
         # Remove tags from main journal.
         hash_before_main = check_drift(workspace, journal)
         hash_before_archive = check_drift(workspace, archive)
-        backup_file(journal, "unmatch")
-        backup_file(archive, "unmatch")
 
         main_text = journal.read_text(encoding="utf-8")
         main_lines = main_text.splitlines()

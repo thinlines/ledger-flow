@@ -22,7 +22,6 @@ from services.reconciliation_service import (
     latest_reconciliation_dates_by_tracked_id,
     parse_closing_balance,
     reconciliation_status,
-    restore_from_backup,
     verify_assertion,
     write_assertion_transaction,
 )
@@ -141,7 +140,7 @@ class TestWriterOrdering:
         )
         journal = _seed_journal(config, body)
 
-        result, _ = write_assertion_transaction(
+        result = write_assertion_transaction(
             config=config,
             tracked_account_cfg=config.tracked_accounts["checking"],
             period_start=date(2026, 3, 18),
@@ -213,7 +212,7 @@ class TestWriterOrdering:
         )
         journal = _seed_journal(config, body)
 
-        result, _ = write_assertion_transaction(
+        result = write_assertion_transaction(
             config=config,
             tracked_account_cfg=config.tracked_accounts["checking"],
             period_start=date(2026, 3, 18),
@@ -234,7 +233,7 @@ class TestWriterOrdering:
         journal_path = config.journal_dir / "2026.journal"
         assert not journal_path.exists()
 
-        result, _ = write_assertion_transaction(
+        result = write_assertion_transaction(
             config=config,
             tracked_account_cfg=config.tracked_accounts["checking"],
             period_start=date(2026, 3, 18),
@@ -339,41 +338,6 @@ class TestVerifyAndRollback:
         assert "250" in failure.expected.replace(",", "")
         assert "100" in failure.actual.replace(",", "")
         assert "Balance assertion off by" in failure.raw_error
-
-
-# ---------------------------------------------------------------------------
-# Rollback preserves byte-equivalence (round-trip via restore_from_backup)
-# ---------------------------------------------------------------------------
-
-
-class TestRollback:
-    def test_restore_from_backup_yields_byte_identical_journal(self, tmp_path: Path) -> None:
-        config = _make_config(tmp_path / "workspace")
-        body = (
-            "2026-04-10 Earlier\n"
-            "    Expenses:Food  $5.00\n"
-            "    Assets:Checking:Wells Fargo\n"
-        )
-        journal = _seed_journal(config, body)
-        before_bytes = journal.read_bytes()
-
-        _, backup = write_assertion_transaction(
-            config=config,
-            tracked_account_cfg=config.tracked_accounts["checking"],
-            period_start=date(2026, 3, 18),
-            period_end=date(2026, 4, 17),
-            closing_balance=Decimal("2500.00"),
-            currency="USD",
-            event_id="recon-rollback",
-        )
-
-        # The journal was mutated.
-        assert journal.read_bytes() != before_bytes
-        # Backup matches the pre-write content.
-        assert backup.read_bytes() == before_bytes
-
-        restore_from_backup(journal, backup)
-        assert journal.read_bytes() == before_bytes
 
 
 # ---------------------------------------------------------------------------

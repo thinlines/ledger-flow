@@ -7,7 +7,6 @@ from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
-from .backup_service import backup_file
 from .config_service import AppConfig
 from .import_index import ImportIndex
 from .transfer_service import (
@@ -428,7 +427,6 @@ def undo_import(config: AppConfig, history_id: str) -> dict:
         raise ValueError(reason or "This import cannot be undone.")
 
     journal_path.parent.mkdir(parents=True, exist_ok=True)
-    undo_backup = backup_file(journal_path, "undo") if journal_path.exists() else None
     removed_transactions = [match.transaction for match in matched_results if match.is_primary]
     strip_only_matches = [match for match in matched_results if not match.is_primary]
     ranges = sorted((transaction.start, transaction.end) for transaction in removed_transactions)
@@ -467,7 +465,6 @@ def undo_import(config: AppConfig, history_id: str) -> dict:
     entry["status"] = UNDONE_STATUS
     entry["undo"] = {
         "undoneAt": datetime.now(UTC).isoformat(),
-        "undoBackupPath": str(undo_backup.resolve(strict=False)) if undo_backup is not None else None,
         "restoredInboxCsvPath": restored_csv_path,
         "removedTxnCount": len(removed_transactions),
         "strippedCarriedIdentityCount": len(strip_only_matches),

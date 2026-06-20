@@ -88,7 +88,6 @@
     };
     undo?: {
       undoneAt?: string;
-      undoBackupPath?: string | null;
       restoredInboxCsvPath?: string | null;
       sourceCsvWarning?: string | null;
     };

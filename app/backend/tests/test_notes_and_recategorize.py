@@ -9,7 +9,6 @@ from pathlib import Path
 import pytest
 
 from services import event_log_service
-from services.backup_service import backup_file
 from services.event_log_service import EVENTS_FILENAME, check_drift, emit_event, hash_file, rel_path
 from services.journal_block_service import find_transaction_block, locate_header
 from services.transfer_service import ACCOUNT_LINE_RE, ACCOUNT_ONLY_RE, rewrite_posting_account
@@ -96,7 +95,6 @@ class TestRecategorizeWithNewCategory:
 
         header_line = "2026-03-15 * Whole Foods"
         hash_before = check_drift(workspace, journal)
-        backup_file(journal, "recategorize")
 
         text = journal.read_text(encoding="utf-8")
         lines = text.splitlines()
@@ -157,7 +155,6 @@ class TestRecategorizeWithNewCategory:
 
         header_line = "2026-03-15 * Whole Foods"
         hash_before = check_drift(workspace, journal)
-        backup_file(journal, "recategorize")
 
         text = journal.read_text(encoding="utf-8")
         lines = text.splitlines()
@@ -258,7 +255,6 @@ class TestSaveNotes:
         notes_text = "Weekly grocery run"
 
         hash_before = check_drift(workspace, journal)
-        backup_file(journal, "notes")
 
         text = journal.read_text(encoding="utf-8")
         lines = text.splitlines()

@@ -2,8 +2,9 @@
 
 The writer is a deep module; these tests exercise observable external behavior
 at the ``mutate(...)`` interface and assert against the filesystem and the
-event log. They do not mock ``check_drift`` / ``hash_file`` / ``backup_file``,
-and they do not exercise any domain code or the real ``ledger`` CLI.
+event log. They do not mock ``check_drift`` / ``hash_file`` / the writer's
+internal backup helper, and they do not exercise any domain code or the real
+``ledger`` CLI.
 
 The op passed into the writer in every test is a trivial fake that writes a
 known string to a path.

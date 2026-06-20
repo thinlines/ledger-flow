@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import logging
 import re
-import shutil
 from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal, InvalidOperation
@@ -253,12 +252,8 @@ def write_assertion_transaction(
     closing_balance: Decimal,
     currency: str,
     event_id: str | None = None,
-) -> tuple[AssertionWriteResult, Path]:
+) -> AssertionWriteResult:
     """Write the reconciliation assertion to the year-derived journal file.
-
-    Returns ``(result, backup_path)``.  The caller is responsible for verifying
-    the assertion via :func:`verify_assertion` and rolling back from
-    *backup_path* if verification fails.
 
     *event_id* lets the caller pre-allocate the id so the same value can be
     written into the journal metadata and re-used when emitting the event.
@@ -281,10 +276,6 @@ def write_assertion_transaction(
     if not journal_path.exists():
         journal_path.write_text("", encoding="utf-8")
 
-    # Backup BEFORE any mutation so we can roll back on verification failure.
-    from .backup_service import backup_file  # local import keeps import graph tidy
-    backup_path = backup_file(journal_path, "reconcile")
-
     original_text = journal_path.read_text(encoding="utf-8")
     original_lines = original_text.splitlines()
 
@@ -304,24 +295,13 @@ def write_assertion_transaction(
     _write_lines(journal_path, new_lines, original_text or None)
 
     journal_rel = str(journal_path.resolve().relative_to(config.root_dir.resolve()))
-    return (
-        AssertionWriteResult(
-            journal_path=journal_path,
-            journal_rel=journal_rel,
-            header_line=block[0],
-            # Zero-indexed offset of the header line in the file — matches the
-            # contract used by ``locate_header_at`` so the API consumer can
-            # round-trip into the existing transaction.delete handler.
-            line_number=header_idx,
-            event_id=event_id,
-        ),
-        backup_path,
+    return AssertionWriteResult(
+        journal_path=journal_path,
+        journal_rel=journal_rel,
+        header_line=block[0],
+        line_number=header_idx,
+        event_id=event_id,
     )
-
-
-def restore_from_backup(journal_path: Path, backup_path: Path) -> None:
-    """Restore *journal_path* from *backup_path* byte-for-byte."""
-    shutil.copyfile(str(backup_path), str(journal_path))
 
 
 # ---------------------------------------------------------------------------

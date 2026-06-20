@@ -1450,7 +1450,7 @@ def accounts_reconcile(account_id: str, req: ReconcileRequest) -> dict:
             verify=lambda cfg, _paths: verify_assertion(cfg),
         ) as mut:
             try:
-                write_result, _backup = write_assertion_transaction(
+                write_result = write_assertion_transaction(
                     config=config,
                     tracked_account_cfg=tracked_account_cfg,
                     period_start=period_start,
