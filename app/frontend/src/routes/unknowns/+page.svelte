@@ -148,7 +148,7 @@
     result?: {
       updatedTxnCount: number;
       warnings?: Array<{ candidateId: string; warning: string }>;
-      backupPath: string;
+      backupPath: string | null;
     } | null;
   };
 
@@ -1510,7 +1510,7 @@
         <p class="eyebrow">Result</p>
         <h3 class="m-0 mt-0.5 mb-3">Changes applied</h3>
         <p class="muted">
-          Updated transactions: {historyStage.result.updatedTxnCount}. Backup: {pathLabel(historyStage.result.backupPath)}.
+          Updated transactions: {historyStage.result.updatedTxnCount}.{#if historyStage.result.backupPath} Backup: {pathLabel(historyStage.result.backupPath)}.{/if}
         </p>
         {#if historyStage.result.warnings?.length}
           <h4>Warnings</h4>

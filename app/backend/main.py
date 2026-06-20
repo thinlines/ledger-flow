@@ -2305,49 +2305,40 @@ def rules_history_apply(req: RuleHistoryApplyRequest) -> dict:
 
     journal_path = Path(stage["journalPath"])
     accounts_dat = config.init_dir / "10-accounts.dat"
-    hash_before = check_drift(config.root_dir, journal_path)
-    journal_backup = backup_file(journal_path, "rule-history")
 
-    try:
-        updated_count, warnings = apply_rule_reapply(
-            journal_path=journal_path,
-            accounts_dat=accounts_dat,
-            candidates=stage.get("candidates") or [],
-            selected_candidate_ids=selected_candidate_ids,
-        )
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
+    with journal_writer.mutate(
+        config=config,
+        paths=[journal_path],
+        tag="rule-history",
+        event_type="rule.history_applied.v1",
+    ) as mut:
+        try:
+            updated_count, warnings = apply_rule_reapply(
+                journal_path=journal_path,
+                accounts_dat=accounts_dat,
+                candidates=stage.get("candidates") or [],
+                selected_candidate_ids=selected_candidate_ids,
+            )
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
 
-    stage["status"] = "applied"
-    stage["selectedCandidateIds"] = selected_candidate_ids
-    stage["result"] = {
-        "applied": True,
-        "backupPath": str(journal_backup.resolve()),
-        "updatedTxnCount": updated_count,
-        "warnings": warnings,
-    }
-    stages.save(req.stageId, stage)
+        stage["status"] = "applied"
+        stage["selectedCandidateIds"] = selected_candidate_ids
+        stage["result"] = {
+            "applied": True,
+            "backupPath": None,
+            "updatedTxnCount": updated_count,
+            "warnings": warnings,
+        }
+        stages.save(req.stageId, stage)
 
-    try:
-        hash_after = hash_file(journal_path)
-        emit_event(
-            config.root_dir,
-            event_type="rule.history_applied.v1",
-            summary=f"Applied rule history: {updated_count} transactions updated",
-            payload={
-                "journal_path": rel_path(journal_path, config.root_dir),
-                "transactions_updated": updated_count,
-                "selected_candidate_count": len(selected_candidate_ids),
-                "warnings": warnings,
-            },
-            journal_refs=[{
-                "path": rel_path(journal_path, config.root_dir),
-                "hash_before": hash_before,
-                "hash_after": hash_after,
-            }],
-        )
-    except Exception:
-        _log.error("Event emission failed for rules_history_apply", exc_info=True)
+        mut.summary = f"Applied rule history: {updated_count} transactions updated"
+        mut.payload = {
+            "journal_path": rel_path(journal_path, config.root_dir),
+            "transactions_updated": updated_count,
+            "selected_candidate_count": len(selected_candidate_ids),
+            "warnings": warnings,
+        }
 
     return stage
 

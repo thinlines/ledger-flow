@@ -1001,3 +1001,90 @@
   complete, drop backup_service.py, drop restore_from_backup from
   event_log_service exports, and drop the legacy-handler branch from
   undo_event.
+
+2026-06-20 — PR 2 sweep step 17: converted rules_history_apply route (last
+  remaining non-skipped mutation route — route surface sweep now complete).
+
+  Route: app/backend/main.py — rules_history_apply
+    - Wrapped apply_rule_reapply(...) + stage status/result mutation +
+      stages.save in `with journal_writer.mutate(config=config,
+      paths=[journal_path], tag="rule-history",
+      event_type="rule.history_applied.v1") as mut:`.
+    - Pre-block validation stays outside `mutate`:
+        * stage lookup (404 on FileNotFoundError from stages.load).
+        * stage kind mismatch (400 if stage["kind"] != "rule_history").
+        * idempotent early return when stage["status"] == "applied" — the
+          route must not double-back-up nor double-emit when called a second
+          time.
+        * selections-empty (400 if no historical matches selected).
+        * path derivation for journal_path (pure value extraction, no I/O).
+    - In-block error handling:
+        * `ValueError` from `apply_rule_reapply` (no selections, missing
+          candidates, unknown account in selection) — caught and re-raised
+          as `HTTPException(400)`. Escapes the block; writer rolls back from
+          backup (no-op against disk because every `ValueError` in
+          `apply_rule_reapply` fires before its `journal_path.write_text`
+          call). No event is emitted on rejection.
+    - `stages.save` stays **inside** the block so a failure rolls back the
+      journal alongside — we don't want a journal-with-rule-applied state
+      with a stage that says staged. Consistent with the ordering decision
+      documented for the import_apply and unknown_apply conversions.
+    - `mut.summary` and `mut.payload` mirror the legacy `emit_event`
+      arguments (journal_path, transactions_updated, selected_candidate_count,
+      warnings). Set inside the block after `apply_rule_reapply` returns and
+      after `stages.save` completes.
+    - Removed `check_drift(config.root_dir, journal_path)` call — writer
+      owns drift detection.
+    - Removed `backup_file(journal_path, "rule-history")` call — writer owns
+      backup.
+    - Removed `hash_file(journal_path)` call and the manual `journal_refs`
+      list assembly — writer assembles `journal_refs` from path-set hash
+      deltas directly.
+    - Removed `emit_event` call + its swallowed-exception try/except — the
+      writer is the sole emitter on this path, and emission failure is now a
+      real error rather than a silent log line.
+    - `stage["result"]["backupPath"]` is now `None` (was a string holding
+      `str(journal_backup.resolve())`). The writer manages backups internally
+      and intentionally does not surface their paths. This is the first
+      conversion where the surfaced `backupPath` was *consumed by the
+      frontend* (unlike import_apply where the frontend already gated on
+      `{#if entry.backupPath}` and unlike unknown_apply where the
+      `backupPaths` field had no consumer at all).
+
+  Frontend: app/frontend/src/routes/unknowns/+page.svelte
+    - Type narrowed: `backupPath: string` → `backupPath: string | null` on
+      the RuleHistoryStage.result shape (line 151).
+    - Display gated: the "Backup: {pathLabel(...)}" suffix on line 1513 is
+      now wrapped in `{#if historyStage.result.backupPath} ... {/if}`. When
+      backupPath is null (the new norm), the line reads "Updated
+      transactions: N." and the Backup suffix is omitted entirely. Matches
+      the ImportFlow.svelte pattern (`{#if entry.backupPath}`). Line 304
+      (the redirect-URL builder) already gated via optional-chain so needed
+      no change.
+
+  Imports: no new imports needed (`journal_writer` was already imported).
+  `backup_file`, `check_drift`, `hash_file`, `rel_path` remain imported in
+  main.py — `backup_file`/`check_drift`/`hash_file` are still used by the
+  unconverted manual-transfer-resolution routes (being removed in PR 3);
+  `rel_path` is still used inside the converted routes for payload path
+  serialization. Final import cleanup happens when PR 2 drops
+  `backup_service.py` and PR 3 removes manual-transfer-resolution.
+
+  Tests: focused suite (test_rule_reapply_service + test_journal_writer +
+  test_undo_service): 45 passed, 0 failures. Full backend suite: 804
+  passed, 0 failures. Frontend type check (svelte-check): 870 files, 0
+  errors, 0 warnings.
+
+  Route sweep status: every mutation route in main.py except
+  manual-transfer-resolution-apply (skipped per PRD §Out-of-Scope; being
+  removed in PR 3) now flows through `journal_writer.mutate(...)`. The
+  legacy `emit_event` call site in manual-transfer-resolution-apply is the
+  only remaining direct caller of `emit_event` for a forward mutation in
+  main.py.
+
+  Next: drop backup_service.py, drop restore_from_backup from
+  event_log_service exports, and drop the legacy-handler branch from
+  undo_event (every undo handler is now writer-routed via
+  _WRITER_HANDLERS). All three cleanups are gated on the manual-transfer-
+  resolution-apply route either being converted or removed — leaving the
+  legacy `backup_file` import live for one more PR is acceptable.
