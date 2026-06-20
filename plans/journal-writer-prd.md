@@ -11,7 +11,7 @@
 - **PR 2 — sweep**: in progress
   - [x] Convert `_undo_transaction_recategorized` to flow through the writer; added `"transaction.recategorized.v1"` to `_WRITER_HANDLERS`. Handler signature now `(config: AppConfig, event: dict) -> str`; `backup_file(..., "undo")` removed (writer owns backup + rollback).
   - [x] Convert `_undo_transaction_account_reassigned` (structurally identical to recategorized). Added `"transaction.account_reassigned.v1"` to `_WRITER_HANDLERS`. Handler signature now `(config: AppConfig, event: dict) -> str`; reads journal and locates header/block inside the `mutate` block; `backup_file(..., "undo")` removed.
-  - [ ] Convert `_undo_transaction_status_toggled`.
+  - [x] Convert `_undo_transaction_status_toggled`. Added `"transaction.status_toggled.v1"` to `_WRITER_HANDLERS`. Handler signature now `(config: AppConfig, event: dict) -> str`; reads journal, reconstructs current header via forward `set_header_status`, locates header, restores previous status — all inside the `mutate` block; `backup_file(..., "undo")` removed.
   - [ ] Convert `_undo_manual_entry_created`.
   - [ ] Convert `_undo_transaction_notes_updated`.
   - [ ] Convert `_undo_transaction_unmatched` (multi-file: main journal + archive).

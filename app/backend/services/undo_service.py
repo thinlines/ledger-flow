@@ -389,48 +389,65 @@ def _undo_transaction_account_reassigned(config: AppConfig, event: dict) -> str:
     return mut.event_id
 
 
-def _undo_transaction_status_toggled(workspace_path: Path, event: dict) -> dict[str, str]:
-    """Restore the previous clearing status on a toggled transaction."""
+def _undo_transaction_status_toggled(config: AppConfig, event: dict) -> str:
+    """Restore the previous clearing status on a toggled transaction.
+
+    Routed through ``journal_writer.mutate`` — the writer owns backup, hashing,
+    rollback, and emission of the compensating event.
+    """
+    workspace_path = config.root_dir
     payload = event.get("payload", {})
     journal_rel = payload.get("journal_path", "")
     header_line = payload.get("header_line", "")
     previous_status_str = payload.get("previous_status", "")
+    forward_event_id = event.get("id", "")
+    forward_summary = event.get("summary", "")
+    forward_type = event.get("type", "")
 
     if not journal_rel or not header_line or not previous_status_str:
         raise UndoFailedError("Incomplete event payload")
 
     journal_path = workspace_path / journal_rel
-    text = journal_path.read_text(encoding="utf-8")
-    lines = text.splitlines()
 
-    # The header line in the file is now the *new* header (post-toggle).
-    # We need to find it. The event's header_line is the *original* (pre-toggle).
-    # Reconstruct the current header by applying the forward toggle.
-    new_status_str = payload.get("new_status", "")
-    try:
-        new_status = TransactionStatus(new_status_str)
-    except ValueError as exc:
-        raise UndoFailedError(f"Invalid new_status in event: {new_status_str}") from exc
+    with journal_writer.mutate(
+        config=config,
+        paths=[journal_path],
+        tag="undo",
+        event_type=f"{forward_type}.compensated.v1",
+    ) as mut:
+        text = journal_path.read_text(encoding="utf-8")
+        lines = text.splitlines()
 
-    current_header = set_header_status(header_line, new_status)
+        # The header line in the file is now the *new* header (post-toggle).
+        # We need to find it. The event's header_line is the *original* (pre-toggle).
+        # Reconstruct the current header by applying the forward toggle.
+        new_status_str = payload.get("new_status", "")
+        try:
+            new_status = TransactionStatus(new_status_str)
+        except ValueError as exc:
+            raise UndoFailedError(f"Invalid new_status in event: {new_status_str}") from exc
 
-    try:
-        header_idx = locate_header(lines, current_header)
-    except (HeaderNotFoundError, AmbiguousHeaderError) as exc:
-        raise UndoFailedError(str(exc)) from exc
+        current_header = set_header_status(header_line, new_status)
 
-    backup_file(journal_path, "undo")
+        try:
+            header_idx = locate_header(lines, current_header)
+        except (HeaderNotFoundError, AmbiguousHeaderError) as exc:
+            raise UndoFailedError(str(exc)) from exc
 
-    try:
-        previous_status = TransactionStatus(previous_status_str)
-    except ValueError as exc:
-        raise UndoFailedError(f"Invalid previous_status in event: {previous_status_str}") from exc
+        try:
+            previous_status = TransactionStatus(previous_status_str)
+        except ValueError as exc:
+            raise UndoFailedError(f"Invalid previous_status in event: {previous_status_str}") from exc
 
-    restored_line = set_header_status(current_header, previous_status)
-    lines[header_idx] = restored_line
-    journal_path.write_text("\n".join(lines) + ("\n" if text.endswith("\n") else ""), encoding="utf-8")
+        restored_line = set_header_status(current_header, previous_status)
+        lines[header_idx] = restored_line
+        journal_path.write_text("\n".join(lines) + ("\n" if text.endswith("\n") else ""), encoding="utf-8")
 
-    return {journal_rel: hash_file(journal_path)}
+        mut.summary = f"Undid: {forward_summary}"
+        mut.payload = {**payload, "compensated_event_id": forward_event_id}
+        mut.compensates = forward_event_id
+
+    return mut.event_id
 
 
 def _undo_manual_entry_created(workspace_path: Path, event: dict) -> dict[str, str]:
@@ -663,6 +680,7 @@ _WRITER_HANDLERS: frozenset[str] = frozenset({
     "transaction.deleted.v1",
     "transaction.recategorized.v1",
     "transaction.account_reassigned.v1",
+    "transaction.status_toggled.v1",
 })
 
 
