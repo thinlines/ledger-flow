@@ -903,13 +903,9 @@ def transactions_reassign_account(req: ReassignAccountRequest) -> dict:
     if not journal_path.is_file():
         raise HTTPException(status_code=404, detail="Journal file not found")
 
-    hash_before = check_drift(config.root_dir, journal_path)
-    backup_file(journal_path, "reassign-account")
-
-    text = journal_path.read_text(encoding="utf-8")
-    lines = text.splitlines()
-    header_idx = _locate_header(lines, req.lineNumber, req.headerLine)
-    block_start, block_end = find_transaction_block(lines, header_idx)
+    parsed = parse_header(req.headerLine)
+    payee = parsed.payee if parsed else req.headerLine[:60]
+    date_str = parsed.date if parsed else ""
 
     # Collect tracked account ledger names.
     tracked_ledger_accounts: set[str] = set()
@@ -921,64 +917,58 @@ def transactions_reassign_account(req: ReassignAccountRequest) -> dict:
     if req.newAccountLedgerName not in tracked_ledger_accounts:
         raise HTTPException(status_code=422, detail="Not a tracked account")
 
-    # Find the single source (tracked) posting to rewrite.
-    source_idx: int | None = None
     previous_account: str | None = None
-    for i in range(block_start + 1, block_end):
-        line = lines[i]
-        stripped = line.strip()
-        if stripped.startswith(";") or stripped == "":
-            continue
-        m = ACCOUNT_LINE_RE.match(line) or ACCOUNT_ONLY_RE.match(line)
-        if m:
-            account = m.group(2).strip()
-            if account not in tracked_ledger_accounts:
-                continue  # Destination (category) posting — skip.
-            if source_idx is not None:
-                raise HTTPException(status_code=422, detail="Cannot reassign a multi-account transaction")
-            source_idx = i
-            previous_account = account
 
-    if source_idx is None:
-        raise HTTPException(status_code=422, detail="Cannot reassign account on this transaction")
+    with journal_writer.mutate(
+        config=config,
+        paths=[journal_path],
+        tag="reassign-account",
+        event_type="transaction.account_reassigned.v1",
+    ) as mut:
+        text = journal_path.read_text(encoding="utf-8")
+        lines = text.splitlines()
+        header_idx = _locate_header(lines, req.lineNumber, req.headerLine)
+        block_start, block_end = find_transaction_block(lines, header_idx)
 
-    if previous_account == req.newAccountLedgerName:
-        raise HTTPException(status_code=422, detail="Transaction already belongs to this account")
+        # Find the single source (tracked) posting to rewrite.
+        source_idx: int | None = None
+        for i in range(block_start + 1, block_end):
+            line = lines[i]
+            stripped = line.strip()
+            if stripped.startswith(";") or stripped == "":
+                continue
+            m = ACCOUNT_LINE_RE.match(line) or ACCOUNT_ONLY_RE.match(line)
+            if m:
+                account = m.group(2).strip()
+                if account not in tracked_ledger_accounts:
+                    continue  # Destination (category) posting — skip.
+                if source_idx is not None:
+                    raise HTTPException(status_code=422, detail="Cannot reassign a multi-account transaction")
+                source_idx = i
+                previous_account = account
 
-    new_line, changed = rewrite_posting_account(lines[source_idx], req.newAccountLedgerName)
-    if not changed:
-        raise HTTPException(status_code=500, detail="Failed to rewrite posting account")
-    lines[source_idx] = new_line
+        if source_idx is None:
+            raise HTTPException(status_code=422, detail="Cannot reassign account on this transaction")
 
-    journal_path.write_text("\n".join(lines) + ("\n" if text.endswith("\n") else ""), encoding="utf-8")
+        if previous_account == req.newAccountLedgerName:
+            raise HTTPException(status_code=422, detail="Transaction already belongs to this account")
 
-    parsed = parse_header(req.headerLine)
-    payee = parsed.payee if parsed else req.headerLine[:60]
-    date_str = parsed.date if parsed else ""
+        new_line, changed = rewrite_posting_account(lines[source_idx], req.newAccountLedgerName)
+        if not changed:
+            raise HTTPException(status_code=500, detail="Failed to rewrite posting account")
+        lines[source_idx] = new_line
 
-    event_id = None
-    try:
-        hash_after = hash_file(journal_path)
-        event_id = emit_event(
-            config.root_dir,
-            event_type="transaction.account_reassigned.v1",
-            summary=f"Reassigned account: {payee} on {date_str} ({previous_account} → {req.newAccountLedgerName})",
-            payload={
-                "journal_path": rel_path(journal_path, config.root_dir),
-                "header_line": req.headerLine,
-                "previous_account": previous_account,
-                "new_account": req.newAccountLedgerName,
-            },
-            journal_refs=[{
-                "path": rel_path(journal_path, config.root_dir),
-                "hash_before": hash_before,
-                "hash_after": hash_after,
-            }],
-        )
-    except Exception:
-        _log.error("Event emission failed for reassign-account", exc_info=True)
+        journal_path.write_text("\n".join(lines) + ("\n" if text.endswith("\n") else ""), encoding="utf-8")
 
-    return {"success": True, "previousAccount": previous_account, "newAccount": req.newAccountLedgerName, "eventId": event_id}
+        mut.summary = f"Reassigned account: {payee} on {date_str} ({previous_account} → {req.newAccountLedgerName})"
+        mut.payload = {
+            "journal_path": rel_path(journal_path, config.root_dir),
+            "header_line": req.headerLine,
+            "previous_account": previous_account,
+            "new_account": req.newAccountLedgerName,
+        }
+
+    return {"success": True, "previousAccount": previous_account, "newAccount": req.newAccountLedgerName, "eventId": mut.event_id}
 
 
 # ---------------------------------------------------------------------------

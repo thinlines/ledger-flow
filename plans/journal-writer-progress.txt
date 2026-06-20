@@ -462,3 +462,65 @@
   Next: convert transactions_reassign_account route (same posting-rewrite
   shape as recategorize but rewrites the source/tracked posting; pre-block
   validation includes the "not a tracked account" 422 check).
+
+2026-06-20 — PR 2 sweep step 10: converted transactions_reassign_account route.
+
+  Route: app/backend/main.py — transactions_reassign_account
+    - Wrapped read + header locate + block find + source-posting walk + rewrite +
+      write in `with journal_writer.mutate(config=config, paths=[journal_path],
+      tag="reassign-account", event_type="transaction.account_reassigned.v1")
+      as mut:`.
+    - Pre-block validation stays outside `mutate`:
+        * journal file existence (404 if not a file).
+        * `parse_header(req.headerLine)` for summary payee/date_str (no rejection;
+          falls back to a 60-char slice on parse miss).
+        * tracked-account ledger-name collection from `config.tracked_accounts`
+          (config-only).
+        * 422 "Not a tracked account" — destination ledger name not in
+          `tracked_ledger_accounts`. Config-only payload-shape check; neither
+          backs up nor emits.
+    - File-content-dependent rejections stay **inside** the block — same design
+      decision as the recategorize conversion: these checks require reading the
+      journal and walking postings, so they can't be moved outside. They raise
+      `HTTPException`, escape the block, and the writer rolls back from backup.
+      The restore is a no-op against disk state (every 422 fires before the
+      `journal_path.write_text` call), but backup is captured pre-mutation so
+      rollback is correct in principle. No compensating event is emitted on
+      rejection. In-block rejections:
+        * 422 "Cannot reassign a multi-account transaction" — multiple source
+          (tracked) postings detected during the block walk.
+        * 422 "Cannot reassign account on this transaction" — no source posting
+          found (e.g. uncategorized-only blocks; should not occur for real txns).
+        * 422 "Transaction already belongs to this account" — previous_account
+          equals `req.newAccountLedgerName`.
+        * 500 "Failed to rewrite posting account" — `rewrite_posting_account`
+          returned `changed=False`.
+        * 404 from `_locate_header` (header not found in file).
+    - Inside the block: read, header locate, block parse, source-posting walk
+      (with the multi-account 422 and previous_account capture), the no-source
+      422, the already-belongs 422, `rewrite_posting_account` (500 on failure),
+      write.
+    - Removed `check_drift`, `backup_file(journal_path, "reassign-account")`,
+      and `hash_file` calls — writer owns all three.
+    - Removed `emit_event` call + its swallowed-exception try/except — the
+      writer is the sole emitter on this path, and emission failure is now a
+      real error rather than a silent log line. Returns `mut.event_id`.
+    - Payload shape unchanged (journal_path + header_line + previous_account +
+      new_account), which keeps `_undo_transaction_account_reassigned` reading
+      the same fields.
+    - Captured local variable `previous_account` is hoisted before the `with`
+      block so the `return` statement after the block can reference it; it's
+      populated inside the block before the journal write.
+
+  Imports: no new imports needed. `backup_file`, `check_drift`, `hash_file`,
+  `rel_path` remain imported in main.py — still used by the ~10 unconverted
+  routes (notes/unmatch/manual-create/import-apply/unknowns-apply/
+  rule-history-apply/etc).
+
+  Tests: full backend suite — 804 passed, 0 failures. No dedicated route test
+  for reassign-account; the converted `_undo_transaction_account_reassigned`
+  handler exercises the symmetric undo path. No existing test was shape-changed.
+
+  Next: convert transactions_notes route (notes update — same single-file
+  header-locate + line-edit shape as toggle-status, with the `; notes:`
+  comment-line set/insert/remove logic mirroring the undo handler).
