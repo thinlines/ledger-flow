@@ -724,39 +724,29 @@ def transactions_toggle_status(req: ToggleStatusRequest) -> dict:
     if not _HEADER_RE.match(new_line):
         raise HTTPException(status_code=500, detail="Rewritten header is invalid")
 
-    hash_before = check_drift(config.root_dir, journal_path)
+    with journal_writer.mutate(
+        config=config,
+        paths=[journal_path],
+        tag="toggle-status",
+        event_type="transaction.status_toggled.v1",
+    ) as mut:
+        text = journal_path.read_text(encoding="utf-8")
+        lines = text.splitlines()
 
-    text = journal_path.read_text(encoding="utf-8")
-    lines = text.splitlines()
+        header_idx = _locate_header(lines, req.lineNumber, req.headerLine)
 
-    header_idx = _locate_header(lines, req.lineNumber, req.headerLine)
+        lines[header_idx] = new_line
+        journal_path.write_text("\n".join(lines) + ("\n" if text.endswith("\n") else ""), encoding="utf-8")
 
-    lines[header_idx] = new_line
-    journal_path.write_text("\n".join(lines) + ("\n" if text.endswith("\n") else ""), encoding="utf-8")
+        mut.summary = f"Toggled status to {next_status.value}: {req.headerLine[:60]}"
+        mut.payload = {
+            "journal_path": rel_path(journal_path, config.root_dir),
+            "header_line": req.headerLine,
+            "previous_status": parsed.status.value,
+            "new_status": next_status.value,
+        }
 
-    event_id = None
-    try:
-        hash_after = hash_file(journal_path)
-        event_id = emit_event(
-            config.root_dir,
-            event_type="transaction.status_toggled.v1",
-            summary=f"Toggled status to {next_status.value}: {req.headerLine[:60]}",
-            payload={
-                "journal_path": rel_path(journal_path, config.root_dir),
-                "header_line": req.headerLine,
-                "previous_status": parsed.status.value,
-                "new_status": next_status.value,
-            },
-            journal_refs=[{
-                "path": rel_path(journal_path, config.root_dir),
-                "hash_before": hash_before,
-                "hash_after": hash_after,
-            }],
-        )
-    except Exception:
-        _log.error("Event emission failed for toggle_status", exc_info=True)
-
-    return {"newStatus": next_status.value, "newHeaderLine": new_line, "eventId": event_id}
+    return {"newStatus": next_status.value, "newHeaderLine": new_line, "eventId": mut.event_id}
 
 
 # ---------------------------------------------------------------------------

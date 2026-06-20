@@ -325,3 +325,40 @@
   Next: sweep the remaining ~14 mutation routes in main.py. After that, drop
   backup_service.py, drop restore_from_backup from event_log_service exports,
   and drop the legacy-handler branch from undo_event.
+
+2026-06-20 — PR 2 sweep step 7: converted transactions_toggle_status route.
+  First forward-mutation route conversion (all six undo handlers are now
+  writer-routed; the route surface in main.py begins its sweep here).
+
+  Route: app/backend/main.py — transactions_toggle_status
+    - Wrapped read + header locate + write in `with journal_writer.mutate(
+      paths=[journal_path], tag="toggle-status",
+      event_type="transaction.status_toggled.v1") as mut:`.
+    - Pre-block validation stays outside `mutate`:
+        * journal file existence (404 if not a file).
+        * `parse_header(req.headerLine)` (400 if invalid).
+        * `set_header_status` round-trip through `_HEADER_RE` (500 if the
+          rewritten header is malformed).
+      Each rejection is shape/programming-error — neither backs up nor emits.
+    - Inside the block: read journal, `_locate_header`, splice the new header
+      line in, write the journal. `_locate_header` raises HTTPException(404)
+      on miss — that escapes the block and the writer rolls back.
+    - Removed `check_drift` and `hash_file` calls (writer owns both).
+    - Removed `emit_event` call + its swallowed-exception try/except — the
+      writer is now the sole emitter on this path, and emission failure is a
+      real error rather than a silent log line. Return value still surfaces
+      `eventId` via `mut.event_id`.
+
+  Imports: no new imports needed (`journal_writer` was already imported for
+  the reconciliation route conversion). Note that `backup_file`, `check_drift`,
+  `hash_file`, `rel_path` remain imported in main.py — they are still used by
+  the ~13 unconverted routes (delete/recategorize/reassign-account/notes/unmatch/
+  manual-create/import-apply/unknowns-apply/rule-history-apply/etc).
+
+  Tests: full backend suite — 804 passed, 0 failures. No existing test was
+  shape-changed (toggle-status has no dedicated route test; the converted
+  `_undo_transaction_status_toggled` round-trip test exercises the symmetric
+  path and continues to pass).
+
+  Next: convert transactions_delete route (next-simplest single-file mutation,
+  same shape — read + header locate + block-find + write + emit).
