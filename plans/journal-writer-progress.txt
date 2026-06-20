@@ -262,3 +262,66 @@
 
   Next: convert _undo_transaction_unmatched (multi-file: main journal +
   archive — only multi-path undo handler remaining).
+
+2026-06-20 — PR 2 sweep step 6: converted _undo_transaction_unmatched (multi-file).
+
+  Handler: app/backend/services/undo_service.py — _undo_transaction_unmatched
+    - Signature changed from (workspace_path: Path, event: dict) -> dict[str, str]
+      to (config: AppConfig, event: dict) -> str. First multi-path undo handler
+      converted — pressure-tests the writer's `paths=[journal, archive]` contract
+      under conditional pre-existence (archive is absent in the post-unmatch
+      state because the original unmatch removed its only entry).
+    - Body wrapped in `with journal_writer.mutate(paths=[journal_path,
+      archive_path], tag="undo", event_type=f"{forward_type}.compensated.v1") as
+      mut:`. Inside the block: re-stamp the imported transaction in the main
+      journal (insert :manual: + match-id: tags after the header, rewrite
+      destination posting from Expenses:Unknown to the original category),
+      locate + remove the restored manual entry (with preceding blank-line
+      consume), write the journal, then call archive_manual_entry to re-create
+      the archive entry. UndoFailedError raised inside the block (header not
+      located on either pass) triggers writer rollback of both files — the
+      main journal restores from its backup, the archive is deleted if the
+      block had created it.
+    - Pre-block validation stays outside `mutate`:
+        * missing journal_path / header_line / match_id / restored_manual_block
+          — incomplete payload, rejected before backup or emission.
+        * no category recoverable from restored_manual_block (heuristic:
+          Expenses:/Income:/Revenue:) — rejected before backup or emission.
+    - Legacy `backup_file(journal_path, "undo")` and
+      `backup_file(archive_path, "undo")` calls dropped — writer owns backup +
+      rollback for both files now.
+    - Sets `mut.summary` (f"Undid: {forward_summary}"), `mut.payload`
+      (forward payload + compensated_event_id), `mut.compensates =
+      forward_event_id` inside the block. Writer emits the compensating event
+      with assembled journal_refs (both paths included when changed) on
+      successful exit.
+
+  Behavioral note: the legacy dispatcher filtered the compensating event's
+  journal_refs to entries also present in forward.journal_refs (which for
+  unmatch held only the main journal). The writer instead iterates the declared
+  `paths` and includes every path whose hash changed — so the compensating
+  event now carries both the journal_path and archive_path refs (the latter
+  with hash_before "sha256:none" since the archive was absent pre-mutation).
+  This is more accurate; the test_compensating_event_emitted test passes
+  unchanged because it only asserts existence + type.
+
+  Dispatcher: _WRITER_HANDLERS now contains transaction.deleted.v1,
+  transaction.recategorized.v1, transaction.account_reassigned.v1,
+  transaction.status_toggled.v1, manual_entry.created.v1,
+  transaction.notes_updated.v1, and transaction.unmatched.v1. Every undo
+  handler now flows through the writer protocol — the legacy emit-on-success
+  branch in undo_event is dead code once PR 2 sweeps the route surface, but
+  it will be retained until the last forward route conversion lands (so the
+  diff that drops the branch is contiguous with the conversions).
+
+  Imports: dropped unused `backup_file` (from services.backup_service) and
+  `rel_path` (from services.event_log_service) imports from undo_service.py
+  — neither has any remaining caller in this module.
+
+  Tests: TestUndoUnmatched (2 tests: round-trip unmatch+rematch, compensating
+  event emitted) passes unchanged. Full undo + journal_writer focused: 43
+  tests pass. Full backend suite: 804 passed, 0 failures.
+
+  Next: sweep the remaining ~14 mutation routes in main.py. After that, drop
+  backup_service.py, drop restore_from_backup from event_log_service exports,
+  and drop the legacy-handler branch from undo_event.

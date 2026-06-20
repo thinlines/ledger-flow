@@ -19,9 +19,8 @@ from typing import Callable
 
 from services import journal_writer
 from services.archive_service import archive_manual_entry
-from services.backup_service import backup_file
 from services.config_service import AppConfig
-from services.event_log_service import emit_event, hash_file, read_events, rel_path
+from services.event_log_service import emit_event, hash_file, read_events
 from services.header_parser import TransactionStatus, parse_header, set_header_status
 from services.journal_block_service import (
     AmbiguousHeaderError,
@@ -512,16 +511,23 @@ def _undo_manual_entry_created(config: AppConfig, event: dict) -> str:
     return mut.event_id
 
 
-def _undo_transaction_unmatched(workspace_path: Path, event: dict) -> dict[str, str]:
+def _undo_transaction_unmatched(config: AppConfig, event: dict) -> str:
     """Re-create the match that was undone: re-stamp the imported transaction,
     remove the restored manual entry from the main journal, and re-archive it.
+
+    Routed through ``journal_writer.mutate`` — the writer owns backup, hashing,
+    rollback, and emission of the compensating event across both files.
     """
+    workspace_path = config.root_dir
     payload = event.get("payload", {})
     journal_rel = payload.get("journal_path", "")
     archive_rel = payload.get("archive_path", "")
     header_line = payload.get("header_line", "")
     match_id = payload.get("match_id", "")
     restored_manual_block = payload.get("restored_manual_block", "")
+    forward_event_id = event.get("id", "")
+    forward_summary = event.get("summary", "")
+    forward_type = event.get("type", "")
 
     if not journal_rel or not header_line or not match_id or not restored_manual_block:
         raise UndoFailedError("Incomplete event payload")
@@ -548,77 +554,78 @@ def _undo_transaction_unmatched(workspace_path: Path, event: dict) -> dict[str, 
     if not manual_category:
         raise UndoFailedError("Could not determine category from restored manual block")
 
-    # --- Backup both files ---
-    backup_file(journal_path, "undo")
-    if archive_path.is_file():
-        backup_file(archive_path, "undo")
+    with journal_writer.mutate(
+        config=config,
+        paths=[journal_path, archive_path],
+        tag="undo",
+        event_type=f"{forward_type}.compensated.v1",
+    ) as mut:
+        # --- Step 1: Re-stamp the imported transaction in the main journal ---
+        text = journal_path.read_text(encoding="utf-8")
+        lines = text.splitlines()
 
-    # --- Step 1: Re-stamp the imported transaction in the main journal ---
-    text = journal_path.read_text(encoding="utf-8")
-    lines = text.splitlines()
+        try:
+            header_idx = locate_header(lines, header_line)
+        except (HeaderNotFoundError, AmbiguousHeaderError) as exc:
+            raise UndoFailedError(f"Could not locate imported transaction: {exc}") from exc
 
-    try:
-        header_idx = locate_header(lines, header_line)
-    except (HeaderNotFoundError, AmbiguousHeaderError) as exc:
-        raise UndoFailedError(f"Could not locate imported transaction: {exc}") from exc
+        block_start, block_end = find_transaction_block(lines, header_idx)
 
-    block_start, block_end = find_transaction_block(lines, header_idx)
+        # Insert :manual: and match-id: tags after the header (same order as unknowns_service).
+        # Process in reverse so indices stay valid: match-id first, then :manual:.
+        lines.insert(block_start + 1, f"    ; match-id: {match_id}")
+        lines.insert(block_start + 1, "    ; :manual:")
+        # block_end shifted by 2 due to insertions.
+        block_end += 2
 
-    # Insert :manual: and match-id: tags after the header (same order as unknowns_service).
-    # Process in reverse so indices stay valid: match-id first, then :manual:.
-    lines.insert(block_start + 1, f"    ; match-id: {match_id}")
-    lines.insert(block_start + 1, "    ; :manual:")
-    # block_end shifted by 2 due to insertions.
-    block_end += 2
-
-    # Rewrite destination posting from Expenses:Unknown to the original category.
-    for i in range(block_start + 3, block_end):  # +3 to skip header + two new tag lines.
-        stripped = lines[i].strip()
-        if stripped.startswith(";") or stripped == "":
-            continue
-        m = ACCOUNT_LINE_RE.match(lines[i]) or ACCOUNT_ONLY_RE.match(lines[i])
-        if m and m.group(2).strip() == "Expenses:Unknown":
-            new_line, changed = rewrite_posting_account(lines[i], manual_category)
-            if changed:
-                lines[i] = new_line
-            break
-
-    # --- Step 2: Find and remove the restored manual entry from the main journal ---
-    # The manual entry was inserted by the original unmatch. Its header is the
-    # first line of restored_manual_block, and it does NOT have the match-id tag
-    # (the tag was stripped during the unmatch).
-    manual_header = manual_lines[0] if manual_lines else ""
-    manual_entry_idx: int | None = None
-    for i, line in enumerate(lines):
-        if line == manual_header and i != header_idx:
-            # Verify it's a plausible match by checking for the manual tag.
-            if i + 1 < len(lines) and ":manual:" in lines[i + 1]:
-                manual_entry_idx = i
+        # Rewrite destination posting from Expenses:Unknown to the original category.
+        for i in range(block_start + 3, block_end):  # +3 to skip header + two new tag lines.
+            stripped = lines[i].strip()
+            if stripped.startswith(";") or stripped == "":
+                continue
+            m = ACCOUNT_LINE_RE.match(lines[i]) or ACCOUNT_ONLY_RE.match(lines[i])
+            if m and m.group(2).strip() == "Expenses:Unknown":
+                new_line, changed = rewrite_posting_account(lines[i], manual_category)
+                if changed:
+                    lines[i] = new_line
                 break
 
-    if manual_entry_idx is None:
-        raise UndoFailedError("Could not locate restored manual entry in journal")
+        # --- Step 2: Find and remove the restored manual entry from the main journal ---
+        # The manual entry was inserted by the original unmatch. Its header is the
+        # first line of restored_manual_block, and it does NOT have the match-id tag
+        # (the tag was stripped during the unmatch).
+        manual_header = manual_lines[0] if manual_lines else ""
+        manual_entry_idx: int | None = None
+        for i, line in enumerate(lines):
+            if line == manual_header and i != header_idx:
+                # Verify it's a plausible match by checking for the manual tag.
+                if i + 1 < len(lines) and ":manual:" in lines[i + 1]:
+                    manual_entry_idx = i
+                    break
 
-    manual_block_start, manual_block_end = find_transaction_block(lines, manual_entry_idx)
-    # Consume a preceding blank line.
-    remove_start = manual_block_start
-    if remove_start > 0 and lines[remove_start - 1].strip() == "":
-        remove_start -= 1
-    lines = lines[:remove_start] + lines[manual_block_end:]
+        if manual_entry_idx is None:
+            raise UndoFailedError("Could not locate restored manual entry in journal")
 
-    journal_path.write_text("\n".join(lines) + ("\n" if text.endswith("\n") else ""), encoding="utf-8")
+        manual_block_start, manual_block_end = find_transaction_block(lines, manual_entry_idx)
+        # Consume a preceding blank line.
+        remove_start = manual_block_start
+        if remove_start > 0 and lines[remove_start - 1].strip() == "":
+            remove_start -= 1
+        lines = lines[:remove_start] + lines[manual_block_end:]
 
-    # --- Step 3: Re-archive the manual entry ---
-    # Use the original block lines (without the match-id tag that archive_manual_entry adds).
-    # archive_manual_entry inserts the match-id tag itself on the second line.
-    block_for_archive = [l for l in manual_lines if l.strip() != f"; match-id: {match_id}"]
-    archive_manual_entry(archive_path, match_id, block_for_archive)
+        journal_path.write_text("\n".join(lines) + ("\n" if text.endswith("\n") else ""), encoding="utf-8")
 
-    # --- Return hashes ---
-    result: dict[str, str] = {journal_rel: hash_file(journal_path)}
-    if archive_path.is_file():
-        result[rel_path(archive_path, workspace_path)] = hash_file(archive_path)
-    return result
+        # --- Step 3: Re-archive the manual entry ---
+        # Use the original block lines (without the match-id tag that archive_manual_entry adds).
+        # archive_manual_entry inserts the match-id tag itself on the second line.
+        block_for_archive = [l for l in manual_lines if l.strip() != f"; match-id: {match_id}"]
+        archive_manual_entry(archive_path, match_id, block_for_archive)
+
+        mut.summary = f"Undid: {forward_summary}"
+        mut.payload = {**payload, "compensated_event_id": forward_event_id}
+        mut.compensates = forward_event_id
+
+    return mut.event_id
 
 
 # ---------------------------------------------------------------------------
@@ -717,6 +724,7 @@ _WRITER_HANDLERS: frozenset[str] = frozenset({
     "transaction.status_toggled.v1",
     "manual_entry.created.v1",
     "transaction.notes_updated.v1",
+    "transaction.unmatched.v1",
 })
 
 
