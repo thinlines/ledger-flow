@@ -24,3 +24,37 @@
 
   Next: convert accounts_reconcile route to use mutate(verify=verify_assertion);
   then convert _undo_transaction_deleted handler.
+
+2026-06-20 — PR 1 task 2/3 complete: converted accounts_reconcile route.
+
+  Route: app/backend/main.py — accounts_reconcile
+    - Wrapped journal write in `with journal_writer.mutate(paths=[year journal],
+      tag="reconcile", event_type="account.reconciled.v1",
+      verify=lambda cfg, _paths: verify_assertion(cfg)) as mut:`
+    - Uses `mut.event_id` (writer-minted) to embed the reconciliation_event_id in
+      journal metadata via write_assertion_transaction(event_id=mut.event_id),
+      preserving DECISIONS §15 byte-identity between the in-journal metadata and
+      the emitted event id.
+    - Sets `mut.summary` + `mut.payload` inside the block — writer emits the
+      event with assembled journal_refs on successful exit.
+    - WriterRejected (verify_assertion → AssertionFailure) translates to
+      HTTP 422 with outcome/expected/actual/rawError detail preserved.
+    - WriterUnavailable (verify_assertion → RuntimeError) translates to
+      HTTP 500 with the existing "ledger CLI is unavailable" copy.
+    - write_assertion_transaction return tuple now discards `backup_path`
+      (writer owns rollback). Inner backup still happens; harmless until PR 2
+      sweeps backup_service.
+
+  Adapter: reconciliation_service.AssertionFailure now subclasses
+  journal_writer.VerifyFailure (marker). No callers needed changes; the
+  inheritance just lets the writer carry it via WriterRejected.failure.
+
+  Imports: main.py drops `restore_from_backup` (no remaining route uses it).
+  reconciliation_service.py imports VerifyFailure for the marker base.
+
+  Tests: 70 focused tests pass (test_reconcile_endpoint 13, test_reconciliation
+  _service 29, test_journal_writer 28). No shape changes to existing tests.
+  Full backend suite: 804 passed, 0 failures.
+
+  Next: convert _undo_transaction_deleted handler in app/backend/services/
+  undo_service.py to flow through mutate(..., compensates=original_event_id).

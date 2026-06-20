@@ -26,6 +26,7 @@ from uuid import uuid7
 from .config_service import AppConfig
 from .currency_parser import parse_amount
 from .journal_query_service import TXN_START_RE
+from .journal_writer import VerifyFailure
 from .ledger_runner import CommandError, run_cmd
 from .manual_entry_service import _format_currency_amount
 
@@ -75,8 +76,13 @@ class AssertionWriteResult:
 
 
 @dataclass(frozen=True)
-class AssertionFailure:
-    """Structured ledger assertion failure surfaced by the writer or detector."""
+class AssertionFailure(VerifyFailure):
+    """Structured ledger assertion failure surfaced by the writer or detector.
+
+    Subclasses ``journal_writer.VerifyFailure`` so ``verify_assertion`` can be
+    plugged in as a writer ``verify`` hook — a failure causes the writer to
+    roll back the journal and raise ``WriterRejected(failure)``.
+    """
 
     expected: str | None
     actual: str | None

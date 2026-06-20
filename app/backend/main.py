@@ -46,6 +46,7 @@ from services.category_suggestion_service import suggest_category
 from services.event_log_service import check_drift, check_startup_drift, emit_event, hash_file, rel_path
 from services.git_snapshot_service import hours_since_last_snapshot, snapshot_commit
 from services.header_parser import TransactionStatus, parse_header, set_header_status, HEADER_RE as _HEADER_RE
+from services import journal_writer
 from services.undo_service import UndoOutcome, is_undoable_type, undo_event
 from services.event_log_service import read_events as _read_events_log
 from services.journal_block_service import (
@@ -95,7 +96,6 @@ from services.reconciliation_service import (
     latest_reconciliation_dates_by_tracked_id,
     parse_closing_balance,
     reconciliation_status as compute_reconciliation_status,
-    restore_from_backup,
     verify_assertion,
     write_assertion_transaction,
 )
@@ -1586,41 +1586,47 @@ def accounts_reconcile(account_id: str, req: ReconcileRequest) -> dict:
                 ),
             )
 
-    # Pre-allocate the event id so the same value is written into the journal
-    # metadata and re-used when emitting the event.
-    event_id = str(uuid7())
-
-    # Drift check the year journal we're about to write before the writer
-    # backs it up — keeps semantics consistent with other mutation endpoints.
     year = f"{period_end.year:04d}"
     target_journal_path = config.journal_dir / f"{year}.journal"
-    hash_before = check_drift(config.root_dir, target_journal_path) if target_journal_path.exists() else hash_file(target_journal_path)
 
     try:
-        write_result, backup_path = write_assertion_transaction(
+        with journal_writer.mutate(
             config=config,
-            tracked_account_cfg=tracked_account_cfg,
-            period_start=period_start,
-            period_end=period_end,
-            closing_balance=closing_balance,
-            currency=base_currency,
-            event_id=event_id,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+            paths=[target_journal_path],
+            tag="reconcile",
+            event_type="account.reconciled.v1",
+            verify=lambda cfg, _paths: verify_assertion(cfg),
+        ) as mut:
+            try:
+                write_result, _backup = write_assertion_transaction(
+                    config=config,
+                    tracked_account_cfg=tracked_account_cfg,
+                    period_start=period_start,
+                    period_end=period_end,
+                    closing_balance=closing_balance,
+                    currency=base_currency,
+                    event_id=mut.event_id,
+                )
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    try:
-        failure = verify_assertion(config)
-    except RuntimeError as exc:
-        # ledger CLI unavailable — roll back and surface explicit copy.
-        restore_from_backup(write_result.journal_path, backup_path)
-        raise HTTPException(
-            status_code=500,
-            detail="Could not verify the assertion: ledger CLI is unavailable.",
-        ) from exc
-
-    if failure is not None:
-        restore_from_backup(write_result.journal_path, backup_path)
+            mut.summary = (
+                f"Reconciled {tracked_account_cfg.get('display_name', account_id)} · "
+                f"ending {period_end.isoformat()} · {req.closingBalance}"
+            )
+            mut.payload = {
+                "tracked_account_id": account_id,
+                "ledger_account": ledger_account,
+                "period_start": period_start.isoformat(),
+                "period_end": period_end.isoformat(),
+                "closing_balance": str(closing_balance),
+                "currency": base_currency,
+                "journal_path": write_result.journal_rel,
+                "header_line": write_result.header_line,
+                "line_number": write_result.line_number,
+            }
+    except journal_writer.WriterRejected as exc:
+        failure = exc.failure
         message = (
             f"Reconciliation rejected — expected {failure.expected}, found {failure.actual}."
             if failure.expected and failure.actual
@@ -1635,36 +1641,12 @@ def accounts_reconcile(account_id: str, req: ReconcileRequest) -> dict:
                 "actual": failure.actual,
                 "rawError": failure.raw_error,
             },
-        )
-
-    hash_after = hash_file(write_result.journal_path)
-    summary = (
-        f"Reconciled {tracked_account_cfg.get('display_name', account_id)} · "
-        f"ending {period_end.isoformat()} · {req.closingBalance}"
-    )
-
-    emit_event(
-        config.root_dir,
-        event_type="account.reconciled.v1",
-        summary=summary,
-        payload={
-            "tracked_account_id": account_id,
-            "ledger_account": ledger_account,
-            "period_start": period_start.isoformat(),
-            "period_end": period_end.isoformat(),
-            "closing_balance": str(closing_balance),
-            "currency": base_currency,
-            "journal_path": write_result.journal_rel,
-            "header_line": write_result.header_line,
-            "line_number": write_result.line_number,
-        },
-        journal_refs=[{
-            "path": write_result.journal_rel,
-            "hash_before": hash_before,
-            "hash_after": hash_after,
-        }],
-        event_id=event_id,
-    )
+        ) from exc
+    except journal_writer.WriterUnavailable as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="Could not verify the assertion: ledger CLI is unavailable.",
+        ) from exc
 
     return {
         "ok": True,
@@ -1673,7 +1655,7 @@ def accounts_reconcile(account_id: str, req: ReconcileRequest) -> dict:
             "headerLine": write_result.header_line,
             "lineNumber": write_result.line_number,
         },
-        "eventId": event_id,
+        "eventId": mut.event_id,
     }
 
 

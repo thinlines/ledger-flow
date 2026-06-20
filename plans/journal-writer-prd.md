@@ -6,7 +6,7 @@
   - [x] `services/journal_writer.py` introduced with `mutate(...)` context manager, `JournalMutation` handle, `VerifyFailure` marker, `WriterRejected` / `WriterUnavailable` / `WriterError` exception surface
   - [x] Unit tests at `app/backend/tests/test_journal_writer.py` covering all 9 behaviors enumerated in §Testing Decisions (28 tests; 0 dependencies on domain code or the `ledger` CLI)
   - [x] `CONTEXT.md` lazily created with **journal mutation** as first entry
-  - [ ] Convert reconciliation route (`accounts_reconcile`) to flow through the writer (pre-minted `event_id` + `verify=verify_assertion`)
+  - [x] Convert reconciliation route (`accounts_reconcile`) to flow through the writer (`mut.event_id` + `verify=verify_assertion` via signature-adapter lambda). `AssertionFailure` now subclasses `VerifyFailure` so the writer can surface it via `WriterRejected`. Route handles `WriterRejected` → 422 and `WriterUnavailable` → 500. `restore_from_backup` import dropped from `main.py` (still exported from `reconciliation_service` for any non-route caller until PR 2 deletes `backup_service`).
   - [ ] Convert `_undo_transaction_deleted` to flow through the writer with `mut.compensates = original_event_id`
 - **PR 2 — sweep**: not started
 - **PR 3 — cleanup (manual transfer resolution removal + DECISIONS §22)**: not started
