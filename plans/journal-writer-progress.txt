@@ -568,3 +568,95 @@
   + archived-manual.journal; pressure-tests forward-route use of the writer's
   `paths=[journal, archive]` contract that was first exercised by the
   _undo_transaction_unmatched conversion).
+
+2026-06-20 — PR 2 sweep step 12: converted transactions_unmatch route (first
+  multi-file forward-route conversion).
+
+  Route: app/backend/main.py — transactions_unmatch
+    - Wrapped the entire unmatch sequence (archive locate + main-journal
+      tag-strip + posting rewrite + first write + restored-entry insertion +
+      second write + archive-block removal or unlink) in
+      `with journal_writer.mutate(config=config, paths=[journal_path,
+      archive_path], tag="unmatch", event_type="transaction.unmatched.v1") as
+      mut:`. Pressure-tests forward-route use of the writer's
+      `paths=[journal, archive]` contract — the writer captures hash_before +
+      backs up both files at entry, and on rollback restores both byte-for-byte
+      (or deletes any newly created file). Symmetric with the
+      _undo_transaction_unmatched conversion that introduced this multi-file
+      pattern on the undo side.
+    - Pre-block validation stays outside `mutate`:
+        * journal file existence (404 if not a file).
+        * archive file existence (404 if not a file) — config-only check
+          ("No archived entries exist") fires before backup or emission.
+        * tracked_ledger_accounts collection from config.tracked_accounts
+          (config-only; used inside the block to identify destination posting).
+        * `parse_header(req.headerLine)` for summary payee/date_str (no
+          rejection; falls back to a 60-char slice on parse miss).
+    - File-content-dependent rejections stay **inside** the block — they raise
+      `HTTPException`, escape the block, and the writer rolls back both files
+      from backup. The restores are no-ops against disk state (both 404s fire
+      before either file's `write_text` call), but backups are captured
+      pre-mutation so rollback is correct in principle. No event is emitted
+      on rejection. In-block rejections:
+        * 404 "Archived manual entry not found for this match" — match-id tag
+          not found anywhere in archive_lines (e.g. stale match-id).
+        * 404 from `_locate_header` (matched-transaction header not found in
+          the main journal).
+    - Inside the block: read archive_text, scan for the match-id tag + extract
+      archived_block_lines; read main journal, locate header, find block,
+      walk postings to collect tag indices and destination_idx; remove tag
+      lines, rewrite destination posting to Expenses:Unknown; write main
+      journal; re-read main journal, find date-ordered insertion point, insert
+      the restored manual entry (stripped of the match-id tag); write main
+      journal again; remove the archived block from archive_lines (with
+      trailing-blank-line consume), write archive (or unlink if no non-empty
+      non-comment lines remain).
+    - Removed `check_drift(workspace, journal_path)` and
+      `check_drift(workspace, archive_path)` calls — writer owns drift for
+      both paths.
+    - Removed `backup_file(journal_path, "unmatch")` and
+      `backup_file(archive_path, "unmatch")` calls — writer owns backup for
+      both paths.
+    - Removed `hash_file(journal_path)` and `hash_file(archive_path)` calls
+      and the manual `refs` list assembly — writer assembles journal_refs
+      directly from path-set hash deltas.
+    - Removed `emit_event` call + its swallowed-exception try/except — the
+      writer is the sole emitter on this path, and emission failure is now a
+      real error rather than a silent log line. Returns `mut.event_id`.
+    - Payload shape unchanged (journal_path + archive_path + header_line +
+      match_id + restored_manual_block), which keeps
+      `_undo_transaction_unmatched` reading the same fields.
+    - Redundant inline `from services.transfer_service import ACCOUNT_LINE_RE,
+      ACCOUNT_ONLY_RE` import dropped — these are already imported at the
+      module top (line 58, alongside `rewrite_posting_account`).
+
+  Behavioral note (archive-deleted journal_refs): The legacy route
+  conditionally appended the archive ref to the emitted event only when
+  `archive_path.is_file()` post-mutation — so when the unmatched entry was
+  the last archive entry (archive deleted), the event carried only the main
+  journal ref. The writer's rule is path-set agnostic: include any declared
+  path whose hash_after differs from hash_before. When the archive is
+  deleted, hash_after becomes "sha256:none" (hash_file gracefully handles
+  missing files), which differs from the captured hash_before, so the
+  archive ref is included with hash_after = "sha256:none". This is more
+  accurate (the archive *was* mutated, even if to deletion). Symmetric with
+  the _undo_transaction_unmatched conversion's documented behavioral note:
+  the same rule applies on the inverse direction when the archive is
+  re-created.
+
+  Imports: no new imports needed. `backup_file`, `check_drift`, `hash_file`,
+  `rel_path` remain imported in main.py — still used by the ~8 unconverted
+  routes (manual-create / import-apply / unknowns-apply / rule-history-apply /
+  manual-transfer-resolution / etc).
+
+  Tests: focused suite (test_transaction_actions + test_undo_service +
+  test_journal_writer): 65 passed, 0 failures. Full backend suite: 804
+  passed, 0 failures. The test_transaction_actions tests for unmatch
+  exercise the underlying journal-mutation logic directly (not the HTTP
+  route), so they were not shape-changed by the conversion.
+
+  Next: continue the route sweep — the remaining ~8 mutation routes
+  (manual-create, import-apply, unknowns-apply, rule-history-apply,
+  manual-transfer-resolution, etc). After the route sweep is complete,
+  drop backup_service.py, drop restore_from_backup from event_log_service
+  exports, and drop the legacy-handler branch from undo_event.

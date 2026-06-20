@@ -1046,185 +1046,158 @@ def transactions_unmatch(req: UnmatchTransactionRequest) -> dict:
     if not archive_path.is_file():
         raise HTTPException(status_code=404, detail="No archived entries exist")
 
-    # --- Locate the archived manual entry by match-id ---
-    archive_text = archive_path.read_text(encoding="utf-8")
-    archive_lines = archive_text.splitlines()
-    archived_block_start: int | None = None
-    archived_block_end: int | None = None
-
-    for i, line in enumerate(archive_lines):
-        stripped = line.strip()
-        if stripped == f"; match-id: {req.matchId}":
-            # The match-id tag is on line 2 of the block (header is the previous line).
-            if i == 0 or not TXN_START_RE.match(archive_lines[i - 1]):
-                continue
-            archived_block_start = i - 1
-            # Find end of this block.
-            archived_block_end = i + 1
-            while archived_block_end < len(archive_lines):
-                if TXN_START_RE.match(archive_lines[archived_block_end]):
-                    break
-                archived_block_end += 1
-            # Trim trailing blank lines.
-            while archived_block_end > archived_block_start + 1 and archive_lines[archived_block_end - 1].strip() == "":
-                archived_block_end -= 1
-            break
-
-    if archived_block_start is None:
-        raise HTTPException(status_code=404, detail="Archived manual entry not found for this match")
-
-    archived_block_lines = archive_lines[archived_block_start:archived_block_end]
-
-    # --- Drift checks and backups ---
-    hash_before_main = check_drift(config.root_dir, journal_path)
-    hash_before_archive = check_drift(config.root_dir, archive_path)
-    backup_file(journal_path, "unmatch")
-    backup_file(archive_path, "unmatch")
-
-    # --- Modify the main journal: remove :manual: and match-id: tags,
-    #     rewrite destination to Expenses:Unknown ---
-    main_text = journal_path.read_text(encoding="utf-8")
-    main_lines = main_text.splitlines()
-    header_idx = _locate_header(main_lines, req.lineNumber, req.headerLine)
-    block_start, block_end = find_transaction_block(main_lines, header_idx)
-
-    from services.transfer_service import ACCOUNT_LINE_RE, ACCOUNT_ONLY_RE
-
     tracked_ledger_accounts: set[str] = set()
     for ta in config.tracked_accounts.values():
         la = str(ta.get("ledger_account", "")).strip()
         if la:
             tracked_ledger_accounts.add(la)
 
-    lines_to_remove: list[int] = []
-    destination_idx: int | None = None
-    for i in range(block_start + 1, block_end):
-        stripped = main_lines[i].strip()
-        if stripped == "; :manual:":
-            lines_to_remove.append(i)
-        elif stripped == f"; match-id: {req.matchId}":
-            lines_to_remove.append(i)
-        elif not stripped.startswith(";") and stripped != "":
-            m = ACCOUNT_LINE_RE.match(main_lines[i]) or ACCOUNT_ONLY_RE.match(main_lines[i])
-            if m:
-                account = m.group(2).strip()
-                if account not in tracked_ledger_accounts and destination_idx is None:
-                    destination_idx = i
-
-    # Remove tag lines in reverse order to preserve indices.
-    for idx in sorted(lines_to_remove, reverse=True):
-        del main_lines[idx]
-
-    # Adjust destination_idx for removed lines above it.
-    if destination_idx is not None:
-        removed_above = sum(1 for idx in lines_to_remove if idx < destination_idx)
-        destination_idx -= removed_above
-        new_line, _ = rewrite_posting_account(main_lines[destination_idx], "Expenses:Unknown")
-        main_lines[destination_idx] = new_line
-
-    journal_path.write_text(
-        "\n".join(main_lines) + ("\n" if main_text.endswith("\n") else ""),
-        encoding="utf-8",
-    )
-
-    # --- Prepare the restored manual entry (strip the match-id tag) ---
-    restored_lines: list[str] = []
-    for line in archived_block_lines:
-        stripped = line.strip()
-        if stripped == f"; match-id: {req.matchId}":
-            continue
-        restored_lines.append(line)
-    restored_block = "\n".join(restored_lines)
-
-    # --- Insert restored manual entry into main journal in date order ---
-    # Re-read after the first write.
-    main_text2 = journal_path.read_text(encoding="utf-8")
-    main_lines2 = main_text2.splitlines()
-
-    # Parse the date from the restored entry header.
-    restored_date = ""
-    if restored_lines and TXN_START_RE.match(restored_lines[0]):
-        restored_date = restored_lines[0][:10]
-
-    # Find insertion point: after the last transaction with date <= restored_date.
-    insert_idx = len(main_lines2)
-    for i in range(len(main_lines2) - 1, -1, -1):
-        if TXN_START_RE.match(main_lines2[i]) and main_lines2[i][:10] <= restored_date:
-            # Find end of this block to insert after it.
-            end_i = i + 1
-            while end_i < len(main_lines2):
-                if TXN_START_RE.match(main_lines2[end_i]):
-                    break
-                end_i += 1
-            insert_idx = end_i
-            break
-
-    # Insert with a blank line separator.
-    insert_block = [""] + restored_lines if insert_idx > 0 else restored_lines
-    main_lines2[insert_idx:insert_idx] = insert_block
-
-    journal_path.write_text(
-        "\n".join(main_lines2) + ("\n" if main_text2.endswith("\n") else ""),
-        encoding="utf-8",
-    )
-
-    # --- Remove the archived block from the archive journal ---
-    # Also remove any trailing blank line that separated this block from the next.
-    remove_end = archived_block_end
-    while remove_end < len(archive_lines) and archive_lines[remove_end].strip() == "":
-        remove_end += 1
-    # If removing from the beginning, also remove leading blank line of next block.
-    new_archive_lines = archive_lines[:archived_block_start] + archive_lines[remove_end:]
-
-    # Clean up: if only the header comment remains, remove the file entirely.
-    non_empty = [l for l in new_archive_lines if l.strip() and not l.strip().startswith(";")]
-    if non_empty:
-        archive_path.write_text(
-            "\n".join(new_archive_lines) + ("\n" if archive_text.endswith("\n") else ""),
-            encoding="utf-8",
-        )
-    else:
-        archive_path.unlink(missing_ok=True)
-
-    # --- Emit event ---
     parsed = parse_header(req.headerLine)
     payee = parsed.payee if parsed else req.headerLine[:60]
     date_str = parsed.date if parsed else ""
 
-    try:
-        hash_after_main = hash_file(journal_path)
-        hash_after_archive = hash_file(archive_path)
-        refs = [
-            {
-                "path": rel_path(journal_path, config.root_dir),
-                "hash_before": hash_before_main,
-                "hash_after": hash_after_main,
-            },
-        ]
-        if archive_path.is_file():
-            refs.append({
-                "path": rel_path(archive_path, config.root_dir),
-                "hash_before": hash_before_archive,
-                "hash_after": hash_after_archive,
-            })
-        event_id = emit_event(
-            config.root_dir,
-            event_type="transaction.unmatched.v1",
-            summary=f"Unmatched: {payee} on {date_str} (match-id: {req.matchId})",
-            payload={
-                "journal_path": rel_path(journal_path, config.root_dir),
-                "archive_path": rel_path(archive_path, config.root_dir),
-                "header_line": req.headerLine,
-                "match_id": req.matchId,
-                "restored_manual_block": restored_block,
-            },
-            journal_refs=refs,
-        )
-    except Exception:
-        event_id = None
-        _log.error("Event emission failed for unmatch", exc_info=True)
+    with journal_writer.mutate(
+        config=config,
+        paths=[journal_path, archive_path],
+        tag="unmatch",
+        event_type="transaction.unmatched.v1",
+    ) as mut:
+        # --- Locate the archived manual entry by match-id ---
+        archive_text = archive_path.read_text(encoding="utf-8")
+        archive_lines = archive_text.splitlines()
+        archived_block_start: int | None = None
+        archived_block_end: int | None = None
 
-    return {"success": True, "eventId": event_id}
+        for i, line in enumerate(archive_lines):
+            stripped = line.strip()
+            if stripped == f"; match-id: {req.matchId}":
+                # The match-id tag is on line 2 of the block (header is the previous line).
+                if i == 0 or not TXN_START_RE.match(archive_lines[i - 1]):
+                    continue
+                archived_block_start = i - 1
+                # Find end of this block.
+                archived_block_end = i + 1
+                while archived_block_end < len(archive_lines):
+                    if TXN_START_RE.match(archive_lines[archived_block_end]):
+                        break
+                    archived_block_end += 1
+                # Trim trailing blank lines.
+                while archived_block_end > archived_block_start + 1 and archive_lines[archived_block_end - 1].strip() == "":
+                    archived_block_end -= 1
+                break
+
+        if archived_block_start is None:
+            raise HTTPException(status_code=404, detail="Archived manual entry not found for this match")
+
+        archived_block_lines = archive_lines[archived_block_start:archived_block_end]
+
+        # --- Modify the main journal: remove :manual: and match-id: tags,
+        #     rewrite destination to Expenses:Unknown ---
+        main_text = journal_path.read_text(encoding="utf-8")
+        main_lines = main_text.splitlines()
+        header_idx = _locate_header(main_lines, req.lineNumber, req.headerLine)
+        block_start, block_end = find_transaction_block(main_lines, header_idx)
+
+        lines_to_remove: list[int] = []
+        destination_idx: int | None = None
+        for i in range(block_start + 1, block_end):
+            stripped = main_lines[i].strip()
+            if stripped == "; :manual:":
+                lines_to_remove.append(i)
+            elif stripped == f"; match-id: {req.matchId}":
+                lines_to_remove.append(i)
+            elif not stripped.startswith(";") and stripped != "":
+                m = ACCOUNT_LINE_RE.match(main_lines[i]) or ACCOUNT_ONLY_RE.match(main_lines[i])
+                if m:
+                    account = m.group(2).strip()
+                    if account not in tracked_ledger_accounts and destination_idx is None:
+                        destination_idx = i
+
+        # Remove tag lines in reverse order to preserve indices.
+        for idx in sorted(lines_to_remove, reverse=True):
+            del main_lines[idx]
+
+        # Adjust destination_idx for removed lines above it.
+        if destination_idx is not None:
+            removed_above = sum(1 for idx in lines_to_remove if idx < destination_idx)
+            destination_idx -= removed_above
+            new_line, _ = rewrite_posting_account(main_lines[destination_idx], "Expenses:Unknown")
+            main_lines[destination_idx] = new_line
+
+        journal_path.write_text(
+            "\n".join(main_lines) + ("\n" if main_text.endswith("\n") else ""),
+            encoding="utf-8",
+        )
+
+        # --- Prepare the restored manual entry (strip the match-id tag) ---
+        restored_lines: list[str] = []
+        for line in archived_block_lines:
+            stripped = line.strip()
+            if stripped == f"; match-id: {req.matchId}":
+                continue
+            restored_lines.append(line)
+        restored_block = "\n".join(restored_lines)
+
+        # --- Insert restored manual entry into main journal in date order ---
+        # Re-read after the first write.
+        main_text2 = journal_path.read_text(encoding="utf-8")
+        main_lines2 = main_text2.splitlines()
+
+        # Parse the date from the restored entry header.
+        restored_date = ""
+        if restored_lines and TXN_START_RE.match(restored_lines[0]):
+            restored_date = restored_lines[0][:10]
+
+        # Find insertion point: after the last transaction with date <= restored_date.
+        insert_idx = len(main_lines2)
+        for i in range(len(main_lines2) - 1, -1, -1):
+            if TXN_START_RE.match(main_lines2[i]) and main_lines2[i][:10] <= restored_date:
+                # Find end of this block to insert after it.
+                end_i = i + 1
+                while end_i < len(main_lines2):
+                    if TXN_START_RE.match(main_lines2[end_i]):
+                        break
+                    end_i += 1
+                insert_idx = end_i
+                break
+
+        # Insert with a blank line separator.
+        insert_block = [""] + restored_lines if insert_idx > 0 else restored_lines
+        main_lines2[insert_idx:insert_idx] = insert_block
+
+        journal_path.write_text(
+            "\n".join(main_lines2) + ("\n" if main_text2.endswith("\n") else ""),
+            encoding="utf-8",
+        )
+
+        # --- Remove the archived block from the archive journal ---
+        # Also remove any trailing blank line that separated this block from the next.
+        remove_end = archived_block_end
+        while remove_end < len(archive_lines) and archive_lines[remove_end].strip() == "":
+            remove_end += 1
+        # If removing from the beginning, also remove leading blank line of next block.
+        new_archive_lines = archive_lines[:archived_block_start] + archive_lines[remove_end:]
+
+        # Clean up: if only the header comment remains, remove the file entirely.
+        non_empty = [l for l in new_archive_lines if l.strip() and not l.strip().startswith(";")]
+        if non_empty:
+            archive_path.write_text(
+                "\n".join(new_archive_lines) + ("\n" if archive_text.endswith("\n") else ""),
+                encoding="utf-8",
+            )
+        else:
+            archive_path.unlink(missing_ok=True)
+
+        mut.summary = f"Unmatched: {payee} on {date_str} (match-id: {req.matchId})"
+        mut.payload = {
+            "journal_path": rel_path(journal_path, config.root_dir),
+            "archive_path": rel_path(archive_path, config.root_dir),
+            "header_line": req.headerLine,
+            "match_id": req.matchId,
+            "restored_manual_block": restored_block,
+        }
+
+    return {"success": True, "eventId": mut.event_id}
 
 
 # ---------------------------------------------------------------------------
