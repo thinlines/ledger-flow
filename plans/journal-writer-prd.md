@@ -10,7 +10,7 @@
   - [x] Convert `_undo_transaction_deleted` to flow through the writer with `mut.compensates = original_event_id`. Dispatcher (`undo_event`) now accepts `config: AppConfig` (was `workspace_path: Path`); the converted handler returns the compensating event id (`str`) while unconverted handlers keep the legacy `dict[str, str]` protocol — dispatcher discriminates via `_WRITER_HANDLERS: frozenset[str]`. PR 2 will move every remaining entry from `_HANDLERS` into `_WRITER_HANDLERS` and drop the legacy branch.
 - **PR 2 — sweep**: in progress
   - [x] Convert `_undo_transaction_recategorized` to flow through the writer; added `"transaction.recategorized.v1"` to `_WRITER_HANDLERS`. Handler signature now `(config: AppConfig, event: dict) -> str`; `backup_file(..., "undo")` removed (writer owns backup + rollback).
-  - [ ] Convert `_undo_transaction_account_reassigned` (same shape as recategorized).
+  - [x] Convert `_undo_transaction_account_reassigned` (structurally identical to recategorized). Added `"transaction.account_reassigned.v1"` to `_WRITER_HANDLERS`. Handler signature now `(config: AppConfig, event: dict) -> str`; reads journal and locates header/block inside the `mutate` block; `backup_file(..., "undo")` removed.
   - [ ] Convert `_undo_transaction_status_toggled`.
   - [ ] Convert `_undo_manual_entry_created`.
   - [ ] Convert `_undo_transaction_notes_updated`.
