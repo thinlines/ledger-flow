@@ -625,11 +625,19 @@ def _undo_transaction_unmatched(workspace_path: Path, event: dict) -> dict[str, 
 # Handler dispatch table
 # ---------------------------------------------------------------------------
 
-def _undo_transaction_notes_updated(workspace_path: Path, event: dict) -> dict[str, str]:
-    """Restore the previous notes value (or absence) on a transaction."""
+def _undo_transaction_notes_updated(config: AppConfig, event: dict) -> str:
+    """Restore the previous notes value (or absence) on a transaction.
+
+    Routed through ``journal_writer.mutate`` — the writer owns backup, hashing,
+    rollback, and emission of the compensating event.
+    """
+    workspace_path = config.root_dir
     payload = event.get("payload", {})
     journal_rel = payload.get("journal_path", "")
     header_line = payload.get("header_line", "")
+    forward_event_id = event.get("id", "")
+    forward_summary = event.get("summary", "")
+    forward_type = event.get("type", "")
 
     if "previous_notes" not in payload:
         # Pre-migration event: no captured prior value, no safe inverse.
@@ -643,41 +651,50 @@ def _undo_transaction_notes_updated(workspace_path: Path, event: dict) -> dict[s
         raise UndoFailedError("Incomplete event payload")
 
     journal_path = workspace_path / journal_rel
-    text = journal_path.read_text(encoding="utf-8")
-    lines = text.splitlines()
 
-    try:
-        header_idx = locate_header(lines, header_line)
-    except (HeaderNotFoundError, AmbiguousHeaderError) as exc:
-        raise UndoFailedError(str(exc)) from exc
+    with journal_writer.mutate(
+        config=config,
+        paths=[journal_path],
+        tag="undo",
+        event_type=f"{forward_type}.compensated.v1",
+    ) as mut:
+        text = journal_path.read_text(encoding="utf-8")
+        lines = text.splitlines()
 
-    block_start, block_end = find_transaction_block(lines, header_idx)
+        try:
+            header_idx = locate_header(lines, header_line)
+        except (HeaderNotFoundError, AmbiguousHeaderError) as exc:
+            raise UndoFailedError(str(exc)) from exc
 
-    backup_file(journal_path, "undo")
+        block_start, block_end = find_transaction_block(lines, header_idx)
 
-    # Find the current notes line in the block (post-forward-write state).
-    notes_idx: int | None = None
-    for i in range(block_start + 1, block_end):
-        if _NOTES_RE.match(lines[i]):
-            notes_idx = i
-            break
+        # Find the current notes line in the block (post-forward-write state).
+        notes_idx: int | None = None
+        for i in range(block_start + 1, block_end):
+            if _NOTES_RE.match(lines[i]):
+                notes_idx = i
+                break
 
-    if previous_notes:
-        restored_line = f"    ; notes: {previous_notes}"
-        if notes_idx is not None:
-            lines[notes_idx] = restored_line
+        if previous_notes:
+            restored_line = f"    ; notes: {previous_notes}"
+            if notes_idx is not None:
+                lines[notes_idx] = restored_line
+            else:
+                # Forward write deleted the line — re-insert at the same position
+                # the forward path would have used (immediately after the header).
+                lines.insert(block_start + 1, restored_line)
         else:
-            # Forward write deleted the line — re-insert at the same position
-            # the forward path would have used (immediately after the header).
-            lines.insert(block_start + 1, restored_line)
-    else:
-        # No prior notes line existed — remove the one the forward write added.
-        if notes_idx is not None:
-            del lines[notes_idx]
+            # No prior notes line existed — remove the one the forward write added.
+            if notes_idx is not None:
+                del lines[notes_idx]
 
-    journal_path.write_text("\n".join(lines) + ("\n" if text.endswith("\n") else ""), encoding="utf-8")
+        journal_path.write_text("\n".join(lines) + ("\n" if text.endswith("\n") else ""), encoding="utf-8")
 
-    return {journal_rel: hash_file(journal_path)}
+        mut.summary = f"Undid: {forward_summary}"
+        mut.payload = {**payload, "compensated_event_id": forward_event_id}
+        mut.compensates = forward_event_id
+
+    return mut.event_id
 
 
 _HANDLERS: dict[str, HandlerFn] = {
@@ -699,6 +716,7 @@ _WRITER_HANDLERS: frozenset[str] = frozenset({
     "transaction.account_reassigned.v1",
     "transaction.status_toggled.v1",
     "manual_entry.created.v1",
+    "transaction.notes_updated.v1",
 })
 
 
