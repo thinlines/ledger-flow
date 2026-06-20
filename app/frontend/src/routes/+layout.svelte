@@ -141,7 +141,7 @@
 </svelte:head>
 
 <!-- Mobile top bar: visible only below the shell breakpoint. -->
-<header class="mobile-topbar hidden max-shell:flex sticky top-0 z-20 items-center justify-between gap-3 border-b border-card-edge bg-white/82 px-4 py-3 backdrop-blur-lg">
+<header class="mobile-topbar hidden max-shell:flex sticky top-0 z-20 items-center justify-between gap-3 border-b border-card-edge bg-white px-4 py-3">
 	<a href="/" class="flex items-center gap-2.5 no-underline text-brand-strong">
 		<span class="brand-mark grid h-8 w-8 place-items-center rounded-lg font-display font-bold text-white">
 			LF
@@ -179,7 +179,7 @@
 >
 	<aside class="sticky top-4 grid gap-4 max-shell:hidden">
 		<div
-			class="brand-card rounded-card border border-card-edge bg-white/75 p-4 shadow-shell backdrop-blur-lg"
+			class="brand-card rounded-card border border-card-edge bg-white p-4 shadow-shell"
 		>
 			<div class="flex items-center gap-3">
 				<span
@@ -213,7 +213,7 @@
 		<nav class="grid gap-4" aria-label="Primary">
 			{#each navSections as section}
 				<section
-					class="grid gap-3 rounded-card border border-card-edge bg-white/75 p-4 shadow-shell backdrop-blur-lg"
+					class="grid gap-3 rounded-card border border-card-edge bg-white p-4 shadow-shell"
 				>
 					<p class="m-0 text-xs font-bold uppercase tracking-wider text-muted-foreground">
 						{section.title}

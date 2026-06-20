@@ -49,8 +49,7 @@
     gap: 1rem;
     padding: 0.35rem 0.5rem;
     margin: 0 -0.5rem 0.25rem;
-    background: rgba(255, 255, 255, 0.97);
-    backdrop-filter: saturate(1.2);
+    background: rgb(255, 255, 255);
   }
 
   .date-header {

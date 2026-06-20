@@ -870,7 +870,7 @@
   {/if}
 </section>
 
-<footer class="page-footer flex items-center justify-end gap-2 max-shell:fixed max-shell:bottom-0 max-shell:left-0 max-shell:right-0 max-shell:z-20 max-shell:flex-col-reverse max-shell:items-stretch max-shell:border-t max-shell:border-card-edge max-shell:bg-white/95 max-shell:p-4 max-shell:backdrop-blur">
+<footer class="page-footer flex items-center justify-end gap-2 max-shell:fixed max-shell:bottom-0 max-shell:left-0 max-shell:right-0 max-shell:z-20 max-shell:flex-col-reverse max-shell:items-stretch max-shell:border-t max-shell:border-card-edge max-shell:bg-white max-shell:p-4">
   <button type="button" class="btn" on:click={handleCancel} disabled={submitting}>Cancel</button>
   <button type="button" class="btn btn-primary" on:click={() => void handleFinish()} disabled={!canFinish}>
     {submitting ? 'Reconciling…' : 'Reconcile'}
