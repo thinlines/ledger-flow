@@ -2053,48 +2053,38 @@ def import_history() -> dict:
 def import_undo(req: ImportUndoRequest) -> dict:
     config = _require_workspace_config()
 
-    # Resolve journal path before mutation for drift check.
-    journal_path = None
-    hash_before = None
-    try:
-        for entry_item in list_import_history(config):
-            if str(entry_item.get("id")) == req.historyId:
-                jp = entry_item.get("targetJournalPath")
-                if jp:
-                    journal_path = Path(str(jp))
-                    hash_before = check_drift(config.root_dir, journal_path)
-                break
-    except Exception:
-        _log.warning("Could not resolve journal path for import undo drift check", exc_info=True)
+    journal_path: Path | None = None
+    for entry_item in list_import_history(config):
+        if str(entry_item.get("id")) == req.historyId:
+            jp = entry_item.get("targetJournalPath")
+            if jp:
+                journal_path = Path(str(jp))
+            break
 
-    try:
-        entry = undo_import(config, req.historyId)
-    except KeyError as e:
-        raise HTTPException(status_code=404, detail="import history entry not found") from e
-    except (FileNotFoundError, OSError, ValueError) as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
+    if journal_path is None:
+        raise HTTPException(status_code=404, detail="import history entry not found")
 
-    try:
-        if journal_path is not None:
-            hash_after = hash_file(journal_path)
-            removed_count = entry.get("undo", {}).get("removedTxnCount", 0)
-            emit_event(
-                config.root_dir,
-                event_type="import.undone.v1",
-                summary=f"Undid import {req.historyId}: removed {removed_count} transactions",
-                payload={
-                    "journal_path": rel_path(journal_path, config.root_dir),
-                    "history_id": req.historyId,
-                    "transactions_removed": removed_count,
-                },
-                journal_refs=[{
-                    "path": rel_path(journal_path, config.root_dir),
-                    "hash_before": hash_before,
-                    "hash_after": hash_after,
-                }],
-            )
-    except Exception:
-        _log.error("Event emission failed for import_undo", exc_info=True)
+    entry: dict = {}
+    with journal_writer.mutate(
+        config=config,
+        paths=[journal_path],
+        tag="import-undo",
+        event_type="import.undone.v1",
+    ) as mut:
+        try:
+            entry = undo_import(config, req.historyId)
+        except KeyError as e:
+            raise HTTPException(status_code=404, detail="import history entry not found") from e
+        except (FileNotFoundError, OSError, ValueError) as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+
+        removed_count = entry.get("undo", {}).get("removedTxnCount", 0)
+        mut.summary = f"Undid import {req.historyId}: removed {removed_count} transactions"
+        mut.payload = {
+            "journal_path": rel_path(journal_path, config.root_dir),
+            "history_id": req.historyId,
+            "transactions_removed": removed_count,
+        }
 
     return {"entry": entry}
 

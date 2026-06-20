@@ -808,3 +808,78 @@
   After the route sweep is complete, drop backup_service.py, drop
   restore_from_backup from event_log_service exports, and drop the
   legacy-handler branch from undo_event.
+
+2026-06-20 — PR 2 sweep step 15: converted import_undo route.
+
+  Route: app/backend/main.py — import_undo
+    - Wrapped the `undo_import(config, req.historyId)` call in
+      `with journal_writer.mutate(config=config, paths=[journal_path],
+      tag="import-undo", event_type="import.undone.v1") as mut:`.
+    - Pre-block validation stays outside `mutate`:
+        * resolve `journal_path` from `list_import_history(config)` by
+          `req.historyId` — single scan extracts the entry's
+          `targetJournalPath`. If the entry isn't found OR the entry has no
+          `targetJournalPath`, raise HTTPException(404) before entering the
+          block. This collapses the legacy two-step "history not found"
+          KeyError + "missing target" cases into a single 404 status, matching
+          legacy behavior (the legacy code would also return 404 in both
+          cases — once via `undo_import`'s KeyError surface).
+        * Legacy best-effort pre-resolution `try/except Exception` swallow
+          (which would log-and-continue, silently skipping emission if
+          `list_import_history` raised) is dropped — resolution errors now
+          surface as 500s rather than producing a silent successful undo with
+          no event.
+    - In-block error handling:
+        * `KeyError` from `undo_import` (defensive — pre-block validation
+          ensures the entry exists, but `undo_import` re-validates and could
+          theoretically raise on race) — caught and re-raised as
+          HTTPException(404). Writer rolls back from backup (no-op since
+          mutation hasn't happened yet).
+        * `FileNotFoundError`/`OSError`/`ValueError` from `undo_import` —
+          caught and re-raised as HTTPException(400). Writer rolls back the
+          journal from backup (restores byte-for-byte if `undo_import` wrote
+          partial state before raising, no-op otherwise).
+    - Inside the block: call `undo_import(config, req.historyId)` (which
+      handles its own internal backup_file call, journal read+strip+write,
+      import index update, archive CSV restore, and history entry update),
+      then read `entry["undo"]["removedTxnCount"]` for the payload and set
+      `mut.summary` + `mut.payload`.
+    - Removed `check_drift(config.root_dir, journal_path)` call — writer
+      owns drift detection.
+    - Removed `hash_file(journal_path)` call and manual `journal_refs`
+      assembly — writer assembles `journal_refs` from path-set hash deltas.
+    - Removed `emit_event` call + its swallowed-exception try/except — the
+      writer is the sole emitter on this path, and emission failure is now
+      a real error rather than a silent log line.
+    - Returns `{"entry": entry}` unchanged. Note that this route did not
+      surface an `eventId` in its response (legacy behavior); the writer-
+      minted `mut.event_id` is recoverable via the events log if needed.
+    - Payload shape unchanged (journal_path + history_id +
+      transactions_removed). Summary copy unchanged (matches legacy
+      "Undid import {id}: removed {N} transactions").
+    - `undo_import`'s internal `backup_file(journal_path, "undo")` is left
+      untouched — harmless duplicate backup until PR 2 sweeps
+      backup_service.py. Its `undoBackupPath` is still asserted by
+      `test_import_history_service.test_undo_import_round_trip` and remains
+      user-facing forensic data on the history entry (frontend ImportFlow.
+      svelte renders it conditionally).
+
+  Imports: no new imports needed (`journal_writer` was already imported).
+  `backup_file`, `check_drift`, `hash_file`, `rel_path` remain imported in
+  main.py — still used by the ~5 unconverted routes (unknown_apply / rules_
+  history_apply / manual-transfer-resolution-apply / etc).
+
+  Tests: focused suite (test_import_history_service + test_journal_writer +
+  test_import_archive + test_import_identity): 55 passed, 0 failures. Full
+  backend suite: 804 passed, 0 failures. No existing test was shape-changed
+  (no HTTP-route-level test for import_undo; the service-layer
+  `test_undo_import_round_trip` test continues to exercise `undo_import`
+  directly).
+
+  Next: continue the route sweep — remaining ~5 mutation routes
+  (unknown_apply [multi-file: journal + accounts_dat + archive],
+  rules_history_apply, and the manual-transfer-resolution route which is
+  being removed in PR 3 so can be skipped). After the route sweep is
+  complete, drop backup_service.py, drop restore_from_backup from
+  event_log_service exports, and drop the legacy-handler branch from
+  undo_event.
