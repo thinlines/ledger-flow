@@ -12,7 +12,7 @@
   - [x] Convert `_undo_transaction_recategorized` to flow through the writer; added `"transaction.recategorized.v1"` to `_WRITER_HANDLERS`. Handler signature now `(config: AppConfig, event: dict) -> str`; `backup_file(..., "undo")` removed (writer owns backup + rollback).
   - [x] Convert `_undo_transaction_account_reassigned` (structurally identical to recategorized). Added `"transaction.account_reassigned.v1"` to `_WRITER_HANDLERS`. Handler signature now `(config: AppConfig, event: dict) -> str`; reads journal and locates header/block inside the `mutate` block; `backup_file(..., "undo")` removed.
   - [x] Convert `_undo_transaction_status_toggled`. Added `"transaction.status_toggled.v1"` to `_WRITER_HANDLERS`. Handler signature now `(config: AppConfig, event: dict) -> str`; reads journal, reconstructs current header via forward `set_header_status`, locates header, restores previous status — all inside the `mutate` block; `backup_file(..., "undo")` removed.
-  - [ ] Convert `_undo_manual_entry_created`.
+  - [x] Convert `_undo_manual_entry_created`. Added `"manual_entry.created.v1"` to `_WRITER_HANDLERS`. Handler signature now `(config: AppConfig, event: dict) -> str`; reads journal, locates the manual-entry header (built from `payload.date` + `payload.payee`), finds the block, consumes a preceding blank line, removes the block, and writes the journal — all inside the `mutate` block; `backup_file(..., "undo")` removed.
   - [ ] Convert `_undo_transaction_notes_updated`.
   - [ ] Convert `_undo_transaction_unmatched` (multi-file: main journal + archive).
   - [ ] Sweep remaining ~14 mutation routes in `main.py`.

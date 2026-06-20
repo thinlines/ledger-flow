@@ -450,11 +450,19 @@ def _undo_transaction_status_toggled(config: AppConfig, event: dict) -> str:
     return mut.event_id
 
 
-def _undo_manual_entry_created(workspace_path: Path, event: dict) -> dict[str, str]:
-    """Delete the manual entry that was created."""
+def _undo_manual_entry_created(config: AppConfig, event: dict) -> str:
+    """Delete the manual entry that was created.
+
+    Routed through ``journal_writer.mutate`` — the writer owns backup, hashing,
+    rollback, and emission of the compensating event.
+    """
+    workspace_path = config.root_dir
     payload = event.get("payload", {})
     date = payload.get("date", "")
     payee = payload.get("payee", "")
+    forward_event_id = event.get("id", "")
+    forward_summary = event.get("summary", "")
+    forward_type = event.get("type", "")
 
     if not date or not payee:
         raise UndoFailedError("Incomplete event payload — missing date or payee")
@@ -472,27 +480,36 @@ def _undo_manual_entry_created(workspace_path: Path, event: dict) -> dict[str, s
         raise UndoFailedError("Empty journal path in refs")
 
     journal_path = workspace_path / journal_rel
-    text = journal_path.read_text(encoding="utf-8")
-    lines = text.splitlines()
 
-    try:
-        header_idx = locate_header(lines, expected_header)
-    except (HeaderNotFoundError, AmbiguousHeaderError) as exc:
-        raise UndoFailedError(f"Could not locate the manual entry to undo: {exc}") from exc
+    with journal_writer.mutate(
+        config=config,
+        paths=[journal_path],
+        tag="undo",
+        event_type=f"{forward_type}.compensated.v1",
+    ) as mut:
+        text = journal_path.read_text(encoding="utf-8")
+        lines = text.splitlines()
 
-    block_start, block_end = find_transaction_block(lines, header_idx)
+        try:
+            header_idx = locate_header(lines, expected_header)
+        except (HeaderNotFoundError, AmbiguousHeaderError) as exc:
+            raise UndoFailedError(f"Could not locate the manual entry to undo: {exc}") from exc
 
-    backup_file(journal_path, "undo")
+        block_start, block_end = find_transaction_block(lines, header_idx)
 
-    # Consume a preceding blank line to avoid double-blank-line gaps.
-    remove_start = block_start
-    if remove_start > 0 and lines[remove_start - 1].strip() == "":
-        remove_start -= 1
-    new_lines = lines[:remove_start] + lines[block_end:]
+        # Consume a preceding blank line to avoid double-blank-line gaps.
+        remove_start = block_start
+        if remove_start > 0 and lines[remove_start - 1].strip() == "":
+            remove_start -= 1
+        new_lines = lines[:remove_start] + lines[block_end:]
 
-    journal_path.write_text("\n".join(new_lines) + ("\n" if text.endswith("\n") else ""), encoding="utf-8")
+        journal_path.write_text("\n".join(new_lines) + ("\n" if text.endswith("\n") else ""), encoding="utf-8")
 
-    return {journal_rel: hash_file(journal_path)}
+        mut.summary = f"Undid: {forward_summary}"
+        mut.payload = {**payload, "compensated_event_id": forward_event_id}
+        mut.compensates = forward_event_id
+
+    return mut.event_id
 
 
 def _undo_transaction_unmatched(workspace_path: Path, event: dict) -> dict[str, str]:
@@ -681,6 +698,7 @@ _WRITER_HANDLERS: frozenset[str] = frozenset({
     "transaction.recategorized.v1",
     "transaction.account_reassigned.v1",
     "transaction.status_toggled.v1",
+    "manual_entry.created.v1",
 })
 
 
