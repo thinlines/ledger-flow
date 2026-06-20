@@ -1347,7 +1347,7 @@ def events_recent() -> dict:
 @app.post("/api/events/undo/{event_id}")
 def events_undo(event_id: str) -> dict:
     config = _require_workspace_config()
-    result = undo_event(config.root_dir, event_id)
+    result = undo_event(config, event_id)
     status = _UNDO_STATUS_MAP.get(result.outcome, 500)
     if status >= 400:
         raise HTTPException(

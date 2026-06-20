@@ -58,3 +58,51 @@
 
   Next: convert _undo_transaction_deleted handler in app/backend/services/
   undo_service.py to flow through mutate(..., compensates=original_event_id).
+
+2026-06-20 — PR 1 task 3/3 complete: converted _undo_transaction_deleted handler.
+
+  Handler: app/backend/services/undo_service.py — _undo_transaction_deleted
+    - Signature changed from (workspace_path: Path, event: dict) -> dict[str, str]
+      to (config: AppConfig, event: dict) -> str (returns the compensating
+      event id).
+    - Restoration logic wrapped in `with journal_writer.mutate(paths=[journal],
+      tag="undo", event_type=f"{forward_type}.compensated.v1") as mut:`.
+    - Sets `mut.summary`, `mut.payload` (forward payload + compensated_event_id),
+      `mut.compensates = forward_event_id` inside the block — writer emits the
+      compensating event with assembled journal_refs on successful exit.
+    - Pre-block safety check (refuse if header already present) stays outside
+      `mutate` so a duplicate-rejection neither backs up nor emits.
+    - Legacy `backup_file(journal_path, "undo")` call dropped — writer owns
+      backup + rollback now.
+
+  Dispatcher: undo_event(config: AppConfig, event_id: str)
+    - Signature changed from undo_event(workspace_path, event_id) — workspace
+      is taken from config.root_dir internally.
+    - New HandlerFn protocol union (LegacyHandlerFn | WriterHandlerFn);
+      _WRITER_HANDLERS frozenset names event types whose handlers use the
+      writer protocol. Discrimination via set lookup, not isinstance.
+    - Legacy emit-on-success branch retained for the six remaining handlers
+      until PR 2 sweeps them.
+    - Per-event drift verification stays in undo_event (precondition before
+      handler dispatch), per PRD Decision 5.
+
+  Caller: main.py events_undo route now passes `config` instead of
+  `config.root_dir`.
+
+  Tests: app/backend/tests/test_undo_service.py
+    - Added _make_config(workspace) helper (minimal AppConfig — root_dir +
+      empty dicts).
+    - All 16 call sites updated mechanically: undo_event(workspace, id) →
+      undo_event(_make_config(workspace), id). No assertion shape changes.
+    - 15 tests pass (one is parametrized count). Round-trip restore test
+      still asserts journal text restoration; already-compensated test still
+      asserts r1.compensating_event_id == r2.compensating_event_id, now
+      verifying that the writer-emitted event id is what _is_compensated
+      finds.
+
+  Full backend suite: 804 passed, 0 failures.
+
+  PR 1 (proof) is now complete. Next: PR 2 (sweep) — convert remaining ~14
+  mutation routes and six undo handlers, delete backup_service.py, remove
+  restore_from_backup from the event-log service's public exports, drop
+  the legacy-handler branch from undo_event.

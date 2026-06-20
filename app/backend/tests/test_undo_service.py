@@ -8,8 +8,26 @@ from pathlib import Path
 import pytest
 
 from services import event_log_service
+from services.config_service import AppConfig
 from services.event_log_service import EVENTS_FILENAME, emit_event, hash_file, check_drift
 from services.undo_service import UndoOutcome, undo_event
+
+
+def _make_config(workspace: Path) -> AppConfig:
+    return AppConfig(
+        root_dir=workspace,
+        config_toml=workspace / "settings" / "workspace.toml",
+        workspace={"name": "Test"},
+        dirs={
+            "csv_dir": "csv",
+            "journal_dir": "journals",
+            "init_dir": "init",
+            "opening_bal_dir": "opening",
+            "imports_dir": "imports",
+        },
+        institution_templates={},
+        import_accounts={},
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -51,7 +69,7 @@ def _write_journal(workspace: Path, filename: str, content: str) -> Path:
 class TestUndoDispatcher:
     def test_not_found(self, tmp_path: Path) -> None:
         workspace = _setup_workspace(tmp_path)
-        result = undo_event(workspace, "nonexistent-id")
+        result = undo_event(_make_config(workspace), "nonexistent-id")
         assert result.outcome == UndoOutcome.NOT_FOUND
 
     def test_unsupported_event_type(self, tmp_path: Path) -> None:
@@ -65,7 +83,7 @@ class TestUndoDispatcher:
             journal_refs=[],
         )
         events = _read_events(workspace)
-        result = undo_event(workspace, events[0]["id"])
+        result = undo_event(_make_config(workspace), events[0]["id"])
         assert result.outcome == UndoOutcome.UNSUPPORTED
 
     def test_already_compensated(self, tmp_path: Path) -> None:
@@ -94,11 +112,11 @@ class TestUndoDispatcher:
         )
 
         # First undo succeeds.
-        r1 = undo_event(workspace, event_id)
+        r1 = undo_event(_make_config(workspace), event_id)
         assert r1.outcome == UndoOutcome.SUCCESS
 
         # Second undo is idempotent.
-        r2 = undo_event(workspace, event_id)
+        r2 = undo_event(_make_config(workspace), event_id)
         assert r2.outcome == UndoOutcome.ALREADY_COMPENSATED
         assert r2.compensating_event_id == r1.compensating_event_id
 
@@ -129,7 +147,7 @@ class TestUndoDispatcher:
         # Tamper with the file to simulate drift.
         journal.write_text("external edit\n", encoding="utf-8")
 
-        result = undo_event(workspace, event_id)
+        result = undo_event(_make_config(workspace), event_id)
         assert result.outcome == UndoOutcome.DRIFT
 
 
@@ -177,7 +195,7 @@ class TestUndoDeleted:
         assert "Whole Foods" not in journal.read_text()
 
         # Undo.
-        result = undo_event(workspace, event_id)
+        result = undo_event(_make_config(workspace), event_id)
         assert result.outcome == UndoOutcome.SUCCESS
 
         # Verify restored.
@@ -206,7 +224,7 @@ class TestUndoDeleted:
         )
 
         # The transaction still exists → undo should refuse.
-        result = undo_event(workspace, event_id)
+        result = undo_event(_make_config(workspace), event_id)
         assert result.outcome == UndoOutcome.FAILED
         assert "re-created" in result.message
 
@@ -262,7 +280,7 @@ class TestUndoRecategorized:
         assert "Expenses:Unknown" in journal.read_text()
 
         # Undo.
-        result = undo_event(workspace, event_id)
+        result = undo_event(_make_config(workspace), event_id)
         assert result.outcome == UndoOutcome.SUCCESS
 
         # Verify restored.
@@ -311,7 +329,7 @@ class TestUndoStatusToggled:
         assert "!" in journal.read_text().splitlines()[0]
 
         # Undo.
-        result = undo_event(workspace, event_id)
+        result = undo_event(_make_config(workspace), event_id)
         assert result.outcome == UndoOutcome.SUCCESS
 
         # Verify restored — should be unmarked (no flag).
@@ -364,7 +382,7 @@ class TestUndoManualEntryCreated:
         assert "Whole Foods" in journal.read_text()
 
         # Undo.
-        result = undo_event(workspace, event_id)
+        result = undo_event(_make_config(workspace), event_id)
         assert result.outcome == UndoOutcome.SUCCESS
 
         # Verify deleted.
@@ -421,7 +439,7 @@ class TestUndoNotesUpdated:
             previous_notes="",
         )
 
-        result = undo_event(workspace, event_id)
+        result = undo_event(_make_config(workspace), event_id)
         assert result.outcome == UndoOutcome.SUCCESS
 
         restored = journal.read_text()
@@ -446,7 +464,7 @@ class TestUndoNotesUpdated:
             previous_notes="old value",
         )
 
-        result = undo_event(workspace, event_id)
+        result = undo_event(_make_config(workspace), event_id)
         assert result.outcome == UndoOutcome.SUCCESS
 
         restored = journal.read_text()
@@ -470,7 +488,7 @@ class TestUndoNotesUpdated:
             previous_notes="receipt #4711",
         )
 
-        result = undo_event(workspace, event_id)
+        result = undo_event(_make_config(workspace), event_id)
         assert result.outcome == UndoOutcome.SUCCESS
 
         restored = journal.read_text()
@@ -496,7 +514,7 @@ class TestUndoNotesUpdated:
             include_previous=False,
         )
 
-        result = undo_event(workspace, event_id)
+        result = undo_event(_make_config(workspace), event_id)
         assert result.outcome == UndoOutcome.FAILED
         assert "previous_notes" in result.message
 
@@ -548,7 +566,7 @@ class TestUndoUnmatched:
         workspace, journal, event_id = self._setup_unmatched_state(tmp_path)
 
         # Undo the unmatch → should re-match.
-        result = undo_event(workspace, event_id)
+        result = undo_event(_make_config(workspace), event_id)
         assert result.outcome == UndoOutcome.SUCCESS
 
         # Verify: imported transaction has the tags back.
@@ -574,7 +592,7 @@ class TestUndoUnmatched:
 
     def test_compensating_event_emitted(self, tmp_path: Path) -> None:
         workspace, journal, event_id = self._setup_unmatched_state(tmp_path)
-        result = undo_event(workspace, event_id)
+        result = undo_event(_make_config(workspace), event_id)
         assert result.outcome == UndoOutcome.SUCCESS
 
         events = _read_events(workspace)

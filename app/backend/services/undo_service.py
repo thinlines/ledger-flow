@@ -17,8 +17,10 @@ from enum import Enum
 from pathlib import Path
 from typing import Callable
 
+from services import journal_writer
 from services.archive_service import archive_manual_entry
 from services.backup_service import backup_file
+from services.config_service import AppConfig
 from services.event_log_service import emit_event, hash_file, read_events, rel_path
 from services.header_parser import TransactionStatus, parse_header, set_header_status
 from services.journal_block_service import (
@@ -62,8 +64,17 @@ class UndoFailedError(Exception):
     """Raised by a handler when the inverse mutation cannot be applied cleanly."""
 
 
-# Type alias for handler callables.
-HandlerFn = Callable[[Path, dict], dict[str, str]]
+# Handler protocols.
+#
+# Legacy handlers (pre journal_writer sweep) take ``(workspace_path, event)``
+# and return ``dict[str, str]`` mapping journal-rel-path → post-mutation hash.
+# The dispatcher consumes those hashes to emit the compensating event itself.
+#
+# Writer-routed handlers take ``(config, event)`` and own emission via
+# ``journal_writer.mutate``; they return the compensating event id (a ``str``).
+LegacyHandlerFn = Callable[[Path, dict], dict[str, str]]
+WriterHandlerFn = Callable[[AppConfig, dict], str]
+HandlerFn = LegacyHandlerFn | WriterHandlerFn
 
 
 # ---------------------------------------------------------------------------
@@ -91,11 +102,12 @@ def _is_compensated(events: list[dict], event_id: str) -> str | None:
 # ---------------------------------------------------------------------------
 
 
-def undo_event(workspace_path: Path, event_id: str) -> UndoResult:
+def undo_event(config: AppConfig, event_id: str) -> UndoResult:
     """Attempt to undo the event identified by *event_id*.
 
     Returns an :class:`UndoResult` describing the outcome.
     """
+    workspace_path = config.root_dir
     events = read_events(workspace_path)
 
     # 1. Locate the forward event.
@@ -141,31 +153,32 @@ def undo_event(workspace_path: Path, event_id: str) -> UndoResult:
             )
 
     # 5. Apply the compensating action.
+    forward_summary = forward.get("summary", "")
     try:
-        new_hashes = handler(workspace_path, forward)
+        if event_type in _WRITER_HANDLERS:
+            compensating_id = handler(config, forward)
+        else:
+            new_hashes = handler(workspace_path, forward)
+            # 6. Legacy handlers: dispatcher emits the compensating event.
+            journal_refs = []
+            for ref in forward.get("journal_refs", []):
+                ref_path = ref.get("path", "")
+                if ref_path and ref_path in new_hashes:
+                    journal_refs.append({
+                        "path": ref_path,
+                        "hash_before": ref.get("hash_after"),  # Our "before" is the forward's "after".
+                        "hash_after": new_hashes[ref_path],
+                    })
+            compensating_id = emit_event(
+                workspace_path,
+                event_type=f"{event_type}.compensated.v1",
+                summary=f"Undid: {forward_summary}",
+                payload={**forward.get("payload", {}), "compensated_event_id": event_id},
+                journal_refs=journal_refs,
+                compensates=event_id,
+            )
     except UndoFailedError as exc:
         return UndoResult(UndoOutcome.FAILED, str(exc), None, event_id)
-
-    # 6. Emit the compensating event.
-    journal_refs = []
-    for ref in forward.get("journal_refs", []):
-        ref_path = ref.get("path", "")
-        if ref_path and ref_path in new_hashes:
-            journal_refs.append({
-                "path": ref_path,
-                "hash_before": ref.get("hash_after"),  # Our "before" is the forward's "after".
-                "hash_after": new_hashes[ref_path],
-            })
-
-    forward_summary = forward.get("summary", "")
-    compensating_id = emit_event(
-        workspace_path,
-        event_type=f"{event_type}.compensated.v1",
-        summary=f"Undid: {forward_summary}",
-        payload={**forward.get("payload", {}), "compensated_event_id": event_id},
-        journal_refs=journal_refs,
-        compensates=event_id,
-    )
 
     return UndoResult(
         UndoOutcome.SUCCESS,
@@ -180,12 +193,20 @@ def undo_event(workspace_path: Path, event_id: str) -> UndoResult:
 # ---------------------------------------------------------------------------
 
 
-def _undo_transaction_deleted(workspace_path: Path, event: dict) -> dict[str, str]:
-    """Restore a deleted transaction block at the correct date-ordered position."""
+def _undo_transaction_deleted(config: AppConfig, event: dict) -> str:
+    """Restore a deleted transaction block at the correct date-ordered position.
+
+    Routed through ``journal_writer.mutate`` — the writer owns backup, hashing,
+    rollback, and emission of the compensating event.
+    """
+    workspace_path = config.root_dir
     payload = event.get("payload", {})
     journal_rel = payload.get("journal_path", "")
     header_line = payload.get("header_line", "")
     deleted_block = payload.get("deleted_block", "")
+    forward_event_id = event.get("id", "")
+    forward_summary = event.get("summary", "")
+    forward_type = event.get("type", "")
 
     if not journal_rel or not deleted_block:
         raise UndoFailedError("Incomplete event payload — missing journal_path or deleted_block")
@@ -198,32 +219,48 @@ def _undo_transaction_deleted(workspace_path: Path, event: dict) -> dict[str, st
     if header_line and any(line == header_line for line in lines):
         raise UndoFailedError("Transaction was re-created — refusing to duplicate")
 
-    backup_file(journal_path, "undo")
+    with journal_writer.mutate(
+        config=config,
+        paths=[journal_path],
+        tag="undo",
+        event_type=f"{forward_type}.compensated.v1",
+    ) as mut:
+        # Re-read inside the block so the writer's pre-mutation hash sees what
+        # we are about to write against.
+        text = journal_path.read_text(encoding="utf-8") if journal_path.is_file() else ""
+        lines = text.splitlines()
 
-    # Parse the date from the header line for insertion ordering.
-    restored_date = header_line[:10] if header_line else ""
-    restored_lines = deleted_block.splitlines()
+        # Parse the date from the header line for insertion ordering.
+        restored_date = header_line[:10] if header_line else ""
+        restored_lines = deleted_block.splitlines()
 
-    # Find insertion point: after the last transaction with date <= restored_date.
-    insert_idx = len(lines)
-    for i in range(len(lines) - 1, -1, -1):
-        if TXN_START_RE.match(lines[i]) and lines[i][:10] <= restored_date:
-            # Find end of this block to insert after it.
-            end_i = i + 1
-            while end_i < len(lines):
-                if TXN_START_RE.match(lines[end_i]):
-                    break
-                end_i += 1
-            insert_idx = end_i
-            break
+        # Find insertion point: after the last transaction with date <= restored_date.
+        insert_idx = len(lines)
+        for i in range(len(lines) - 1, -1, -1):
+            if TXN_START_RE.match(lines[i]) and lines[i][:10] <= restored_date:
+                # Find end of this block to insert after it.
+                end_i = i + 1
+                while end_i < len(lines):
+                    if TXN_START_RE.match(lines[end_i]):
+                        break
+                    end_i += 1
+                insert_idx = end_i
+                break
 
-    # Insert with a blank line separator.
-    insert_block = [""] + restored_lines if insert_idx > 0 else restored_lines
-    lines[insert_idx:insert_idx] = insert_block
+        # Insert with a blank line separator.
+        insert_block = [""] + restored_lines if insert_idx > 0 else restored_lines
+        lines[insert_idx:insert_idx] = insert_block
 
-    journal_path.write_text("\n".join(lines) + ("\n" if text.endswith("\n") or not text else "\n"), encoding="utf-8")
+        journal_path.write_text(
+            "\n".join(lines) + ("\n" if text.endswith("\n") or not text else "\n"),
+            encoding="utf-8",
+        )
 
-    return {journal_rel: hash_file(journal_path)}
+        mut.summary = f"Undid: {forward_summary}"
+        mut.payload = {**payload, "compensated_event_id": forward_event_id}
+        mut.compensates = forward_event_id
+
+    return mut.event_id
 
 
 def _undo_transaction_recategorized(workspace_path: Path, event: dict) -> dict[str, str]:
@@ -584,6 +621,13 @@ _HANDLERS: dict[str, HandlerFn] = {
     "transaction.unmatched.v1": _undo_transaction_unmatched,
     "transaction.notes_updated.v1": _undo_transaction_notes_updated,
 }
+
+# Event types whose handlers use the writer-routed protocol (return the
+# compensating event id; emission already happened inside the handler).
+# PR 2 will move every remaining entry from ``_HANDLERS`` into this set.
+_WRITER_HANDLERS: frozenset[str] = frozenset({
+    "transaction.deleted.v1",
+})
 
 
 def is_undoable_type(event_type: str) -> bool:
