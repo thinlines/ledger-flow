@@ -11,8 +11,17 @@ dependencies = [
   "python-multipart>=0.0.20"
 ]
 
+[project.scripts]
+ledger-flow = "ledger_flow_cli:main"
+
 [project.optional-dependencies]
 dev = ["pytest>=8.4.0", "httpx>=0.28.0"]
+
+[tool.setuptools]
+py-modules = ["ledger_flow_cli", "main"]
+
+[tool.setuptools.packages.find]
+where = ["."]
 
 [build-system]
 requires = ["setuptools>=68", "wheel"]
