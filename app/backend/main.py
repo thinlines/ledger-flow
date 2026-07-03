@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 from datetime import date
+from importlib import resources
 import logging
 import os
 from pathlib import Path
@@ -10,6 +11,8 @@ from uuid import uuid4, uuid7
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from models import (
     ImportCandidateRemoveRequest,
@@ -2308,3 +2311,42 @@ def get_stage(stage_id: str) -> dict:
 def delete_stage(stage_id: str) -> dict:
     stages.delete(stage_id)
     return {"deleted": True, "stageId": stage_id}
+
+
+def _frontend_static_dir() -> Path:
+    configured = os.environ.get("LEDGER_FLOW_STATIC_DIR")
+    if configured:
+        return Path(configured).expanduser().resolve()
+    try:
+        return Path(str(resources.files("ledger_flow_frontend").joinpath("static"))).resolve()
+    except ModuleNotFoundError:
+        return Path(__file__).resolve().parent / "ledger_flow_frontend" / "static"
+
+
+def _mount_frontend() -> None:
+    static_dir = _frontend_static_dir()
+    index_path = static_dir / "index.html"
+    if not index_path.exists():
+        return
+
+    app_assets = static_dir / "_app"
+    if app_assets.exists():
+        app.mount(
+            "/_app",
+            StaticFiles(directory=app_assets),
+            name="frontend-assets",
+        )
+
+    @app.get("/")
+    def frontend_index():
+        return FileResponse(index_path)
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    def frontend_fallback(full_path: str):
+        requested = static_dir / full_path
+        if requested.is_file():
+            return FileResponse(requested)
+        return FileResponse(index_path)
+
+
+_mount_frontend()

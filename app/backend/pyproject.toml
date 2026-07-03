@@ -19,9 +19,14 @@ dev = ["pytest>=8.4.0", "httpx>=0.28.0"]
 
 [tool.setuptools]
 py-modules = ["ledger_flow_cli", "main"]
+include-package-data = true
 
 [tool.setuptools.packages.find]
 where = ["."]
+exclude = ["tests*"]
+
+[tool.setuptools.package-data]
+ledger_flow_frontend = ["static/**/*"]
 
 [build-system]
 requires = ["setuptools>=68", "wheel"]

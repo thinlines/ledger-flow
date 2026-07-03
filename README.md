@@ -48,20 +48,26 @@ just app-frontend
 just start-servers
 ```
 
-Without `just`:
+For the packaged single-server app, build the frontend into the backend package
+and install the CLI:
+
+```sh
+cd app/frontend
+pnpm build
+cd ../backend
+uv tool install --editable .
+ledger-flow server --workspace /path/to/ledger-flow-workspace --host 127.0.0.1 --port 8000
+```
+
+Open `http://127.0.0.1:8000` in your browser. The same process serves the UI
+and the `/api` routes.
+
+For development without a packaged frontend, run the API and Vite dev server
+separately:
 
 ```sh
 cd app/backend
 uv run uvicorn main:app --reload --host 127.0.0.1 --port 8000
-```
-
-After installing the backend package, the same API server can be started through
-the CLI:
-
-```sh
-cd app/backend
-uv tool install --editable .
-ledger-flow server --workspace /path/to/ledger-flow-workspace --host 127.0.0.1 --port 8000
 ```
 
 ```sh
@@ -69,7 +75,7 @@ cd app/frontend
 pnpm dev
 ```
 
-Open `http://127.0.0.1:5173` in your browser, then follow the setup flow to create or select a workspace and import your first account.
+Open `http://127.0.0.1:5173` in your browser for the dev UI.
 
 ### Run the backend as a systemd user service
 
