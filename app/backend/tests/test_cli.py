@@ -3,10 +3,21 @@ from __future__ import annotations
 import json
 import os
 import sys
+import tomllib
 import types
 from pathlib import Path
 
 from ledger_flow_cli import main
+
+
+def test_packaging_includes_server_top_level_modules() -> None:
+    pyproject = tomllib.loads(
+        (Path(__file__).resolve().parents[1] / "pyproject.toml").read_text(encoding="utf-8")
+    )
+
+    assert {"ledger_flow_cli", "main", "models"}.issubset(
+        set(pyproject["tool"]["setuptools"]["py-modules"])
+    )
 
 
 def _workspace(tmp_path: Path) -> Path:

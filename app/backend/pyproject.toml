@@ -18,7 +18,7 @@ ledger-flow = "ledger_flow_cli:main"
 dev = ["pytest>=8.4.0", "httpx>=0.28.0"]
 
 [tool.setuptools]
-py-modules = ["ledger_flow_cli", "main"]
+py-modules = ["ledger_flow_cli", "main", "models"]
 include-package-data = true
 
 [tool.setuptools.packages.find]
