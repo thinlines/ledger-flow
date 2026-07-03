@@ -1,5 +1,5 @@
 [project]
-name = "ledger-workflow-backend"
+name = "ledger-flow"
 version = "0.1.0"
 description = "Local API for ledger import and unknown-account reconciliation"
 requires-python = ">=3.11"

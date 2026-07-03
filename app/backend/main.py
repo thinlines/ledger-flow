@@ -3,6 +3,7 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 from datetime import date
 import logging
+import os
 from pathlib import Path
 import re
 from uuid import uuid4, uuid7
@@ -115,7 +116,7 @@ from services.unknowns_service import (
 from services.workspace_service import OPENING_BALANCE_OFFSET_ACCOUNT_UNSET, WorkspaceManager
 
 
-ROOT_DIR = Path(__file__).resolve().parents[2]
+ROOT_DIR = Path(os.environ.get("LEDGER_FLOW_ROOT", Path(__file__).resolve().parents[2])).expanduser().resolve()
 stages = StageStore(ROOT_DIR)
 import_index = ImportIndex(ROOT_DIR / ".workflow" / "state.db")
 workspace_manager = WorkspaceManager(ROOT_DIR)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import json
 import sys
 from pathlib import Path
@@ -75,6 +76,28 @@ def _add_transaction(args: argparse.Namespace) -> dict:
     return {**result, "eventId": mut.event_id}
 
 
+def _run_server(args: argparse.Namespace) -> dict:
+    workspace = Path(args.workspace).expanduser().resolve()
+    os.environ["LEDGER_FLOW_ROOT"] = str(workspace)
+    result = {
+        "host": args.host,
+        "port": args.port,
+        "reload": args.reload,
+        "workspace": str(workspace),
+    }
+    print(json.dumps(result, sort_keys=True), flush=True)
+
+    import uvicorn
+
+    uvicorn.run(
+        "main:app",
+        host=args.host,
+        port=args.port,
+        reload=args.reload,
+    )
+    return None
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="ledger-flow")
     parser.add_argument(
@@ -93,6 +116,17 @@ def _build_parser() -> argparse.ArgumentParser:
     add.add_argument("--source", default="cli")
     add.add_argument("--dry-run", action="store_true")
     add.set_defaults(handler=_add_transaction)
+
+    server = subparsers.add_parser("server", help="Start the Ledger Flow API server")
+    server.add_argument(
+        "--workspace",
+        default=".",
+        help="Workspace root. Defaults to the current directory.",
+    )
+    server.add_argument("--host", default="127.0.0.1")
+    server.add_argument("--port", type=int, default=8000)
+    server.add_argument("--reload", action="store_true")
+    server.set_defaults(handler=_run_server)
     return parser
 
 
@@ -104,7 +138,8 @@ def main(argv: list[str] | None = None) -> int:
     except ValueError as exc:
         print(json.dumps({"error": str(exc)}), file=sys.stderr)
         return 1
-    print(json.dumps(result, sort_keys=True))
+    if result is not None:
+        print(json.dumps(result, sort_keys=True))
     return 0
 
 

@@ -55,12 +55,48 @@ cd app/backend
 uv run uvicorn main:app --reload --host 127.0.0.1 --port 8000
 ```
 
+After installing the backend package, the same API server can be started through
+the CLI:
+
+```sh
+cd app/backend
+uv tool install --editable .
+ledger-flow server --workspace /path/to/ledger-flow-workspace --host 127.0.0.1 --port 8000
+```
+
 ```sh
 cd app/frontend
 pnpm dev
 ```
 
 Open `http://127.0.0.1:5173` in your browser, then follow the setup flow to create or select a workspace and import your first account.
+
+### Run the backend as a systemd user service
+
+Copy the template into your user units directory, edit the workspace path, then
+enable it:
+
+```sh
+mkdir -p ~/.config/systemd/user
+cp packaging/systemd/ledger-flow.service ~/.config/systemd/user/
+$EDITOR ~/.config/systemd/user/ledger-flow.service
+systemctl --user daemon-reload
+systemctl --user enable --now ledger-flow.service
+```
+
+The template runs the same command you can run by hand:
+
+```sh
+ledger-flow server --workspace /path/to/ledger-flow-workspace --host 127.0.0.1 --port 8000
+```
+
+Useful service commands:
+
+```sh
+systemctl --user status ledger-flow.service
+journalctl --user -u ledger-flow.service -f
+systemctl --user restart ledger-flow.service
+```
 
 ## Documentation
 

@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import json
+import os
+import sys
+import types
 from pathlib import Path
 
 from ledger_flow_cli import main
@@ -112,3 +115,43 @@ def test_add_dry_run_prints_preview_without_writing(tmp_path: Path, capsys) -> N
     ]
     assert not (workspace / "journals" / "2026.journal").exists()
     assert not (workspace / "events.jsonl").exists()
+
+
+def test_server_starts_api_for_workspace(tmp_path: Path, monkeypatch, capsys) -> None:
+    workspace = _workspace(tmp_path)
+    calls: list[dict] = []
+
+    def fake_run(app, **kwargs):
+        calls.append({"app": app, **kwargs})
+
+    monkeypatch.delenv("LEDGER_FLOW_ROOT", raising=False)
+    monkeypatch.setitem(sys.modules, "uvicorn", types.SimpleNamespace(run=fake_run))
+
+    status = main([
+        "server",
+        "--workspace",
+        str(workspace),
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "8123",
+        "--reload",
+    ])
+
+    assert status == 0
+    assert calls == [
+        {
+            "app": "main:app",
+            "host": "0.0.0.0",
+            "port": 8123,
+            "reload": True,
+        }
+    ]
+    assert os.environ["LEDGER_FLOW_ROOT"] == str(workspace)
+    output = json.loads(capsys.readouterr().out)
+    assert output == {
+        "host": "0.0.0.0",
+        "port": 8123,
+        "reload": True,
+        "workspace": str(workspace),
+    }

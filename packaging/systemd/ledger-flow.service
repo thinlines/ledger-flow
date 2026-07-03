@@ -1,0 +1,14 @@
+[Unit]
+Description=Ledger Flow local server
+Documentation=https://github.com/thinlines/ledger-flow
+
+[Service]
+Type=simple
+WorkingDirectory=%h/ledger-flow-workspace
+Environment=LEDGER_FLOW_ROOT=%h/ledger-flow-workspace
+ExecStart=%h/.local/bin/ledger-flow server --workspace %h/ledger-flow-workspace --host 127.0.0.1 --port 8000
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target
