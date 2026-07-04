@@ -11,9 +11,9 @@ from .header_parser import TransactionStatus
 from .journal_query_service import (
     amount_to_number,
     is_generated_opening_balance_transaction,
-    load_transactions,
     pretty_account_name,
 )
+from .projection_service import load_transactions_projected
 from .transaction_helpers import (
     RegisterEvent,
     account_amount,
@@ -141,8 +141,8 @@ def build_unified_transactions(
 ) -> dict:
     current_day = today or date.today()
 
-    # 1. Load all transactions.
-    transactions = load_transactions(config)
+    # 1. Load all transactions (served from the journal projection).
+    transactions = load_transactions_projected(config)
 
     # 2. Determine scope accounts.
     if filters.accounts:

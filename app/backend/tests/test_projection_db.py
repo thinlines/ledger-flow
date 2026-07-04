@@ -1,0 +1,159 @@
+"""Slice 1: workspace-scoped SQLite created from migrations.
+
+The projection database lives in the same ``.workflow/state.db`` file the
+import index already uses, resolved from the workspace config's root — never
+from a process-level root. Migrations are versioned, idempotent, and the
+projection tables are safe to wipe and rebuild.
+"""
+from __future__ import annotations
+
+import sqlite3
+from pathlib import Path
+
+from services.config_service import AppConfig
+from services.import_index import ImportIndex
+from services.projection_db import (
+    PROJECTION_TABLES,
+    connect,
+    ensure_database,
+)
+
+
+PROJECTION_TABLE_NAMES = {
+    "journal_files",
+    "journal_items",
+    "transactions",
+    "postings",
+    "comments",
+    "metadata_entries",
+    "journal_diagnostics",
+}
+
+
+def _make_config(workspace: Path) -> AppConfig:
+    for name in ["settings", "journals", "inbox", "rules", "opening", "imports"]:
+        (workspace / name).mkdir(parents=True, exist_ok=True)
+    return AppConfig(
+        root_dir=workspace,
+        config_toml=workspace / "settings" / "workspace.toml",
+        workspace={"name": "Test", "base_currency": "USD", "start_year": 2026},
+        dirs={
+            "csv_dir": "inbox",
+            "journal_dir": "journals",
+            "init_dir": "rules",
+            "opening_bal_dir": "opening",
+            "imports_dir": "imports",
+        },
+        institution_templates={},
+        import_accounts={},
+        tracked_accounts={},
+    )
+
+
+def _table_names(db_path: Path) -> set[str]:
+    with sqlite3.connect(db_path) as conn:
+        rows = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table'"
+        ).fetchall()
+    return {name for (name,) in rows}
+
+
+def test_ensure_database_creates_workspace_scoped_db(tmp_path):
+    config = _make_config(tmp_path)
+
+    db_path = ensure_database(config)
+
+    assert db_path == tmp_path / ".workflow" / "state.db"
+    assert db_path.exists()
+    tables = _table_names(db_path)
+    assert "schema_migrations" in tables
+    assert PROJECTION_TABLE_NAMES <= tables
+
+
+def test_projection_tables_constant_matches_created_tables(tmp_path):
+    config = _make_config(tmp_path)
+    ensure_database(config)
+    assert set(PROJECTION_TABLES) == PROJECTION_TABLE_NAMES
+
+
+def test_ensure_database_is_idempotent_and_records_versions_once(tmp_path):
+    config = _make_config(tmp_path)
+
+    db_path = ensure_database(config)
+    with sqlite3.connect(db_path) as conn:
+        first = conn.execute(
+            "SELECT version, name FROM schema_migrations ORDER BY version"
+        ).fetchall()
+
+    ensure_database(config)
+    with sqlite3.connect(db_path) as conn:
+        second = conn.execute(
+            "SELECT version, name FROM schema_migrations ORDER BY version"
+        ).fetchall()
+
+    assert first == second
+    assert len(first) >= 1
+    versions = [version for version, _ in first]
+    assert versions == sorted(set(versions))
+
+
+def test_lives_beside_import_index_table(tmp_path):
+    config = _make_config(tmp_path)
+    index = ImportIndex(config.root_dir / ".workflow" / "state.db")
+    index.ensure_schema()
+
+    db_path = ensure_database(config)
+
+    tables = _table_names(db_path)
+    assert "imported_transactions_v2" in tables
+    assert PROJECTION_TABLE_NAMES <= tables
+    # And the reverse order must not disturb the import index either.
+    index.ensure_schema()
+    assert "imported_transactions_v2" in _table_names(db_path)
+
+
+def test_projection_tables_are_wipe_and_rebuild_safe(tmp_path):
+    config = _make_config(tmp_path)
+    db_path = ensure_database(config)
+
+    with connect(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO journal_files (id, path, role, content_hash, parsed_at)
+            VALUES ('jf1', 'journals/2026.journal', 'journal', 'sha256:x', '2026-07-04T00:00:00Z')
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO transactions (
+                id, journal_file_id, txn_order, date, payee,
+                raw_header, raw_block_hash, source_start_line, source_end_line
+            ) VALUES ('t1', 'jf1', 0, '2026-01-01', 'Payee', 'h', 'sha256:y', 1, 2)
+            """
+        )
+        for table in PROJECTION_TABLES:
+            conn.execute(f"DELETE FROM {table}")
+
+    ensure_database(config)
+    with sqlite3.connect(db_path) as conn:
+        count = conn.execute("SELECT COUNT(*) FROM journal_files").fetchone()[0]
+    assert count == 0
+
+
+def test_foreign_keys_enforced_on_connect(tmp_path):
+    config = _make_config(tmp_path)
+    db_path = ensure_database(config)
+
+    with connect(db_path) as conn:
+        try:
+            conn.execute(
+                """
+                INSERT INTO transactions (
+                    id, journal_file_id, txn_order, date, payee,
+                    raw_header, raw_block_hash, source_start_line, source_end_line
+                ) VALUES ('t1', 'missing-file', 0, '2026-01-01', 'P', 'h', 'sha', 1, 1)
+                """
+            )
+        except sqlite3.IntegrityError:
+            return
+    raise AssertionError("expected IntegrityError for orphan journal_file_id")
