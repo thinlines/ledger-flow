@@ -1,1 +1,0 @@
-function a(e){return String(e||"").trim()}function r(e=new Date){return`${e.getFullYear()}-01-01`}function i(e,n=new Date){return a(e)||r(n)}function c(e,n,u=new Date){const t=a(e);return t||(n?r(u):null)}export{c as e,i as o};

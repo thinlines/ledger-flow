@@ -1,1 +1,0 @@
-import{r as s,t as n}from"./Bwn51pDL.js";function t(o,i,r,f,a){var d=()=>{f(r[o])};r.addEventListener(i,d),a?s(()=>{r[o]=a()}):d(),(r===document.body||r===window||r===document)&&n(()=>{r.removeEventListener(i,d)})}export{t as b};
