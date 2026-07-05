@@ -46,6 +46,7 @@ class ManualTransactionRequest(BaseModel):
     payee: str = ""
     amount: str = Field(min_length=1)
     destinationAccount: str = Field(min_length=1)
+    notes: str | None = None
 
 
 class UnknownScanRequest(BaseModel):

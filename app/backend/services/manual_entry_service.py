@@ -108,16 +108,20 @@ def build_manual_transaction_block(
     tracked_ledger_account: str,
     currency: str = "USD",
     txn_id: str | None = None,
+    notes: str | None = None,
 ) -> list[str]:
     date_formatted = txn_date.replace("/", "-")
     amount_str = _format_currency_amount(amount, currency)
-    return [
+    block = [
         f"{date_formatted} {payee}",
         lf_txn_id_line(txn_id or mint_lf_txn_id()),
         "    ; :manual:",
         f"    {destination_account}  {amount_str}",
         f"    {tracked_ledger_account}",
     ]
+    if notes:
+        block.insert(1, f"    ; notes: {notes}")
+    return block
 
 
 def create_manual_transaction(
@@ -130,6 +134,7 @@ def create_manual_transaction(
     amount_str: str,
     destination_account: str,
     currency: str = "USD",
+    notes: str | None = None,
 ) -> dict:
     amount = _parse_amount_str(amount_str)
     tracked_ledger_account = str(tracked_account_cfg.get("ledger_account", "")).strip()
@@ -150,6 +155,7 @@ def create_manual_transaction(
         tracked_ledger_account=tracked_ledger_account,
         currency=currency,
         txn_id=txn_id,
+        notes=notes,
     )
 
     journal_path.parent.mkdir(parents=True, exist_ok=True)

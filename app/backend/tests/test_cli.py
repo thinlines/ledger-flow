@@ -5,7 +5,10 @@ import os
 import sys
 import tomllib
 import types
+import ledger_flow_cli
+from io import BytesIO
 from pathlib import Path
+from urllib.error import HTTPError
 
 from ledger_flow_cli import main
 from services.event_log_service import read_events
@@ -125,6 +128,244 @@ def test_add_dry_run_prints_preview_without_writing(tmp_path: Path, capsys) -> N
     ]
     assert not (workspace / "journals" / "2026.journal").exists()
     assert not (workspace / "events.jsonl").exists()
+
+
+def test_transactions_create_posts_api_payload_and_prints_json(monkeypatch, capsys) -> None:
+    calls: list[dict] = []
+
+    class FakeResponse:
+        def __enter__(self):
+            return BytesIO(b'{"created":true,"txnId":"txn_123"}')
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    def fake_urlopen(request, timeout):
+        calls.append({
+            "url": request.full_url,
+            "method": request.get_method(),
+            "headers": dict(request.header_items()),
+            "body": json.loads(request.data.decode("utf-8")),
+            "timeout": timeout,
+        })
+        return FakeResponse()
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    status = main([
+        "transactions",
+        "create",
+        "--api-url",
+        "http://ledger.test/base/",
+        "--account",
+        "Assets:Checking",
+        "--to",
+        "Expenses:Eating Out",
+        "--payee",
+        "Burger King",
+        "--amount",
+        "20.00",
+        "--date",
+        "2026-07-02",
+        "--note",
+        "receipt saved",
+        "--json",
+    ])
+
+    assert status == 0
+    assert json.loads(capsys.readouterr().out) == {"created": True, "txnId": "txn_123"}
+    assert calls == [
+        {
+            "url": "http://ledger.test/base/api/transactions/create",
+            "method": "POST",
+            "headers": {"Content-type": "application/json"},
+            "body": {
+                "sourceAccount": "Assets:Checking",
+                "date": "2026-07-02",
+                "payee": "Burger King",
+                "amount": "20.00",
+                "destinationAccount": "Expenses:Eating Out",
+                "notes": "receipt saved",
+            },
+            "timeout": 10,
+        }
+    ]
+
+
+def test_transactions_create_defaults_api_url_date_and_quiet_output(monkeypatch, capsys) -> None:
+    calls: list[dict] = []
+
+    class FixedDate(ledger_flow_cli.date):
+        @classmethod
+        def today(cls):
+            return cls(2026, 7, 5)
+
+    class FakeResponse:
+        def __enter__(self):
+            return BytesIO(b'{"created":true}')
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    def fake_urlopen(request, timeout):
+        calls.append({
+            "url": request.full_url,
+            "body": json.loads(request.data.decode("utf-8")),
+        })
+        return FakeResponse()
+
+    monkeypatch.setattr(ledger_flow_cli, "date", FixedDate)
+    monkeypatch.setenv("LEDGER_FLOW_API_URL", "http://env-ledger.test")
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    status = main([
+        "transactions",
+        "create",
+        "--account",
+        "Assets:Checking",
+        "--to",
+        "Expenses:Eating Out",
+        "--payee",
+        "Burger King",
+        "--amount",
+        "20.00",
+    ])
+
+    captured = capsys.readouterr()
+    assert status == 0
+    assert captured.out == ""
+    assert captured.err == ""
+    assert calls == [
+        {
+            "url": "http://env-ledger.test/api/transactions/create",
+            "body": {
+                "sourceAccount": "Assets:Checking",
+                "date": "2026-07-05",
+                "payee": "Burger King",
+                "amount": "20.00",
+                "destinationAccount": "Expenses:Eating Out",
+            },
+        }
+    ]
+
+
+def test_transactions_create_rejects_invalid_input_before_api_call(monkeypatch, capsys) -> None:
+    calls = 0
+
+    def fake_urlopen(request, timeout):
+        nonlocal calls
+        calls += 1
+        raise AssertionError("request should not be sent")
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    bad_date_status = main([
+        "transactions",
+        "create",
+        "--account",
+        "Assets:Checking",
+        "--to",
+        "Expenses:Eating Out",
+        "--payee",
+        "Burger King",
+        "--amount",
+        "20.00",
+        "--date",
+        "07/02/2026",
+    ])
+    bad_date = capsys.readouterr()
+
+    bad_amount_status = main([
+        "transactions",
+        "create",
+        "--account",
+        "Assets:Checking",
+        "--to",
+        "Expenses:Eating Out",
+        "--payee",
+        "Burger King",
+        "--amount",
+        "0",
+    ])
+    bad_amount = capsys.readouterr()
+
+    assert bad_date_status == 1
+    assert "Invalid date" in bad_date.err
+    assert bad_amount_status == 1
+    assert "positive decimal" in bad_amount.err
+    assert calls == 0
+
+
+def test_transactions_create_accepts_relative_date_aliases(monkeypatch) -> None:
+    dates: list[str] = []
+
+    class FixedDate(ledger_flow_cli.date):
+        @classmethod
+        def today(cls):
+            return cls(2026, 7, 5)
+
+    class FakeResponse:
+        def __enter__(self):
+            return BytesIO(b'{"created":true}')
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    def fake_urlopen(request, timeout):
+        dates.append(json.loads(request.data.decode("utf-8"))["date"])
+        return FakeResponse()
+
+    monkeypatch.setattr(ledger_flow_cli, "date", FixedDate)
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    for raw_date in ["today", "yesterday"]:
+        assert main([
+            "transactions",
+            "create",
+            "--account",
+            "Assets:Checking",
+            "--to",
+            "Expenses:Eating Out",
+            "--payee",
+            "Burger King",
+            "--amount",
+            "20.00",
+            "--date",
+            raw_date,
+        ]) == 0
+
+    assert dates == ["2026-07-05", "2026-07-04"]
+
+
+def test_transactions_create_api_failure_prints_concise_error(monkeypatch, capsys) -> None:
+    def fake_urlopen(request, timeout):
+        raise HTTPError(
+            url=request.full_url,
+            code=400,
+            msg="Bad Request",
+            hdrs={},
+            fp=BytesIO(b'{"detail":"no matching source account"}'),
+        )
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    status = main([
+        "transactions",
+        "create",
+        "--account",
+        "Assets:Missing",
+        "--to",
+        "Expenses:Eating Out",
+        "--payee",
+        "Burger King",
+        "--amount",
+        "20.00",
+    ])
+
+    captured = capsys.readouterr()
+    assert status == 1
+    assert captured.out == ""
+    assert captured.err == "API request failed: HTTP 400\n"
 
 
 def test_server_starts_api_for_workspace(tmp_path: Path, monkeypatch, capsys) -> None:

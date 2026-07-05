@@ -4,6 +4,10 @@ import argparse
 import os
 import json
 import sys
+import urllib.error
+import urllib.request
+from datetime import date, timedelta
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 from services import journal_writer
@@ -11,6 +15,9 @@ from services.config_service import AppConfig, load_config
 from services.currency_parser import parse_amount
 from services.journal_migration_service import migrate_lf_metadata
 from services.manual_entry_service import build_manual_transaction_block, create_manual_transaction
+
+
+DEFAULT_API_URL = "http://127.0.0.1:8000"
 
 
 def _find_tracked_account(config: AppConfig, ledger_account: str) -> tuple[str, dict]:
@@ -104,6 +111,59 @@ def _run_server(args: argparse.Namespace) -> dict:
     return None
 
 
+def _normalize_cli_date(raw: str | None) -> str:
+    if raw is None:
+        return date.today().isoformat()
+    value = raw.strip().lower()
+    if value == "today":
+        return date.today().isoformat()
+    if value == "yesterday":
+        return (date.today() - timedelta(days=1)).isoformat()
+    try:
+        return date.fromisoformat(value).isoformat()
+    except ValueError as exc:
+        raise ValueError(f"Invalid date: {raw}") from exc
+
+
+def _validate_positive_amount(raw: str) -> str:
+    try:
+        amount = Decimal(raw)
+    except InvalidOperation as exc:
+        raise ValueError("Amount must be a positive decimal.") from exc
+    if amount <= 0:
+        raise ValueError("Amount must be a positive decimal.")
+    return raw
+
+
+def _resolve_api_url(args: argparse.Namespace) -> str:
+    return (args.api_url or os.environ.get("LEDGER_FLOW_API_URL") or DEFAULT_API_URL).rstrip("/")
+
+
+def _transactions_create(args: argparse.Namespace) -> dict | None:
+    payload = {
+        "sourceAccount": args.account,
+        "date": _normalize_cli_date(args.date),
+        "payee": args.payee,
+        "amount": _validate_positive_amount(args.amount),
+        "destinationAccount": args.to_account,
+    }
+    if args.note is not None:
+        payload["notes"] = args.note
+
+    data = json.dumps(payload).encode("utf-8")
+    request = urllib.request.Request(
+        f"{_resolve_api_url(args)}/api/transactions/create",
+        data=data,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(request, timeout=10) as response:
+        response_payload = json.loads(response.read().decode("utf-8"))
+    if args.json:
+        return response_payload
+    return None
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="ledger-flow")
     parser.add_argument(
@@ -139,6 +199,19 @@ def _build_parser() -> argparse.ArgumentParser:
     server.add_argument("--port", type=int, default=8000)
     server.add_argument("--reload", action="store_true")
     server.set_defaults(handler=_run_server)
+
+    transactions = subparsers.add_parser("transactions", help="Transaction commands")
+    transaction_subparsers = transactions.add_subparsers(dest="transaction_command", required=True)
+    create = transaction_subparsers.add_parser("create", help="Create a manual transaction through the API")
+    create.add_argument("--api-url")
+    create.add_argument("--account", required=True)
+    create.add_argument("--to", dest="to_account", required=True)
+    create.add_argument("--payee", required=True)
+    create.add_argument("--amount", required=True)
+    create.add_argument("--date")
+    create.add_argument("--note")
+    create.add_argument("--json", action="store_true")
+    create.set_defaults(handler=_transactions_create)
     return parser
 
 
@@ -148,7 +221,13 @@ def main(argv: list[str] | None = None) -> int:
     try:
         result = args.handler(args)
     except ValueError as exc:
-        print(json.dumps({"error": str(exc)}), file=sys.stderr)
+        print(str(exc), file=sys.stderr)
+        return 1
+    except urllib.error.HTTPError as exc:
+        print(f"API request failed: HTTP {exc.code}", file=sys.stderr)
+        return 1
+    except urllib.error.URLError as exc:
+        print(f"API request failed: {exc.reason}", file=sys.stderr)
         return 1
     if result is not None:
         print(json.dumps(result, sort_keys=True))

@@ -175,3 +175,14 @@ def test_tracked_account_id_payload_creates_transaction(tmp_path, monkeypatch):
     journal_text = (config.journal_dir / "2026.journal").read_text(encoding="utf-8")
     assert "2026-03-18 Burger King" in journal_text
     assert "Assets:Bank:Checking" in journal_text
+
+
+def test_notes_payload_creates_normal_notes_metadata(tmp_path, monkeypatch):
+    config = _workspace(tmp_path, monkeypatch)
+
+    result = main.transactions_create(_request(notes="receipt saved"))
+
+    assert result["created"] is True
+    journal_text = (config.journal_dir / "2026.journal").read_text(encoding="utf-8")
+    assert "2026-03-18 Burger King" in journal_text
+    assert "    ; notes: receipt saved" in journal_text

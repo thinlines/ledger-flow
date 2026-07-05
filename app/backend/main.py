@@ -677,6 +677,7 @@ def transactions_create(req: ManualTransactionRequest) -> dict:
                 amount_str=req.amount,
                 destination_account=req.destinationAccount,
                 currency=currency,
+                notes=req.notes,
             )
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e)) from e
@@ -689,6 +690,7 @@ def transactions_create(req: ManualTransactionRequest) -> dict:
             "destination_account": req.destinationAccount,
             "source_account": source_account,
             "txn_id": result["txnId"],
+            "notes": req.notes or "",
         }
 
     return {**result, "eventId": mut.event_id}
