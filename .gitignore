@@ -55,3 +55,4 @@ tasks/
 /.vscode
 /.zprofile
 /.zshrc
+/.playwright-mcp/
