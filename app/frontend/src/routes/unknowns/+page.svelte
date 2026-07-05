@@ -3,8 +3,20 @@
   import { goto } from '$app/navigation';
   import { page } from '$app/stores';
   import { onMount } from 'svelte';
-  import { apiDelete, apiGet, apiPost } from '$lib/api';
+  import { apiGet, apiPost } from '$lib/api';
   import { splitAccountSeed } from '$lib/account-create';
+  import {
+    applyRuleHistoryStage,
+    applyUnknownStage,
+    discardStage,
+    loadStage,
+    saveUnknownSelections
+  } from '$lib/stage-client';
+  import {
+    clearRememberedUnknownStage as clearRememberedStageFor,
+    recallUnknownStage,
+    rememberUnknownStage as rememberStageFor
+  } from '$lib/unknown-stage-memory';
   import AccountCombobox from '$lib/components/AccountCombobox.svelte';
   import CreateAccountModal from '$lib/components/CreateAccountModal.svelte';
   import RuleEditor from '$lib/components/RuleEditor.svelte';
@@ -217,53 +229,20 @@
   let stageAutosaveInFlight: Promise<void> | null = null;
   let stageAutosaveQueued = false;
   let stageAutosavePaused = false;
-  const UNKNOWN_STAGE_STORAGE_PREFIX = 'ledger-flow:unknown-review:';
-
   $: selectedRuleAccount = extractSetAccount(ruleActions).trim();
   $: existingRuleCandidates =
     ruleMode === 'create' ? findExistingRulesForAccount(selectedRuleAccount, ruleSourcePayee, ruleId) : [];
 
-  function unknownStageStorageKey(): string | null {
-    return workspacePath ? `${UNKNOWN_STAGE_STORAGE_PREFIX}${workspacePath}` : null;
-  }
-
   function rememberUnknownStage(nextStage: UnknownStage | null) {
-    const key = unknownStageStorageKey();
-    if (!key || typeof window === 'undefined') return;
-    if (!nextStage?.stageId) {
-      window.localStorage.removeItem(key);
-      return;
-    }
-    window.localStorage.setItem(
-      key,
-      JSON.stringify({
-        stageId: nextStage.stageId,
-        journalPath: nextStage.journalPath
-      })
-    );
+    rememberStageFor(workspacePath, nextStage);
   }
 
   function rememberedUnknownStage(): { stageId: string; journalPath: string } | null {
-    const key = unknownStageStorageKey();
-    if (!key || typeof window === 'undefined') return null;
-    const raw = window.localStorage.getItem(key);
-    if (!raw) return null;
-    try {
-      const parsed = JSON.parse(raw) as { stageId?: string; journalPath?: string };
-      const stageId = parsed.stageId?.trim() ?? '';
-      const journalPath = parsed.journalPath?.trim() ?? '';
-      if (!stageId) return null;
-      return { stageId, journalPath };
-    } catch {
-      window.localStorage.removeItem(key);
-      return null;
-    }
+    return recallUnknownStage(workspacePath);
   }
 
   function clearRememberedUnknownStage() {
-    const key = unknownStageStorageKey();
-    if (!key || typeof window === 'undefined') return;
-    window.localStorage.removeItem(key);
+    clearRememberedStageFor(workspacePath);
   }
 
   async function syncUnknownStageRoute(stageId: string | null) {
@@ -317,7 +296,7 @@
   async function finalizeHistoryApply(stageToRedirect: RuleHistoryStage) {
     const stageId = stageToRedirect.stageId;
     try {
-      await apiDelete(`/api/stages/${encodeURIComponent(stageId)}`);
+      await discardStage(stageId);
     } catch {
       // Ignore cleanup failures once the rewrite succeeded.
     }
@@ -331,7 +310,7 @@
   }
 
   async function loadStageFromRoute(stageId: string) {
-    const loaded = await apiGet<UnknownStage | RuleHistoryStage>(`/api/stages/${encodeURIComponent(stageId)}`);
+    const loaded = await loadStage<UnknownStage | RuleHistoryStage>(stageId);
     if ((loaded as RuleHistoryStage).kind === 'rule_history') {
       const loadedHistoryStage = loaded as RuleHistoryStage;
       if (loadedHistoryStage.result) {
@@ -363,7 +342,7 @@
     error = '';
     if (stageId && !alreadyApplied) {
       try {
-        await apiDelete(`/api/stages/${encodeURIComponent(stageId)}`);
+        await discardStage(stageId);
       } catch {
         // Ignore stage cleanup failures and still let the user leave the review.
       }
@@ -771,7 +750,7 @@
     const stageId = stage.stageId;
     const payload = stageSelectionPayload(selections);
     try {
-      const savedStage = await apiPost<UnknownStage>('/api/unknowns/stage-mappings', { stageId, selections: payload });
+      const savedStage = await saveUnknownSelections<UnknownStage>(stageId, payload);
       if (stage?.stageId === savedStage.stageId) {
         stage = {
           ...stage,
@@ -920,8 +899,8 @@
       await flushStageAutosave();
       const stageId = stage.stageId;
       const payload = stageSelectionPayload(selections);
-      await apiPost<UnknownStage>('/api/unknowns/stage-mappings', { stageId, selections: payload });
-      const appliedStage = await apiPost<UnknownStage>('/api/unknowns/apply', { stageId });
+      await saveUnknownSelections<UnknownStage>(stageId, payload);
+      const appliedStage = await applyUnknownStage<UnknownStage>(stageId);
       lastApplyResult = appliedStage.result ?? null;
       lastAppliedGroups = appliedStage.groups ?? [];
       clearRememberedUnknownStage();
@@ -959,10 +938,10 @@
     loading = true;
     error = '';
     try {
-      const appliedHistoryStage = await apiPost<RuleHistoryStage>('/api/rules/history/apply', {
-        stageId: historyStage.stageId,
-        selectedCandidateIds: historySelectedCandidateIds
-      });
+      const appliedHistoryStage = await applyRuleHistoryStage<RuleHistoryStage>(
+        historyStage.stageId,
+        historySelectedCandidateIds
+      );
       historyStage = appliedHistoryStage;
       historySelectedCandidateIds =
         appliedHistoryStage.selectedCandidateIds?.length

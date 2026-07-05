@@ -249,9 +249,55 @@ CREATE TABLE IF NOT EXISTS commodities (
 );
 """
 
+# Operation-class and workflow-state tables. Neither is wiped on projection
+# rebuild: operations are durable history; stages are resumable in-flight
+# workflow state. `operations` ships as DDL only — the stages FK needs the
+# parent table to exist (SQLite refuses child-table DML otherwise); #22 wires
+# the operations spine. `operation_files` / `operation_entities` arrive with it.
+_MIGRATION_0003 = """
+CREATE TABLE IF NOT EXISTS operations (
+    id TEXT PRIMARY KEY,
+    type TEXT NOT NULL,
+    actor_type TEXT NOT NULL DEFAULT 'user'
+        CHECK (actor_type IN ('user', 'system', 'ai')),
+    actor_id TEXT,
+    status TEXT NOT NULL DEFAULT 'applied'
+        CHECK (status IN ('staged', 'applying', 'applied', 'failed', 'undone')),
+    summary TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    applied_at TEXT,
+    base_revision TEXT,
+    git_commit_sha TEXT,
+    undo_mode TEXT NOT NULL DEFAULT 'exact'
+        CHECK (undo_mode IN ('exact', 'semantic', 'unavailable')),
+    compensates_operation_id TEXT REFERENCES operations(id),
+    payload_json TEXT NOT NULL DEFAULT '{}'
+);
+
+CREATE INDEX IF NOT EXISTS operations_type_idx ON operations(type);
+CREATE INDEX IF NOT EXISTS operations_created_idx ON operations(created_at);
+CREATE INDEX IF NOT EXISTS operations_compensates_idx
+    ON operations(compensates_operation_id);
+
+CREATE TABLE IF NOT EXISTS stages (
+    id TEXT PRIMARY KEY,
+    kind TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'ready'
+        CHECK (status IN ('ready', 'stale', 'applied', 'discarded', 'failed')),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    base_revision TEXT,
+    base_file_hashes_json TEXT NOT NULL DEFAULT '{}',
+    summary_json TEXT NOT NULL DEFAULT '{}',
+    payload_json TEXT NOT NULL,
+    applied_operation_id TEXT REFERENCES operations(id) ON DELETE SET NULL
+);
+"""
+
 MIGRATIONS: tuple[tuple[int, str, str], ...] = (
     (1, "journal_projection_tables", _MIGRATION_0001),
     (2, "reference_data_tables", _MIGRATION_0002),
+    (3, "operations_and_stages_tables", _MIGRATION_0003),
 )
 
 

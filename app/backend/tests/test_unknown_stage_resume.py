@@ -3,7 +3,6 @@ from pathlib import Path
 import main
 from models import UnknownScanRequest, UnknownSelection, UnknownStageRequest
 from services.config_service import AppConfig
-from services.stage_store import StageStore
 
 
 def _make_config(workspace: Path) -> AppConfig:
@@ -54,7 +53,6 @@ def test_unknown_scan_reuses_existing_stage_and_preserves_selections(tmp_path: P
         encoding="utf-8",
     )
 
-    monkeypatch.setattr(main, "stages", StageStore(tmp_path / "stage-root"))
     monkeypatch.setattr(main, "_require_workspace_config", lambda: config)
 
     scanned = main.unknown_scan(UnknownScanRequest(journalPath=str(journal)))
@@ -108,7 +106,6 @@ def test_unknown_scan_refreshes_groups_and_drops_stale_selections(tmp_path: Path
         encoding="utf-8",
     )
 
-    monkeypatch.setattr(main, "stages", StageStore(tmp_path / "stage-root"))
     monkeypatch.setattr(main, "_require_workspace_config", lambda: config)
 
     scanned = main.unknown_scan(UnknownScanRequest(journalPath=str(journal)))

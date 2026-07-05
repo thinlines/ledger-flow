@@ -7,6 +7,7 @@ import logging
 import os
 from pathlib import Path
 import re
+import shutil
 from uuid import uuid4, uuid7
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
@@ -103,7 +104,7 @@ from services.reconciliation_service import (
     write_assertion_transaction,
 )
 from services.rule_reapply_service import apply_rule_reapply, scan_rule_reapply
-from services.stage_store import StageStore
+from services.stage_store import StageNotFoundError, StageStore
 from services.rules_service import (
     create_rule,
     delete_rule,
@@ -130,7 +131,6 @@ from services.workspace_service import OPENING_BALANCE_OFFSET_ACCOUNT_UNSET, Wor
 
 
 ROOT_DIR = Path(os.environ.get("LEDGER_FLOW_ROOT", Path(__file__).resolve().parents[2])).expanduser().resolve()
-stages = StageStore(ROOT_DIR)
 import_index = ImportIndex(ROOT_DIR / ".workflow" / "state.db")
 workspace_manager = WorkspaceManager(ROOT_DIR)
 
@@ -299,12 +299,14 @@ _log = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    stages.cleanup_old(days=7)
     import_index.ensure_schema()
+    # Stages moved into the workspace database; drop the retired JSON store.
+    shutil.rmtree(ROOT_DIR / ".workflow" / "stages", ignore_errors=True)
     config = None
     try:
         config = workspace_manager.load_active_config()
         if config is not None:
+            StageStore(config).cleanup_old(days=7)
             check_startup_drift(config.root_dir)
     except Exception:
         _log.warning("Startup drift check failed — skipping", exc_info=True)
@@ -359,7 +361,7 @@ def _same_resolved_path(left: str | None, right: Path) -> bool:
         return False
 
 
-def _import_stage_payload(csv_path: str, year: str, import_account_id: str, data: dict) -> dict:
+def _import_stage_payload(config, csv_path: str, year: str, import_account_id: str, data: dict) -> dict:
     payload = {
         "kind": "import",
         "status": "ready",
@@ -368,7 +370,9 @@ def _import_stage_payload(csv_path: str, year: str, import_account_id: str, data
         "importAccountId": import_account_id,
         **data,
     }
-    stage_id = stages.create(payload)
+    stage_id = StageStore(config).create(
+        payload, base_files=[Path(payload["targetJournalPath"])]
+    )
     payload["stageId"] = stage_id
     return payload
 
@@ -406,8 +410,8 @@ def _filtered_unknown_selections(groups: list[dict], selections: dict[str, dict]
     }
 
 
-def _find_resumable_unknown_stage(journal_path: Path) -> dict | None:
-    return stages.find_latest(
+def _find_resumable_unknown_stage(config, journal_path: Path) -> dict | None:
+    return StageStore(config).find_latest(
         lambda payload: (
             payload.get("kind") == "unknowns"
             and payload.get("status") != "applied"
@@ -1821,7 +1825,7 @@ async def import_upload(
             "fileName": safe_name,
             "absPath": str(dest.resolve()),
             "sizeBytes": len(content),
-            **_import_stage_payload(str(dest.resolve()), year, importAccountId, data),
+            **_import_stage_payload(config, str(dest.resolve()), year, importAccountId, data),
         }
 
     return {
@@ -1941,7 +1945,7 @@ def import_preview(req: ImportPreviewRequest) -> dict:
     except FileNotFoundError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
 
-    return _import_stage_payload(req.csvPath, req.year, req.importAccountId, data)
+    return _import_stage_payload(config, req.csvPath, req.year, req.importAccountId, data)
 
 
 @app.post("/api/import/remove")
@@ -1963,9 +1967,10 @@ def import_remove(req: ImportCandidateRemoveRequest) -> dict:
 @app.post("/api/import/apply")
 def import_apply(req: StageApplyRequest) -> dict:
     config = _require_workspace_config()
+    stages = StageStore(config)
     try:
         stage = stages.load(req.stageId)
-    except FileNotFoundError as e:
+    except StageNotFoundError as e:
         raise HTTPException(status_code=404, detail="stage not found") from e
 
     if stage.get("kind") != "import":
@@ -2085,7 +2090,8 @@ def unknown_scan(req: UnknownScanRequest) -> dict:
     accounts_dat = config.init_dir / "10-accounts.dat"
     rule_path = ensure_rules_store(config.init_dir, accounts_dat)
     data = scan_unknowns(journal_path, load_rules(rule_path), config.import_accounts, config.tracked_accounts)
-    existing_stage = _find_resumable_unknown_stage(journal_path)
+    stages = StageStore(config)
+    existing_stage = _find_resumable_unknown_stage(config, journal_path)
     if existing_stage is not None:
         payload = {
             **existing_stage,
@@ -2096,16 +2102,18 @@ def unknown_scan(req: UnknownScanRequest) -> dict:
         return payload
 
     payload = _build_unknown_stage_payload(journal_path, data["groups"])
-    stage_id = stages.create(payload)
+    stage_id = stages.create(payload, base_files=[journal_path.resolve()])
     payload["stageId"] = stage_id
     return payload
 
 
 @app.post("/api/unknowns/stage-mappings")
 def unknown_stage_mappings(req: UnknownStageRequest) -> dict:
+    config = _require_workspace_config()
+    stages = StageStore(config)
     try:
         stage = stages.load(req.stageId)
-    except FileNotFoundError as e:
+    except StageNotFoundError as e:
         raise HTTPException(status_code=404, detail="stage not found") from e
 
     if stage.get("kind") != "unknowns":
@@ -2128,9 +2136,10 @@ def unknown_stage_mappings(req: UnknownStageRequest) -> dict:
 @app.post("/api/unknowns/apply")
 def unknown_apply(req: StageApplyRequest) -> dict:
     config = _require_workspace_config()
+    stages = StageStore(config)
     try:
         stage = stages.load(req.stageId)
-    except FileNotFoundError as e:
+    except StageNotFoundError as e:
         raise HTTPException(status_code=404, detail="stage not found") from e
 
     if stage.get("kind") != "unknowns":
@@ -2267,7 +2276,7 @@ def rules_history_scan(rule_id: str, req: RuleHistoryScanRequest) -> dict:
         "warnings": data["warnings"],
         "summary": data["summary"],
     }
-    stage_id = stages.create(payload)
+    stage_id = StageStore(config).create(payload, base_files=[journal_path.resolve()])
     payload["stageId"] = stage_id
     return payload
 
@@ -2275,9 +2284,10 @@ def rules_history_scan(rule_id: str, req: RuleHistoryScanRequest) -> dict:
 @app.post("/api/rules/history/apply")
 def rules_history_apply(req: RuleHistoryApplyRequest) -> dict:
     config = _require_workspace_config()
+    stages = StageStore(config)
     try:
         stage = stages.load(req.stageId)
-    except FileNotFoundError as e:
+    except StageNotFoundError as e:
         raise HTTPException(status_code=404, detail="stage not found") from e
 
     if stage.get("kind") != "rule_history":
@@ -2342,15 +2352,17 @@ def rules_delete(rule_id: str) -> dict:
 
 @app.get("/api/stages/{stage_id}")
 def get_stage(stage_id: str) -> dict:
+    config = _require_workspace_config()
     try:
-        return stages.load(stage_id)
-    except FileNotFoundError as e:
+        return StageStore(config).load(stage_id)
+    except StageNotFoundError as e:
         raise HTTPException(status_code=404, detail="stage not found") from e
 
 
 @app.delete("/api/stages/{stage_id}")
 def delete_stage(stage_id: str) -> dict:
-    stages.delete(stage_id)
+    config = _require_workspace_config()
+    StageStore(config).delete(stage_id)
     return {"deleted": True, "stageId": stage_id}
 
 

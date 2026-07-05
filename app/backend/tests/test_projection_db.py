@@ -180,6 +180,95 @@ def test_payee_aliases_cascade_with_their_payee(tmp_path):
     assert remaining == 0
 
 
+def test_stages_and_operations_tables_created(tmp_path):
+    config = _make_config(tmp_path)
+    db_path = ensure_database(config)
+
+    tables = _table_names(db_path)
+    assert "stages" in tables
+    assert "operations" in tables
+
+    with sqlite3.connect(db_path) as conn:
+        columns = {
+            name
+            for (_, name, *_rest) in conn.execute("PRAGMA table_info(stages)").fetchall()
+        }
+    assert columns == {
+        "id",
+        "kind",
+        "status",
+        "created_at",
+        "updated_at",
+        "base_revision",
+        "base_file_hashes_json",
+        "summary_json",
+        "payload_json",
+        "applied_operation_id",
+    }
+
+
+def test_stages_survive_projection_wipe(tmp_path):
+    config = _make_config(tmp_path)
+    db_path = ensure_database(config)
+
+    with connect(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO stages (id, kind, status, created_at, updated_at, payload_json)
+            VALUES ('s1', 'import', 'ready', '2026-07-04T00:00:00Z', '2026-07-04T00:00:00Z', '{}')
+            """
+        )
+        assert "stages" not in PROJECTION_TABLES
+        for table in PROJECTION_TABLES:
+            conn.execute(f"DELETE FROM {table}")
+
+    ensure_database(config)
+    with sqlite3.connect(db_path) as conn:
+        count = conn.execute("SELECT COUNT(*) FROM stages").fetchone()[0]
+    assert count == 1
+
+
+def test_stages_applied_operation_id_foreign_key(tmp_path):
+    config = _make_config(tmp_path)
+    db_path = ensure_database(config)
+
+    with connect(db_path) as conn:
+        # NULL linkage is the pre-#22 steady state.
+        conn.execute(
+            """
+            INSERT INTO stages (id, kind, status, created_at, updated_at, payload_json)
+            VALUES ('s1', 'import', 'ready', '2026-07-04T00:00:00Z', '2026-07-04T00:00:00Z', '{}')
+            """
+        )
+        try:
+            conn.execute(
+                """
+                INSERT INTO stages (id, kind, status, created_at, updated_at, payload_json, applied_operation_id)
+                VALUES ('s2', 'import', 'applied', '2026-07-04T00:00:00Z', '2026-07-04T00:00:00Z', '{}', 'no-such-op')
+                """
+            )
+        except sqlite3.IntegrityError:
+            return
+    raise AssertionError("expected IntegrityError for orphan applied_operation_id")
+
+
+def test_stages_status_check_rejects_unknown_values(tmp_path):
+    config = _make_config(tmp_path)
+    db_path = ensure_database(config)
+
+    with connect(db_path) as conn:
+        try:
+            conn.execute(
+                """
+                INSERT INTO stages (id, kind, status, created_at, updated_at, payload_json)
+                VALUES ('s1', 'import', 'bogus', '2026-07-04T00:00:00Z', '2026-07-04T00:00:00Z', '{}')
+                """
+            )
+        except sqlite3.IntegrityError:
+            return
+    raise AssertionError("expected IntegrityError for unknown stage status")
+
+
 def test_foreign_keys_enforced_on_connect(tmp_path):
     config = _make_config(tmp_path)
     db_path = ensure_database(config)

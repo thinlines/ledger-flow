@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { apiGet, apiPost } from '$lib/api';
+  import { applyImportStage } from '$lib/stage-client';
   import { showImportUndoToast } from '$lib/undo-toast';
 
   type Candidate = {
@@ -528,7 +529,7 @@
 
     try {
       loadingState = 'apply';
-      const applied = await apiPost<PreviewResult>('/api/import/apply', { stageId });
+      const applied = await applyImportStage<PreviewResult>(stageId);
       const appendedCount = applied.result?.appendedTxnCount ?? 0;
       const skippedDuplicates = applied.result?.skippedDuplicateCount ?? 0;
       const historyId = applied.result?.historyId;
@@ -572,7 +573,7 @@
     resetImportState();
     try {
       loadingState = 'apply';
-      const applied = await apiPost<PreviewResult>('/api/import/apply', { stageId: cv.stageId });
+      const applied = await applyImportStage<PreviewResult>(cv.stageId);
       const appendedCount = applied.result?.appendedTxnCount ?? 0;
       const skippedDuplicates = applied.result?.skippedDuplicateCount ?? 0;
       const historyId = applied.result?.historyId;
