@@ -5,6 +5,10 @@ from datetime import UTC, date as calendar_date, datetime
 from pathlib import Path
 from uuid import uuid4
 
+from .config_service import AppConfig
+from .operations_service import record_operation
+from .projection_db import connect, ensure_database
+
 
 RULES_FILE = "20-match-rules.ndjson"
 ALLOWED_FIELDS = {"payee", "date"}
@@ -18,6 +22,33 @@ ALLOWED_ACTION_TYPES = {"set_account", "add_tag", "set_kv", "append_comment"}
 
 def rules_path(rules_dir: Path) -> Path:
     return rules_dir / RULES_FILE
+
+
+def _rules_dir(path: Path) -> Path:
+    return path if path.is_dir() else path.parent
+
+
+def _config_from_rules_dir(rules_dir: Path) -> AppConfig:
+    root = rules_dir.parent
+    return AppConfig(
+        root_dir=root,
+        config_toml=root / "settings" / "workspace.toml",
+        workspace={"name": "Workspace", "start_year": 2026},
+        dirs={
+            "csv_dir": "inbox",
+            "journal_dir": "journals",
+            "init_dir": rules_dir.name,
+            "opening_bal_dir": "opening",
+            "imports_dir": "imports",
+        },
+        institution_templates={},
+        import_accounts={},
+        tracked_accounts={},
+    )
+
+
+def _db_path_for(path: Path) -> Path:
+    return ensure_database(_config_from_rules_dir(_rules_dir(path)))
 
 
 def _now_iso() -> str:
@@ -248,7 +279,188 @@ def _normalize_rules(rules: list[dict]) -> list[dict]:
     return [r for r in normalized if r["conditions"] and r["actions"]]
 
 
+def _condition_groups(conditions: list[dict]) -> list[list[dict]]:
+    groups: list[list[dict]] = []
+    current: list[dict] = []
+    for condition in conditions:
+        if current and condition.get("joiner") == "or":
+            groups.append(current)
+            current = []
+        current.append(condition)
+    if current:
+        groups.append(current)
+    return groups
+
+
+def _action_storage(action: dict) -> tuple[str, str | None, str]:
+    action_type = action["type"]
+    if action_type == "set_account":
+        return action_type, None, str(action.get("account", ""))
+    if action_type == "add_tag":
+        return action_type, None, str(action.get("tag", ""))
+    if action_type == "set_kv":
+        return action_type, str(action.get("key", "")), str(action.get("value", ""))
+    if action_type == "append_comment":
+        return action_type, None, str(action.get("text", ""))
+    return action_type, None, ""
+
+
+def _action_from_storage(action_type: str, key: str | None, value: str) -> dict:
+    if action_type == "set_account":
+        return {"type": "set_account", "account": value}
+    if action_type == "add_tag":
+        return {"type": "add_tag", "tag": value}
+    if action_type == "set_kv":
+        return {"type": "set_kv", "key": key or "", "value": value}
+    if action_type == "append_comment":
+        return {"type": "append_comment", "text": value}
+    return {"type": action_type, "value": value}
+
+
+def _replace_rules_in_db(path: Path, rules: list[dict]) -> None:
+    db_path = _db_path_for(path)
+    with connect(db_path) as conn:
+        conn.execute("DELETE FROM rules")
+        for rule in _normalize_rules(rules):
+            conn.execute(
+                """
+                INSERT INTO rules (id, type, name, enabled, position, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    rule["id"],
+                    rule["type"],
+                    rule["name"],
+                    1 if rule["enabled"] else 0,
+                    rule["position"],
+                    rule["createdAt"],
+                    rule["updatedAt"],
+                ),
+            )
+            for group_order, group in enumerate(_condition_groups(rule["conditions"]), start=1):
+                group_id = uuid4().hex
+                conn.execute(
+                    """
+                    INSERT INTO rule_condition_groups (id, rule_id, group_order)
+                    VALUES (?, ?, ?)
+                    """,
+                    (group_id, rule["id"], group_order),
+                )
+                for condition_order, condition in enumerate(group, start=1):
+                    conn.execute(
+                        """
+                        INSERT INTO rule_conditions (
+                            id, group_id, condition_order, field, operator, value, secondary_value
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            uuid4().hex,
+                            group_id,
+                            condition_order,
+                            condition["field"],
+                            condition["operator"],
+                            condition["value"],
+                            condition.get("secondaryValue"),
+                        ),
+                    )
+            for action_order, action in enumerate(rule["actions"], start=1):
+                action_type, key, value = _action_storage(action)
+                conn.execute(
+                    """
+                    INSERT INTO rule_actions (id, rule_id, action_order, action_type, key, value)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (uuid4().hex, rule["id"], action_order, action_type, key, value),
+                )
+
+
+def _load_rules_from_db(path: Path) -> list[dict]:
+    db_path = _db_path_for(path)
+    with connect(db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT id, type, name, enabled, position, created_at, updated_at
+            FROM rules
+            ORDER BY position, id
+            """
+        ).fetchall()
+        rules: list[dict] = []
+        for rule_id, rule_type, name, enabled, position, created_at, updated_at in rows:
+            condition_rows = conn.execute(
+                """
+                SELECT g.group_order, c.condition_order, c.field, c.operator, c.value, c.secondary_value
+                FROM rule_condition_groups g
+                JOIN rule_conditions c ON c.group_id = g.id
+                WHERE g.rule_id = ?
+                ORDER BY g.group_order, c.condition_order
+                """,
+                (rule_id,),
+            ).fetchall()
+            conditions: list[dict] = []
+            previous_group: int | None = None
+            for group_order, condition_order, field, operator, value, secondary_value in condition_rows:
+                condition = {
+                    "field": field,
+                    "operator": operator,
+                    "value": value,
+                    "joiner": "or" if previous_group is not None and group_order != previous_group else "and",
+                }
+                if secondary_value:
+                    condition["secondaryValue"] = secondary_value
+                conditions.append(condition)
+                previous_group = group_order
+
+            action_rows = conn.execute(
+                """
+                SELECT action_type, key, value
+                FROM rule_actions
+                WHERE rule_id = ?
+                ORDER BY action_order
+                """,
+                (rule_id,),
+            ).fetchall()
+            actions = [_action_from_storage(action_type, key, value) for action_type, key, value in action_rows]
+            rules.append(
+                {
+                    "id": rule_id,
+                    "type": rule_type,
+                    "name": name,
+                    "conditions": conditions,
+                    "actions": actions,
+                    "enabled": bool(enabled),
+                    "position": position,
+                    "createdAt": created_at,
+                    "updatedAt": updated_at,
+                }
+            )
+    return _normalize_rules(rules)
+
+
+def _record_rule_operation(path: Path, operation_type: str, summary: str, payload: dict) -> None:
+    config = _config_from_rules_dir(_rules_dir(path))
+    record_operation(
+        config,
+        operation_type=operation_type,
+        summary=summary,
+        payload=payload,
+        files=[],
+        entities=[
+            {
+                "entity_type": "rule",
+                "entity_id": str(payload.get("rule_id") or payload.get("id") or ""),
+                "role": "affected",
+                "payload": payload,
+            }
+        ],
+        undo_mode="unavailable",
+    )
+
+
 def save_rules(path: Path, rules: list[dict]) -> None:
+    if path.is_dir() or (path.parent / ".workflow").exists():
+        _rules_dir(path).mkdir(parents=True, exist_ok=True)
+        _replace_rules_in_db(path, rules)
+        return
     path.parent.mkdir(parents=True, exist_ok=True)
     normalized = _normalize_rules(rules)
     lines = [json.dumps(rule, ensure_ascii=True, separators=(",", ":")) for rule in normalized]
@@ -258,7 +470,7 @@ def save_rules(path: Path, rules: list[dict]) -> None:
     path.write_text(text, encoding="utf-8")
 
 
-def load_rules(path: Path) -> list[dict]:
+def _load_rules_from_file(path: Path) -> list[dict]:
     if not path.exists():
         return []
     rules: list[dict] = []
@@ -270,12 +482,24 @@ def load_rules(path: Path) -> list[dict]:
     return _normalize_rules(rules)
 
 
+def load_rules(path: Path) -> list[dict]:
+    if path.is_dir() or (path.parent / ".workflow" / "state.db").exists():
+        return _load_rules_from_db(path)
+    return _load_rules_from_file(path)
+
+
 def ensure_rules_store(rules_dir: Path, accounts_dat: Path) -> Path:
+    rules_dir.mkdir(parents=True, exist_ok=True)
     path = rules_path(rules_dir)
+    db_path = _db_path_for(rules_dir)
+    with connect(db_path) as conn:
+        seeded = conn.execute("SELECT 1 FROM rules LIMIT 1").fetchone() is not None
+    if not seeded:
+        seed_rules = _load_rules_from_file(path) if path.exists() else _parse_legacy_payee_rules(accounts_dat)
+        _replace_rules_in_db(rules_dir, seed_rules)
     if path.exists():
-        return path
-    save_rules(path, _parse_legacy_payee_rules(accounts_dat))
-    return path
+        path.unlink()
+    return rules_dir
 
 
 def _matches_condition(condition: dict, context: dict[str, str]) -> bool:
@@ -357,6 +581,13 @@ def upsert_payee_rule(path: Path, payee: str, account: str) -> tuple[dict, bool]
             rule["enabled"] = True
             rule["updatedAt"] = now
             save_rules(path, rules)
+            if changed:
+                _record_rule_operation(
+                    path,
+                    "rule.updated.v1",
+                    f"Updated rule: {rule['name']}",
+                    {"rule_id": rule["id"], "rule": rule},
+                )
             return rule, changed
 
     created = {
@@ -371,6 +602,12 @@ def upsert_payee_rule(path: Path, payee: str, account: str) -> tuple[dict, bool]
     }
     rules.append(created)
     save_rules(path, rules)
+    _record_rule_operation(
+        path,
+        "rule.created.v1",
+        f"Created rule: {_normalize_rule_name(None, created['conditions'])}",
+        {"rule_id": created["id"], "rule": _normalize_rules([created])[0]},
+    )
     return created, True
 
 
@@ -404,6 +641,12 @@ def create_rule(
     }
     rules.append(created)
     save_rules(path, rules)
+    _record_rule_operation(
+        path,
+        "rule.created.v1",
+        f"Created rule: {created['name']}",
+        {"rule_id": created["id"], "rule": created},
+    )
     return created
 
 
@@ -419,6 +662,12 @@ def reorder_rules(path: Path, ordered_ids: list[str]) -> list[dict]:
     for idx, rule in enumerate(reordered, start=1):
         rule["position"] = idx
     save_rules(path, reordered)
+    _record_rule_operation(
+        path,
+        "rule.reordered.v1",
+        "Reordered rules",
+        {"ordered_ids": ordered_ids},
+    )
     return load_rules(path)
 
 
@@ -452,6 +701,12 @@ def update_rule(
             rule["enabled"] = enabled
         rule["updatedAt"] = now
         save_rules(path, rules)
+        _record_rule_operation(
+            path,
+            "rule.updated.v1",
+            f"Updated rule: {rule['name']}",
+            {"rule_id": rule["id"], "rule": rule},
+        )
         return rule
     raise ValueError("Rule not found")
 
@@ -461,5 +716,12 @@ def delete_rule(path: Path, rule_id: str) -> bool:
     kept = [r for r in rules if r["id"] != rule_id]
     if len(kept) == len(rules):
         return False
+    deleted = next(r for r in rules if r["id"] == rule_id)
     save_rules(path, kept)
+    _record_rule_operation(
+        path,
+        "rule.deleted.v1",
+        f"Deleted rule: {deleted['name']}",
+        {"rule_id": rule_id, "rule": deleted},
+    )
     return True

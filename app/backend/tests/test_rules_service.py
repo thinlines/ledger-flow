@@ -1,7 +1,10 @@
 from pathlib import Path
 
+from services.config_service import AppConfig
+from services.projection_db import connect, ensure_database
 from services.rules_service import (
     create_rule,
+    delete_rule,
     ensure_rules_store,
     find_matching_rule,
     load_rules,
@@ -9,6 +12,92 @@ from services.rules_service import (
     update_rule,
     upsert_payee_rule,
 )
+
+
+def _make_config(workspace: Path) -> AppConfig:
+    for name in ["settings", "journals", "inbox", "rules", "opening", "imports"]:
+        (workspace / name).mkdir(parents=True, exist_ok=True)
+    return AppConfig(
+        root_dir=workspace,
+        config_toml=workspace / "settings" / "workspace.toml",
+        workspace={"name": "Test", "base_currency": "USD", "start_year": 2026},
+        dirs={
+            "csv_dir": "inbox",
+            "journal_dir": "journals",
+            "init_dir": "rules",
+            "opening_bal_dir": "opening",
+            "imports_dir": "imports",
+        },
+        institution_templates={},
+        import_accounts={},
+        tracked_accounts={},
+    )
+
+
+def test_ensure_rules_store_seeds_ndjson_into_database_once(tmp_path: Path) -> None:
+    config = _make_config(tmp_path / "workspace")
+    db_path = ensure_database(config)
+    rules_file = config.init_dir / "20-match-rules.ndjson"
+    rules_file.write_text(
+        "\n".join(
+            [
+                '{"id":"r1","type":"match","name":"Coffee","conditions":[{"field":"payee","operator":"contains","value":"coffee"},{"field":"date","operator":"on_or_after","value":"2026-01-01","joiner":"and"},{"field":"payee","operator":"contains","value":"cafe","joiner":"or"}],"actions":[{"type":"set_account","account":"Expenses:Coffee"}],"enabled":true,"position":1,"createdAt":"2026-01-02T00:00:00+00:00","updatedAt":"2026-01-02T00:00:00+00:00"}',
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    store = ensure_rules_store(config.init_dir, config.init_dir / "10-accounts.dat")
+    rules = load_rules(store)
+
+    assert not rules_file.exists()
+    assert rules[0]["id"] == "r1"
+    assert rules[0]["conditions"] == [
+        {"field": "payee", "operator": "contains", "value": "coffee", "joiner": "and"},
+        {"field": "date", "operator": "on_or_after", "value": "2026-01-01", "joiner": "and"},
+        {"field": "payee", "operator": "contains", "value": "cafe", "joiner": "or"},
+    ]
+    assert find_matching_rule({"payee": "Corner Cafe", "date": "2025-12-31"}, rules)["id"] == "r1"
+    assert find_matching_rule({"payee": "Coffee Shop", "date": "2026-02-01"}, rules)["id"] == "r1"
+    assert find_matching_rule({"payee": "Coffee Shop", "date": "2025-12-31"}, rules) is None
+
+    with connect(db_path) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM rules").fetchone()[0] == 1
+        assert conn.execute("SELECT COUNT(*) FROM rule_condition_groups").fetchone()[0] == 2
+        assert conn.execute("SELECT COUNT(*) FROM rule_conditions").fetchone()[0] == 3
+        assert conn.execute("SELECT COUNT(*) FROM rule_actions").fetchone()[0] == 1
+
+    ensure_rules_store(config.init_dir, config.init_dir / "10-accounts.dat")
+    with connect(db_path) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM rules").fetchone()[0] == 1
+
+
+def test_rule_mutations_are_recorded_as_operations(tmp_path: Path) -> None:
+    config = _make_config(tmp_path / "workspace")
+    store = ensure_rules_store(config.init_dir, config.init_dir / "10-accounts.dat")
+
+    created = create_rule(
+        store,
+        name="Coffee",
+        conditions=[{"field": "payee", "operator": "contains", "value": "coffee"}],
+        actions=[{"type": "set_account", "account": "Expenses:Coffee"}],
+    )
+    update_rule(store, created["id"], enabled=False)
+    delete_rule(store, created["id"])
+
+    with connect(ensure_database(config)) as conn:
+        rows = conn.execute(
+            "SELECT type, summary, payload_json FROM operations ORDER BY rowid"
+        ).fetchall()
+
+    assert [row[0] for row in rows] == [
+        "rule.created.v1",
+        "rule.updated.v1",
+        "rule.deleted.v1",
+    ]
+    assert rows[0][1] == "Created rule: Coffee"
+    assert f'"rule_id":"{created["id"]}"' in rows[2][2]
 
 
 def test_ensure_rules_store_migrates_legacy_payee_rules(tmp_path: Path) -> None:

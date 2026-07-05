@@ -352,12 +352,57 @@ CREATE INDEX IF NOT EXISTS operation_entities_entity_idx
     ON operation_entities(entity_type, entity_id);
 """
 
+_MIGRATION_0006 = """
+CREATE TABLE IF NOT EXISTS rules (
+    id TEXT PRIMARY KEY,
+    type TEXT NOT NULL DEFAULT 'match',
+    name TEXT NOT NULL,
+    enabled BOOLEAN NOT NULL DEFAULT TRUE,
+    position INTEGER NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS rule_condition_groups (
+    id TEXT PRIMARY KEY,
+    rule_id TEXT NOT NULL REFERENCES rules(id) ON DELETE CASCADE,
+    group_order INTEGER NOT NULL,
+    UNIQUE (rule_id, group_order)
+);
+
+CREATE TABLE IF NOT EXISTS rule_conditions (
+    id TEXT PRIMARY KEY,
+    group_id TEXT NOT NULL REFERENCES rule_condition_groups(id) ON DELETE CASCADE,
+    condition_order INTEGER NOT NULL,
+    field TEXT NOT NULL
+        CHECK (field IN ('payee', 'merchant', 'date', 'amount', 'account')),
+    operator TEXT NOT NULL,
+    value TEXT NOT NULL,
+    secondary_value TEXT,
+    UNIQUE (group_id, condition_order)
+);
+
+CREATE TABLE IF NOT EXISTS rule_actions (
+    id TEXT PRIMARY KEY,
+    rule_id TEXT NOT NULL REFERENCES rules(id) ON DELETE CASCADE,
+    action_order INTEGER NOT NULL,
+    action_type TEXT NOT NULL
+        CHECK (action_type IN ('set_account', 'add_tag', 'set_kv', 'append_comment')),
+    key TEXT,
+    value TEXT NOT NULL,
+    UNIQUE (rule_id, action_order)
+);
+
+CREATE INDEX IF NOT EXISTS rule_actions_value_idx ON rule_actions(action_type, value);
+"""
+
 MIGRATIONS: tuple[tuple[int, str, str], ...] = (
     (1, "journal_projection_tables", _MIGRATION_0001),
     (2, "reference_data_tables", _MIGRATION_0002),
     (3, "operations_and_stages_tables", _MIGRATION_0003),
     (4, "import_identity_tables", _MIGRATION_0004),
     (5, "operation_files_and_entities_tables", _MIGRATION_0005),
+    (6, "rules_tables", _MIGRATION_0006),
 )
 
 

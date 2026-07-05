@@ -129,6 +129,25 @@ def test_projection_tables_are_wipe_and_rebuild_safe(tmp_path):
     assert count == 0
 
 
+def test_rules_tables_survive_projection_wipe(tmp_path):
+    config = _make_config(tmp_path)
+    db_path = ensure_database(config)
+
+    with connect(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO rules (id, type, name, enabled, position, created_at, updated_at)
+            VALUES ('r1', 'match', 'Coffee', 1, 1, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')
+            """
+        )
+        for table in PROJECTION_TABLES:
+            conn.execute(f"DELETE FROM {table}")
+
+    with sqlite3.connect(db_path) as conn:
+        count = conn.execute("SELECT COUNT(*) FROM rules").fetchone()[0]
+    assert count == 1
+
+
 def test_reference_tables_enforce_entity_uniqueness(tmp_path):
     config = _make_config(tmp_path)
     db_path = ensure_database(config)
