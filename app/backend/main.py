@@ -16,6 +16,9 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from models import (
+    AccountCloseRequest,
+    AccountNameRequest,
+    AccountSubtypeRequest,
     ImportCandidateRemoveRequest,
     CustomImportAccountUpsertRequest,
     CreateAccountRequest,
@@ -111,19 +114,34 @@ from services.rules_service import (
     update_rule,
     upsert_payee_rule,
 )
+from services.account_declaration_service import (
+    AccountNotDeclared,
+    DeclarationInUse,
+    close_account,
+    create_account,
+    delete_block_reason,
+    delete_declaration,
+    reopen_account,
+    set_subtype,
+)
 from services.projection_service import refresh_projection
 from services.reference_data_service import (
+    account_subtypes,
     list_account_names,
     list_category_account_names,
+    list_managed_accounts,
     posting_counts_by_account,
 )
 from services.unknowns_service import (
     apply_unknown_mappings,
-    create_account,
     list_known_accounts,
     scan_unknowns,
 )
-from services.workspace_service import OPENING_BALANCE_OFFSET_ACCOUNT_UNSET, WorkspaceManager
+from services.workspace_service import (
+    ACCOUNT_SUBTYPE_KIND,
+    OPENING_BALANCE_OFFSET_ACCOUNT_UNSET,
+    WorkspaceManager,
+)
 
 
 ROOT_DIR = Path(os.environ.get("LEDGER_FLOW_ROOT", Path(__file__).resolve().parents[2])).expanduser().resolve()
@@ -199,6 +217,15 @@ def _transaction_counts_by_ledger_account(config) -> dict[str, int]:
         return {}
 
 
+def _projected_subtypes(config) -> dict[str, str]:
+    """{account name: lf_subtype} from the projection — the canonical
+    subtype source since issue #19 (config.toml no longer stores it)."""
+    try:
+        return account_subtypes(config)
+    except OSError:
+        return {}
+
+
 def _tracked_account_ui(
     config,
     account_id: str,
@@ -207,7 +234,10 @@ def _tracked_account_ui(
     opening_by_ledger: dict,
     reconciliation_status_by_id: dict[str, dict] | None = None,
     last_reconciled_by_id: dict[str, "date"] | None = None,
+    subtype_by_ledger: dict[str, str] | None = None,
 ) -> dict:
+    if subtype_by_ledger is None:
+        subtype_by_ledger = _projected_subtypes(config)
     import_account_id = str(account_cfg.get("import_account_id") or "").strip() or None
     linked_import_cfg = config.import_accounts.get(import_account_id or "", {}) if import_account_id else {}
     source = import_source_summary(config, linked_import_cfg) if linked_import_cfg else None
@@ -249,7 +279,7 @@ def _tracked_account_ui(
         "displayName": account_cfg.get("display_name", account_id),
         "ledgerAccount": ledger_account,
         "kind": _account_kind(ledger_account),
-        "subtype": account_cfg.get("subtype"),
+        "subtype": subtype_by_ledger.get(ledger_account),
         "institutionId": institution_id,
         "institutionDisplayName": institution_display_name,
         "last4": account_cfg.get("last4"),
@@ -473,8 +503,9 @@ def app_state() -> dict:
     opening_by_id, opening_by_ledger = opening_balance_index(config)
     reconciliation_status_map = compute_reconciliation_status(config)
     last_reconciled_map = latest_reconciliation_dates_by_tracked_id(config)
+    subtype_map = _projected_subtypes(config)
     tracked_accounts = [
-        _tracked_account_ui(config, account_id, account_cfg, opening_by_id, opening_by_ledger, reconciliation_status_map, last_reconciled_map)
+        _tracked_account_ui(config, account_id, account_cfg, opening_by_id, opening_by_ledger, reconciliation_status_map, last_reconciled_map, subtype_map)
         for account_id, account_cfg in sorted(config.tracked_accounts.items(), key=lambda x: x[0])
     ]
     return {
@@ -1373,9 +1404,10 @@ def tracked_accounts_list() -> dict:
     reconciliation_status_map = compute_reconciliation_status(config)
     last_reconciled_map = latest_reconciliation_dates_by_tracked_id(config)
     txn_counts = _transaction_counts_by_ledger_account(config)
+    subtype_map = _projected_subtypes(config)
     rows = []
     for account_id, account_cfg in config.tracked_accounts.items():
-        row = _tracked_account_ui(config, account_id, account_cfg, opening_by_id, opening_by_ledger, reconciliation_status_map, last_reconciled_map)
+        row = _tracked_account_ui(config, account_id, account_cfg, opening_by_id, opening_by_ledger, reconciliation_status_map, last_reconciled_map, subtype_map)
         ledger_acct = str(account_cfg.get("ledger_account", "")).strip()
         row["transactionCount"] = txn_counts.get(ledger_acct, 0)
         rows.append(row)
@@ -1926,6 +1958,95 @@ def accounts_create(req: CreateAccountRequest) -> dict:
     if added:
         refresh_projection(config)
     return {"added": added, "warning": warning, "account": account_name}
+
+
+@app.get("/api/accounts/manage")
+def accounts_manage() -> dict:
+    """Lifecycle panel rows: every projected account with declared/used/
+    closed state, subtree posting counts, and the delete-guard verdict."""
+    config = _require_workspace_config()
+    rows = []
+    for account in list_managed_accounts(config):
+        reason = (
+            delete_block_reason(config, account["name"], account["posting_count"])
+            if account["declared"]
+            else None
+        )
+        rows.append(
+            {
+                "name": account["name"],
+                "accountType": account["account_type"],
+                "depth": account["depth"],
+                "subtype": account["subtype"],
+                "note": account["note"],
+                "closedOn": account["closed_on"],
+                "declared": account["declared"],
+                "used": account["used"],
+                "postingCount": account["posting_count"],
+                "deletable": account["declared"] and reason is None,
+                "deleteBlockedReason": reason,
+            }
+        )
+    return {"accounts": rows}
+
+
+@app.post("/api/accounts/subtype")
+def accounts_set_subtype(req: AccountSubtypeRequest) -> dict:
+    config = _require_workspace_config()
+    account = req.account.strip()
+    if not account:
+        raise HTTPException(status_code=400, detail="Account is required")
+    if req.subtype is not None:
+        expected_kind = ACCOUNT_SUBTYPE_KIND[req.subtype]
+        if _account_kind(account) != expected_kind:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Subtype '{req.subtype}' requires a {expected_kind} account",
+            )
+    set_subtype(config, account, req.subtype)
+    return {"ok": True, "account": account, "subtype": req.subtype}
+
+
+@app.post("/api/accounts/close")
+def accounts_close(req: AccountCloseRequest) -> dict:
+    config = _require_workspace_config()
+    account = req.account.strip()
+    if not account:
+        raise HTTPException(status_code=400, detail="Account is required")
+    closed_on = (req.closedOn or "").strip() or date.today().isoformat()
+    try:
+        date.fromisoformat(closed_on)
+    except ValueError as e:
+        raise HTTPException(
+            status_code=400, detail=f"Invalid close date: {closed_on}"
+        ) from e
+    close_account(config, account, closed_on)
+    return {"ok": True, "account": account, "closedOn": closed_on}
+
+
+@app.post("/api/accounts/reopen")
+def accounts_reopen(req: AccountNameRequest) -> dict:
+    config = _require_workspace_config()
+    account = req.account.strip()
+    if not account:
+        raise HTTPException(status_code=400, detail="Account is required")
+    reopen_account(config, account)
+    return {"ok": True, "account": account}
+
+
+@app.post("/api/accounts/delete")
+def accounts_delete(req: AccountNameRequest) -> dict:
+    config = _require_workspace_config()
+    account = req.account.strip()
+    if not account:
+        raise HTTPException(status_code=400, detail="Account is required")
+    try:
+        delete_declaration(config, account)
+    except DeclarationInUse as e:
+        raise HTTPException(status_code=409, detail=e.reason) from e
+    except AccountNotDeclared as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    return {"ok": True, "account": account}
 
 
 def _compose_account_name(req: CreateAccountRequest) -> str:

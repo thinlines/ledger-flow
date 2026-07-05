@@ -23,9 +23,11 @@ from __future__ import annotations
 import re
 
 from . import journal_writer
+from .account_declaration_service import set_subtype
 from .config_service import AppConfig
 from .journal_block_service import lf_txn_id_line, mint_lf_txn_id
 from .projection_service import _classify_file, _discover_files, refresh_projection
+from .reference_data_service import account_subtypes
 
 _MIGRATED_ROLES = {"journal", "opening", "archive"}
 
@@ -130,8 +132,43 @@ def migrate_lf_metadata(config: AppConfig) -> dict:
         # even when a previous run was interrupted between write and refresh.
         refresh_projection(config)
 
+    subtypes_adopted = _adopt_config_subtypes(config)
+
     return {
         "files_changed": sorted(changed),
         "ids_assigned": ids_assigned,
         "keys_renamed": keys_renamed,
+        "subtypes_adopted": subtypes_adopted,
     }
+
+
+def _adopt_config_subtypes(config: AppConfig) -> int:
+    """Copy legacy config.toml subtypes into ``lf_subtype`` declaration
+    metadata (issue #19: subtype is declaration-canonical).
+
+    A declaration that already carries ``lf_subtype`` wins — the migration
+    never overwrites it. Idempotent: adopted values project back, so the
+    second run finds nothing to copy. Stale ``subtype =`` keys left in
+    config.toml are inert (nothing reads them) and drop off on the next
+    config write."""
+    config_subtypes: dict[str, str] = {}
+    for account_cfg in (
+        *config.tracked_accounts.values(),
+        *config.import_accounts.values(),
+    ):
+        ledger_account = str(account_cfg.get("ledger_account", "")).strip()
+        subtype = str(account_cfg.get("subtype") or "").strip()
+        if ledger_account and subtype:
+            config_subtypes.setdefault(ledger_account, subtype)
+
+    if not config_subtypes:
+        return 0
+
+    declared = account_subtypes(config)
+    adopted = 0
+    for ledger_account, subtype in sorted(config_subtypes.items()):
+        if ledger_account in declared:
+            continue
+        set_subtype(config, ledger_account, subtype)
+        adopted += 1
+    return adopted

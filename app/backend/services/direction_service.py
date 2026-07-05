@@ -16,6 +16,7 @@ from .journal_query_service import (
 )
 from .opening_balance_service import opening_balance_index
 from .reconciliation_service import reconciliation_status as compute_reconciliation_status
+from .reference_data_service import account_subtypes
 
 
 def _month_key(d: date) -> str:
@@ -120,12 +121,16 @@ def build_dashboard_direction(config: AppConfig, *, today: date | None = None) -
     LIQUID_SUBTYPES = {"checking", "savings", "cash"}
     FIXED_ASSET_SUBTYPES = {"vehicle", "real_estate"}
 
+    # Subtype is declaration-canonical (issue #19): read the projected
+    # lf_subtype metadata, not config.toml.
+    projected_subtypes = account_subtypes(config)
+
     spendable_cash = Decimal("0")
     for account_id, account_cfg in config.tracked_accounts.items():
         ledger_account = str(account_cfg.get("ledger_account", "")).strip()
         if not ledger_account or infer_account_kind(ledger_account) != "asset":
             continue
-        subtype = account_cfg.get("subtype")
+        subtype = projected_subtypes.get(ledger_account)
         if subtype is None or subtype in LIQUID_SUBTYPES:
             spendable_cash += account_balances.get(ledger_account, Decimal("0"))
 
@@ -325,7 +330,7 @@ def build_dashboard_direction(config: AppConfig, *, today: date | None = None) -
         ledger_account = str(account_cfg.get("ledger_account", "")).strip()
         if not ledger_account:
             continue
-        if account_cfg.get("subtype") in FIXED_ASSET_SUBTYPES:
+        if projected_subtypes.get(ledger_account) in FIXED_ASSET_SUBTYPES:
             continue
         last_date = account_last_transaction.get(ledger_account)
         if last_date is not None and last_date < stale_threshold:

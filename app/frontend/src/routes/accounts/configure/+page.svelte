@@ -17,6 +17,7 @@
   import { effectiveOpeningBalanceDate, openingBalanceDateForDraft } from '$lib/account-defaults';
   import { describeBalanceTrust } from '$lib/account-trust';
   import { normalizeCurrencyCode } from '$lib/currency-format';
+  import LedgerAccountsPanel from '$lib/components/LedgerAccountsPanel.svelte';
 
   type AppState = {
     initialized: boolean;
@@ -178,6 +179,7 @@
   let lastRouteKey = '';
   let needsSetupCount = 0;
   let showAdvancedSettings = false;
+  let ledgerAccountsPanel: LedgerAccountsPanel | null = null;
 
   function defaultCurrencySymbol(value: string): string {
     switch (value.toUpperCase()) {
@@ -771,6 +773,7 @@
       }
 
       await load();
+      await ledgerAccountsPanel?.reload();
       lastRouteKey = '';
       if (editorMode === 'institution') {
         startInstitutionAccount();
@@ -1416,6 +1419,8 @@
       {/if}
     </article>
   </section>
+
+  <LedgerAccountsPanel bind:this={ledgerAccountsPanel} />
 {/if}
 
 <style>

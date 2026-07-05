@@ -130,6 +130,23 @@ class CreateAccountRequest(BaseModel):
     description: str | None = None
 
 
+class AccountNameRequest(BaseModel):
+    account: str = Field(min_length=1)
+
+
+class AccountSubtypeRequest(BaseModel):
+    account: str = Field(min_length=1)
+    subtype: AccountSubtype | None = None
+
+
+class AccountCloseRequest(BaseModel):
+    """``closedOn`` defaults to today; validated as an ISO date server-side
+    (not by pattern) so bad dates get a 400 with a readable message."""
+
+    account: str = Field(min_length=1)
+    closedOn: str | None = None
+
+
 class WorkspaceImportAccountRequest(BaseModel):
     institutionId: str = Field(min_length=1)
     displayName: str = Field(min_length=1)

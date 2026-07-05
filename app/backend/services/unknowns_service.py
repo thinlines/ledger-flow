@@ -7,6 +7,7 @@ from decimal import Decimal
 from pathlib import Path
 from uuid import uuid4
 
+from .account_declaration_service import load_known_accounts
 from .archive_service import archive_manual_entry, rollback_archive
 from .config_service import infer_account_kind
 from .manual_entry_service import (
@@ -56,14 +57,9 @@ def list_category_accounts(accounts_dat: Path) -> list[str]:
     )
 
 
-def _load_known_accounts(accounts_dat: Path) -> set[str]:
-    known = set()
-    if not accounts_dat.exists():
-        return known
-    for line in accounts_dat.read_text(encoding="utf-8").splitlines():
-        if line.startswith("account "):
-            known.add(line[len("account "):].strip())
-    return known
+# Declaration parsing/writing lives with the lifecycle service (issue #19);
+# the alias keeps this module's call sites unchanged.
+_load_known_accounts = load_known_accounts
 
 
 def _load_payee_rules(accounts_dat: Path) -> dict[str, str]:
@@ -1049,48 +1045,3 @@ def add_payee_rule(accounts_dat: Path, payee: str, account: str) -> tuple[bool, 
     return True, None
 
 
-def _infer_account_type(account: str) -> str:
-    prefix = account.split(":", 1)[0].strip().lower()
-    if prefix == "assets":
-        return "Asset"
-    if prefix in {"liabilities", "liability"}:
-        return "Liability"
-    if prefix in {"expenses", "expense"}:
-        return "Expense"
-    if prefix in {"income", "revenue"}:
-        return "Revenue"
-    if prefix == "equity":
-        return "Equity"
-    return "Other"
-
-
-def create_account(
-    accounts_dat: Path,
-    account: str,
-    account_type: str | None = None,
-    description: str | None = None,
-) -> tuple[bool, str | None]:
-    account_clean = account.strip()
-    if not account_clean:
-        raise ValueError("Account is required")
-    if ":" not in account_clean:
-        raise ValueError("Account must be fully qualified, e.g. Expenses:Food")
-
-    known = _load_known_accounts(accounts_dat)
-    if account_clean in known:
-        return False, None
-
-    account_type_clean = (account_type or "").strip() or _infer_account_type(account_clean)
-    description_clean = re.sub(r"\s*[\r\n]+\s*", " ", description or "").strip()
-    if accounts_dat.exists():
-        lines = accounts_dat.read_text(encoding="utf-8").splitlines()
-    else:
-        lines = []
-    if lines and lines[-1].strip():
-        lines.append("")
-    lines.append(f"account {account_clean}")
-    lines.append(f"    ; type: {account_type_clean}")
-    if description_clean:
-        lines.append(f"    ; description: {description_clean}")
-    accounts_dat.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    return True, None

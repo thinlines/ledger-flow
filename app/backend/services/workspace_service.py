@@ -6,6 +6,8 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
+from .account_declaration_service import set_subtype
+from .reference_data_service import account_subtypes
 from .commodity_service import BASE_CURRENCY_SYMBOLS
 from .config_service import AppConfig, infer_account_kind, load_config
 from .custom_csv_service import normalize_custom_profile
@@ -568,11 +570,42 @@ class WorkspaceManager:
         return {
             "display_name": account_cfg.get("display_name", tracked_account_id),
             "ledger_account": account_cfg.get("ledger_account", ""),
-            "subtype": account_cfg.get("subtype"),
             "institution": account_cfg.get("institution"),
             "last4": account_cfg.get("last4"),
             "import_account_id": import_account_id,
         }
+
+    def _sync_subtype_declaration(
+        self, config: AppConfig, ledger_account: str, subtype: str | None
+    ) -> None:
+        """Subtype is declaration-canonical (issue #19): persist it as
+        ``lf_subtype`` metadata on the account directive, never in
+        config.toml."""
+        ledger_account = str(ledger_account or "").strip()
+        if not ledger_account:
+            return
+        set_subtype(config, ledger_account, subtype or None)
+
+    def _sync_subtype_after_upsert(
+        self,
+        config: AppConfig,
+        payload: dict,
+        normalized: dict,
+        previous_ledger_account: str,
+        ledger_account: str,
+    ) -> None:
+        """Apply the payload's subtype to the declaration; when the payload
+        omits the field but the upsert renamed the ledger account, carry the
+        previous declaration's subtype over to the new one."""
+        if "subtype" in payload:
+            self._sync_subtype_declaration(
+                config, ledger_account, normalized.get("subtype")
+            )
+            return
+        if previous_ledger_account and previous_ledger_account != ledger_account:
+            carried = account_subtypes(config).get(previous_ledger_account)
+            if carried:
+                self._sync_subtype_declaration(config, ledger_account, carried)
 
     def _write_workspace_config(
         self,
@@ -621,9 +654,6 @@ class WorkspaceManager:
             cfg_lines.append(f"[tracked_accounts.{account_id}]")
             cfg_lines.append(f"display_name = {json.dumps(str(account_cfg.get('display_name', account_id)))}")
             cfg_lines.append(f"ledger_account = {json.dumps(str(account_cfg.get('ledger_account', '')))}")
-            subtype = str(account_cfg.get("subtype") or "").strip()
-            if subtype:
-                cfg_lines.append(f"subtype = {json.dumps(subtype)}")
             institution = str(account_cfg.get("institution") or "").strip()
             if institution:
                 cfg_lines.append(f"institution = {json.dumps(institution)}")
@@ -957,16 +987,18 @@ class WorkspaceManager:
         used_account_ids: set[str] = set()
         normalized_input_rows: list[tuple[dict, dict]] = []
 
+        subtype_by_ledger: dict[str, str | None] = {}
         for raw in import_accounts:
             normalized, template = self._normalize_import_account(raw, used_account_ids)
             normalized_accounts[normalized["id"]] = {
                 "display_name": normalized["display_name"],
                 "institution": normalized["institution"],
                 "ledger_account": normalized["ledger_account"],
-                "subtype": normalized.get("subtype"),
                 "last4": normalized["last4"],
                 "tracked_account_id": normalized["id"],
             }
+            if normalized.get("subtype"):
+                subtype_by_ledger[normalized["ledger_account"]] = normalized["subtype"]
             selected_templates[normalized["institution"]] = template.as_config()
             normalized_input_rows.append((raw, normalized_accounts[normalized["id"]]))
 
@@ -1030,6 +1062,8 @@ class WorkspaceManager:
 
         config = load_config(settings / "workspace.toml")
         ensure_workspace_journal_includes(config)
+        for ledger_account, subtype in subtype_by_ledger.items():
+            self._sync_subtype_declaration(config, ledger_account, subtype)
         for raw, normalized_account in normalized_input_rows:
             opening_balance = raw.get("openingBalance")
             if opening_balance is None:
@@ -1085,17 +1119,11 @@ class WorkspaceManager:
         previous_ledger_account = str(existing_row.get("ledger_account", "")).strip()
         tracked_account_id = str(existing_row.get("tracked_account_id", "")).strip() or normalized["id"]
         stale_profile_id = str(existing_row.get("import_profile_id") or "").strip()
-        subtype = (
-            normalized.get("subtype")
-            if "subtype" in account
-            else existing_tracked_accounts.get(tracked_account_id, {}).get("subtype")
-        )
 
         existing_accounts[normalized["id"]] = {
             "display_name": normalized["display_name"],
             "institution": normalized["institution"],
             "ledger_account": normalized["ledger_account"],
-            "subtype": subtype,
             "last4": normalized["last4"],
             "tracked_account_id": tracked_account_id,
         }
@@ -1145,6 +1173,13 @@ class WorkspaceManager:
             opening_balance_date=opening_balance_date,
             opening_balance_offset_account_id=opening_balance_offset_account_id,
             minimum_payment=minimum_payment,
+        )
+        self._sync_subtype_after_upsert(
+            refreshed,
+            account,
+            normalized,
+            previous_ledger_account,
+            existing_accounts[normalized["id"]]["ledger_account"],
         )
 
         return normalized["id"], existing_accounts[normalized["id"]]
@@ -1196,17 +1231,11 @@ class WorkspaceManager:
         ).strip()
         if stale_profile_id and stale_profile_id != normalized["import_profile_id"]:
             existing_import_profiles.pop(stale_profile_id, None)
-        subtype = (
-            normalized.get("subtype")
-            if "subtype" in account
-            else existing_tracked_accounts.get(tracked_account_id, {}).get("subtype")
-        )
 
         existing_accounts[normalized["id"]] = {
             "display_name": normalized["display_name"],
             "institution": None,
             "ledger_account": normalized["ledger_account"],
-            "subtype": subtype,
             "last4": normalized["last4"],
             "tracked_account_id": tracked_account_id,
             "import_profile_id": normalized["import_profile_id"],
@@ -1251,6 +1280,13 @@ class WorkspaceManager:
             opening_balance_offset_account_id=opening_balance_offset_account_id,
             minimum_payment=minimum_payment,
         )
+        self._sync_subtype_after_upsert(
+            refreshed,
+            account,
+            normalized,
+            previous_ledger_account,
+            existing_accounts[normalized["id"]]["ledger_account"],
+        )
 
         return normalized["id"], existing_accounts[normalized["id"]]
 
@@ -1290,7 +1326,6 @@ class WorkspaceManager:
         existing_tracked_accounts[normalized["id"]] = {
             "display_name": normalized["display_name"],
             "ledger_account": normalized["ledger_account"],
-            "subtype": normalized.get("subtype"),
             "institution": normalized["institution"],
             "last4": normalized["last4"],
             "import_account_id": None,
@@ -1330,5 +1365,12 @@ class WorkspaceManager:
             opening_balance_date=opening_balance_date,
             opening_balance_offset_account_id=opening_balance_offset_account_id,
             minimum_payment=minimum_payment,
+        )
+        self._sync_subtype_after_upsert(
+            refreshed,
+            account,
+            normalized,
+            previous_ledger_account,
+            normalized["ledger_account"],
         )
         return normalized["id"], existing_tracked_accounts[normalized["id"]]

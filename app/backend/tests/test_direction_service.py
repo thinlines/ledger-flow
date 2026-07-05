@@ -119,6 +119,51 @@ def test_runway_gauge_computed_correctly(tmp_path: Path) -> None:
     assert result["runway"]["months"] == 6.0
 
 
+def test_runway_excludes_fixed_assets_by_projected_subtype(tmp_path: Path) -> None:
+    """Subtype is declaration-canonical (issue #19): the runway's liquid /
+    fixed split reads ``lf_subtype`` from the projection, not config.toml."""
+    config = _make_config(tmp_path / "workspace")
+    config.tracked_accounts["condo"] = {
+        "display_name": "Condo",
+        "ledger_account": "Assets:Property:Condo",
+        "import_account_id": None,
+    }
+    (config.init_dir / "10-accounts.dat").write_text(
+        "account Assets:Property:Condo\n    ; lf_subtype: real_estate\n",
+        encoding="utf-8",
+    )
+
+    journal = ""
+    for month_num in range(11, 17):  # Nov 2025 through Apr 2026
+        year = 2025 if month_num <= 12 else 2026
+        m = month_num if month_num <= 12 else month_num - 12
+        journal += f"""
+{year:04d}/{m:02d}/15 Paycheck
+    ; import_account_id: checking
+    Assets:Bank:Checking  $2000.00
+    Income:Salary
+
+{year:04d}/{m:02d}/20 Rent
+    ; import_account_id: checking
+    Expenses:Housing:Rent  $1000.00
+    Assets:Bank:Checking
+"""
+    journal += """
+2026/01/02 Condo purchase recorded
+    Assets:Property:Condo  $100000.00
+    Equity:Opening-Balances
+"""
+    _write_journal(config, "2025.journal", "")
+    (config.journal_dir / "2025.journal").write_text(journal, encoding="utf-8")
+    ensure_workspace_journal_includes(config)
+
+    result = build_dashboard_direction(config, today=date(2026, 4, 18))
+
+    assert result["runway"] is not None
+    # Condo balance is excluded from spendable cash: 6 * 2000 - 6 * 1000.
+    assert result["runway"]["spendableCash"] == 6000.0
+
+
 def test_runway_null_when_no_spending(tmp_path: Path) -> None:
     config = _make_config(tmp_path / "workspace")
     _write_journal(

@@ -46,6 +46,58 @@ def list_category_account_names(config: AppConfig) -> list[str]:
     ]
 
 
+def account_subtypes(config: AppConfig) -> dict[str, str]:
+    """``{name: subtype}`` for every account whose declaration carries
+    ``lf_subtype`` — the canonical subtype source (issue #19)."""
+    with closing(_open(config)) as conn:
+        rows = conn.execute(
+            "SELECT name, subtype FROM accounts WHERE subtype IS NOT NULL"
+        ).fetchall()
+    return dict(rows)
+
+
+def list_managed_accounts(config: AppConfig) -> list[dict]:
+    """Every projected account row for the lifecycle management panel, in
+    lexicographic (= depth-first tree) order, with subtree posting counts.
+
+    Counts include every file role — archives too — because they feed the
+    delete guard, which must block on any historical reference."""
+    with closing(_open(config)) as conn:
+        account_rows = conn.execute(
+            """
+            SELECT name, account_type, subtype, depth, note, closed_on,
+                   declared, used
+            FROM accounts ORDER BY name
+            """
+        ).fetchall()
+        posting_rows = conn.execute(
+            "SELECT account, COUNT(*) FROM postings GROUP BY account"
+        ).fetchall()
+
+    subtree_counts: dict[str, int] = {}
+    for account, count in posting_rows:
+        segments = account.split(":")
+        for end in range(1, len(segments) + 1):
+            prefix = ":".join(segments[:end])
+            subtree_counts[prefix] = subtree_counts.get(prefix, 0) + count
+
+    return [
+        {
+            "name": name,
+            "account_type": account_type,
+            "subtype": subtype,
+            "depth": depth,
+            "note": note,
+            "closed_on": closed_on,
+            "declared": bool(declared),
+            "used": bool(used),
+            "posting_count": subtree_counts.get(name, 0),
+        }
+        for name, account_type, subtype, depth, note, closed_on, declared, used
+        in account_rows
+    ]
+
+
 def posting_counts_by_account(config: AppConfig) -> dict[str, int]:
     """Exact-name posting counts over non-archive files — the DB-backed
     replacement for parsing ``ledger accounts --count`` output.

@@ -286,6 +286,53 @@ def test_migration_is_idempotent(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# Config subtype adoption (issue #19: subtype is declaration-canonical)
+# ---------------------------------------------------------------------------
+
+
+def test_migration_copies_config_subtypes_into_declarations(tmp_path):
+    config = _workspace(tmp_path)
+    config.tracked_accounts["checking"] = {
+        "display_name": "Checking",
+        "ledger_account": "Assets:Checking",
+        "subtype": "checking",
+    }
+
+    report = migrate_lf_metadata(config)
+    assert report["subtypes_adopted"] == 1
+
+    dat = (tmp_path / "rules" / "10-accounts.dat").read_text(encoding="utf-8")
+    assert "account Assets:Checking\n    ; lf_subtype: checking\n" in dat
+
+    second = migrate_lf_metadata(config)
+    assert second["subtypes_adopted"] == 0
+
+
+def test_migration_never_overwrites_declaration_subtype(tmp_path):
+    config = _workspace(tmp_path)
+    dat_path = tmp_path / "rules" / "10-accounts.dat"
+    dat_path.write_text(
+        dat_path.read_text(encoding="utf-8").replace(
+            "account Assets:Checking\n",
+            "account Assets:Checking\n    ; lf_subtype: savings\n",
+        ),
+        encoding="utf-8",
+    )
+    config.tracked_accounts["checking"] = {
+        "display_name": "Checking",
+        "ledger_account": "Assets:Checking",
+        "subtype": "checking",
+    }
+
+    report = migrate_lf_metadata(config)
+
+    assert report["subtypes_adopted"] == 0
+    dat = dat_path.read_text(encoding="utf-8")
+    assert "; lf_subtype: savings" in dat
+    assert "; lf_subtype: checking" not in dat
+
+
+# ---------------------------------------------------------------------------
 # Writer ritual: backups + event
 # ---------------------------------------------------------------------------
 

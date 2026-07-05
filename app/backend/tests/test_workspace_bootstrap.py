@@ -140,7 +140,9 @@ def test_upsert_import_account_adds_post_bootstrap_account_and_updates_setup_sta
     assert reloaded.import_accounts[account_id]["ledger_account"] == "Assets:Bank:Wells Fargo:Checking"
     assert reloaded.tracked_accounts[account_id]["ledger_account"] == "Assets:Bank:Wells Fargo:Checking"
     assert reloaded.tracked_accounts[account_id]["import_account_id"] == account_id
-    assert reloaded.tracked_accounts[account_id]["subtype"] == "checking"
+    # Subtype is declaration-canonical (issue #19): stored as lf_ metadata,
+    # not in config.toml.
+    assert "subtype" not in reloaded.tracked_accounts[account_id]
     assert list(reloaded.institution_templates) == ["wells_fargo"]
 
     setup = manager.get_setup_state(reloaded)
@@ -152,6 +154,10 @@ def test_upsert_import_account_adds_post_bootstrap_account_and_updates_setup_sta
     accounts_dat = workspace_root / "rules" / "10-accounts.dat"
     content = accounts_dat.read_text(encoding="utf-8")
     assert "account Assets:Bank:Wells Fargo:Checking" in content
+    assert (
+        "account Assets:Bank:Wells Fargo:Checking\n    ; lf_subtype: checking\n"
+        in content
+    )
 
 
 def test_upsert_import_account_updates_existing_account_without_replacing_id(tmp_path: Path) -> None:
@@ -198,11 +204,17 @@ def test_upsert_import_account_updates_existing_account_without_replacing_id(tmp
     assert reloaded.import_accounts[account_id]["ledger_account"] == "Assets:Bank:Wells Fargo:Primary:Checking"
     assert reloaded.tracked_accounts[account_id]["display_name"] == "Primary Checking"
     assert reloaded.tracked_accounts[account_id]["ledger_account"] == "Assets:Bank:Wells Fargo:Primary:Checking"
-    assert reloaded.tracked_accounts[account_id]["subtype"] == "checking"
+    assert "subtype" not in reloaded.tracked_accounts[account_id]
 
     accounts_dat = workspace_root / "rules" / "10-accounts.dat"
     content = accounts_dat.read_text(encoding="utf-8")
     assert "account Assets:Bank:Wells Fargo:Primary:Checking" in content
+    # An update without a subtype field carries the previous ledger
+    # account's declared subtype over to the renamed declaration.
+    assert (
+        "account Assets:Bank:Wells Fargo:Primary:Checking\n    ; lf_subtype: checking\n"
+        in content
+    )
 
 
 def test_setup_state_detects_imported_activity_and_review_queue(tmp_path: Path) -> None:
@@ -317,11 +329,14 @@ def test_upsert_tracked_account_creates_manual_account_with_opening_balance(tmp_
     assert sorted(reloaded.tracked_accounts) == ["cash_wallet"]
     assert reloaded.tracked_accounts["cash_wallet"]["ledger_account"] == "Assets:Cash:Wallet"
     assert reloaded.tracked_accounts["cash_wallet"]["import_account_id"] is None
-    assert reloaded.tracked_accounts["cash_wallet"]["subtype"] == "cash"
+    assert "subtype" not in reloaded.tracked_accounts["cash_wallet"]
+    assert "subtype =" not in (workspace_root / "settings" / "workspace.toml").read_text(
+        encoding="utf-8"
+    )
 
     accounts_dat = workspace_root / "rules" / "10-accounts.dat"
     content = accounts_dat.read_text(encoding="utf-8")
-    assert "account Assets:Cash:Wallet" in content
+    assert "account Assets:Cash:Wallet\n    ; lf_subtype: cash\n" in content
 
     opening_file = workspace_root / "opening" / "cash_wallet.journal"
     opening_content = opening_file.read_text(encoding="utf-8")
@@ -498,13 +513,107 @@ def test_upsert_tracked_account_accepts_null_institution_id(tmp_path: Path) -> N
     assert account_id == "brokerage_cash"
     assert account_cfg["institution"] is None
     assert account_cfg["last4"] is None
-    assert account_cfg["subtype"] == "investment"
+    assert "subtype" not in account_cfg
 
     reloaded = load_config(workspace_root / "settings" / "workspace.toml")
     assert reloaded.tracked_accounts["brokerage_cash"].get("institution") is None
     assert reloaded.tracked_accounts["brokerage_cash"].get("last4") is None
     assert reloaded.tracked_accounts["brokerage_cash"]["import_account_id"] is None
-    assert reloaded.tracked_accounts["brokerage_cash"]["subtype"] == "investment"
+
+    dat = (workspace_root / "rules" / "10-accounts.dat").read_text(encoding="utf-8")
+    assert (
+        "account Assets:Investments:Brokerage:Cash\n    ; lf_subtype: investment\n"
+        in dat
+    )
+
+
+def test_tracked_account_ui_serves_subtype_from_projection(tmp_path: Path) -> None:
+    """The declaration is canonical: a hand edit to the ``.dat`` wins over
+    whatever the account was last saved with."""
+    manager = WorkspaceManager(tmp_path / "app")
+    workspace_root = tmp_path / "workspace"
+
+    manager.bootstrap_workspace(
+        workspace_path=workspace_root,
+        workspace_name="Test Books",
+        base_currency="USD",
+        start_year=2026,
+        import_accounts=[],
+    )
+
+    config = load_config(workspace_root / "settings" / "workspace.toml")
+    account_id, _ = manager.upsert_tracked_account(
+        config,
+        {
+            "displayName": "Cash Wallet",
+            "ledgerAccount": "Assets:Cash:Wallet",
+            "subtype": "cash",
+        },
+    )
+
+    reloaded = load_config(workspace_root / "settings" / "workspace.toml")
+    opening_by_id, opening_by_ledger = opening_balance_index(reloaded)
+    ui = _tracked_account_ui(
+        reloaded,
+        account_id,
+        reloaded.tracked_accounts[account_id],
+        opening_by_id,
+        opening_by_ledger,
+    )
+    assert ui["subtype"] == "cash"
+
+    accounts_dat = workspace_root / "rules" / "10-accounts.dat"
+    accounts_dat.write_text(
+        accounts_dat.read_text(encoding="utf-8").replace(
+            "; lf_subtype: cash", "; lf_subtype: savings"
+        ),
+        encoding="utf-8",
+    )
+    ui = _tracked_account_ui(
+        reloaded,
+        account_id,
+        reloaded.tracked_accounts[account_id],
+        opening_by_id,
+        opening_by_ledger,
+    )
+    assert ui["subtype"] == "savings"
+
+
+def test_upsert_tracked_account_clearing_subtype_removes_declaration_line(tmp_path: Path) -> None:
+    manager = WorkspaceManager(tmp_path / "app")
+    workspace_root = tmp_path / "workspace"
+
+    manager.bootstrap_workspace(
+        workspace_path=workspace_root,
+        workspace_name="Test Books",
+        base_currency="USD",
+        start_year=2026,
+        import_accounts=[],
+    )
+
+    config = load_config(workspace_root / "settings" / "workspace.toml")
+    account_id, _ = manager.upsert_tracked_account(
+        config,
+        {
+            "displayName": "Cash Wallet",
+            "ledgerAccount": "Assets:Cash:Wallet",
+            "subtype": "cash",
+        },
+    )
+
+    config = load_config(workspace_root / "settings" / "workspace.toml")
+    manager.upsert_tracked_account(
+        config,
+        {
+            "displayName": "Cash Wallet",
+            "ledgerAccount": "Assets:Cash:Wallet",
+            "subtype": None,
+        },
+        account_id=account_id,
+    )
+
+    dat = (workspace_root / "rules" / "10-accounts.dat").read_text(encoding="utf-8")
+    assert "lf_subtype" not in dat
 
 
 def test_upsert_import_account_keeps_opening_balance_in_sync_with_ledger_account(tmp_path: Path) -> None:
@@ -754,7 +863,13 @@ def test_upsert_custom_import_account_creates_profile_and_links_tracked_account(
     assert sorted(reloaded.import_profiles) == [account_id]
     assert reloaded.import_profiles[account_id]["amount_mode"] == "debit_credit"
     assert reloaded.tracked_accounts[account_id]["import_account_id"] == account_id
-    assert reloaded.tracked_accounts[account_id]["subtype"] == "credit_card"
+    assert "subtype" not in reloaded.tracked_accounts[account_id]
+
+    dat = (workspace_root / "rules" / "10-accounts.dat").read_text(encoding="utf-8")
+    assert (
+        "account Liabilities:Cards:Capital One\n    ; lf_subtype: credit_card\n"
+        in dat
+    )
 
     opening_file = workspace_root / "opening" / f"{account_id}.journal"
     assert "Liabilities:Cards:Capital One  USD 500.00" in opening_file.read_text(encoding="utf-8")
