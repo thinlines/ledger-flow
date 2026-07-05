@@ -6,15 +6,17 @@ from decimal import Decimal
 
 from .commodity_service import CommodityMismatchError, commodity_label
 from .config_service import AppConfig, infer_account_kind
+from .header_parser import TransactionStatus
 from .journal_query_service import (
     ParsedTransaction,
     Posting,
     amount_to_number,
-    get_transactions_cached,
     is_generated_opening_balance_transaction,
     pretty_account_name,
 )
 from .opening_balance_service import opening_balance_index
+from .projection_db import connect, database_path
+from .projection_service import refresh_projection
 from .reconciliation_service import reconciliation_status as compute_reconciliation_status
 
 
@@ -59,6 +61,106 @@ def _accumulate_total(
         )
     commodities[key] = commodity
     totals[key] += amount
+
+
+def _decimal_from_nano(value: int | None) -> Decimal | None:
+    if value is None:
+        return None
+    return Decimal(value) / Decimal("1000000000")
+
+
+def _load_dashboard_transactions_from_projection(
+    config: AppConfig,
+) -> list[ParsedTransaction]:
+    """Load dashboard source rows from the journal projection, not journal text.
+
+    The dashboard still uses the existing Python shaping code, but the read-heavy
+    parse/hydrate step is served from SQLite projection tables.
+    """
+    refresh_projection(config)
+
+    with connect(database_path(config)) as conn:
+        txn_rows = conn.execute(
+            """
+            SELECT transactions.id, transactions.date, transactions.payee,
+                   transactions.status, transactions.raw_header,
+                   journal_files.path, transactions.source_start_line
+            FROM transactions
+            JOIN journal_files ON journal_files.id = transactions.journal_file_id
+            WHERE journal_files.role != 'archive'
+              AND transactions.parse_status = 'ok'
+            ORDER BY transactions.date, journal_files.path, transactions.txn_order
+            """
+        ).fetchall()
+
+        posting_rows = conn.execute(
+            """
+            SELECT postings.transaction_id, postings.account, postings.amount_nano,
+                   postings.commodity, postings.amount_inferred
+            FROM postings
+            JOIN transactions ON transactions.id = postings.transaction_id
+            JOIN journal_files ON journal_files.id = transactions.journal_file_id
+            WHERE journal_files.role != 'archive'
+              AND transactions.parse_status = 'ok'
+            ORDER BY postings.transaction_id, postings.posting_order
+            """
+        ).fetchall()
+
+        metadata_rows = conn.execute(
+            """
+            SELECT metadata_entries.owner_id, metadata_entries.key,
+                   metadata_entries.value_text
+            FROM metadata_entries
+            JOIN transactions ON transactions.id = metadata_entries.owner_id
+            JOIN journal_files ON journal_files.id = transactions.journal_file_id
+            WHERE metadata_entries.owner_type = 'transaction'
+              AND journal_files.role != 'archive'
+              AND transactions.parse_status = 'ok'
+            ORDER BY metadata_entries.owner_id, metadata_entries.source_order
+            """
+        ).fetchall()
+
+    postings_by_txn: dict[str, list[Posting]] = defaultdict(list)
+    for txn_id, account, amount_nano, commodity, inferred in posting_rows:
+        postings_by_txn[txn_id].append(
+            Posting(
+                account=account,
+                amount=_decimal_from_nano(amount_nano),
+                commodity=commodity,
+                inferred=bool(inferred),
+            )
+        )
+
+    metadata_by_txn: dict[str, dict[str, str]] = defaultdict(dict)
+    for txn_id, key, value in metadata_rows:
+        metadata_by_txn[txn_id][str(key).lower()] = str(value)
+
+    root = config.root_dir.resolve()
+    transactions: list[ParsedTransaction] = []
+    for (
+        txn_id,
+        date_text,
+        payee,
+        status,
+        raw_header,
+        rel_path,
+        source_start_line,
+    ) in txn_rows:
+        transactions.append(
+            ParsedTransaction(
+                posted_on=date.fromisoformat(date_text),
+                payee=payee,
+                postings=postings_by_txn.get(txn_id, []),
+                metadata=metadata_by_txn.get(txn_id, {}),
+                status=TransactionStatus(status),
+                header_line=raw_header,
+                source_journal=str(root / rel_path),
+                header_line_number=int(source_start_line) - 1,
+                txn_id=txn_id,
+            )
+        )
+
+    return transactions
 
 
 def _primary_posting(transaction: ParsedTransaction, config: AppConfig) -> Posting | None:
@@ -119,7 +221,7 @@ def _transaction_category(transaction: ParsedTransaction) -> tuple[str, bool]:
 
 def build_dashboard_overview(config: AppConfig, *, today: date | None = None) -> dict:
     current_day = today or date.today()
-    transactions = get_transactions_cached(config)
+    transactions = _load_dashboard_transactions_from_projection(config)
     _, opening_by_ledger_account = opening_balance_index(config)
     opening_balance_accounts = set(opening_by_ledger_account)
     account_balances: defaultdict[str, Decimal] = defaultdict(lambda: Decimal("0"))
@@ -411,7 +513,7 @@ def query_dashboard_transactions(
     last_day = calendar.monthrange(year, month_num)[1]
     period_end = date(year, month_num, last_day)
 
-    transactions = get_transactions_cached(config)
+    transactions = _load_dashboard_transactions_from_projection(config)
 
     matching: list[dict] = []
     for transaction in transactions:

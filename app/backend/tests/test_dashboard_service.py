@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from services import journal_query_service
 from services.commodity_service import CommodityMismatchError
 from services.config_service import AppConfig
 from services.dashboard_service import build_dashboard_overview, query_dashboard_transactions
@@ -176,6 +177,30 @@ def test_dashboard_overview_summarizes_financial_state(tmp_path: Path) -> None:
     assert latest["category"] == "Unknown"
     assert latest["amount"] == -25.0
     assert latest["isUnknown"] is True
+
+
+def test_dashboard_overview_reads_from_projection_without_legacy_journal_parse(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = _make_config(tmp_path / "workspace")
+    _write_year_journal(config, _FIXTURE_JOURNAL)
+
+    def fail_legacy_loader(config: AppConfig):
+        raise AssertionError("dashboard overview must not parse journals directly")
+
+    monkeypatch.setattr(
+        journal_query_service,
+        "get_transactions_cached",
+        fail_legacy_loader,
+    )
+
+    overview = build_dashboard_overview(config, today=date(2026, 3, 9))
+
+    assert overview["summary"]["netWorth"] == 3459.49
+    assert overview["summary"]["incomeThisMonth"] == 2500.0
+    assert overview["summary"]["spendingThisMonth"] == 200.01
+    assert overview["recentTransactions"][0]["payee"] == "Unknown Merchant"
 
 
 def test_dashboard_overview_handles_empty_journals(tmp_path: Path) -> None:
@@ -441,6 +466,33 @@ def test_dashboard_transactions_returns_matching_period(tmp_path: Path) -> None:
     assert len(result["transactions"]) == 6
     dates = [r["date"] for r in result["transactions"]]
     assert dates == sorted(dates, reverse=True)
+
+
+def test_dashboard_transactions_reads_from_projection_without_legacy_journal_parse(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = _make_config(tmp_path / "workspace")
+    _write_year_journal(config, _FIXTURE_JOURNAL)
+
+    def fail_legacy_loader(config: AppConfig):
+        raise AssertionError("dashboard transactions must not parse journals directly")
+
+    monkeypatch.setattr(
+        journal_query_service,
+        "get_transactions_cached",
+        fail_legacy_loader,
+    )
+
+    result = query_dashboard_transactions(
+        config, period="2026-03", category="Expenses:Food"
+    )
+
+    assert result["total"] == 2
+    assert {row["payee"] for row in result["transactions"]} == {
+        "Coffee Shop",
+        "Grocery Market",
+    }
 
 
 def test_dashboard_transactions_filters_by_category(tmp_path: Path) -> None:
