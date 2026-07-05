@@ -40,7 +40,8 @@ class ImportCandidateRemoveRequest(BaseModel):
 
 
 class ManualTransactionRequest(BaseModel):
-    trackedAccountId: str
+    trackedAccountId: str | None = None
+    sourceAccount: str | None = None
     date: str = Field(pattern=DATE_PATTERN)
     payee: str = ""
     amount: str = Field(min_length=1)

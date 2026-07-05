@@ -607,18 +607,58 @@ def transactions_unified(
         raise HTTPException(status_code=404, detail=str(e)) from e
 
 
+def _resolve_source_tracked_account(config, req: ManualTransactionRequest) -> tuple[str, dict]:
+    """Resolve the source tracked account from a create request.
+
+    Accepts either the internal tracked account id (existing UI payload) or a
+    user-facing source account selector: a fully-qualified Ledger account name.
+    """
+    if (req.trackedAccountId is None) == (req.sourceAccount is None):
+        raise HTTPException(
+            status_code=400,
+            detail="Provide exactly one of 'trackedAccountId' or 'sourceAccount'.",
+        )
+    if req.trackedAccountId is not None:
+        tracked_account_cfg = config.tracked_accounts.get(req.trackedAccountId)
+        if not tracked_account_cfg:
+            raise HTTPException(status_code=404, detail=f"Tracked account not found: {req.trackedAccountId}")
+        return req.trackedAccountId, tracked_account_cfg
+
+    selector = str(req.sourceAccount or "").strip()
+    matches = [
+        (tracked_account_id, tracked_account)
+        for tracked_account_id, tracked_account in config.tracked_accounts.items()
+        if str(tracked_account.get("ledger_account", "")).strip() == selector
+    ]
+    if not matches:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"No tracked account matches source account '{selector}'. "
+                "Use a fully-qualified Ledger account name of a tracked account."
+            ),
+        )
+    if len(matches) > 1:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Source account '{selector}' is ambiguous: it matches "
+                f"{len(matches)} tracked accounts."
+            ),
+        )
+    return matches[0]
+
+
 @app.post("/api/transactions/create")
 def transactions_create(req: ManualTransactionRequest) -> dict:
     config = _require_workspace_config()
-    tracked_account_cfg = config.tracked_accounts.get(req.trackedAccountId)
-    if not tracked_account_cfg:
-        raise HTTPException(status_code=404, detail=f"Tracked account not found: {req.trackedAccountId}")
+    tracked_account_id, tracked_account_cfg = _resolve_source_tracked_account(config, req)
 
     year = req.date[:4]
     journal_path = config.journal_dir / f"{year}.journal"
     accounts_dat = config.init_dir / "10-accounts.dat"
     currency = str(config.workspace.get("base_currency", "USD"))
-    source_account = tracked_account_cfg.get("name", req.trackedAccountId)
+    source_account = tracked_account_cfg.get("name", tracked_account_id)
 
     result: dict
     with journal_writer.mutate(
