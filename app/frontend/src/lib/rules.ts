@@ -180,16 +180,18 @@ export function ruleMatches(rule: Pick<EditableRule, 'conditions' | 'enabled'>, 
   const conditions = normalizeConditions(rule.conditions);
   if (!conditions.length) return false;
 
-  let matched = false;
-  for (const [index, condition] of conditions.entries()) {
-    const conditionMatch = matchesCondition(condition, context);
-    if (index === 0) {
-      matched = conditionMatch;
-      continue;
+  let currentGroup: RuleCondition[] = [];
+  const groups: RuleCondition[][] = [];
+  for (const condition of conditions) {
+    if (currentGroup.length > 0 && condition.joiner === 'or') {
+      groups.push(currentGroup);
+      currentGroup = [];
     }
-    matched = condition.joiner === 'or' ? matched || conditionMatch : matched && conditionMatch;
+    currentGroup.push(condition);
   }
-  return matched;
+  if (currentGroup.length > 0) groups.push(currentGroup);
+
+  return groups.some((group) => group.every((condition) => matchesCondition(condition, context)));
 }
 
 export function findMatchingRule<T extends Pick<EditableRule, 'conditions' | 'enabled'>>(

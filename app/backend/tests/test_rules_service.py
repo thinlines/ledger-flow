@@ -179,6 +179,32 @@ def test_rule_supports_or_joiner(tmp_path: Path) -> None:
     assert matched["id"] == rule["id"]
 
 
+def test_rule_or_groups_match_with_and_conditions_inside_each_group(tmp_path: Path) -> None:
+    rules_dir = tmp_path / "rules"
+    rules_dir.mkdir(parents=True, exist_ok=True)
+    accounts = rules_dir / "10-accounts.dat"
+    accounts.write_text("", encoding="utf-8")
+    path = ensure_rules_store(rules_dir, accounts)
+
+    rule = create_rule(
+        path,
+        conditions=[
+            {"field": "payee", "operator": "contains", "value": "coffee"},
+            {"field": "date", "operator": "before", "value": "2026-02-01", "joiner": "and"},
+            {"field": "payee", "operator": "contains", "value": "books", "joiner": "or"},
+            {"field": "date", "operator": "on_or_after", "value": "2026-03-01", "joiner": "and"},
+        ],
+        actions=[{"type": "set_account", "account": "Expenses:Mixed"}],
+        enabled=True,
+    )
+    rules = load_rules(path)
+
+    assert find_matching_rule({"payee": "Coffee Shop", "date": "2026-01-15"}, rules)["id"] == rule["id"]
+    assert find_matching_rule({"payee": "Neighborhood Books", "date": "2026-03-15"}, rules)["id"] == rule["id"]
+    assert find_matching_rule({"payee": "Coffee Shop", "date": "2026-03-15"}, rules) is None
+    assert find_matching_rule({"payee": "Neighborhood Books", "date": "2026-01-15"}, rules) is None
+
+
 def test_rule_supports_date_conditions(tmp_path: Path) -> None:
     rules_dir = tmp_path / "rules"
     rules_dir.mkdir(parents=True, exist_ok=True)

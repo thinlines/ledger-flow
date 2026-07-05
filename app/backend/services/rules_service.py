@@ -538,17 +538,10 @@ def find_matching_rule(context: dict[str, str], rules: list[dict]) -> dict | Non
     for rule in _normalize_rules(rules):
         if not rule["enabled"]:
             continue
-        matched = False
-        for idx, condition in enumerate(rule["conditions"]):
-            condition_match = _matches_condition(condition, context)
-            if idx == 0:
-                matched = condition_match
-                continue
-            if condition["joiner"] == "or":
-                matched = matched or condition_match
-            else:
-                matched = matched and condition_match
-        if matched:
+        if any(
+            all(_matches_condition(condition, context) for condition in group)
+            for group in _condition_groups(rule["conditions"])
+        ):
             return rule
     return None
 

@@ -194,6 +194,40 @@ def test_scan_unknowns_only_suggests_date_rule_when_all_group_transactions_match
     assert group["matchedRuleId"] is None
 
 
+def test_scan_unknowns_applies_dnf_rule_groups(tmp_path: Path) -> None:
+    journal = tmp_path / "sample.journal"
+    journal.write_text(
+        """
+2026/03/10 Neighborhood Books
+    Expenses:Unknown  $7.00
+    Assets:Bank:Checking
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    result = scan_unknowns(
+        journal,
+        [{
+            "id": "r1",
+            "type": "match",
+            "conditions": [
+                {"field": "payee", "operator": "contains", "value": "coffee"},
+                {"field": "date", "operator": "before", "value": "2026-02-01", "joiner": "and"},
+                {"field": "payee", "operator": "contains", "value": "books", "joiner": "or"},
+                {"field": "date", "operator": "on_or_after", "value": "2026-03-01", "joiner": "and"},
+            ],
+            "actions": [{"type": "set_account", "account": "Expenses:Books"}],
+            "enabled": True,
+            "position": 1,
+        }],
+    )
+
+    group = result["groups"][0]
+    assert group["suggestedAccount"] == "Expenses:Books"
+    assert group["matchedRuleId"] == "r1"
+
+
 def test_apply_unknown_mappings_updates_journal_only(tmp_path: Path) -> None:
     journal = tmp_path / "sample.journal"
     accounts = tmp_path / "10-accounts.dat"
