@@ -8,6 +8,7 @@
   import SavedRuleAccordionItem from '$lib/components/SavedRuleAccordionItem.svelte';
   import type { RuleAction, RuleCondition } from '$lib/components/rule-editor-types';
   import { apiDelete, apiGet, apiPost } from '$lib/api';
+  import { splitAccountSeed } from '$lib/account-create';
   import {
     createDefaultRuleActions,
     createDefaultRuleConditions,
@@ -63,8 +64,8 @@
   let dragIndex: number | null = null;
 
   let showCreateAccountModal = false;
-  let newAccountName = '';
-  let newAccountType = 'Expense';
+  let newAccountParent = '';
+  let newAccountLeaf = '';
   let newAccountDescription = '';
   let createAccountError = '';
   let createAccountContext: { mode: 'new-rule' | 'existing-rule'; ruleId: string | null } = {
@@ -78,7 +79,6 @@
   let historyLoading = false;
   let historyJournalSelectEl: HTMLSelectElement | null = null;
   let historyApplyNotice: HistoryApplyNotice | null = null;
-  const categoryAccountTypes = ['Expense', 'Revenue'];
 
   const historyApplyNoticeKeys = [
     'historyApplied',
@@ -114,24 +114,9 @@
     };
   });
 
-  function inferAccountType(accountName: string): string {
-    const prefix = accountName.split(':', 1)[0]?.trim().toLowerCase() || '';
-    if (prefix === 'assets') return 'Asset';
-    if (prefix === 'liabilities' || prefix === 'liability') return 'Liability';
-    if (prefix === 'expenses' || prefix === 'expense') return 'Expense';
-    if (prefix === 'income' || prefix === 'revenue') return 'Revenue';
-    if (prefix === 'equity') return 'Equity';
-    return 'Expense';
-  }
-
   function isCategoryAccountName(accountName: string): boolean {
     const prefix = accountName.split(':', 1)[0]?.trim().toLowerCase() || '';
     return ['expenses', 'expense', 'income', 'revenue'].includes(prefix);
-  }
-
-  function updateInferredTypeFromName() {
-    const inferredType = inferAccountType(newAccountName);
-    newAccountType = categoryAccountTypes.includes(inferredType) ? inferredType : categoryAccountTypes[0];
   }
 
   function pathLabel(path: string): string {
@@ -455,9 +440,8 @@
     context: { mode: 'new-rule' | 'existing-rule'; ruleId: string | null }
   ) {
     createAccountContext = context;
-    newAccountName = initialName;
+    ({ parent: newAccountParent, leaf: newAccountLeaf } = splitAccountSeed(initialName));
     newAccountDescription = '';
-    updateInferredTypeFromName();
     createAccountError = '';
     showCreateAccountModal = true;
   }
@@ -476,19 +460,21 @@
   }
 
   async function createAccountAndContinue() {
-    if (!newAccountName || !newAccountType) return;
-    if (!isCategoryAccountName(newAccountName) || !categoryAccountTypes.includes(newAccountType)) {
+    if (!isCategoryAccountName(newAccountParent)) {
       createAccountError = 'Rules can only create income or expense accounts.';
       return;
     }
     loading = true;
     createAccountError = '';
     try {
-      const created = await apiPost<{ added: boolean; warning: string | null }>('/api/accounts', {
-        account: newAccountName,
-        accountType: newAccountType,
-        description: newAccountDescription
-      });
+      const created = await apiPost<{ added: boolean; warning: string | null; account: string }>(
+        '/api/accounts',
+        {
+          parent: newAccountParent,
+          leaf: newAccountLeaf,
+          description: newAccountDescription
+        }
+      );
       if (created.warning) {
         createAccountError = created.warning;
         return;
@@ -498,11 +484,11 @@
       accounts = refreshed.categoryAccounts ?? refreshed.accounts;
 
       if (createAccountContext.mode === 'new-rule') {
-        newActions = setActionsAccount(newActions, newAccountName);
+        newActions = setActionsAccount(newActions, created.account);
       } else if (createAccountContext.ruleId) {
         rules = rules.map((rule) =>
           rule.id === createAccountContext.ruleId
-            ? { ...rule, actions: setActionsAccount(rule.actions, newAccountName) }
+            ? { ...rule, actions: setActionsAccount(rule.actions, created.account) }
             : rule
         );
       }
@@ -775,18 +761,18 @@
 
 <CreateAccountModal
   bind:open={showCreateAccountModal}
-  bind:accountName={newAccountName}
-  bind:accountType={newAccountType}
+  bind:parent={newAccountParent}
+  bind:leaf={newAccountLeaf}
   bind:accountDescription={newAccountDescription}
+  parentAccounts={accounts}
   title="Create category"
-  allowedAccountTypes={categoryAccountTypes}
   error={createAccountError}
   {loading}
   description="Create an income or expense category here. For tracked assets or liabilities such as loans, use Accounts instead."
-  accountNamePlaceholder="Expenses:Auto:Fuel"
-  accountTypeLabel="Category type"
+  parentLabel="Parent category"
+  leafLabel="New category name"
+  leafPlaceholder="e.g. Fuel"
   submitLabel="Create Category"
-  onNameInput={updateInferredTypeFromName}
   onClose={closeCreateAccountModal}
   onSubmit={createAccountAndContinue}
 />

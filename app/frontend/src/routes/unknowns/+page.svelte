@@ -4,6 +4,7 @@
   import { page } from '$app/stores';
   import { onMount } from 'svelte';
   import { apiDelete, apiGet, apiPost } from '$lib/api';
+  import { splitAccountSeed } from '$lib/account-create';
   import AccountCombobox from '$lib/components/AccountCombobox.svelte';
   import CreateAccountModal from '$lib/components/CreateAccountModal.svelte';
   import RuleEditor from '$lib/components/RuleEditor.svelte';
@@ -200,8 +201,8 @@
   let existingRuleCandidates: ExistingRuleCandidate[] = [];
 
   let showCreateAccountModal = false;
-  let newAccountName = '';
-  let newAccountType = 'Expense';
+  let newAccountParent = '';
+  let newAccountLeaf = '';
   let newAccountDescription = '';
   let createAccountError = '';
   let ruleNameInputEl: HTMLInputElement | null = null;
@@ -213,7 +214,6 @@
   let statusFilter: 'all' | 'ready' | 'needs' = 'all';
   let lastApplyResult: UnknownStage['result'] = null;
   let lastAppliedGroups: UnknownGroup[] = [];
-  const categoryAccountTypes = ['Expense', 'Revenue'];
   let stageAutosaveInFlight: Promise<void> | null = null;
   let stageAutosaveQueued = false;
   let stageAutosavePaused = false;
@@ -322,21 +322,6 @@
       // Ignore cleanup failures once the rewrite succeeded.
     }
     await goto(buildHistoryApplyRedirect(stageToRedirect), { replaceState: true, noScroll: true, keepFocus: true });
-  }
-
-  function inferAccountType(accountName: string): string {
-    const prefix = accountName.split(':', 1)[0]?.trim().toLowerCase() || '';
-    if (prefix === 'assets') return 'Asset';
-    if (prefix === 'liabilities' || prefix === 'liability') return 'Liability';
-    if (prefix === 'expenses' || prefix === 'expense') return 'Expense';
-    if (prefix === 'income' || prefix === 'revenue') return 'Revenue';
-    if (prefix === 'equity') return 'Equity';
-    return 'Expense';
-  }
-
-  function updateInferredTypeFromName() {
-    const inferredType = inferAccountType(newAccountName);
-    newAccountType = categoryAccountTypes.includes(inferredType) ? inferredType : categoryAccountTypes[0];
   }
 
   async function loadRules() {
@@ -1375,9 +1360,8 @@
     context: { mode: 'rule' | 'category'; groupKey: string | null; txnId: string | null }
   ) {
     createAccountContext = context;
-    newAccountName = initialName;
+    ({ parent: newAccountParent, leaf: newAccountLeaf } = splitAccountSeed(initialName));
     newAccountDescription = '';
-    updateInferredTypeFromName();
     createAccountError = '';
     showCreateAccountModal = true;
   }
@@ -1400,19 +1384,21 @@
   }
 
   async function createAccountAndContinue() {
-    if (!newAccountName || !newAccountType) return;
-    if (!isCategoryAccountName(newAccountName) || !categoryAccountTypes.includes(newAccountType)) {
+    if (!isCategoryAccountName(newAccountParent)) {
       createAccountError = 'Review and rules can only create income or expense accounts.';
       return;
     }
     loading = true;
     createAccountError = '';
     try {
-      const created = await apiPost<{ added: boolean; warning: string | null }>('/api/accounts', {
-        account: newAccountName,
-        accountType: newAccountType,
-        description: newAccountDescription
-      });
+      const created = await apiPost<{ added: boolean; warning: string | null; account: string }>(
+        '/api/accounts',
+        {
+          parent: newAccountParent,
+          leaf: newAccountLeaf,
+          description: newAccountDescription
+        }
+      );
       if (created.warning) {
         createAccountError = created.warning;
         return;
@@ -1423,13 +1409,13 @@
 
       if (createAccountContext.mode === 'category') {
         if (createAccountContext.txnId) {
-          setCategoryForTxn(createAccountContext.txnId, newAccountName);
+          setCategoryForTxn(createAccountContext.txnId, created.account);
         }
         showCreateAccountModal = false;
         return;
       }
 
-      setRuleAccount(newAccountName);
+      setRuleAccount(created.account);
       showCreateAccountModal = false;
       showRuleModal = true;
       await persistRule({ allowCreateAccountModal: false });
@@ -2015,18 +2001,18 @@
 
 <CreateAccountModal
   bind:open={showCreateAccountModal}
-  bind:accountName={newAccountName}
-  bind:accountType={newAccountType}
+  bind:parent={newAccountParent}
+  bind:leaf={newAccountLeaf}
   bind:accountDescription={newAccountDescription}
+  parentAccounts={accounts}
   title="Create category"
-  allowedAccountTypes={categoryAccountTypes}
   error={createAccountError}
   {loading}
   description="Create an income or expense category here. For tracked assets or liabilities such as loans, use Accounts instead."
-  accountNamePlaceholder="Expenses:Food:Dining"
-  accountTypeLabel="Category type"
+  parentLabel="Parent category"
+  leafLabel="New category name"
+  leafPlaceholder="e.g. Dining"
   submitLabel={createAccountContext.mode === 'rule' ? 'Create Category and Save Rule' : 'Create Category'}
-  onNameInput={updateInferredTypeFromName}
   onClose={closeCreateAccountModal}
   onSubmit={createAccountAndContinue}
 />

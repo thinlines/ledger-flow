@@ -4,6 +4,7 @@
 	import CheckIcon from '@lucide/svelte/icons/check';
 	import StickyNoteIcon from '@lucide/svelte/icons/sticky-note';
 	import { apiGet, apiPost } from '$lib/api';
+	import { splitAccountSeed } from '$lib/account-create';
 	import { showUndoToast } from '$lib/undo-toast';
 	import AccountCombobox from '$lib/components/AccountCombobox.svelte';
 	import CreateAccountModal from '$lib/components/CreateAccountModal.svelte';
@@ -31,8 +32,8 @@
 	let suggestedCategory = '';
 
 	let showCreateModal = false;
-	let newAccountName = '';
-	let newAccountType = 'Expense';
+	let newAccountParent = '';
+	let newAccountLeaf = '';
 	let newAccountDescription = '';
 	let createError = '';
 	let createLoading = false;
@@ -234,36 +235,24 @@
 	}
 
 	/* ── Create-account modal ── */
-	function inferAccountType(name: string): string {
-		const prefix = name.split(':', 1)[0]?.trim().toLowerCase() || '';
-		if (prefix === 'assets') return 'Asset';
-		if (prefix === 'liabilities' || prefix === 'liability') return 'Liability';
-		if (prefix === 'expenses' || prefix === 'expense') return 'Expense';
-		if (prefix === 'income' || prefix === 'revenue') return 'Revenue';
-		if (prefix === 'equity') return 'Equity';
-		return 'Expense';
-	}
-
 	function openCreateModal(seed: string) {
-		newAccountName = seed;
-		newAccountType = inferAccountType(seed);
+		({ parent: newAccountParent, leaf: newAccountLeaf } = splitAccountSeed(seed));
 		newAccountDescription = '';
 		createError = '';
 		showCreateModal = true;
 	}
 
 	async function createAccountAndSelect() {
-		if (!newAccountName || !newAccountType) return;
 		createLoading = true;
 		createError = '';
 		try {
-			const result = await apiPost<{ added: boolean; warning: string | null }>('/api/accounts', {
-				account: newAccountName, accountType: newAccountType, description: newAccountDescription
+			const result = await apiPost<{ added: boolean; warning: string | null; account: string }>('/api/accounts', {
+				parent: newAccountParent, leaf: newAccountLeaf, description: newAccountDescription
 			});
 			if (result.warning) { createError = result.warning; return; }
 			const refreshed = await apiGet<{ accounts: string[] }>('/api/accounts');
 			allAccounts = refreshed.accounts;
-			category = newAccountName;
+			category = result.account;
 			showCreateModal = false;
 		} catch (e) { createError = String(e); }
 		finally { createLoading = false; }
@@ -465,10 +454,10 @@
 </DialogPrimitive.Root>
 
 <CreateAccountModal
-	bind:open={showCreateModal} bind:accountName={newAccountName}
-	bind:accountType={newAccountType} bind:accountDescription={newAccountDescription}
-	error={createError} loading={createLoading} accountNamePlaceholder="Expenses:Food:Dining"
-	onNameInput={() => { newAccountType = inferAccountType(newAccountName); }}
+	bind:open={showCreateModal} bind:parent={newAccountParent}
+	bind:leaf={newAccountLeaf} bind:accountDescription={newAccountDescription}
+	parentAccounts={allAccounts}
+	error={createError} loading={createLoading}
 	onClose={() => { createError = ''; showCreateModal = false; }}
 	onSubmit={createAccountAndSelect} />
 

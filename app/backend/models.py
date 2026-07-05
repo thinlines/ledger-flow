@@ -117,7 +117,12 @@ class RuleHistoryApplyRequest(BaseModel):
 
 
 class CreateAccountRequest(BaseModel):
-    account: str
+    """Either a fully qualified ``account`` name, or ``parent`` + ``leaf``
+    composed server-side (the picker flow)."""
+
+    account: str | None = None
+    parent: str | None = None
+    leaf: str | None = None
     accountType: str | None = None
     description: str | None = None
 

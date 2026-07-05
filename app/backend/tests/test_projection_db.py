@@ -27,6 +27,11 @@ PROJECTION_TABLE_NAMES = {
     "comments",
     "metadata_entries",
     "journal_diagnostics",
+    "accounts",
+    "payees",
+    "payee_aliases",
+    "tags",
+    "commodities",
 }
 
 
@@ -138,6 +143,41 @@ def test_projection_tables_are_wipe_and_rebuild_safe(tmp_path):
     with sqlite3.connect(db_path) as conn:
         count = conn.execute("SELECT COUNT(*) FROM journal_files").fetchone()[0]
     assert count == 0
+
+
+def test_reference_tables_enforce_entity_uniqueness(tmp_path):
+    config = _make_config(tmp_path)
+    db_path = ensure_database(config)
+
+    with connect(db_path) as conn:
+        conn.execute(
+            "INSERT INTO accounts (id, name, account_type) VALUES ('a1', 'Assets:Checking', 'assets')"
+        )
+        try:
+            conn.execute(
+                "INSERT INTO accounts (id, name, account_type) VALUES ('a2', 'Assets:Checking', 'assets')"
+            )
+        except sqlite3.IntegrityError:
+            pass
+        else:
+            raise AssertionError("expected IntegrityError for duplicate account name")
+
+
+def test_payee_aliases_cascade_with_their_payee(tmp_path):
+    config = _make_config(tmp_path)
+    db_path = ensure_database(config)
+
+    with connect(db_path) as conn:
+        conn.execute("INSERT INTO payees (id, name) VALUES ('p1', 'Walmart')")
+        conn.execute(
+            """
+            INSERT INTO payee_aliases (id, payee_id, pattern, alias_order)
+            VALUES ('pa1', 'p1', 'WAL-?MART', 0)
+            """
+        )
+        conn.execute("DELETE FROM payees WHERE id = 'p1'")
+        remaining = conn.execute("SELECT COUNT(*) FROM payee_aliases").fetchone()[0]
+    assert remaining == 0
 
 
 def test_foreign_keys_enforced_on_connect(tmp_path):

@@ -109,10 +109,15 @@ from services.rules_service import (
     update_rule,
     upsert_payee_rule,
 )
+from services.projection_service import refresh_projection
+from services.reference_data_service import (
+    list_account_names,
+    list_category_account_names,
+    posting_counts_by_account,
+)
 from services.unknowns_service import (
     apply_unknown_mappings,
     create_account,
-    list_category_accounts,
     list_known_accounts,
     scan_unknowns,
 )
@@ -186,32 +191,11 @@ def _account_kind(account: str) -> str:
 
 
 def _transaction_counts_by_ledger_account(config) -> dict[str, int]:
-    """Return {ledger_account: count} via ``ledger accounts --count``."""
-    from services.reconciliation_service import _journal_files
-
-    journals = _journal_files(config)
-    if not journals:
-        return {}
-    args = ["ledger"]
-    for journal in journals:
-        args.extend(["-f", str(journal)])
-    args.extend(["accounts", "--count"])
+    """Return {ledger_account: count} from the projected reference data."""
     try:
-        output = run_cmd(args, cwd=config.root_dir)
-    except (CommandError, FileNotFoundError):
+        return posting_counts_by_account(config)
+    except OSError:
         return {}
-    counts: dict[str, int] = {}
-    for line in output.strip().splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        parts = line.split(None, 1)
-        if len(parts) == 2:
-            try:
-                counts[parts[1]] = int(parts[0])
-            except ValueError:
-                pass
-    return counts
 
 
 def _tracked_account_ui(
@@ -1831,12 +1815,11 @@ def journals() -> dict:
 @app.get("/api/accounts")
 def accounts() -> dict:
     config = _require_workspace_config()
-    accounts_dat = config.init_dir / "10-accounts.dat"
-    category_accounts = list_category_accounts(accounts_dat)
+    category_accounts = list_category_account_names(config)
     return {
         "accounts": category_accounts,
         "categoryAccounts": category_accounts,
-        "allAccounts": list_known_accounts(accounts_dat),
+        "allAccounts": list_account_names(config),
     }
 
 
@@ -1876,10 +1859,32 @@ def accounts_create(req: CreateAccountRequest) -> dict:
     config = _require_workspace_config()
     accounts_dat = config.init_dir / "10-accounts.dat"
     try:
-        added, warning = create_account(accounts_dat, req.account, req.accountType, req.description)
+        account_name = _compose_account_name(req)
+        added, warning = create_account(
+            accounts_dat, account_name, req.accountType, req.description
+        )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
-    return {"added": added, "warning": warning}
+    if added:
+        refresh_projection(config)
+    return {"added": added, "warning": warning, "account": account_name}
+
+
+def _compose_account_name(req: CreateAccountRequest) -> str:
+    """Parent + leaf from the picker flow, or the legacy fully qualified name."""
+    if req.parent is not None or req.leaf is not None:
+        parent = (req.parent or "").strip()
+        leaf = (req.leaf or "").strip()
+        if not parent:
+            raise ValueError("Parent account is required")
+        if not leaf:
+            raise ValueError("Account name is required")
+        if ":" in leaf:
+            raise ValueError("Account name cannot contain ':'")
+        return f"{parent}:{leaf}"
+    if req.account is None or not req.account.strip():
+        raise ValueError("Account is required")
+    return req.account.strip()
 
 
 @app.post("/api/import/preview")

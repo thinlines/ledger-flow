@@ -44,6 +44,7 @@ from .journal_query_service import (
     _resolve_include_paths,
 )
 from .projection_db import PROJECTION_TABLES, connect, database_path, ensure_database
+from .reference_projection_service import rebuild_reference_data
 
 COMMENT_CHARS = (";", "#", "%", "|", "*")
 DIRECTIVE_KEYWORDS = {
@@ -735,6 +736,15 @@ def refresh_projection(config: AppConfig) -> dict[str, list[str]]:
                 conn, rel, info["role"], info["text"], info["content_hash"], parsed_at
             )
             projected.append(rel)
+
+        # Reference data is a pure function of the projected files: re-derive
+        # when anything changed, or when the tables are empty (first refresh
+        # after the reference migration). Unchanged files keep reads write-free.
+        reference_stale = bool(projected or removed) or (
+            conn.execute("SELECT COUNT(*) FROM accounts").fetchone()[0] == 0
+        )
+        if reference_stale:
+            rebuild_reference_data(conn, parsed_at)
 
     return {
         "projected": sorted(projected),

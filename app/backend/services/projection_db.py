@@ -26,6 +26,11 @@ PROJECTION_TABLES: tuple[str, ...] = (
     "comments",
     "metadata_entries",
     "journal_diagnostics",
+    "accounts",
+    "payees",
+    "payee_aliases",
+    "tags",
+    "commodities",
 )
 
 _MIGRATION_0001 = """
@@ -186,8 +191,67 @@ CREATE INDEX IF NOT EXISTS diagnostics_file_idx
     ON journal_diagnostics(journal_file_id, line_number);
 """
 
+_MIGRATION_0002 = """
+CREATE TABLE IF NOT EXISTS accounts (
+    id TEXT PRIMARY KEY,
+    journal_file_id TEXT REFERENCES journal_files(id) ON DELETE CASCADE,
+    name TEXT NOT NULL UNIQUE,
+    account_type TEXT NOT NULL
+        CHECK (account_type IN ('assets', 'liabilities', 'income', 'expenses', 'equity', 'other')),
+    subtype TEXT,
+    parent_name TEXT,
+    depth INTEGER NOT NULL DEFAULT 0,
+    note TEXT,
+    closed_on TEXT,
+    declared BOOLEAN NOT NULL DEFAULT FALSE,
+    used BOOLEAN NOT NULL DEFAULT FALSE,
+    managed_by_app BOOLEAN NOT NULL DEFAULT FALSE
+);
+
+CREATE INDEX IF NOT EXISTS accounts_type_idx ON accounts(account_type, subtype);
+CREATE INDEX IF NOT EXISTS accounts_parent_idx ON accounts(parent_name);
+
+CREATE TABLE IF NOT EXISTS payees (
+    id TEXT PRIMARY KEY,
+    journal_file_id TEXT REFERENCES journal_files(id) ON DELETE CASCADE,
+    name TEXT NOT NULL UNIQUE,
+    default_account TEXT,
+    declared BOOLEAN NOT NULL DEFAULT FALSE,
+    used BOOLEAN NOT NULL DEFAULT FALSE
+);
+
+CREATE TABLE IF NOT EXISTS payee_aliases (
+    id TEXT PRIMARY KEY,
+    payee_id TEXT NOT NULL REFERENCES payees(id) ON DELETE CASCADE,
+    pattern TEXT NOT NULL,
+    alias_order INTEGER NOT NULL,
+    UNIQUE (payee_id, pattern)
+);
+
+CREATE TABLE IF NOT EXISTS tags (
+    id TEXT PRIMARY KEY,
+    journal_file_id TEXT REFERENCES journal_files(id) ON DELETE CASCADE,
+    name TEXT NOT NULL UNIQUE,
+    note TEXT,
+    declared BOOLEAN NOT NULL DEFAULT FALSE,
+    used BOOLEAN NOT NULL DEFAULT FALSE
+);
+
+CREATE TABLE IF NOT EXISTS commodities (
+    id TEXT PRIMARY KEY,
+    journal_file_id TEXT REFERENCES journal_files(id) ON DELETE CASCADE,
+    symbol TEXT NOT NULL UNIQUE,
+    format TEXT,
+    display_scale INTEGER NOT NULL DEFAULT 2,
+    note TEXT,
+    declared BOOLEAN NOT NULL DEFAULT FALSE,
+    used BOOLEAN NOT NULL DEFAULT FALSE
+);
+"""
+
 MIGRATIONS: tuple[tuple[int, str, str], ...] = (
     (1, "journal_projection_tables", _MIGRATION_0001),
+    (2, "reference_data_tables", _MIGRATION_0002),
 )
 
 

@@ -1,32 +1,33 @@
 <script lang="ts">
   import { Dialog as DialogPrimitive } from 'bits-ui';
+  import AccountCombobox from '$lib/components/AccountCombobox.svelte';
+  import { validateNewAccount } from '$lib/account-create';
 
   export let open = false;
   export let title = 'Create New Account';
-  export let accountName = '';
-  export let accountType = 'Expense';
+  export let parentAccounts: string[] = [];
+  export let parent = '';
+  export let leaf = '';
   export let accountDescription = '';
   export let error = '';
   export let loading = false;
-  export let description = 'Enter a fully qualified account name.';
-  export let accountNamePlaceholder = 'Assets:Transfers';
-  export let accountTypeLabel = 'Account Type';
+  export let description = 'Pick where the account belongs, then name it.';
+  export let parentLabel = 'Parent account';
+  export let leafLabel = 'New account name';
+  export let leafPlaceholder = 'e.g. Dining';
   export let submitLabel = 'Create Account';
-  export let allowedAccountTypes = ['Asset', 'Cash', 'Liability', 'Expense', 'Revenue', 'Equity'];
-  export let onNameInput: () => void = () => {};
   export let onClose: () => void = () => {};
   export let onSubmit: () => void | Promise<void> = () => {};
 
-  let inputEl: HTMLInputElement | null = null;
+  let leafEl: HTMLInputElement | null = null;
+
+  $: validationError = validateNewAccount(parent, leaf);
+  $: showLeafHint = leaf.includes(':');
 
   function handleEnterKey(event: KeyboardEvent) {
     if (event.key !== 'Enter') return;
     event.preventDefault();
-    void onSubmit();
-  }
-
-  function handleNameInput() {
-    onNameInput();
+    if (!validationError) void onSubmit();
   }
 
   function handleOpenChange(nextOpen: boolean) {
@@ -35,8 +36,8 @@
 
   function handleOpenAutoFocus(event: Event) {
     event.preventDefault();
-    inputEl?.focus();
-    inputEl?.select();
+    leafEl?.focus();
+    leafEl?.select();
   }
 </script>
 
@@ -54,24 +55,27 @@
       <p id="create-account-description" class="muted">{description}</p>
 
       <div class="field">
-        <label for="newAccountName">Account Name</label>
-        <input
-          id="newAccountName"
-          bind:this={inputEl}
-          bind:value={accountName}
-          placeholder={accountNamePlaceholder}
-          on:input={handleNameInput}
-          on:keydown={handleEnterKey}
+        <label for="newAccountParent">{parentLabel}</label>
+        <AccountCombobox
+          accounts={parentAccounts}
+          bind:value={parent}
+          placeholder="Select parent account..."
+          allowCreate={false}
         />
       </div>
 
       <div class="field">
-        <label for="newAccountType">{accountTypeLabel}</label>
-        <select id="newAccountType" bind:value={accountType}>
-          {#each allowedAccountTypes as optionType (optionType)}
-            <option value={optionType}>{optionType}</option>
-          {/each}
-        </select>
+        <label for="newAccountLeaf">{leafLabel}</label>
+        <input
+          id="newAccountLeaf"
+          bind:this={leafEl}
+          bind:value={leaf}
+          placeholder={leafPlaceholder}
+          on:keydown={handleEnterKey}
+        />
+        {#if showLeafHint}
+          <p class="error-text">{validateNewAccount(parent || 'x', leaf)}</p>
+        {/if}
       </div>
 
       <div class="field">
@@ -79,10 +83,9 @@
         <input
           id="newAccountDescription"
           bind:value={accountDescription}
-          placeholder="Optional account note"
+          placeholder="Optional note about what this account is for"
           on:keydown={handleEnterKey}
         />
-        <p class="muted">Optional. Saved to `10-accounts.dat` as `; description: ...`.</p>
       </div>
 
       {#if error}
@@ -94,7 +97,7 @@
         <button
           class="btn btn-primary"
           type="button"
-          disabled={loading || !accountName || !accountType}
+          disabled={loading || validationError !== null}
           on:click={() => void onSubmit()}
         >
           {submitLabel}
