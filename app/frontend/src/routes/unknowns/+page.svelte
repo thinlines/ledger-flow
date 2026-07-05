@@ -57,6 +57,7 @@
 
   type MatchCandidate = {
     manualTxnId: string;
+    lfTxnId: string | null;
     date: string;
     payee: string;
     amount: string | null;
@@ -110,6 +111,7 @@
     targetTrackedAccountId?: string;
     matchedCandidateId?: string;
     matchedManualTxnId?: string;
+    matchedManualLfTxnId?: string | null;
     matchedManualLineRange?: [number, number];
   };
 
@@ -497,6 +499,7 @@
         return {
           selectionType: 'match',
           matchedManualTxnId: suggestedId,
+          matchedManualLfTxnId: suggested.lfTxnId,
           matchedManualLineRange: [suggested.lineStart, suggested.lineEnd]
         };
       }
@@ -508,6 +511,7 @@
       return {
         selectionType: 'match',
         matchedManualTxnId: candidates[0]?.manualTxnId ?? '',
+        matchedManualLfTxnId: candidates[0]?.lfTxnId ?? null,
         matchedManualLineRange: candidates[0] ? [candidates[0].lineStart, candidates[0].lineEnd] : undefined
       };
     }
@@ -649,6 +653,7 @@
       headerLine: string;
       selectionType: 'match';
       matchedManualTxnId: string;
+      matchedManualLfTxnId?: string | null;
       matchedManualLineRange: [number, number];
     };
 
@@ -673,6 +678,7 @@
             headerLine,
             selectionType: 'match',
             matchedManualTxnId,
+            matchedManualLfTxnId: selection.matchedManualLfTxnId ?? null,
             matchedManualLineRange: selection.matchedManualLineRange
           });
           return payload;
@@ -1187,6 +1193,7 @@
       nextSelection = {
         selectionType: 'match',
         matchedManualTxnId: suggested?.manualTxnId ?? '',
+        matchedManualLfTxnId: suggested?.lfTxnId ?? null,
         matchedManualLineRange: suggested ? [suggested.lineStart, suggested.lineEnd] : undefined
       };
     } else if (selectionType === 'transfer') {
@@ -1265,6 +1272,7 @@
       [txn.txnId]: {
         selectionType: 'match',
         matchedManualTxnId: manualTxnId,
+        matchedManualLfTxnId: candidate?.lfTxnId ?? null,
         matchedManualLineRange: candidate ? [candidate.lineStart, candidate.lineEnd] : undefined
       }
     };

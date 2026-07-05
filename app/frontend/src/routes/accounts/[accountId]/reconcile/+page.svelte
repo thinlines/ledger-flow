@@ -404,9 +404,8 @@
     duplicateReviewError = '';
     try {
       const res = await apiPost<{ success: boolean; eventId: string | null }>('/api/transactions/delete', {
-        journalPath: row.journalPath,
-        headerLine: row.headerLine,
-        lineNumber: row.lineNumber
+        txnId: row.txnId,
+        blockHash: row.blockHash
       });
       if (res.eventId) {
         showUndoToast(res.eventId, `Removed ${row.payee} on ${row.date}`, async () => {

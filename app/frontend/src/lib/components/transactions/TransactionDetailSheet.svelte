@@ -80,9 +80,9 @@
     ? row.isManual && !row.isOpeningBalance && row.categories.length <= 1
     : false;
 
-  // Journal path from first leg (for notes, actions)
+  // Stable identity from first leg (for notes, actions)
   $: leg = row?.legs?.[0] ?? null;
-  $: hasJournal = leg?.journalPath && leg?.headerLine;
+  $: hasJournal = leg?.txnId && leg?.blockHash;
 
   // Sync notes value when row changes
   $: if (row && row.id !== lastNotesRowId) {
@@ -195,15 +195,21 @@
     if (notesSaveTimer) clearTimeout(notesSaveTimer);
 
     try {
-      const res = await apiPost<{ success: boolean; eventId: string | null }>(
-        '/api/transactions/notes',
-        {
-          journalPath: leg.journalPath,
-          headerLine: leg.headerLine,
-          lineNumber: leg.lineNumber,
-          notes: trimmed
-        }
-      );
+      const res = await apiPost<{
+        success: boolean;
+        eventId: string | null;
+        txnId?: string;
+        blockHash?: string | null;
+      }>('/api/transactions/notes', {
+        txnId: leg.txnId,
+        blockHash: leg.blockHash,
+        notes: trimmed
+      });
+      // Re-spread the post-edit identity so follow-up edits keep working
+      // before the row list reloads.
+      if (res.txnId && row.legs[0]) {
+        row.legs[0] = { ...row.legs[0], txnId: res.txnId, blockHash: res.blockHash ?? null };
+      }
       if (res.eventId) showUndoToast(res.eventId, `Notes updated on ${row.payee}`, reload);
       notesSaveState = 'saved';
       notesSaveTimer = setTimeout(() => {

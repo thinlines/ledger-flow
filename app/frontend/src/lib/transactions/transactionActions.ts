@@ -4,17 +4,31 @@ import type { TransactionRow } from './types';
 
 type ActionResult = { success: boolean; error?: string };
 
+type MutationResponse = {
+  success: boolean;
+  eventId: string | null;
+  txnId?: string;
+  blockHash?: string | null;
+};
+
+/** Re-spread the acting leg with the post-edit projected identity so
+ * follow-up actions keep working before the row list reloads. */
+function respreadIdentity(row: TransactionRow, res: { txnId?: string; blockHash?: string | null }) {
+  const leg = row.legs[0];
+  if (!leg || !res.txnId) return;
+  row.legs[0] = { ...leg, txnId: res.txnId, blockHash: res.blockHash ?? null };
+}
+
 export async function deleteTransaction(
   row: TransactionRow,
   reload: () => Promise<void>
 ): Promise<ActionResult> {
   const leg = row.legs[0];
-  if (!leg?.headerLine || !leg?.journalPath) return { success: false, error: 'Missing journal data' };
+  if (!leg?.txnId || !leg?.blockHash) return { success: false, error: 'Missing transaction identity' };
   try {
-    const res = await apiPost<{ success: boolean; eventId: string | null }>('/api/transactions/delete', {
-      journalPath: leg.journalPath,
-      headerLine: leg.headerLine,
-      lineNumber: leg.lineNumber,
+    const res = await apiPost<MutationResponse>('/api/transactions/delete', {
+      txnId: leg.txnId,
+      blockHash: leg.blockHash
     });
     if (res.eventId) showUndoToast(res.eventId, `Removed ${row.payee} on ${row.date}`, reload);
     await reload();
@@ -29,13 +43,13 @@ export async function resetCategory(
   reload: () => Promise<void>
 ): Promise<ActionResult> {
   const leg = row.legs[0];
-  if (!leg?.headerLine || !leg?.journalPath) return { success: false, error: 'Missing journal data' };
+  if (!leg?.txnId || !leg?.blockHash) return { success: false, error: 'Missing transaction identity' };
   try {
-    const res = await apiPost<{ success: boolean; eventId: string | null }>('/api/transactions/recategorize', {
-      journalPath: leg.journalPath,
-      headerLine: leg.headerLine,
-      lineNumber: leg.lineNumber,
+    const res = await apiPost<MutationResponse>('/api/transactions/recategorize', {
+      txnId: leg.txnId,
+      blockHash: leg.blockHash
     });
+    respreadIdentity(row, res);
     if (res.eventId) showUndoToast(res.eventId, `Reset category on ${row.payee}`, reload);
     await reload();
     return { success: true };
@@ -50,14 +64,14 @@ export async function recategorize(
   reload: () => Promise<void>
 ): Promise<ActionResult> {
   const leg = row.legs[0];
-  if (!leg?.headerLine || !leg?.journalPath) return { success: false, error: 'Missing journal data' };
+  if (!leg?.txnId || !leg?.blockHash) return { success: false, error: 'Missing transaction identity' };
   try {
-    const res = await apiPost<{ success: boolean; eventId: string | null }>('/api/transactions/recategorize', {
-      journalPath: leg.journalPath,
-      headerLine: leg.headerLine,
-      lineNumber: leg.lineNumber,
-      newCategory,
+    const res = await apiPost<MutationResponse>('/api/transactions/recategorize', {
+      txnId: leg.txnId,
+      blockHash: leg.blockHash,
+      newCategory
     });
+    respreadIdentity(row, res);
     if (res.eventId) showUndoToast(res.eventId, `Recategorized ${row.payee}`, reload);
     await reload();
     return { success: true };
@@ -72,14 +86,14 @@ export async function reassignAccount(
   reload: () => Promise<void>
 ): Promise<ActionResult> {
   const leg = row.legs[0];
-  if (!leg?.headerLine || !leg?.journalPath) return { success: false, error: 'Missing journal data' };
+  if (!leg?.txnId || !leg?.blockHash) return { success: false, error: 'Missing transaction identity' };
   try {
-    const res = await apiPost<{ success: boolean; eventId: string | null }>('/api/transactions/reassign-account', {
-      journalPath: leg.journalPath,
-      headerLine: leg.headerLine,
-      lineNumber: leg.lineNumber,
-      newAccountLedgerName,
+    const res = await apiPost<MutationResponse>('/api/transactions/reassign-account', {
+      txnId: leg.txnId,
+      blockHash: leg.blockHash,
+      newAccountLedgerName
     });
+    respreadIdentity(row, res);
     if (res.eventId) showUndoToast(res.eventId, `Reassigned account on ${row.payee}`, reload);
     await reload();
     return { success: true };
@@ -93,14 +107,14 @@ export async function unmatchTransaction(
   reload: () => Promise<void>
 ): Promise<ActionResult> {
   const leg = row.legs[0];
-  if (!leg?.headerLine || !leg?.journalPath || !row.matchId) return { success: false, error: 'Missing journal data' };
+  if (!leg?.txnId || !leg?.blockHash || !row.matchId) return { success: false, error: 'Missing transaction identity' };
   try {
-    const res = await apiPost<{ success: boolean; eventId: string | null }>('/api/transactions/unmatch', {
-      journalPath: leg.journalPath,
-      headerLine: leg.headerLine,
-      lineNumber: leg.lineNumber,
-      matchId: row.matchId,
+    const res = await apiPost<MutationResponse>('/api/transactions/unmatch', {
+      txnId: leg.txnId,
+      blockHash: leg.blockHash,
+      matchId: row.matchId
     });
+    respreadIdentity(row, res);
     if (res.eventId) showUndoToast(res.eventId, `Undid match for ${row.payee}`, reload);
     await reload();
     return { success: true };
@@ -124,20 +138,11 @@ export async function toggleClearing(row: TransactionRow): Promise<void> {
   try {
     const res = await apiPost<{
       newStatus: string;
-      newHeaderLine: string;
       txnId: string;
       blockHash: string;
     }>('/api/transactions/toggle-status', { txnId: leg.txnId, blockHash: leg.blockHash });
     row.status = res.newStatus as 'unmarked' | 'pending' | 'cleared';
-    // Re-spread the leg with the post-edit projected identity so follow-up
-    // toggles keep working; headerLine stays fresh for the actions that are
-    // still positional (delete/recategorize/unmatch, until #17).
-    row.legs[0] = {
-      ...leg,
-      headerLine: res.newHeaderLine,
-      txnId: res.txnId,
-      blockHash: res.blockHash
-    };
+    respreadIdentity(row, res);
   } catch {
     row.status = previousStatus;
   }

@@ -14,6 +14,7 @@ from .event_log_service import emit_event, rel_path
 from .import_index import ImportIndex
 from .import_identity_service import source_payload_hash_for_lines
 from .import_profile_service import import_source_summary, resolve_import_source
+from .journal_block_service import lf_txn_id_line, mint_lf_txn_id
 from .ledger_runner import CommandError, run_cmd
 from .payee_alias_service import ensure_payee_alias_dat
 from .workspace_service import ensure_standard_commodities_file, ensure_workspace_journal_includes
@@ -761,7 +762,15 @@ def apply_import(config: AppConfig, stage: dict) -> tuple[str, int, int, list[di
 
     if new_txns:
         preamble_lines, existing_blocks = _split_journal_preamble_and_transactions(target.read_text(encoding="utf-8"))
-        new_blocks = [_normalize_transaction_block(str(t["annotatedRaw"])) for t in new_txns]
+        # Each written row mints its durable lf_txn_id directly after the
+        # header (#17): imported blocks stay mutation-targetable no matter
+        # how later edits move them.
+        new_blocks = [
+            [block[0], lf_txn_id_line(mint_lf_txn_id()), *block[1:]]
+            for block in (
+                _normalize_transaction_block(str(t["annotatedRaw"])) for t in new_txns
+            )
+        ]
         merged_blocks = _merge_transaction_blocks(existing_blocks, new_blocks)
         target.write_text(_render_journal_text(preamble_lines, merged_blocks), encoding="utf-8")
 

@@ -250,6 +250,15 @@ class TestWriterOrdering:
         assert "    ; statement_period: 2026-03-18..2026-04-17" in text
         assert "Assets:Checking:Wells Fargo  $0 = $2,500.00" in text
         assert result.header_line.startswith("2026-04-17 * Statement reconciliation")
+        # App-created blocks mint a durable identity at write time (#17):
+        # the lf_txn_id line sits directly after the header and matches the
+        # returned txn_id.
+        lines = text.splitlines()
+        header_idx = next(
+            i for i, line in enumerate(lines) if "Statement reconciliation" in line
+        )
+        assert result.txn_id.startswith("txn_")
+        assert lines[header_idx + 1] == f"    ; lf_txn_id: {result.txn_id}"
 
     def test_inserts_after_earlier_date_when_no_period_end_match(self, tmp_path: Path) -> None:
         config = _make_config(tmp_path / "workspace")

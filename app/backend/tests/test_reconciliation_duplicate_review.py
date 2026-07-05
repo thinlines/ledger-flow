@@ -533,3 +533,61 @@ class TestDuplicateResolution:
                 },
                 existing_map,
             ) == "duplicate"
+
+
+class TestResolutionSurvivesLineShift:
+    """#17: resolutions locate blocks by lf_txn_id — an external edit that
+    moves line numbers between review and resolve no longer breaks them."""
+
+    def test_remove_manual_duplicate_after_external_insert_above(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        config = _make_config(tmp_path / "workspace")
+        _seed_accounts_dat(config)
+        journal = _seed_journal(
+            config,
+            (
+                "2026-03-04 Imported rent\n"
+                "    ; lf_txn_id: txn_imported_rent\n"
+                "    ; import_account_id: checking\n"
+                "    ; lf_source_identity: rent-1\n"
+                "    ; source_payload_hash: payload-rent-1\n"
+                "    Assets:Checking:Wells Fargo  $-900.00\n"
+                "    Expenses:Food:Dining\n"
+                "\n"
+                "2026-03-05 Manual rent copy\n"
+                "    ; lf_txn_id: txn_manual_rent\n"
+                "    ; :manual:\n"
+                "    Assets:Checking:Wells Fargo  $-900.00\n"
+                "    Expenses:Food:Dining\n"
+            ),
+        )
+        rows = _context_rows(config, monkeypatch)
+        imported = _row_by_payee(rows, "Imported rent")
+        manual = _row_by_payee(rows, "Manual rent copy")
+
+        # External edit above both blocks after the review page loaded.
+        journal.write_text(
+            "2026-03-01 Inserted Externally\n"
+            "    Assets:Checking:Wells Fargo  $-1.00\n"
+            "    Expenses:Food:Groceries\n"
+            "\n" + journal.read_text(encoding="utf-8"),
+            encoding="utf-8",
+        )
+
+        result = main.accounts_reconciliation_duplicate_resolution(
+            "checking",
+            ReconciliationDuplicateResolutionRequest(
+                periodStart="2026-03-01",
+                periodEnd="2026-03-31",
+                checkedSelectionKey=imported["selectionKey"],
+                uncheckedSelectionKey=manual["selectionKey"],
+                action="remove_manual_duplicate",
+            ),
+        )
+
+        updated = journal.read_text(encoding="utf-8")
+        assert result["removedSelectionKeys"] == [manual["selectionKey"]]
+        assert "Manual rent copy" not in updated
+        assert "Imported rent" in updated
+        assert "Inserted Externally" in updated

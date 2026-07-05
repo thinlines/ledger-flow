@@ -15,7 +15,8 @@ from .archive_service import archive_manual_entry
 from .config_service import AppConfig
 from .event_log_service import rel_path
 from .import_index import ImportIndex
-from .journal_block_service import find_transaction_block, locate_header_at
+from .journal_block_service import find_transaction_block
+from .projection_service import find_projected_transaction
 from .reconciliation_context_service import (
     IMPORT_IDENTITY_KEY_RE,
     ReconciliationContext,
@@ -61,7 +62,7 @@ def _candidate_reason(date_diff: int, payee_score: float) -> tuple[str, int]:
 
 
 def _action_for_pair(checked: ReconciliationContextRow, unchecked: ReconciliationContextRow) -> tuple[str | None, str | None, str | None]:
-    if unchecked.line_number < 0:
+    if unchecked.txn_id is None:
         return None, None, "This transaction cannot be changed from this journal view."
     if checked.is_imported and unchecked.is_imported:
         if checked.journal_path != unchecked.journal_path:
@@ -127,14 +128,32 @@ def build_duplicate_groups(
     return groups
 
 
-def _read_block(row: ReconciliationContextRow) -> tuple[Path, list[str], int, int]:
-    journal_path = Path(row.journal_path)
+_STALE_ROW_DETAIL = "This transaction changed since this page loaded — refresh and try again."
+
+
+def _row_ref(config: AppConfig, row: ReconciliationContextRow):
+    """Resolve a context row to its projected block (#17): locate by txn_id,
+    reject only true block-level staleness (hash mismatch)."""
+    ref = find_projected_transaction(config, row.txn_id) if row.txn_id else None
+    if ref is None:
+        raise HTTPException(status_code=409, detail=_STALE_ROW_DETAIL)
+    if row.block_hash and ref.raw_block_hash != row.block_hash:
+        raise HTTPException(status_code=409, detail=_STALE_ROW_DETAIL)
+    return ref
+
+
+def _locate_in_lines(lines: list[str], ref) -> tuple[int, int]:
+    header_idx = ref.source_start_line - 1
+    if header_idx >= len(lines) or lines[header_idx] != ref.raw_header:
+        raise HTTPException(status_code=409, detail=_STALE_ROW_DETAIL)
+    return find_transaction_block(lines, header_idx)
+
+
+def _read_block(config: AppConfig, row: ReconciliationContextRow) -> tuple[Path, list[str], int, int]:
+    ref = _row_ref(config, row)
+    journal_path = config.root_dir / ref.journal_path
     lines = journal_path.read_text(encoding="utf-8").splitlines()
-    try:
-        header_idx = locate_header_at(lines, row.line_number, row.header_line)
-    except Exception as exc:
-        raise HTTPException(status_code=409, detail="Transaction moved since this page loaded. Refresh and try again.") from exc
-    block_start, block_end = find_transaction_block(lines, header_idx)
+    block_start, block_end = _locate_in_lines(lines, ref)
     return journal_path, lines, block_start, block_end
 
 
@@ -353,7 +372,7 @@ def resolve_duplicate_candidate(
 
     if action == "remove_manual_duplicate":
         target = unchecked_row
-        journal_path, lines, block_start, block_end = _read_block(target)
+        journal_path, lines, block_start, block_end = _read_block(config, target)
         with journal_writer.mutate(
             config=config,
             paths=[journal_path],
@@ -372,6 +391,7 @@ def resolve_duplicate_candidate(
                 "journal_path": rel_path(journal_path, config.root_dir),
                 "removed_selection_key": target.selection_key,
                 "removed_header_line": target.header_line,
+                "txn_id": target.txn_id,
                 "deleted_block": deleted_block,
             }
         return {
@@ -383,8 +403,8 @@ def resolve_duplicate_candidate(
     if action == "use_imported_transaction":
         manual_row = checked_row
         imported_row = unchecked_row
-        manual_journal, manual_lines, manual_start, manual_end = _read_block(manual_row)
-        imported_journal, imported_lines, imported_start, imported_end = _read_block(imported_row)
+        manual_journal, manual_lines, manual_start, manual_end = _read_block(config, manual_row)
+        imported_journal, imported_lines, imported_start, imported_end = _read_block(config, imported_row)
         archive_path = config.journal_dir / "archived-manual.journal"
         paths = [manual_journal, archive_path]
         if imported_journal != manual_journal:
@@ -397,10 +417,8 @@ def resolve_duplicate_candidate(
         ) as mut:
             if manual_journal == imported_journal:
                 shared_lines = manual_journal.read_text(encoding="utf-8").splitlines()
-                manual_header_idx = locate_header_at(shared_lines, manual_row.line_number, manual_row.header_line)
-                imported_header_idx = locate_header_at(shared_lines, imported_row.line_number, imported_row.header_line)
-                manual_start, manual_end = find_transaction_block(shared_lines, manual_header_idx)
-                imported_start, imported_end = find_transaction_block(shared_lines, imported_header_idx)
+                manual_start, manual_end = _locate_in_lines(shared_lines, _row_ref(config, manual_row))
+                imported_start, imported_end = _locate_in_lines(shared_lines, _row_ref(config, imported_row))
                 manual_block = shared_lines[manual_start:manual_end]
                 imported_block = shared_lines[imported_start:imported_end]
             else:
@@ -467,8 +485,8 @@ def resolve_duplicate_candidate(
     if action == "merge_imported_duplicates":
         survivor_row = checked_row
         merged_row = unchecked_row
-        journal_path, lines, survivor_start, survivor_end = _read_block(survivor_row)
-        merge_journal_path, merge_lines, merge_start, merge_end = _read_block(merged_row)
+        journal_path, lines, survivor_start, survivor_end = _read_block(config, survivor_row)
+        merge_journal_path, merge_lines, merge_start, merge_end = _read_block(config, merged_row)
         if journal_path != merge_journal_path:
             raise HTTPException(status_code=422, detail="Imported duplicates must live in the same journal file to merge.")
 

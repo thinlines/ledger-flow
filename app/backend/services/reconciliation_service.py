@@ -24,6 +24,7 @@ from uuid import uuid7
 
 from .config_service import AppConfig
 from .currency_parser import parse_amount
+from .journal_block_service import lf_txn_id_line, mint_lf_txn_id
 from .journal_query_service import TXN_START_RE
 from .journal_writer import VerifyFailure
 from .ledger_runner import CommandError, run_cmd
@@ -72,6 +73,7 @@ class AssertionWriteResult:
     header_line: str
     line_number: int
     event_id: str
+    txn_id: str
 
 
 @dataclass(frozen=True)
@@ -138,6 +140,7 @@ def _build_assertion_block(
     display_name: str,
     ledger_account: str,
     event_id: str,
+    txn_id: str,
 ) -> list[str]:
     period_end_iso = period_end.isoformat()
     period_start_iso = period_start.isoformat()
@@ -151,6 +154,7 @@ def _build_assertion_block(
     )
     return [
         header,
+        lf_txn_id_line(txn_id),
         f"    ; lf_operation_id: {event_id}",
         f"    ; statement_period: {period_start_iso}..{period_end_iso}",
         posting,
@@ -269,6 +273,7 @@ def write_assertion_transaction(
 
     if event_id is None:
         event_id = str(uuid7())
+    txn_id = mint_lf_txn_id()
 
     year = f"{period_end.year:04d}"
     journal_path = config.journal_dir / f"{year}.journal"
@@ -287,6 +292,7 @@ def write_assertion_transaction(
         display_name=display_name,
         ledger_account=ledger_account,
         event_id=event_id,
+        txn_id=txn_id,
     )
 
     insert_idx = _insertion_index_for_date(original_lines, period_end.isoformat())
@@ -301,6 +307,7 @@ def write_assertion_transaction(
         header_line=block[0],
         line_number=header_idx,
         event_id=event_id,
+        txn_id=txn_id,
     )
 
 

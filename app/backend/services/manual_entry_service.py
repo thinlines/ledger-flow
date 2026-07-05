@@ -7,6 +7,7 @@ from pathlib import Path
 
 from .currency_parser import parse_amount
 from .header_parser import HEADER_RE
+from .journal_block_service import lf_txn_id_line, mint_lf_txn_id
 from .import_service import (
     _merge_transaction_blocks,
     _render_journal_text,
@@ -32,6 +33,7 @@ TIER_SCORES = {1: 1.0, 2: 0.85, 3: 0.70, 4: 0.55, 5: 0.35}
 TIER_QUALITY = {1: "strong", 2: "strong", 3: "likely", 4: "possible", 5: "possible"}
 
 META_RE = re.compile(r"^\s*;\s*([^:]+):\s*(.*)$")
+LF_TXN_ID_META_RE = re.compile(r"^\s*;\s*lf_txn_id:\s*(\S+)\s*$")
 TXN_START_RE = re.compile(r"^\d{4}[-/]\d{2}[-/]\d{2}")
 ACCOUNT_LINE_RE = re.compile(r"^(\s+)([^\s].*?)(\s{2,}|\t+)(.*)$")
 ACCOUNT_ONLY_RE = re.compile(r"^(\s+)([^\s].*?)\s*$")
@@ -105,11 +107,13 @@ def build_manual_transaction_block(
     destination_account: str,
     tracked_ledger_account: str,
     currency: str = "USD",
+    txn_id: str | None = None,
 ) -> list[str]:
     date_formatted = txn_date.replace("/", "-")
     amount_str = _format_currency_amount(amount, currency)
     return [
         f"{date_formatted} {payee}",
+        lf_txn_id_line(txn_id or mint_lf_txn_id()),
         "    ; :manual:",
         f"    {destination_account}  {amount_str}",
         f"    {tracked_ledger_account}",
@@ -137,6 +141,7 @@ def create_manual_transaction(
     if destination_account not in known_accounts:
         destination_warning = f"Account '{destination_account}' is not in accounts.dat. The transaction will still be created."
 
+    txn_id = mint_lf_txn_id()
     block = build_manual_transaction_block(
         txn_date=txn_date,
         payee=payee,
@@ -144,6 +149,7 @@ def create_manual_transaction(
         destination_account=destination_account,
         tracked_ledger_account=tracked_ledger_account,
         currency=currency,
+        txn_id=txn_id,
     )
 
     journal_path.parent.mkdir(parents=True, exist_ok=True)
@@ -162,6 +168,7 @@ def create_manual_transaction(
         "amount": str(amount),
         "destinationAccount": destination_account,
         "trackedLedgerAccount": tracked_ledger_account,
+        "txnId": txn_id,
         "warning": destination_warning,
     }
 
@@ -365,8 +372,18 @@ def find_match_candidates(
 
         amt_prox = _amount_proximity(import_amount, manual_amount)
 
+        lf_txn_id = next(
+            (
+                m.group(1)
+                for m in (LF_TXN_ID_META_RE.match(line) for line in txn_lines[1:])
+                if m
+            ),
+            None,
+        )
+
         candidates.append({
             "manualTxnId": f"manual:{start + 1}",
+            "lfTxnId": lf_txn_id,
             "date": txn_date_str,
             "payee": txn_payee,
             "amount": str(manual_amount) if manual_amount is not None else None,

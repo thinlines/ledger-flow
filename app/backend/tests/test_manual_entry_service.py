@@ -63,10 +63,11 @@ def test_build_manual_transaction_block_has_manual_tag() -> None:
         tracked_ledger_account="Assets:Bank:Checking",
     )
     assert block[0] == "2026-03-28 Uber"
-    assert block[1] == "    ; :manual:"
-    assert "Expenses:Transportation:Rides" in block[2]
-    assert "$45.95" in block[2]
-    assert "Assets:Bank:Checking" in block[3]
+    assert block[1].startswith("    ; lf_txn_id: txn_")
+    assert block[2] == "    ; :manual:"
+    assert "Expenses:Transportation:Rides" in block[3]
+    assert "$45.95" in block[3]
+    assert "Assets:Bank:Checking" in block[4]
 
 
 def test_create_manual_transaction_writes_to_journal(tmp_path: Path) -> None:
@@ -705,3 +706,78 @@ account Assets:Bank:Checking
     assert txn_updates == 1
     assert warnings == []
     assert "Expenses:Food" in journal.read_text(encoding="utf-8")
+
+
+def test_apply_match_locates_manual_entry_by_id_after_line_shift(tmp_path: Path) -> None:
+    """#17: the match selection carries the manual entry's lf_txn_id, so an
+    external edit that shifts line numbers between scan and apply no longer
+    invalidates the staged match."""
+    journal = tmp_path / "sample.journal"
+    accounts = tmp_path / "10-accounts.dat"
+
+    journal.write_text(
+        """2026/03/28 Uber
+    ; lf_txn_id: txn_manual_uber
+    ; :manual:
+    Expenses:Transportation:Rides  $45.95
+    Assets:Bank:Checking
+
+2026/03/28 Uber
+    ; lf_txn_id: txn_imported_uber
+    ; import_account_id: checking_import
+    ; lf_source_identity: tx-uber
+    Expenses:Unknown  $45.95
+    Assets:Bank:Checking
+""",
+        encoding="utf-8",
+    )
+    accounts.write_text(
+        """account Expenses:Transportation:Rides
+    ; type: Expense
+
+account Assets:Bank:Checking
+    ; type: Cash
+""",
+        encoding="utf-8",
+    )
+
+    groups = scan_unknowns(journal, [], _import_accounts(), _tracked_accounts())["groups"]
+    txn = groups[0]["txns"][0]
+    candidate = txn["matchCandidates"][0]
+    assert candidate["lfTxnId"] == "txn_manual_uber"
+
+    # External edit above both blocks shifts every line number.
+    journal.write_text(
+        "2026/03/01 Inserted Externally\n"
+        "    Expenses:Transportation:Rides  $1.00\n"
+        "    Assets:Bank:Checking\n"
+        "\n" + journal.read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+
+    txn_updates, warnings = apply_unknown_mappings(
+        journal_path=journal,
+        accounts_dat=accounts,
+        selections={
+            txn["txnId"]: {
+                "groupKey": groups[0]["groupKey"],
+                "headerLine": txn["headerLine"],
+                "selectionType": "match",
+                "matchedManualTxnId": candidate["manualTxnId"],
+                "matchedManualLfTxnId": candidate["lfTxnId"],
+            }
+        },
+        scanned_groups=groups,
+        tracked_accounts=_tracked_accounts(),
+    )
+
+    content = journal.read_text(encoding="utf-8")
+    assert warnings == []
+    assert txn_updates == 1
+    # The imported transaction got the manual destination + tags; the manual
+    # entry was archived out of the journal.
+    assert "Expenses:Unknown" not in content
+    assert "; match-id:" in content
+    assert "txn_manual_uber" not in content
+    archived = (tmp_path / "archived-manual.journal").read_text(encoding="utf-8")
+    assert "txn_manual_uber" in archived

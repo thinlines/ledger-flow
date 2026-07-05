@@ -21,10 +21,10 @@ Idempotent: a second run finds nothing to assign or rename.
 from __future__ import annotations
 
 import re
-from uuid import uuid7
 
 from . import journal_writer
 from .config_service import AppConfig
+from .journal_block_service import lf_txn_id_line, mint_lf_txn_id
 from .projection_service import _classify_file, _discover_files, refresh_projection
 
 _MIGRATED_ROLES = {"journal", "opening", "archive"}
@@ -67,7 +67,7 @@ def _migrate_block(raw_text: str, has_txn_id: bool) -> tuple[str, int, int]:
     ids_assigned = 0
     if not has_txn_id:
         header_ending = _line_ending(lines[0]) or "\n"
-        lines.insert(1, f"    ; lf_txn_id: txn_{uuid7().hex}{header_ending}")
+        lines.insert(1, f"{lf_txn_id_line(mint_lf_txn_id())}{header_ending}")
         ids_assigned = 1
 
     return "".join(lines), ids_assigned, renames
@@ -125,8 +125,10 @@ def migrate_lf_metadata(config: AppConfig) -> dict:
                 "ids_assigned": ids_assigned,
                 "keys_renamed": keys_renamed,
             }
-
-    refresh_projection(config)
+    else:
+        # Nothing to write — still self-heal so assigned ids are adopted
+        # even when a previous run was interrupted between write and refresh.
+        refresh_projection(config)
 
     return {
         "files_changed": sorted(changed),

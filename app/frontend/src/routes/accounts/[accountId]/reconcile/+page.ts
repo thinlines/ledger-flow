@@ -19,9 +19,8 @@ export type ReconcileContextRow = {
   sourceLabel: 'Imported' | 'Manual';
   isImported: boolean;
   isManual: boolean;
-  journalPath: string;
-  headerLine: string;
-  lineNumber: number;
+  txnId: string | null;
+  blockHash: string | null;
   canDelete: boolean;
 };
 

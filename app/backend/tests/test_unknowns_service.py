@@ -907,3 +907,156 @@ def test_scan_unknowns_suggests_transfer_when_csv_comment_contains_double_spaces
     assert savings_group["txns"][0]["transferSuggestion"] is not None
     assert savings_group["txns"][0]["transferSuggestion"]["targetTrackedAccountId"] == "checking"
     assert savings_group["txns"][0]["transferMatchCount"] == 1
+
+
+# ---------------------------------------------------------------------------
+# #17: stable identity through scan → apply
+# ---------------------------------------------------------------------------
+
+IDENTITY_JOURNAL = """\
+2026/03/01 COSTCO #0761
+    ; lf_txn_id: txn_costco_1
+    Expenses:Unknown  $42.00
+    Assets:Bank:Checking
+
+2026/03/05 COSTCO #0761
+    ; lf_txn_id: txn_costco_2
+    Expenses:Unknown  $19.00
+    Assets:Bank:Checking
+"""
+
+ACCOUNTS_DAT = """\
+account Expenses:Groceries
+    ; type: Expense
+
+account Assets:Bank:Checking
+    ; type: Cash
+"""
+
+EXTERNAL_INSERT = """\
+2026/02/01 Inserted Externally
+    Expenses:Groceries  $1.00
+    Assets:Bank:Checking
+
+"""
+
+
+def test_scan_records_block_identity(tmp_path: Path) -> None:
+    journal = tmp_path / "sample.journal"
+    journal.write_text(IDENTITY_JOURNAL, encoding="utf-8")
+
+    groups = scan_unknowns(journal, [])["groups"]
+    rows = groups[0]["txns"]
+    assert [row["lfTxnId"] for row in rows] == ["txn_costco_1", "txn_costco_2"]
+    assert all(row["blockHash"] for row in rows)
+
+
+def test_apply_survives_line_shift_when_block_carries_identity(tmp_path: Path) -> None:
+    """The scan→apply positional coupling is gone: an external edit that
+    shifts line numbers no longer invalidates staged selections."""
+    journal = tmp_path / "sample.journal"
+    accounts = tmp_path / "10-accounts.dat"
+    journal.write_text(IDENTITY_JOURNAL, encoding="utf-8")
+    accounts.write_text(ACCOUNTS_DAT, encoding="utf-8")
+
+    groups = scan_unknowns(journal, [])["groups"]
+    second_txn = groups[0]["txns"][1]
+
+    journal.write_text(EXTERNAL_INSERT + journal.read_text(encoding="utf-8"), encoding="utf-8")
+
+    txn_updates, warnings = apply_unknown_mappings(
+        journal_path=journal,
+        accounts_dat=accounts,
+        selections={
+            second_txn["txnId"]: {
+                "groupKey": groups[0]["groupKey"],
+                "headerLine": second_txn["headerLine"],
+                "selectionType": "category",
+                "categoryAccount": "Expenses:Groceries",
+            }
+        },
+        scanned_groups=groups,
+        tracked_accounts={},
+    )
+
+    assert warnings == []
+    assert txn_updates == 1
+    content = journal.read_text(encoding="utf-8")
+    # The second Costco (the $19.00 one) was rewritten; the first was not.
+    lines = content.splitlines()
+    groceries_idx = next(i for i, l in enumerate(lines) if "Expenses:Groceries  $19.00" in l)
+    assert "txn_costco_2" in "\n".join(lines[groceries_idx - 3 : groceries_idx])
+    assert "Inserted Externally" in content
+
+
+def test_apply_rejects_changed_block_with_transaction_copy(tmp_path: Path) -> None:
+    """True block-level staleness: the block itself changed since the scan.
+    The warning talks about the transaction, not moved line numbers."""
+    journal = tmp_path / "sample.journal"
+    accounts = tmp_path / "10-accounts.dat"
+    journal.write_text(IDENTITY_JOURNAL, encoding="utf-8")
+    accounts.write_text(ACCOUNTS_DAT, encoding="utf-8")
+
+    groups = scan_unknowns(journal, [])["groups"]
+    first_txn = groups[0]["txns"][0]
+
+    journal.write_text(
+        journal.read_text(encoding="utf-8").replace("$42.00", "$43.00"),
+        encoding="utf-8",
+    )
+
+    txn_updates, warnings = apply_unknown_mappings(
+        journal_path=journal,
+        accounts_dat=accounts,
+        selections={
+            first_txn["txnId"]: {
+                "groupKey": groups[0]["groupKey"],
+                "headerLine": first_txn["headerLine"],
+                "selectionType": "category",
+                "categoryAccount": "Expenses:Groceries",
+            }
+        },
+        scanned_groups=groups,
+        tracked_accounts={},
+    )
+
+    assert txn_updates == 0
+    assert len(warnings) == 1
+    assert "changed since" in warnings[0]["warning"]
+    assert "line" not in warnings[0]["warning"].lower()
+    assert "Expenses:Groceries" not in journal.read_text(encoding="utf-8")
+
+
+def test_apply_rejects_deleted_block_with_transaction_copy(tmp_path: Path) -> None:
+    journal = tmp_path / "sample.journal"
+    accounts = tmp_path / "10-accounts.dat"
+    journal.write_text(IDENTITY_JOURNAL, encoding="utf-8")
+    accounts.write_text(ACCOUNTS_DAT, encoding="utf-8")
+
+    groups = scan_unknowns(journal, [])["groups"]
+    first_txn = groups[0]["txns"][0]
+
+    # Remove the first block entirely.
+    journal.write_text(
+        IDENTITY_JOURNAL.split("\n\n", 1)[1],
+        encoding="utf-8",
+    )
+
+    txn_updates, warnings = apply_unknown_mappings(
+        journal_path=journal,
+        accounts_dat=accounts,
+        selections={
+            first_txn["txnId"]: {
+                "groupKey": groups[0]["groupKey"],
+                "headerLine": first_txn["headerLine"],
+                "selectionType": "category",
+                "categoryAccount": "Expenses:Groceries",
+            }
+        },
+        scanned_groups=groups,
+        tracked_accounts={},
+    )
+
+    assert txn_updates == 0
+    assert len(warnings) == 1
+    assert "no longer exists" in warnings[0]["warning"]

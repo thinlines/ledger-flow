@@ -4,6 +4,7 @@ import re
 from pathlib import Path
 
 from .config_service import infer_account_kind
+from .journal_block_service import hash_block, locate_block_by_id
 from .rules_service import extract_set_account, find_matching_rule
 from .unknowns_service import list_known_accounts
 
@@ -148,6 +149,9 @@ def scan_rule_reapply(journal_path: Path, rule: dict, import_accounts: dict[str,
         candidates.append(
             {
                 "id": f"{journal_path.name}:{posting['lineNo']}",
+                "lfTxnId": str(metadata.get("lf_txn_id", "")).strip() or None,
+                "blockHash": hash_block(lines, start, end),
+                "transactionStartLine": start + 1,
                 "date": current_date,
                 "payee": current_payee,
                 "amount": posting["amount"],
@@ -204,12 +208,37 @@ def apply_rule_reapply(
     updated_count = 0
 
     for candidate in selected_candidates:
+        # Re-locate the block by lf_txn_id (#17): line shifts from earlier
+        # edits rebase the staged posting position; only a changed or
+        # deleted block is stale.
         idx = int(candidate["lineNo"]) - 1
+        lf_txn_id = str(candidate.get("lfTxnId") or "").strip()
+        if lf_txn_id:
+            located = locate_block_by_id(lines, lf_txn_id)
+            if located is None:
+                warnings.append(
+                    {
+                        "candidateId": candidate["id"],
+                        "warning": "This transaction no longer exists in the journal (stale data — try refreshing).",
+                    }
+                )
+                continue
+            start, end = located
+            if hash_block(lines, start, end) != candidate.get("blockHash"):
+                warnings.append(
+                    {
+                        "candidateId": candidate["id"],
+                        "warning": "This transaction changed since the scan and was skipped.",
+                    }
+                )
+                continue
+            idx += (start + 1) - int(candidate["transactionStartLine"])
+
         if idx < 0 or idx >= len(lines):
             warnings.append(
                 {
                     "candidateId": candidate["id"],
-                    "warning": f"Line {candidate['lineNo']} is no longer available.",
+                    "warning": "This transaction is no longer available (stale data — try refreshing).",
                 }
             )
             continue
@@ -222,7 +251,7 @@ def apply_rule_reapply(
                 warnings.append(
                     {
                         "candidateId": candidate["id"],
-                        "warning": f"Line {candidate['lineNo']} changed after the scan and was skipped.",
+                        "warning": "This transaction changed since the scan and was skipped.",
                     }
                 )
                 continue
@@ -237,7 +266,7 @@ def apply_rule_reapply(
                 warnings.append(
                     {
                         "candidateId": candidate["id"],
-                        "warning": f"Line {candidate['lineNo']} changed after the scan and was skipped.",
+                        "warning": "This transaction changed since the scan and was skipped.",
                     }
                 )
                 continue
@@ -248,7 +277,7 @@ def apply_rule_reapply(
         warnings.append(
             {
                 "candidateId": candidate["id"],
-                "warning": f"Line {candidate['lineNo']} is no longer a posting.",
+                "warning": "A posting in this transaction changed since the scan.",
             }
         )
 

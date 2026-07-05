@@ -146,6 +146,7 @@ def test_reconciliation_writer_emits_iso_header() -> None:
         display_name="Test Card",
         ledger_account="Liabilities:Test:Card",
         event_id="01HX0123456789ABCDEFGHIJKL",
+        txn_id="txn_test",
     )
     assert ISO_HEADER_RE.match(block[0]), block[0]
 

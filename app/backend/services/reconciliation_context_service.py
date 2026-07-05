@@ -20,9 +20,9 @@ import re
 from .config_service import AppConfig
 from .journal_query_service import (
     is_generated_opening_balance_transaction,
-    load_transactions,
     pretty_account_name,
 )
+from .projection_service import load_transactions_projected
 from .reconciliation_service import latest_reconciliation_date
 from .transaction_helpers import (
     account_amount,
@@ -50,6 +50,10 @@ class ReconciliationContextRow:
     can_delete: bool
     import_account_id: str | None
     source_identity: str | None
+    # Stable projected identity (#17): mutations locate the block by txn_id
+    # and reject staleness by block_hash instead of (line_number, header_line).
+    txn_id: str | None = None
+    block_hash: str | None = None
 
 
 @dataclass(frozen=True)
@@ -181,7 +185,7 @@ def build_reconciliation_context(
     base_currency = str(config.workspace.get("base_currency", "USD")).strip().upper() or "USD"
     last_recon = latest_reconciliation_date(config, ledger_account)
 
-    transactions = load_transactions(config)
+    transactions = load_transactions_projected(config)
 
     opening_balance = Decimal("0")
     earliest_posting: date | None = None
@@ -236,9 +240,11 @@ def build_reconciliation_context(
                 journal_path=transaction.source_journal,
                 header_line=transaction.header_line,
                 line_number=transaction.header_line_number,
-                can_delete=(not imported and transaction.header_line_number >= 0),
+                can_delete=(not imported and transaction.txn_id is not None),
                 import_account_id=str(transaction.metadata.get("import_account_id") or "").strip() or None,
                 source_identity=source_identity,
+                txn_id=transaction.txn_id,
+                block_hash=transaction.block_hash,
             )
         )
 

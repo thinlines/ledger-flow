@@ -33,7 +33,12 @@ from .transfer_service import (
 )
 
 from .header_parser import HEADER_RE
-from .journal_block_service import HeaderNotFoundError, locate_header_at
+from .journal_block_service import (
+    HeaderNotFoundError,
+    hash_block as _hash_block,
+    locate_block_by_id as _locate_block_by_id,
+    locate_header_at,
+)
 
 ACCOUNT_LINE_RE = re.compile(r"^(\s+)([^\s].*?)(\s{2,}|\t+)(.*)$")
 ACCOUNT_ONLY_RE = re.compile(r"^(\s+)([^\s].*?)\s*$")
@@ -93,6 +98,39 @@ def _iter_transaction_ranges(lines: list[str]) -> list[tuple[int, int]]:
         end = starts[idx + 1] if idx + 1 < len(starts) else len(lines)
         ranges.append((start, end))
     return ranges
+
+
+def _rebase_record(lines: list[str], record: dict, expected_header: str = "") -> tuple[dict | None, str | None]:
+    """Re-locate a scanned transaction record against the current file.
+
+    Blocks carrying an ``lf_txn_id`` are found by identity and rejected only
+    on true block-level staleness (content-hash mismatch) — line shifts from
+    earlier edits rebase all positional fields instead of failing. Blocks
+    without identity keep the byte-exact positional check.
+
+    Returns ``(rebased_record, None)`` or ``(None, warning_text)``.
+    """
+    lf_txn_id = str(record.get("lfTxnId") or "").strip()
+    if lf_txn_id:
+        located = _locate_block_by_id(lines, lf_txn_id)
+        if located is None:
+            return None, "This transaction no longer exists in the journal (stale data — try refreshing)"
+        start, end = located
+        if _hash_block(lines, start, end) != record.get("blockHash"):
+            return None, "This transaction changed since it was scanned — refresh and try again"
+        delta = (start + 1) - int(record["transactionStartLine"])
+        rebased = {**record, "transactionStartLine": start + 1, "transactionEndLine": end}
+        if record.get("lineNo") is not None:
+            rebased["lineNo"] = int(record["lineNo"]) + delta
+        return rebased, None
+
+    header = expected_header or str(record.get("headerLine") or "")
+    if header:
+        try:
+            locate_header_at(lines, int(record["transactionStartLine"]) - 1, header)
+        except HeaderNotFoundError:
+            return None, "This transaction changed since it was scanned (stale data — try refreshing)"
+    return record, None
 
 
 def _parse_postings(lines: list[str], start: int, end: int) -> list[dict]:
@@ -254,6 +292,8 @@ def _build_transaction_records(
         base_txn_id = _transaction_base_id(journal_path, start + 1, metadata)
         record = {
             "txnId": base_txn_id,
+            "lfTxnId": str(metadata.get("lf_txn_id", "")).strip() or None,
+            "blockHash": _hash_block(lines, start, end),
             "payeeDisplay": current_payee,
             "date": current_date,
             "postedOn": _parse_posted_on(current_date),
@@ -291,6 +331,8 @@ def _build_transaction_records(
             row = {
                 "txnId": f"{base_txn_id}:{posting['lineNo']}",
                 "transactionId": base_txn_id,
+                "lfTxnId": record["lfTxnId"],
+                "blockHash": record["blockHash"],
                 "date": current_date,
                 "lineNo": posting["lineNo"],
                 "transactionStartLine": start + 1,
@@ -329,6 +371,8 @@ def _transfer_match(current: dict, candidate: dict) -> bool:
 def _build_transfer_suggestion(current: dict, candidate: dict) -> dict:
     suggestion = {
         "candidateTxnId": candidate.get("unknownRows", [{}])[0].get("txnId") or candidate["txnId"],
+        "candidateLfTxnId": candidate.get("lfTxnId"),
+        "candidateBlockHash": candidate.get("blockHash"),
         "candidateState": candidate.get("transferState") or "unknown",
         "candidateTransferId": candidate.get("transferId"),
         "targetTrackedAccountId": candidate["sourceTrackedAccountId"],
@@ -499,23 +543,23 @@ def _apply_operation(lines: list[str], operation: dict) -> tuple[list[str], str 
     start_idx = operation["transactionStartLine"] - 1
     end_idx = operation["transactionEndLine"]
     if start_idx < 0 or end_idx > len(lines):
-        return lines, f"Transaction starting at line {operation['transactionStartLine']} is no longer available"
+        return lines, "This transaction is no longer available (changed since it was scanned)"
 
     txn_lines = list(lines[start_idx:end_idx])
     for posting_update in operation.get("postingUpdates", []):
         posting_line_no = posting_update["postingLineNo"]
         relative_index = posting_line_no - operation["transactionStartLine"]
         if relative_index < 0 or relative_index >= len(txn_lines):
-            return lines, f"Line {posting_line_no} is no longer part of this transaction"
+            return lines, "A posting in this transaction changed since it was scanned"
         line = txn_lines[relative_index]
         match = ACCOUNT_LINE_RE.match(line) or ACCOUNT_ONLY_RE.match(line)
         if not match:
-            return lines, f"Line {posting_line_no} is no longer a posting"
+            return lines, "A posting in this transaction changed since it was scanned"
         if posting_update.get("expectedUnknown") and "Unknown" not in match.group(2):
-            return lines, f"Line {posting_line_no} is already resolved"
+            return lines, "This transaction is already resolved"
         rewritten, replaced = rewrite_posting_account(line, posting_update["targetAccount"])
         if not replaced:
-            return lines, f"Line {posting_line_no} could not be rewritten"
+            return lines, "A posting in this transaction could not be rewritten"
         txn_lines[relative_index] = rewritten
 
     txn_lines = upsert_transaction_metadata(txn_lines, operation.get("metadataUpdates", {}))
@@ -543,10 +587,9 @@ def apply_unknown_mappings(
     processed_line_nos: set[int] = set()
     txn_index = _index_txns_by_id(scanned_groups)
 
-    # Resolve each selection to its (group, txn) and verify the journal has not
-    # drifted under us — reusing the locate_header_at helper introduced in
-    # bea0f296 to identify transactions by (lineNumber, headerLine) rather than
-    # by header text alone.
+    # Resolve each selection to its (group, txn) and re-locate the block in
+    # the current file by its lf_txn_id (#17): line shifts from earlier edits
+    # rebase the staged positions; only a changed or deleted block is stale.
     resolved_selections: list[tuple[str, dict, dict, dict]] = []
     for txn_id, selection in selections.items():
         entry = txn_index.get(txn_id)
@@ -554,20 +597,15 @@ def apply_unknown_mappings(
             warnings.append({"txnId": txn_id, "warning": "Transaction is no longer in this stage"})
             continue
         group, txn = entry
-        expected_header = str(selection.get("headerLine") or txn.get("headerLine") or "")
-        if expected_header:
-            try:
-                locate_header_at(original_lines, int(txn["transactionStartLine"]) - 1, expected_header)
-            except HeaderNotFoundError:
-                warnings.append(
-                    {
-                        "txnId": txn_id,
-                        "groupKey": group["groupKey"],
-                        "warning": f"Transaction at line {txn['transactionStartLine']} has shifted (stale data — try refreshing)",
-                    }
-                )
-                continue
-        resolved_selections.append((txn_id, selection, group, txn))
+        rebased, stale_warning = _rebase_record(
+            original_lines, txn, str(selection.get("headerLine") or "")
+        )
+        if rebased is None:
+            warnings.append(
+                {"txnId": txn_id, "groupKey": group["groupKey"], "warning": stale_warning}
+            )
+            continue
+        resolved_selections.append((txn_id, selection, group, rebased))
 
     # Pass 1: transfers. Accepted transfers may resolve their counterpart, so
     # they run before category and match selections.
@@ -650,12 +688,26 @@ def apply_unknown_mappings(
                     peer_account_id=source_tracked_account_id,
                     transfer_match_state=TRANSFER_MATCH_STATE_MATCHED,
                 )
+                candidate_record, candidate_warning = _rebase_record(
+                    original_lines,
+                    {
+                        "lfTxnId": matched_suggestion.get("candidateLfTxnId"),
+                        "blockHash": matched_suggestion.get("candidateBlockHash"),
+                        "transactionStartLine": int(matched_suggestion["candidateTransactionStartLine"]),
+                        "transactionEndLine": int(matched_suggestion["candidateTransactionEndLine"]),
+                    },
+                )
+                if candidate_record is None:
+                    warnings.append(
+                        {"txnId": txn_id, "groupKey": group["groupKey"], "warning": candidate_warning}
+                    )
+                    continue
                 _queue_operation(
                     operations_by_start,
                     _build_operation(
                         group_key=group["groupKey"],
-                        transaction_start_line=int(matched_suggestion["candidateTransactionStartLine"]),
-                        transaction_end_line=int(matched_suggestion["candidateTransactionEndLine"]),
+                        transaction_start_line=int(candidate_record["transactionStartLine"]),
+                        transaction_end_line=int(candidate_record["transactionEndLine"]),
                         posting_line_no=None,
                         target_account=None,
                         expected_unknown=False,
@@ -678,8 +730,14 @@ def apply_unknown_mappings(
                         {
                             "txnId": txn_id,
                             "groupKey": group["groupKey"],
-                            "warning": f"Suggested transfer counterpart for line {txn['lineNo']} is no longer available",
+                            "warning": "The suggested transfer counterpart is no longer available",
                         }
+                    )
+                    continue
+                candidate_txn, candidate_warning = _rebase_record(original_lines, candidate_txn)
+                if candidate_txn is None:
+                    warnings.append(
+                        {"txnId": txn_id, "groupKey": group["groupKey"], "warning": candidate_warning}
                     )
                     continue
                 _queue_operation(
@@ -768,17 +826,33 @@ def apply_unknown_mappings(
             if selection.get("selectionType") != "match":
                 continue
 
-            matched_manual_line_range = selection.get("matchedManualLineRange")
-            if not matched_manual_line_range or len(matched_manual_line_range) < 2:
-                warnings.append({"txnId": txn_id, "groupKey": group["groupKey"], "warning": "Match selection is missing manual entry line range"})
-                continue
+            # Locate the manual entry by its lf_txn_id when the candidate
+            # carried one (#17); the scan-time line range is the fallback
+            # for id-less blocks.
+            matched_manual_lf_txn_id = str(selection.get("matchedManualLfTxnId") or "").strip()
+            if matched_manual_lf_txn_id:
+                located_manual = _locate_block_by_id(original_lines, matched_manual_lf_txn_id)
+                if located_manual is None:
+                    warnings.append({"txnId": txn_id, "groupKey": group["groupKey"], "warning": "The matched manual entry no longer exists (stale data — try refreshing)"})
+                    continue
+                manual_start = located_manual[0] + 1
+                manual_end = located_manual[1]
+                # Trim trailing blank lines from the range, mirroring the
+                # scan-time candidate ranges.
+                while manual_end > manual_start and not original_lines[manual_end - 1].strip():
+                    manual_end -= 1
+            else:
+                matched_manual_line_range = selection.get("matchedManualLineRange")
+                if not matched_manual_line_range or len(matched_manual_line_range) < 2:
+                    warnings.append({"txnId": txn_id, "groupKey": group["groupKey"], "warning": "Match selection is missing the manual entry's identity"})
+                    continue
 
-            manual_start = int(matched_manual_line_range[0])
-            manual_end = int(matched_manual_line_range[1])
+                manual_start = int(matched_manual_line_range[0])
+                manual_end = int(matched_manual_line_range[1])
 
-            if manual_start < 1 or manual_end > len(original_lines):
-                warnings.append({"txnId": txn_id, "groupKey": group["groupKey"], "warning": "Manual entry is no longer available (line range out of bounds)"})
-                continue
+                if manual_start < 1 or manual_end > len(original_lines):
+                    warnings.append({"txnId": txn_id, "groupKey": group["groupKey"], "warning": "The matched manual entry is no longer available (stale data — try refreshing)"})
+                    continue
 
             manual_lines = original_lines[manual_start - 1 : manual_end]
             if not has_manual_tag(manual_lines):

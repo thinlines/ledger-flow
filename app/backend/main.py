@@ -52,11 +52,7 @@ from services.header_parser import TransactionStatus, parse_header, set_header_s
 from services import journal_writer
 from services.undo_service import UndoOutcome, is_undoable_type, undo_event
 from services.event_log_service import read_events as _read_events_log
-from services.journal_block_service import (
-    HeaderNotFoundError,
-    find_transaction_block,
-    locate_header_at,
-)
+from services.journal_block_service import find_transaction_block
 from services.journal_query_service import TXN_START_RE
 from services.projection_service import (
     find_projected_transaction,
@@ -623,6 +619,7 @@ def transactions_create(req: ManualTransactionRequest) -> dict:
             "currency": currency,
             "destination_account": req.destinationAccount,
             "source_account": source_account,
+            "txn_id": result["txnId"],
         }
 
     return {**result, "eventId": mut.event_id}
@@ -640,6 +637,35 @@ _STALE_TRANSACTION_DETAIL = (
 )
 
 
+def _locate_projected_transaction(config, txn_id: str, block_hash: str):
+    """The stable-identity locate ritual shared by every row mutation:
+    self-heal the projection, look the transaction up by id, reject only
+    true block-level staleness (hash mismatch)."""
+    refresh_projection(config)
+    ref = find_projected_transaction(config, txn_id)
+    if ref is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Transaction not found (stale data — try refreshing)",
+        )
+    if block_hash != ref.raw_block_hash:
+        raise HTTPException(status_code=409, detail=_STALE_TRANSACTION_DETAIL)
+    return ref
+
+
+def _post_edit_identity(config, ref) -> dict:
+    """Post-edit projected identity for the response. The id lookup wins for
+    blocks carrying ``lf_txn_id`` (stable across edits and re-ordering); the
+    ``txn_order`` fallback recovers ephemeral-id blocks after in-place edits."""
+    updated = find_projected_transaction(config, ref.id) or find_projected_transaction_at(
+        config, ref.journal_file_id, ref.txn_order
+    )
+    return {
+        "txnId": updated.id if updated else ref.id,
+        "blockHash": updated.raw_block_hash if updated else None,
+    }
+
+
 @app.post("/api/transactions/toggle-status")
 def transactions_toggle_status(req: ToggleStatusRequest) -> dict:
     """Stable-identity mutation contract (spec: Mutation-Time Projection):
@@ -647,16 +673,7 @@ def transactions_toggle_status(req: ToggleStatusRequest) -> dict:
     hash differs, re-project the touched file, return updated projected data.
     """
     config = _require_workspace_config()
-    refresh_projection(config)
-
-    ref = find_projected_transaction(config, req.txnId)
-    if ref is None:
-        raise HTTPException(
-            status_code=404,
-            detail="Transaction not found (stale data — try refreshing)",
-        )
-    if req.blockHash != ref.raw_block_hash:
-        raise HTTPException(status_code=409, detail=_STALE_TRANSACTION_DETAIL)
+    ref = _locate_projected_transaction(config, req.txnId, req.blockHash)
 
     parsed = parse_header(ref.raw_header)
     if parsed is None:
@@ -694,16 +711,10 @@ def transactions_toggle_status(req: ToggleStatusRequest) -> dict:
             "txn_id": ref.id,
         }
 
-    refresh_projection(config)
-    updated = find_projected_transaction_at(config, ref.journal_file_id, ref.txn_order)
-
+    # The writer re-projected the touched file; just re-read the row.
     return {
         "newStatus": next_status.value,
-        # Transitional: the other row actions are positional until #17 and
-        # need a fresh headerLine after a toggle.
-        "newHeaderLine": new_line,
-        "txnId": updated.id if updated else ref.id,
-        "blockHash": updated.raw_block_hash if updated else None,
+        **_post_edit_identity(config, ref),
         "eventId": mut.event_id,
     }
 
@@ -713,31 +724,23 @@ def transactions_toggle_status(req: ToggleStatusRequest) -> dict:
 # ---------------------------------------------------------------------------
 
 
-def _locate_header(lines: list[str], line_number: int, expected_header: str) -> int:
-    """Thin wrapper around :func:`locate_header_at` that raises HTTPException.
-
-    The position-based identity scheme makes the old ``AmbiguousHeaderError``
-    unreachable from mutation endpoints — the line number disambiguates two
-    transactions whose header lines are byte-identical.
-    """
-    try:
-        return locate_header_at(lines, line_number, expected_header)
-    except HeaderNotFoundError:
-        raise HTTPException(
-            status_code=404,
-            detail="Transaction not found in journal (stale data — try refreshing)",
-        )
+def _stale_block_guard(lines: list[str], ref) -> int:
+    """Belt-and-suspenders re-check inside the writer block: the projected
+    header must still sit at the projected line. Returns the header index."""
+    header_idx = ref.source_start_line - 1
+    if header_idx >= len(lines) or lines[header_idx] != ref.raw_header:
+        raise HTTPException(status_code=409, detail=_STALE_TRANSACTION_DETAIL)
+    return header_idx
 
 
 @app.post("/api/transactions/delete")
 def transactions_delete(req: DeleteTransactionRequest) -> dict:
     config = _require_workspace_config()
-    journal_path = Path(req.journalPath)
-    if not journal_path.is_file():
-        raise HTTPException(status_code=404, detail="Journal file not found")
+    ref = _locate_projected_transaction(config, req.txnId, req.blockHash)
+    journal_path = config.root_dir / ref.journal_path
 
-    parsed = parse_header(req.headerLine)
-    payee = parsed.payee if parsed else req.headerLine[:60]
+    parsed = parse_header(ref.raw_header)
+    payee = parsed.payee if parsed else ref.raw_header[:60]
     date_str = parsed.date if parsed else ""
 
     with journal_writer.mutate(
@@ -748,7 +751,7 @@ def transactions_delete(req: DeleteTransactionRequest) -> dict:
     ) as mut:
         text = journal_path.read_text(encoding="utf-8")
         lines = text.splitlines()
-        header_idx = _locate_header(lines, req.lineNumber, req.headerLine)
+        header_idx = _stale_block_guard(lines, ref)
         block_start, block_end = find_transaction_block(lines, header_idx)
         deleted_block = "\n".join(lines[block_start:block_end])
 
@@ -761,8 +764,9 @@ def transactions_delete(req: DeleteTransactionRequest) -> dict:
 
         mut.summary = f"Deleted transaction: {payee} on {date_str}"
         mut.payload = {
-            "journal_path": rel_path(journal_path, config.root_dir),
-            "header_line": req.headerLine,
+            "journal_path": ref.journal_path,
+            "header_line": ref.raw_header,
+            "txn_id": ref.id,
             "deleted_block": deleted_block,
         }
 
@@ -772,12 +776,11 @@ def transactions_delete(req: DeleteTransactionRequest) -> dict:
 @app.post("/api/transactions/recategorize")
 def transactions_recategorize(req: RecategorizeTransactionRequest) -> dict:
     config = _require_workspace_config()
-    journal_path = Path(req.journalPath)
-    if not journal_path.is_file():
-        raise HTTPException(status_code=404, detail="Journal file not found")
+    ref = _locate_projected_transaction(config, req.txnId, req.blockHash)
+    journal_path = config.root_dir / ref.journal_path
 
-    parsed = parse_header(req.headerLine)
-    payee = parsed.payee if parsed else req.headerLine[:60]
+    parsed = parse_header(ref.raw_header)
+    payee = parsed.payee if parsed else ref.raw_header[:60]
     date_str = parsed.date if parsed else ""
 
     # Collect tracked account ledger names for distinguishing categories from
@@ -799,7 +802,7 @@ def transactions_recategorize(req: RecategorizeTransactionRequest) -> dict:
     ) as mut:
         text = journal_path.read_text(encoding="utf-8")
         lines = text.splitlines()
-        header_idx = _locate_header(lines, req.lineNumber, req.headerLine)
+        header_idx = _stale_block_guard(lines, ref)
         block_start, block_end = find_transaction_block(lines, header_idx)
 
         # Find the single destination posting to rewrite.
@@ -841,13 +844,20 @@ def transactions_recategorize(req: RecategorizeTransactionRequest) -> dict:
 
         mut.summary = f"Recategorized: {payee} on {date_str} ({previous_account} → {target_account})"
         mut.payload = {
-            "journal_path": rel_path(journal_path, config.root_dir),
-            "header_line": req.headerLine,
+            "journal_path": ref.journal_path,
+            "header_line": ref.raw_header,
+            "txn_id": ref.id,
             "previous_account": previous_account,
             "new_account": target_account,
         }
 
-    return {"success": True, "previousAccount": previous_account, "newAccount": target_account, "eventId": mut.event_id}
+    return {
+        "success": True,
+        "previousAccount": previous_account,
+        "newAccount": target_account,
+        **_post_edit_identity(config, ref),
+        "eventId": mut.event_id,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -858,13 +868,6 @@ def transactions_recategorize(req: RecategorizeTransactionRequest) -> dict:
 @app.post("/api/transactions/reassign-account")
 def transactions_reassign_account(req: ReassignAccountRequest) -> dict:
     config = _require_workspace_config()
-    journal_path = Path(req.journalPath)
-    if not journal_path.is_file():
-        raise HTTPException(status_code=404, detail="Journal file not found")
-
-    parsed = parse_header(req.headerLine)
-    payee = parsed.payee if parsed else req.headerLine[:60]
-    date_str = parsed.date if parsed else ""
 
     # Collect tracked account ledger names.
     tracked_ledger_accounts: set[str] = set()
@@ -876,6 +879,13 @@ def transactions_reassign_account(req: ReassignAccountRequest) -> dict:
     if req.newAccountLedgerName not in tracked_ledger_accounts:
         raise HTTPException(status_code=422, detail="Not a tracked account")
 
+    ref = _locate_projected_transaction(config, req.txnId, req.blockHash)
+    journal_path = config.root_dir / ref.journal_path
+
+    parsed = parse_header(ref.raw_header)
+    payee = parsed.payee if parsed else ref.raw_header[:60]
+    date_str = parsed.date if parsed else ""
+
     previous_account: str | None = None
 
     with journal_writer.mutate(
@@ -886,7 +896,7 @@ def transactions_reassign_account(req: ReassignAccountRequest) -> dict:
     ) as mut:
         text = journal_path.read_text(encoding="utf-8")
         lines = text.splitlines()
-        header_idx = _locate_header(lines, req.lineNumber, req.headerLine)
+        header_idx = _stale_block_guard(lines, ref)
         block_start, block_end = find_transaction_block(lines, header_idx)
 
         # Find the single source (tracked) posting to rewrite.
@@ -921,13 +931,20 @@ def transactions_reassign_account(req: ReassignAccountRequest) -> dict:
 
         mut.summary = f"Reassigned account: {payee} on {date_str} ({previous_account} → {req.newAccountLedgerName})"
         mut.payload = {
-            "journal_path": rel_path(journal_path, config.root_dir),
-            "header_line": req.headerLine,
+            "journal_path": ref.journal_path,
+            "header_line": ref.raw_header,
+            "txn_id": ref.id,
             "previous_account": previous_account,
             "new_account": req.newAccountLedgerName,
         }
 
-    return {"success": True, "previousAccount": previous_account, "newAccount": req.newAccountLedgerName, "eventId": mut.event_id}
+    return {
+        "success": True,
+        "previousAccount": previous_account,
+        "newAccount": req.newAccountLedgerName,
+        **_post_edit_identity(config, ref),
+        "eventId": mut.event_id,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -940,12 +957,11 @@ _NOTES_RE = re.compile(r"^(\s*;\s*)notes:\s*(.*)$")
 @app.post("/api/transactions/notes")
 def transactions_notes(req: UpdateNotesRequest) -> dict:
     config = _require_workspace_config()
-    journal_path = Path(req.journalPath)
-    if not journal_path.is_file():
-        raise HTTPException(status_code=404, detail="Journal file not found")
+    ref = _locate_projected_transaction(config, req.txnId, req.blockHash)
+    journal_path = config.root_dir / ref.journal_path
 
-    parsed = parse_header(req.headerLine)
-    payee = parsed.payee if parsed else req.headerLine[:60]
+    parsed = parse_header(ref.raw_header)
+    payee = parsed.payee if parsed else ref.raw_header[:60]
     date_str = parsed.date if parsed else ""
 
     with journal_writer.mutate(
@@ -956,7 +972,7 @@ def transactions_notes(req: UpdateNotesRequest) -> dict:
     ) as mut:
         text = journal_path.read_text(encoding="utf-8")
         lines = text.splitlines()
-        header_idx = _locate_header(lines, req.lineNumber, req.headerLine)
+        header_idx = _stale_block_guard(lines, ref)
         block_start, block_end = find_transaction_block(lines, header_idx)
 
         # Find existing notes line within the block and capture its prior value.
@@ -985,21 +1001,21 @@ def transactions_notes(req: UpdateNotesRequest) -> dict:
 
         mut.summary = f"Notes updated: {payee} on {date_str}"
         mut.payload = {
-            "journal_path": rel_path(journal_path, config.root_dir),
-            "header_line": req.headerLine,
+            "journal_path": ref.journal_path,
+            "header_line": ref.raw_header,
+            "txn_id": ref.id,
             "notes": req.notes,
             "previous_notes": previous_notes,
         }
 
-    return {"success": True, "eventId": mut.event_id}
+    return {"success": True, **_post_edit_identity(config, ref), "eventId": mut.event_id}
 
 
 @app.post("/api/transactions/unmatch")
 def transactions_unmatch(req: UnmatchTransactionRequest) -> dict:
     config = _require_workspace_config()
-    journal_path = Path(req.journalPath)
-    if not journal_path.is_file():
-        raise HTTPException(status_code=404, detail="Journal file not found")
+    ref = _locate_projected_transaction(config, req.txnId, req.blockHash)
+    journal_path = config.root_dir / ref.journal_path
 
     archive_path = config.root_dir / "journals" / "archived-manual.journal"
     if not archive_path.is_file():
@@ -1011,8 +1027,8 @@ def transactions_unmatch(req: UnmatchTransactionRequest) -> dict:
         if la:
             tracked_ledger_accounts.add(la)
 
-    parsed = parse_header(req.headerLine)
-    payee = parsed.payee if parsed else req.headerLine[:60]
+    parsed = parse_header(ref.raw_header)
+    payee = parsed.payee if parsed else ref.raw_header[:60]
     date_str = parsed.date if parsed else ""
 
     with journal_writer.mutate(
@@ -1054,7 +1070,7 @@ def transactions_unmatch(req: UnmatchTransactionRequest) -> dict:
         #     rewrite destination to Expenses:Unknown ---
         main_text = journal_path.read_text(encoding="utf-8")
         main_lines = main_text.splitlines()
-        header_idx = _locate_header(main_lines, req.lineNumber, req.headerLine)
+        header_idx = _stale_block_guard(main_lines, ref)
         block_start, block_end = find_transaction_block(main_lines, header_idx)
 
         lines_to_remove: list[int] = []
@@ -1149,14 +1165,15 @@ def transactions_unmatch(req: UnmatchTransactionRequest) -> dict:
 
         mut.summary = f"Unmatched: {payee} on {date_str} (match-id: {req.matchId})"
         mut.payload = {
-            "journal_path": rel_path(journal_path, config.root_dir),
+            "journal_path": ref.journal_path,
             "archive_path": rel_path(archive_path, config.root_dir),
-            "header_line": req.headerLine,
+            "header_line": ref.raw_header,
+            "txn_id": ref.id,
             "match_id": req.matchId,
             "restored_manual_block": restored_block,
         }
 
-    return {"success": True, "eventId": mut.event_id}
+    return {"success": True, **_post_edit_identity(config, ref), "eventId": mut.event_id}
 
 
 # ---------------------------------------------------------------------------
@@ -1528,12 +1545,15 @@ def accounts_reconcile(account_id: str, req: ReconcileRequest) -> dict:
             detail="Could not verify the assertion: ledger CLI is unavailable.",
         ) from exc
 
+    # The writer re-projected the touched file; return the assertion block's
+    # durable identity so follow-up mutations need no positional data.
+    assertion_ref = find_projected_transaction(config, write_result.txn_id)
     return {
         "ok": True,
         "assertionTransaction": {
-            "journalPath": write_result.journal_rel,
+            "txnId": write_result.txn_id,
+            "blockHash": assertion_ref.raw_block_hash if assertion_ref else None,
             "headerLine": write_result.header_line,
-            "lineNumber": write_result.line_number,
         },
         "eventId": mut.event_id,
     }
@@ -1605,9 +1625,8 @@ def accounts_reconciliation_context(
                 "sourceLabel": row.source_label,
                 "isImported": row.is_imported,
                 "isManual": row.is_manual,
-                "journalPath": row.journal_path,
-                "headerLine": row.header_line,
-                "lineNumber": row.line_number,
+                "txnId": row.txn_id,
+                "blockHash": row.block_hash,
                 "canDelete": row.can_delete,
             }
             for row in context.transactions
@@ -1648,9 +1667,8 @@ def accounts_reconciliation_duplicate_review(
             "sourceLabel": row.source_label,
             "isImported": row.is_imported,
             "isManual": row.is_manual,
-            "journalPath": row.journal_path,
-            "headerLine": row.header_line,
-            "lineNumber": row.line_number,
+            "txnId": row.txn_id,
+            "blockHash": row.block_hash,
             "canDelete": row.can_delete,
         }
 

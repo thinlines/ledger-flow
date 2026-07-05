@@ -59,6 +59,9 @@ class UnknownSelection(BaseModel):
     targetTrackedAccountId: str | None = None
     matchedCandidateId: str | None = None
     matchedManualTxnId: str | None = None
+    # Stable identity of the matched manual entry (#17); the line range is
+    # the fallback for blocks that never carried an lf_txn_id.
+    matchedManualLfTxnId: str | None = None
     matchedManualLineRange: list[int] | None = None
 
 
@@ -197,7 +200,7 @@ class ManualTransactionCreateRequest(BaseModel):
     destinationAccount: str = Field(min_length=1)
 
 
-class ToggleStatusRequest(BaseModel):
+class TransactionTargetRequest(BaseModel):
     """Stable-identity mutation contract (spec: Mutation-Time Projection).
 
     The transaction is located by its projected id; ``blockHash`` is the
@@ -208,37 +211,27 @@ class ToggleStatusRequest(BaseModel):
     blockHash: str = Field(min_length=1)
 
 
-class DeleteTransactionRequest(BaseModel):
-    journalPath: str
-    headerLine: str
-    lineNumber: int
+class ToggleStatusRequest(TransactionTargetRequest):
+    pass
 
 
-class RecategorizeTransactionRequest(BaseModel):
-    journalPath: str
-    headerLine: str
-    lineNumber: int
+class DeleteTransactionRequest(TransactionTargetRequest):
+    pass
+
+
+class RecategorizeTransactionRequest(TransactionTargetRequest):
     newCategory: str | None = None
 
 
-class ReassignAccountRequest(BaseModel):
-    journalPath: str
-    headerLine: str
-    lineNumber: int
+class ReassignAccountRequest(TransactionTargetRequest):
     newAccountLedgerName: str
 
 
-class UnmatchTransactionRequest(BaseModel):
-    journalPath: str
-    headerLine: str
-    lineNumber: int
+class UnmatchTransactionRequest(TransactionTargetRequest):
     matchId: str
 
 
-class UpdateNotesRequest(BaseModel):
-    journalPath: str
-    headerLine: str
-    lineNumber: int
+class UpdateNotesRequest(TransactionTargetRequest):
     notes: str
 
 

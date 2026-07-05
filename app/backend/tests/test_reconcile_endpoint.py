@@ -215,7 +215,10 @@ class TestReconcileSuccess:
 
         assert result["ok"] is True
         assert "eventId" in result
-        assert result["assertionTransaction"]["journalPath"].endswith("2026.journal")
+        # #17: the response carries the assertion block's durable identity,
+        # not positional targeting data.
+        assert result["assertionTransaction"]["txnId"].startswith("txn_")
+        assert result["assertionTransaction"]["blockHash"]
 
         # Journal contains the assertion transaction.
         journal = config.journal_dir / "2026.journal"
@@ -376,13 +379,17 @@ class TestReconcileDeleteRoundTrip:
         # Sanity: latest_reconciliation_date now returns 2026-04-17.
         assert latest_reconciliation_date(config, "Assets:Checking:Wells Fargo") == date(2026, 4, 17)
 
-        # Delete the assertion transaction via the existing endpoint.
-        delete_req = DeleteTransactionRequest(
-            journalPath=str(journal),
-            headerLine=result["assertionTransaction"]["headerLine"],
-            lineNumber=result["assertionTransaction"]["lineNumber"],
+        # Delete the assertion transaction via the identity the reconcile
+        # response returned (#17: no positional targeting anywhere).
+        assertion_txn = result["assertionTransaction"]
+        assert assertion_txn["txnId"].startswith("txn_")
+        assert assertion_txn["blockHash"]
+        main.transactions_delete(
+            DeleteTransactionRequest(
+                txnId=assertion_txn["txnId"],
+                blockHash=assertion_txn["blockHash"],
+            )
         )
-        main.transactions_delete(delete_req)
 
         # Journal back to byte-equivalent state.
         assert journal.read_bytes() == before_bytes

@@ -118,8 +118,9 @@ def test_add_dry_run_prints_preview_without_writing(tmp_path: Path, capsys) -> N
     assert output["created"] is False
     assert output["dryRun"] is True
     assert output["journalPath"].endswith("journals/2026.journal")
-    assert output["block"] == [
-        "2026-07-02 Burger King",
+    assert output["block"][0] == "2026-07-02 Burger King"
+    assert output["block"][1].startswith("    ; lf_txn_id: txn_")
+    assert output["block"][2:] == [
         "    ; :manual:",
         "    Expenses:Eating Out  $20.00",
         "    Assets:Credit Card",

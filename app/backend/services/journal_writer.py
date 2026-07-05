@@ -1,8 +1,8 @@
 """Single chokepoint for journal mutations.
 
 Every journal-class write in Ledger Flow flows through ``journal_writer.mutate``.
-The writer owns the seven-step ritual that previously lived inline in every
-route and undo handler: drift detect, hash, backup, mutate, verify, hash,
+The writer owns the ritual that previously lived inline in every route and
+undo handler: drift detect, hash, backup, mutate, verify, re-project, hash,
 emit-event, rollback-on-failure.
 
 Callers describe **what** they want to change as a path set plus event metadata;
@@ -23,6 +23,10 @@ Failure semantics ride on Python exceptions:
 * Exception inside the block → restore every backed-up path, re-raise.
 * Verifier returns ``VerifyFailure`` → restore, raise ``WriterRejected``.
 * Verifier raises ``RuntimeError`` → restore, raise ``WriterUnavailable``.
+* Re-projection raises → restore every backed-up path, re-raise. The
+  projection's own SQLite transaction rolls back with the exception, so
+  files and projection commit or revert together (spec: Mutation-Time
+  Projection).
 * One or more per-path restores fail during rollback → raise aggregate
   ``WriterError`` carrying per-file outcomes.
 """
@@ -39,6 +43,7 @@ from uuid import uuid7
 
 from .config_service import AppConfig
 from .event_log_service import check_drift, emit_event, hash_file, rel_path
+from .projection_service import refresh_projection
 
 
 # ---------------------------------------------------------------------------
@@ -227,6 +232,16 @@ def mutate(
         if failure is not None:
             _rollback(paths, pre_existed, backups)
             raise WriterRejected(failure)
+
+    # Mutation-time projection: bring the projection in line with the files
+    # just written, inside refresh_projection's own SQLite transaction. On
+    # failure that transaction rolls back and the files are restored, so
+    # neither side can commit without the other.
+    try:
+        refresh_projection(config)
+    except BaseException:
+        _rollback(paths, pre_existed, backups)
+        raise
 
     journal_refs: list[dict] = []
     for path in paths:

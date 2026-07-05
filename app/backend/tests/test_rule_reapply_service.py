@@ -90,9 +90,14 @@ account Assets:Savings
         "upToDateCount": 1,
         "skippedCount": 2,
     }
+    candidate = result["candidates"][0]
+    block_hash = candidate.pop("blockHash")
+    assert block_hash
     assert result["candidates"] == [
         {
             "id": "2026.journal:8",
+            "lfTxnId": None,
+            "transactionStartLine": 6,
             "date": "2026-02-15",
             "payee": "Coffee Shop",
             "amount": "$7.00",
@@ -149,3 +154,132 @@ account Expenses:Food:Shopping
     assert updated_count == 1
     assert warnings == []
     assert "Expenses:Food:Shopping  $7.00" in journal.read_text(encoding="utf-8")
+
+
+def test_scan_records_block_identity(tmp_path: Path) -> None:
+    journal = tmp_path / "2026.journal"
+    journal.write_text(
+        """
+2026/02/15 Coffee Shop
+    ; lf_txn_id: txn_coffee
+    ; import_account_id: checking
+    Expenses:Food:Groceries  $7.00
+    Assets:Bank:Checking
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    rule = {
+        "id": "r1",
+        "type": "match",
+        "conditions": [{"field": "payee", "operator": "contains", "value": "coffee"}],
+        "actions": [{"type": "set_account", "account": "Expenses:Food:Shopping"}],
+        "enabled": True,
+        "position": 1,
+    }
+    result = scan_rule_reapply(journal, rule, {"checking": {"ledger_account": "Assets:Bank:Checking"}})
+
+    candidate = result["candidates"][0]
+    assert candidate["lfTxnId"] == "txn_coffee"
+    assert candidate["blockHash"]
+
+
+def test_apply_survives_line_shift_when_block_carries_identity(tmp_path: Path) -> None:
+    """#17: the candidate is re-located by lf_txn_id at apply time, so an
+    external edit above no longer invalidates the staged line number."""
+    journal = tmp_path / "2026.journal"
+    journal.write_text(
+        """
+2026/02/15 Coffee Shop
+    ; lf_txn_id: txn_coffee
+    ; import_account_id: checking
+    Expenses:Food:Groceries  $7.00
+    Assets:Bank:Checking
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    accounts = tmp_path / "10-accounts.dat"
+    accounts.write_text(
+        "account Expenses:Food:Groceries\naccount Expenses:Food:Shopping\n",
+        encoding="utf-8",
+    )
+
+    rule = {
+        "id": "r1",
+        "type": "match",
+        "conditions": [{"field": "payee", "operator": "contains", "value": "coffee"}],
+        "actions": [{"type": "set_account", "account": "Expenses:Food:Shopping"}],
+        "enabled": True,
+        "position": 1,
+    }
+    candidates = scan_rule_reapply(journal, rule, {"checking": {"ledger_account": "Assets:Bank:Checking"}})["candidates"]
+
+    journal.write_text(
+        "2026/01/01 Inserted Externally\n"
+        "    Expenses:Food:Groceries  $1.00\n"
+        "    Assets:Bank:Checking\n"
+        "\n" + journal.read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+
+    updated_count, warnings = apply_rule_reapply(
+        journal_path=journal,
+        accounts_dat=accounts,
+        candidates=candidates,
+        selected_candidate_ids=[candidates[0]["id"]],
+    )
+
+    assert warnings == []
+    assert updated_count == 1
+    content = journal.read_text(encoding="utf-8")
+    assert "Expenses:Food:Shopping  $7.00" in content
+    assert "Inserted Externally" in content
+
+
+def test_apply_rejects_changed_block_with_transaction_copy(tmp_path: Path) -> None:
+    journal = tmp_path / "2026.journal"
+    journal.write_text(
+        """
+2026/02/15 Coffee Shop
+    ; lf_txn_id: txn_coffee
+    ; import_account_id: checking
+    Expenses:Food:Groceries  $7.00
+    Assets:Bank:Checking
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    accounts = tmp_path / "10-accounts.dat"
+    accounts.write_text(
+        "account Expenses:Food:Groceries\naccount Expenses:Food:Shopping\n",
+        encoding="utf-8",
+    )
+
+    rule = {
+        "id": "r1",
+        "type": "match",
+        "conditions": [{"field": "payee", "operator": "contains", "value": "coffee"}],
+        "actions": [{"type": "set_account", "account": "Expenses:Food:Shopping"}],
+        "enabled": True,
+        "position": 1,
+    }
+    candidates = scan_rule_reapply(journal, rule, {"checking": {"ledger_account": "Assets:Bank:Checking"}})["candidates"]
+
+    journal.write_text(
+        journal.read_text(encoding="utf-8").replace("$7.00", "$8.00"),
+        encoding="utf-8",
+    )
+
+    updated_count, warnings = apply_rule_reapply(
+        journal_path=journal,
+        accounts_dat=accounts,
+        candidates=candidates,
+        selected_candidate_ids=[candidates[0]["id"]],
+    )
+
+    assert updated_count == 0
+    assert len(warnings) == 1
+    assert "changed since" in warnings[0]["warning"]
+    assert "line" not in warnings[0]["warning"].lower()

@@ -9,8 +9,10 @@ from .config_service import AppConfig, infer_account_kind
 
 
 from .header_parser import HEADER_RE
+from .journal_block_service import lf_txn_id_line, mint_lf_txn_id
 
 TXN_START_RE = re.compile(r"^\d{4}[-/]\d{2}[-/]\d{2}")
+LF_TXN_ID_META_RE = re.compile(r"^\s*;\s*lf_txn_id:\s*(\S+)\s*$")
 POSTING_RE = re.compile(r"^\s+([^\s].*?)(?:(?:\s{2,}|\t+)(.+))?$")
 META_RE = re.compile(r"^\s*;\s*([^:]+):\s*(.*)$")
 OPENING_BALANCES_EQUITY = "Equity:Opening-Balances"
@@ -193,7 +195,17 @@ def write_opening_balance(
     offset_ledger_account = offset_account.strip() or OPENING_BALANCES_EQUITY
     currency = str(config.workspace.get("base_currency", "USD")).strip() or "USD"
     target_path.parent.mkdir(parents=True, exist_ok=True)
+    # Upsert semantics: an amount edit rewrites the block, but its identity
+    # must survive — reuse the existing lf_txn_id when the file has one.
+    txn_id = mint_lf_txn_id()
+    if target_path.exists():
+        for line in target_path.read_text(encoding="utf-8").splitlines():
+            existing_id = LF_TXN_ID_META_RE.match(line)
+            if existing_id:
+                txn_id = existing_id.group(1)
+                break
     meta_lines = [
+        lf_txn_id_line(txn_id),
         f"    ; tracked_account_id: {tracked_account_id}",
     ]
     cleaned_min_payment = (minimum_payment or "").strip()

@@ -1,8 +1,14 @@
 """Semantic undo for journal mutations via compensating events.
 
-Dispatches on the forward event type, verifies journal hashes have not drifted,
+Dispatches on the forward event type, locates the target transaction by the
+``txn_id`` recorded in the forward payload (spec: Mutation-Time Projection),
+verifies the transaction still holds the state the forward action produced,
 applies the inverse mutation, and writes a compensating event linked back to
 the original.
+
+Staleness is judged per transaction, not per file: an unrelated later edit
+to the same journal no longer blocks undo. A conflicting edit to the target
+transaction fails the handler's semantic precondition instead.
 
 Journals remain the canonical source of truth — undo writes journals and records
 the change in the event log.  The event log is never rewritten.
@@ -19,15 +25,15 @@ from typing import Callable
 from services import journal_writer
 from services.archive_service import archive_manual_entry
 from services.config_service import AppConfig
-from services.event_log_service import hash_file, read_events
-from services.header_parser import TransactionStatus, parse_header, set_header_status
-from services.journal_block_service import (
-    AmbiguousHeaderError,
-    HeaderNotFoundError,
-    find_transaction_block,
-    locate_header,
-)
+from services.event_log_service import read_events
+from services.header_parser import TransactionStatus, set_header_status
+from services.journal_block_service import find_transaction_block
 from services.journal_query_service import TXN_START_RE
+from services.projection_service import (
+    ProjectedTransactionRef,
+    find_projected_transaction,
+    refresh_projection,
+)
 from services.transfer_service import ACCOUNT_LINE_RE, ACCOUNT_ONLY_RE, rewrite_posting_account
 
 logger = logging.getLogger(__name__)
@@ -65,6 +71,44 @@ class UndoFailedError(Exception):
 # Handler protocol: handlers take ``(config, event)`` and own emission via
 # ``journal_writer.mutate``; they return the compensating event id.
 HandlerFn = Callable[[AppConfig, dict], str]
+
+
+# Matches the migration/minting line shape: ``    ; lf_txn_id: txn_...``.
+_LF_TXN_ID_META_RE = re.compile(r"^\s*;\s*lf_txn_id:\s*(\S+)\s*$")
+
+
+def _payload_txn_id(payload: dict) -> str:
+    txn_id = str(payload.get("txn_id") or "").strip()
+    if not txn_id:
+        raise UndoFailedError(
+            "Event lacks txn_id (predates stable identity) — cannot undo"
+        )
+    return txn_id
+
+
+def _locate_projected(config: AppConfig, txn_id: str) -> ProjectedTransactionRef:
+    """Locate the target transaction through a fresh projection."""
+    refresh_projection(config)
+    ref = find_projected_transaction(config, txn_id)
+    if ref is None:
+        raise UndoFailedError("Transaction no longer exists — cannot undo")
+    return ref
+
+
+def _header_index(lines: list[str], ref: ProjectedTransactionRef) -> int:
+    """The projected header position, re-checked against the file bytes."""
+    header_idx = ref.source_start_line - 1
+    if header_idx >= len(lines) or lines[header_idx] != ref.raw_header:
+        raise UndoFailedError("This transaction changed since the action — cannot undo")
+    return header_idx
+
+
+def _block_txn_id(block_text: str) -> str | None:
+    for line in block_text.splitlines():
+        match = _LF_TXN_ID_META_RE.match(line)
+        if match:
+            return match.group(1)
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -126,23 +170,9 @@ def undo_event(config: AppConfig, event_id: str) -> UndoResult:
             event_id,
         )
 
-    # 4. Drift verification.
-    for ref in forward.get("journal_refs", []):
-        ref_path = ref.get("path", "")
-        expected_hash = ref.get("hash_after")
-        if not ref_path or not expected_hash:
-            continue
-        full_path = workspace_path / ref_path
-        current_hash = hash_file(full_path)
-        if current_hash != expected_hash:
-            return UndoResult(
-                UndoOutcome.DRIFT,
-                f"File changed since the action: {ref_path}",
-                None,
-                event_id,
-            )
-
-    # 5. Apply the compensating action. Handlers own emission via journal_writer.
+    # 4. Apply the compensating action. Handlers own per-transaction
+    # staleness (locate by txn_id, verify the forward state still holds)
+    # and emission via journal_writer.
     forward_summary = forward.get("summary", "")
     try:
         compensating_id = handler(config, forward)
@@ -182,11 +212,18 @@ def _undo_transaction_deleted(config: AppConfig, event: dict) -> str:
 
     journal_path = workspace_path / journal_rel
 
-    # Safety: refuse if a transaction with the same header already exists.
-    text = journal_path.read_text(encoding="utf-8") if journal_path.is_file() else ""
-    lines = text.splitlines()
-    if header_line and any(line == header_line for line in lines):
-        raise UndoFailedError("Transaction was re-created — refusing to duplicate")
+    # Safety: refuse if the deleted transaction already exists again. The
+    # block's own lf_txn_id is the reliable signal; header-text equality is
+    # the fallback for blocks that never carried one.
+    deleted_txn_id = _block_txn_id(deleted_block)
+    if deleted_txn_id is not None:
+        refresh_projection(config)
+        if find_projected_transaction(config, deleted_txn_id) is not None:
+            raise UndoFailedError("Transaction was re-created — refusing to duplicate")
+    else:
+        text = journal_path.read_text(encoding="utf-8") if journal_path.is_file() else ""
+        if header_line and any(line == header_line for line in text.splitlines()):
+            raise UndoFailedError("Transaction was re-created — refusing to duplicate")
 
     with journal_writer.mutate(
         config=config,
@@ -240,18 +277,17 @@ def _undo_transaction_recategorized(config: AppConfig, event: dict) -> str:
     """
     workspace_path = config.root_dir
     payload = event.get("payload", {})
-    journal_rel = payload.get("journal_path", "")
-    header_line = payload.get("header_line", "")
     previous_account = payload.get("previous_account", "")
     new_account = payload.get("new_account", "Expenses:Unknown")
     forward_event_id = event.get("id", "")
     forward_summary = event.get("summary", "")
     forward_type = event.get("type", "")
 
-    if not journal_rel or not header_line or not previous_account:
+    if not previous_account:
         raise UndoFailedError("Incomplete event payload")
 
-    journal_path = workspace_path / journal_rel
+    ref = _locate_projected(config, _payload_txn_id(payload))
+    journal_path = workspace_path / ref.journal_path
 
     with journal_writer.mutate(
         config=config,
@@ -262,11 +298,7 @@ def _undo_transaction_recategorized(config: AppConfig, event: dict) -> str:
         text = journal_path.read_text(encoding="utf-8")
         lines = text.splitlines()
 
-        try:
-            header_idx = locate_header(lines, header_line)
-        except (HeaderNotFoundError, AmbiguousHeaderError) as exc:
-            raise UndoFailedError(str(exc)) from exc
-
+        header_idx = _header_index(lines, ref)
         block_start, block_end = find_transaction_block(lines, header_idx)
 
         # Find the posting with new_account and rewrite it back.
@@ -303,18 +335,17 @@ def _undo_transaction_account_reassigned(config: AppConfig, event: dict) -> str:
     """
     workspace_path = config.root_dir
     payload = event.get("payload", {})
-    journal_rel = payload.get("journal_path", "")
-    header_line = payload.get("header_line", "")
     previous_account = payload.get("previous_account", "")
     new_account = payload.get("new_account", "")
     forward_event_id = event.get("id", "")
     forward_summary = event.get("summary", "")
     forward_type = event.get("type", "")
 
-    if not journal_rel or not header_line or not previous_account:
+    if not previous_account:
         raise UndoFailedError("Incomplete event payload")
 
-    journal_path = workspace_path / journal_rel
+    ref = _locate_projected(config, _payload_txn_id(payload))
+    journal_path = workspace_path / ref.journal_path
 
     with journal_writer.mutate(
         config=config,
@@ -325,11 +356,7 @@ def _undo_transaction_account_reassigned(config: AppConfig, event: dict) -> str:
         text = journal_path.read_text(encoding="utf-8")
         lines = text.splitlines()
 
-        try:
-            header_idx = locate_header(lines, header_line)
-        except (HeaderNotFoundError, AmbiguousHeaderError) as exc:
-            raise UndoFailedError(str(exc)) from exc
-
+        header_idx = _header_index(lines, ref)
         block_start, block_end = find_transaction_block(lines, header_idx)
 
         # Find the posting with new_account and rewrite it back.
@@ -366,17 +393,28 @@ def _undo_transaction_status_toggled(config: AppConfig, event: dict) -> str:
     """
     workspace_path = config.root_dir
     payload = event.get("payload", {})
-    journal_rel = payload.get("journal_path", "")
-    header_line = payload.get("header_line", "")
     previous_status_str = payload.get("previous_status", "")
+    new_status_str = payload.get("new_status", "")
     forward_event_id = event.get("id", "")
     forward_summary = event.get("summary", "")
     forward_type = event.get("type", "")
 
-    if not journal_rel or not header_line or not previous_status_str:
+    if not previous_status_str:
         raise UndoFailedError("Incomplete event payload")
 
-    journal_path = workspace_path / journal_rel
+    try:
+        previous_status = TransactionStatus(previous_status_str)
+    except ValueError as exc:
+        raise UndoFailedError(f"Invalid previous_status in event: {previous_status_str}") from exc
+
+    ref = _locate_projected(config, _payload_txn_id(payload))
+    # Semantic staleness gate: the transaction must still hold the status
+    # the forward toggle produced; a later toggle supersedes this event.
+    if ref.status != new_status_str:
+        raise UndoFailedError(
+            "Transaction status changed since this action — undo the later change first"
+        )
+    journal_path = workspace_path / ref.journal_path
 
     with journal_writer.mutate(
         config=config,
@@ -387,28 +425,8 @@ def _undo_transaction_status_toggled(config: AppConfig, event: dict) -> str:
         text = journal_path.read_text(encoding="utf-8")
         lines = text.splitlines()
 
-        # The header line in the file is now the *new* header (post-toggle).
-        # We need to find it. The event's header_line is the *original* (pre-toggle).
-        # Reconstruct the current header by applying the forward toggle.
-        new_status_str = payload.get("new_status", "")
-        try:
-            new_status = TransactionStatus(new_status_str)
-        except ValueError as exc:
-            raise UndoFailedError(f"Invalid new_status in event: {new_status_str}") from exc
-
-        current_header = set_header_status(header_line, new_status)
-
-        try:
-            header_idx = locate_header(lines, current_header)
-        except (HeaderNotFoundError, AmbiguousHeaderError) as exc:
-            raise UndoFailedError(str(exc)) from exc
-
-        try:
-            previous_status = TransactionStatus(previous_status_str)
-        except ValueError as exc:
-            raise UndoFailedError(f"Invalid previous_status in event: {previous_status_str}") from exc
-
-        restored_line = set_header_status(current_header, previous_status)
+        header_idx = _header_index(lines, ref)
+        restored_line = set_header_status(ref.raw_header, previous_status)
         lines[header_idx] = restored_line
         journal_path.write_text("\n".join(lines) + ("\n" if text.endswith("\n") else ""), encoding="utf-8")
 
@@ -427,28 +445,12 @@ def _undo_manual_entry_created(config: AppConfig, event: dict) -> str:
     """
     workspace_path = config.root_dir
     payload = event.get("payload", {})
-    date = payload.get("date", "")
-    payee = payload.get("payee", "")
     forward_event_id = event.get("id", "")
     forward_summary = event.get("summary", "")
     forward_type = event.get("type", "")
 
-    if not date or not payee:
-        raise UndoFailedError("Incomplete event payload — missing date or payee")
-
-    # Manual entries use ISO 8601 (YYYY-MM-DD) headers; see manual_entry_service.
-    date_formatted = date.replace("/", "-")
-    expected_header = f"{date_formatted} {payee}"
-
-    # Determine journal path from journal_refs.
-    refs = event.get("journal_refs", [])
-    if not refs:
-        raise UndoFailedError("No journal_refs in event")
-    journal_rel = refs[0].get("path", "")
-    if not journal_rel:
-        raise UndoFailedError("Empty journal path in refs")
-
-    journal_path = workspace_path / journal_rel
+    ref = _locate_projected(config, _payload_txn_id(payload))
+    journal_path = workspace_path / ref.journal_path
 
     with journal_writer.mutate(
         config=config,
@@ -459,11 +461,7 @@ def _undo_manual_entry_created(config: AppConfig, event: dict) -> str:
         text = journal_path.read_text(encoding="utf-8")
         lines = text.splitlines()
 
-        try:
-            header_idx = locate_header(lines, expected_header)
-        except (HeaderNotFoundError, AmbiguousHeaderError) as exc:
-            raise UndoFailedError(f"Could not locate the manual entry to undo: {exc}") from exc
-
+        header_idx = _header_index(lines, ref)
         block_start, block_end = find_transaction_block(lines, header_idx)
 
         # Consume a preceding blank line to avoid double-blank-line gaps.
@@ -490,20 +488,28 @@ def _undo_transaction_unmatched(config: AppConfig, event: dict) -> str:
     """
     workspace_path = config.root_dir
     payload = event.get("payload", {})
-    journal_rel = payload.get("journal_path", "")
     archive_rel = payload.get("archive_path", "")
-    header_line = payload.get("header_line", "")
     match_id = payload.get("match_id", "")
     restored_manual_block = payload.get("restored_manual_block", "")
     forward_event_id = event.get("id", "")
     forward_summary = event.get("summary", "")
     forward_type = event.get("type", "")
 
-    if not journal_rel or not header_line or not match_id or not restored_manual_block:
+    if not match_id or not restored_manual_block:
         raise UndoFailedError("Incomplete event payload")
 
-    journal_path = workspace_path / journal_rel
+    ref = _locate_projected(config, _payload_txn_id(payload))
+    journal_path = workspace_path / ref.journal_path
     archive_path = workspace_path / archive_rel if archive_rel else workspace_path / "journals" / "archived-manual.journal"
+
+    # The restored manual entry carries its own identity; locate it through
+    # the same fresh projection instead of scanning for header text.
+    manual_txn_id = _block_txn_id(restored_manual_block)
+    manual_ref = (
+        find_projected_transaction(config, manual_txn_id)
+        if manual_txn_id is not None
+        else None
+    )
 
     # Parse the restored manual block to recover the category account.
     manual_lines = restored_manual_block.splitlines()
@@ -534,11 +540,7 @@ def _undo_transaction_unmatched(config: AppConfig, event: dict) -> str:
         text = journal_path.read_text(encoding="utf-8")
         lines = text.splitlines()
 
-        try:
-            header_idx = locate_header(lines, header_line)
-        except (HeaderNotFoundError, AmbiguousHeaderError) as exc:
-            raise UndoFailedError(f"Could not locate imported transaction: {exc}") from exc
-
+        header_idx = _header_index(lines, ref)
         block_start, block_end = find_transaction_block(lines, header_idx)
 
         # Insert :manual: and match-id: tags after the header (same order as unknowns_service).
@@ -561,17 +563,26 @@ def _undo_transaction_unmatched(config: AppConfig, event: dict) -> str:
                 break
 
         # --- Step 2: Find and remove the restored manual entry from the main journal ---
-        # The manual entry was inserted by the original unmatch. Its header is the
-        # first line of restored_manual_block, and it does NOT have the match-id tag
-        # (the tag was stripped during the unmatch).
+        # The manual entry was inserted by the original unmatch. Prefer its
+        # projected identity; fall back to a header scan for blocks that
+        # never carried an lf_txn_id. Step 1 inserted two tag lines, so any
+        # projected position after the imported header has shifted by two.
         manual_header = manual_lines[0] if manual_lines else ""
         manual_entry_idx: int | None = None
-        for i, line in enumerate(lines):
-            if line == manual_header and i != header_idx:
-                # Verify it's a plausible match by checking for the manual tag.
-                if i + 1 < len(lines) and ":manual:" in lines[i + 1]:
-                    manual_entry_idx = i
-                    break
+        if manual_ref is not None and manual_ref.journal_path == ref.journal_path:
+            candidate_idx = manual_ref.source_start_line - 1
+            if candidate_idx > header_idx:
+                candidate_idx += 2
+            if candidate_idx < len(lines) and lines[candidate_idx] == manual_ref.raw_header:
+                manual_entry_idx = candidate_idx
+        if manual_entry_idx is None:
+            for i, line in enumerate(lines):
+                if line == manual_header and i != header_idx:
+                    # Verify it's a plausible match by checking for the manual tag.
+                    block_head = "\n".join(lines[i : i + 3])
+                    if ":manual:" in block_head:
+                        manual_entry_idx = i
+                        break
 
         if manual_entry_idx is None:
             raise UndoFailedError("Could not locate restored manual entry in journal")
@@ -610,8 +621,6 @@ def _undo_transaction_notes_updated(config: AppConfig, event: dict) -> str:
     """
     workspace_path = config.root_dir
     payload = event.get("payload", {})
-    journal_rel = payload.get("journal_path", "")
-    header_line = payload.get("header_line", "")
     forward_event_id = event.get("id", "")
     forward_summary = event.get("summary", "")
     forward_type = event.get("type", "")
@@ -624,10 +633,8 @@ def _undo_transaction_notes_updated(config: AppConfig, event: dict) -> str:
 
     previous_notes = payload.get("previous_notes", "") or ""
 
-    if not journal_rel or not header_line:
-        raise UndoFailedError("Incomplete event payload")
-
-    journal_path = workspace_path / journal_rel
+    ref = _locate_projected(config, _payload_txn_id(payload))
+    journal_path = workspace_path / ref.journal_path
 
     with journal_writer.mutate(
         config=config,
@@ -638,11 +645,7 @@ def _undo_transaction_notes_updated(config: AppConfig, event: dict) -> str:
         text = journal_path.read_text(encoding="utf-8")
         lines = text.splitlines()
 
-        try:
-            header_idx = locate_header(lines, header_line)
-        except (HeaderNotFoundError, AmbiguousHeaderError) as exc:
-            raise UndoFailedError(str(exc)) from exc
-
+        header_idx = _header_index(lines, ref)
         block_start, block_end = find_transaction_block(lines, header_idx)
 
         # Find the current notes line in the block (post-forward-write state).

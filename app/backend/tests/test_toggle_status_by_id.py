@@ -108,7 +108,9 @@ def test_toggle_by_id_cycles_status_and_returns_projected_data(tmp_path, monkeyp
     assert result["txnId"] == "txn_grocery"
     assert result["blockHash"] != before["raw_block_hash"]
     assert result["eventId"]
-    assert result["newHeaderLine"] == "2026-01-05 ! Grocery Store"
+    # The transitional newHeaderLine field is gone (#17): every row action
+    # is identity-based now, nothing needs fresh header text.
+    assert "newHeaderLine" not in result
 
     text = (config.journal_dir / "2026.journal").read_text(encoding="utf-8")
     assert "2026-01-05 ! Grocery Store" in text
