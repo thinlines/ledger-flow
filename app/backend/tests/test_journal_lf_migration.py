@@ -23,6 +23,7 @@ import sqlite3
 from pathlib import Path
 
 from services.config_service import AppConfig
+from services.event_log_service import read_events
 from services.journal_migration_service import migrate_lf_metadata
 from services.projection_db import database_path
 from services.projection_service import refresh_projection
@@ -346,10 +347,7 @@ def test_backups_written_and_event_emitted(tmp_path):
     assert len(backups) == 1
     assert backups[0].read_text(encoding="utf-8") == YEAR_2026
 
-    events = [
-        json.loads(line)
-        for line in (tmp_path / "events.jsonl").read_text(encoding="utf-8").splitlines()
-    ]
+    events = read_events(tmp_path)
     assert events[-1]["type"] == "journal.lf_metadata_migrated.v1"
 
 

@@ -25,7 +25,7 @@ from typing import Callable
 from services import journal_writer
 from services.archive_service import archive_manual_entry
 from services.config_service import AppConfig
-from services.event_log_service import read_events
+from services.event_log_service import hash_file, read_events
 from services.header_parser import TransactionStatus, set_header_status
 from services.journal_block_service import find_transaction_block
 from services.journal_query_service import TXN_START_RE
@@ -34,6 +34,7 @@ from services.projection_service import (
     find_projected_transaction,
     refresh_projection,
 )
+from services.operations_service import list_operations, operation_is_compensated
 from services.transfer_service import ACCOUNT_LINE_RE, ACCOUNT_ONLY_RE, rewrite_posting_account
 
 logger = logging.getLogger(__name__)
@@ -131,6 +132,24 @@ def _is_compensated(events: list[dict], event_id: str) -> str | None:
     return None
 
 
+def _read_history(config: AppConfig) -> list[dict]:
+    operations = list(reversed(list_operations(config)))
+    legacy = read_events(config.root_dir)
+    seen = {str(event.get("id")) for event in legacy}
+    return legacy + [operation for operation in operations if str(operation.get("id")) not in seen]
+
+
+def _has_file_drift(config: AppConfig, event: dict) -> bool:
+    for file_ref in event.get("files") or event.get("journal_refs") or []:
+        path = str(file_ref.get("path") or "").strip()
+        expected = str(file_ref.get("hash_after") or "").strip()
+        if not path or not expected:
+            continue
+        if hash_file(config.root_dir / path) != expected:
+            return True
+    return False
+
+
 # ---------------------------------------------------------------------------
 # Undo dispatcher
 # ---------------------------------------------------------------------------
@@ -142,7 +161,7 @@ def undo_event(config: AppConfig, event_id: str) -> UndoResult:
     Returns an :class:`UndoResult` describing the outcome.
     """
     workspace_path = config.root_dir
-    events = read_events(workspace_path)
+    events = _read_history(config)
 
     # 1. Locate the forward event.
     forward = _find_event(events, event_id)
@@ -150,12 +169,20 @@ def undo_event(config: AppConfig, event_id: str) -> UndoResult:
         return UndoResult(UndoOutcome.NOT_FOUND, "Event not found", None, event_id)
 
     # 2. Idempotency check.
-    existing = _is_compensated(events, event_id)
+    existing = operation_is_compensated(config, event_id) or _is_compensated(events, event_id)
     if existing is not None:
         return UndoResult(
             UndoOutcome.ALREADY_COMPENSATED,
             "Already undone",
             existing,
+            event_id,
+        )
+
+    if _has_file_drift(config, forward):
+        return UndoResult(
+            UndoOutcome.DRIFT,
+            "Affected file changed since this operation — cannot undo",
+            None,
             event_id,
         )
 

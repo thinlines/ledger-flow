@@ -6,7 +6,7 @@ from pathlib import Path
 
 import main
 from services.config_service import AppConfig
-from services.event_log_service import emit_event
+from services.operations_service import record_operation
 
 
 def _make_config(workspace: Path) -> AppConfig:
@@ -43,19 +43,19 @@ def test_returns_events_newest_first_with_undoable_flag(tmp_path: Path, monkeypa
     monkeypatch.setattr(main, "_require_workspace_config", lambda: config)
 
     # Two forward events: one undoable, one not.
-    deletable_id = emit_event(
-        config.root_dir,
-        event_type="transaction.deleted.v1",
+    deletable_id = record_operation(
+        config,
+        operation_type="transaction.deleted.v1",
         summary="Removed Coffee Shop",
         payload={"journal_path": "journals/2026.journal", "header_line": "x", "deleted_block": "y"},
-        journal_refs=[],
+        files=[],
     )
-    import_id = emit_event(
-        config.root_dir,
-        event_type="import.applied.v1",  # No handler — should report undoable=False.
+    import_id = record_operation(
+        config,
+        operation_type="import.applied.v1",  # No handler — should report undoable=False.
         summary="Imported statement",
         payload={},
-        journal_refs=[],
+        files=[],
     )
 
     result = main.events_recent()
@@ -77,20 +77,20 @@ def test_compensated_flag_resolves_via_compensates_link(tmp_path: Path, monkeypa
     config = _make_config(tmp_path / "workspace")
     monkeypatch.setattr(main, "_require_workspace_config", lambda: config)
 
-    forward_id = emit_event(
-        config.root_dir,
-        event_type="transaction.deleted.v1",
+    forward_id = record_operation(
+        config,
+        operation_type="transaction.deleted.v1",
         summary="Removed Coffee Shop",
         payload={},
-        journal_refs=[],
+        files=[],
     )
-    comp_id = emit_event(
-        config.root_dir,
-        event_type="transaction.deleted.v1.compensated.v1",
+    comp_id = record_operation(
+        config,
+        operation_type="transaction.deleted.v1.compensated.v1",
         summary="Undid: Removed Coffee Shop",
         payload={},
-        journal_refs=[],
-        compensates=forward_id,
+        files=[],
+        compensates_operation_id=forward_id,
     )
 
     result = main.events_recent()
@@ -109,12 +109,12 @@ def test_returns_at_most_twenty_events_newest_first(tmp_path: Path, monkeypatch)
 
     ids: list[str] = []
     for i in range(25):
-        ids.append(emit_event(
-            config.root_dir,
-            event_type="transaction.deleted.v1",
+        ids.append(record_operation(
+            config,
+            operation_type="transaction.deleted.v1",
             summary=f"event {i}",
             payload={},
-            journal_refs=[],
+            files=[],
         ))
 
     rows = main.events_recent()["events"]

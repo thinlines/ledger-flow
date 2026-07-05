@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from services import event_log_service
+from services.config_service import AppConfig
 from services.event_log_service import (
     EVENTS_FILENAME,
     check_drift,
@@ -17,6 +18,7 @@ from services.event_log_service import (
     hash_file,
     rel_path,
 )
+from services.operations_service import record_operation
 
 
 @pytest.fixture(autouse=True)
@@ -32,6 +34,26 @@ def _read_events(workspace: Path) -> list[dict]:
     if not events_file.exists():
         return []
     return [json.loads(line) for line in events_file.read_text().splitlines() if line.strip()]
+
+
+def _make_config(workspace: Path) -> AppConfig:
+    for rel in ["settings", "journals", "rules", "opening", "imports", "inbox"]:
+        (workspace / rel).mkdir(parents=True, exist_ok=True)
+    return AppConfig(
+        root_dir=workspace,
+        config_toml=workspace / "settings" / "workspace.toml",
+        workspace={"name": "Test", "start_year": 2026, "base_currency": "USD"},
+        dirs={
+            "csv_dir": "inbox",
+            "journal_dir": "journals",
+            "init_dir": "rules",
+            "opening_bal_dir": "opening",
+            "imports_dir": "imports",
+        },
+        institution_templates={},
+        import_accounts={},
+        tracked_accounts={},
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -182,6 +204,39 @@ class TestGetLastKnownHash:
             payload={},
             journal_refs=[{"path": "journals/2026.journal", "hash_before": "sha256:b", "hash_after": "sha256:c"}],
         )
+        assert get_last_known_hash(tmp_path / EVENTS_FILENAME, "journals/2026.journal") == "sha256:c"
+
+    def test_returns_most_recent_operation_file_hash_when_events_file_missing(self, tmp_path: Path) -> None:
+        config = _make_config(tmp_path)
+        record_operation(
+            config,
+            operation_type="manual_entry.created.v1",
+            summary="Created entry",
+            payload={},
+            files=[
+                {
+                    "path": "journals/2026.journal",
+                    "hash_before": "sha256:a",
+                    "hash_after": "sha256:b",
+                }
+            ],
+            created_at="2026-07-05T10:00:00+00:00",
+        )
+        record_operation(
+            config,
+            operation_type="transaction.notes_updated.v1",
+            summary="Updated notes",
+            payload={},
+            files=[
+                {
+                    "path": "journals/2026.journal",
+                    "hash_before": "sha256:b",
+                    "hash_after": "sha256:c",
+                }
+            ],
+            created_at="2026-07-05T11:00:00+00:00",
+        )
+
         assert get_last_known_hash(tmp_path / EVENTS_FILENAME, "journals/2026.journal") == "sha256:c"
 
     def test_handles_corrupt_jsonl_line_gracefully(self, tmp_path: Path) -> None:

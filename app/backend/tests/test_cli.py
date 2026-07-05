@@ -8,6 +8,7 @@ import types
 from pathlib import Path
 
 from ledger_flow_cli import main
+from services.event_log_service import read_events
 
 
 def test_packaging_includes_server_top_level_modules() -> None:
@@ -85,10 +86,7 @@ def test_add_creates_manual_entry_in_year_journal(tmp_path: Path, capsys) -> Non
     assert "    Expenses:Eating Out  $20.00" in journal
     assert "    Assets:Credit Card" in journal
 
-    events = [
-        json.loads(line)
-        for line in (workspace / "events.jsonl").read_text(encoding="utf-8").splitlines()
-    ]
+    events = read_events(workspace)
     assert events[-1]["type"] == "manual_entry.created.v1"
     assert events[-1]["payload"]["source_account"] == "Assets:Credit Card"
 

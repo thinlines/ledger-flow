@@ -74,6 +74,7 @@ from services.unified_transactions_service import (
     build_unified_transactions,
 )
 from services.import_history_service import list_import_history, record_applied_import, undo_import
+from services.operations_service import list_operations
 from services.import_service import (
     ImportPreviewBlockedError,
     apply_import,
@@ -1238,29 +1239,25 @@ _RECENT_EVENTS_LIMIT = 20
 def events_recent() -> dict:
     """Return the most recent forward + compensating events, newest-first."""
     config = _require_workspace_config()
-    events = _read_events_log(config.root_dir)
-    window = events[-_RECENT_EVENTS_LIMIT:]
+    window = list_operations(config, limit=_RECENT_EVENTS_LIMIT)
 
-    # A forward event in the window can only be compensated by something that
-    # appears later in the log — and since the window is the contiguous tail,
-    # any compensator must also be inside the window.
     compensated_by: dict[str, str] = {}
-    for ev in window:
-        target = ev.get("compensates")
-        eid = ev.get("id")
+    for op in window:
+        target = op.get("compensates")
+        eid = op.get("id")
         if target and isinstance(eid, str):
             compensated_by[target] = eid
 
     rows: list[dict] = []
-    for ev in reversed(window):
-        eid = ev.get("id", "")
-        etype = ev.get("type", "")
+    for op in window:
+        eid = op.get("id", "")
+        etype = op.get("type", "")
         compensating_id = compensated_by.get(eid)
         rows.append({
             "id": eid,
             "type": etype,
-            "summary": ev.get("summary", ""),
-            "timestamp": ev.get("ts", ""),
+            "summary": op.get("summary", ""),
+            "timestamp": op.get("ts", ""),
             "undoable": is_undoable_type(etype),
             "compensated": compensating_id is not None,
             "compensatedBy": compensating_id,
@@ -2151,21 +2148,14 @@ def import_apply(req: StageApplyRequest) -> dict:
             "archivedCsvPath": archived_csv_path,
             "sourceCsvWarning": source_csv_warning,
         }
+        stage["operationId"] = mut.event_id
         history_entry = record_applied_import(config, stage)
         stage["result"]["historyId"] = history_entry["id"]
         stages.save(req.stageId, stage)
 
         source_file = Path(stage.get("csvPath", "")).name
         mut.summary = f"Imported {appended_count} transactions from {source_file}"
-        mut.payload = {
-            "journal_path": rel_path(journal, config.root_dir),
-            "source_file": source_file,
-            "account_id": stage.get("importAccountId", ""),
-            "transactions_added": appended_count,
-            "duplicates_skipped": skipped_duplicate_count,
-            "conflicts": conflicts,
-            "history_id": history_entry["id"],
-        }
+        mut.payload = history_entry
 
     return stage
 
@@ -2199,7 +2189,7 @@ def import_undo(req: ImportUndoRequest) -> dict:
         event_type="import.undone.v1",
     ) as mut:
         try:
-            entry = undo_import(config, req.historyId)
+            entry = undo_import(config, req.historyId, operation_id=mut.event_id)
         except KeyError as e:
             raise HTTPException(status_code=404, detail="import history entry not found") from e
         except (FileNotFoundError, OSError, ValueError) as e:
@@ -2207,11 +2197,8 @@ def import_undo(req: ImportUndoRequest) -> dict:
 
         removed_count = entry.get("undo", {}).get("removedTxnCount", 0)
         mut.summary = f"Undid import {req.historyId}: removed {removed_count} transactions"
-        mut.payload = {
-            "journal_path": rel_path(journal_path, config.root_dir),
-            "history_id": req.historyId,
-            "transactions_removed": removed_count,
-        }
+        mut.payload = {"kind": "import_undo", "entry": entry}
+        mut.compensates = req.historyId
 
     return {"entry": entry}
 

@@ -21,6 +21,7 @@ import pytest
 from services import event_log_service, journal_writer
 from services.config_service import AppConfig
 from services.event_log_service import EVENTS_FILENAME, hash_file
+from services.operations_service import list_operations
 from services.journal_writer import (
     JournalMutation,
     VerifyFailure,
@@ -83,7 +84,32 @@ def journal_path(workspace: Path) -> Path:
 def _read_events(workspace: Path) -> list[dict]:
     events_file = workspace / EVENTS_FILENAME
     if not events_file.is_file():
-        return []
+        config = AppConfig(
+            root_dir=workspace,
+            config_toml=workspace / "settings" / "workspace.toml",
+            workspace={"name": "Test"},
+            dirs={
+                "csv_dir": "csv",
+                "journal_dir": "journals",
+                "init_dir": "init",
+                "opening_bal_dir": "opening",
+                "imports_dir": "imports",
+            },
+            institution_templates={},
+            import_accounts={},
+        )
+        return [
+            {
+                "id": op["id"],
+                "type": op["type"],
+                "actor": op["actor"],
+                "summary": op["summary"],
+                "payload": op["payload"],
+                "journal_refs": op["files"],
+                "compensates": op["compensates"],
+            }
+            for op in reversed(list_operations(config))
+        ]
     return [
         json.loads(line)
         for line in events_file.read_text(encoding="utf-8").splitlines()
@@ -201,6 +227,27 @@ class TestBackup:
 
 
 class TestSuccessfulExit:
+    def test_records_operation_instead_of_events_jsonl(
+        self, config: AppConfig, journal_path: Path
+    ) -> None:
+        with mutate(
+            config=config,
+            paths=[journal_path],
+            tag="t",
+            event_type="thing.happened.v1",
+        ) as mut:
+            journal_path.write_text("; new\n", encoding="utf-8")
+            mut.summary = "It happened"
+            mut.payload = {"reason": "test"}
+
+        assert not (config.root_dir / EVENTS_FILENAME).exists()
+        operations = list_operations(config)
+        assert len(operations) == 1
+        assert operations[0]["id"] == mut.event_id
+        assert operations[0]["type"] == "thing.happened.v1"
+        assert operations[0]["summary"] == "It happened"
+        assert operations[0]["payload"] == {"reason": "test"}
+
     def test_emits_exactly_one_event_with_set_fields(
         self, config: AppConfig, journal_path: Path
     ) -> None:

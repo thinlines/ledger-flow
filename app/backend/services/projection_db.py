@@ -323,11 +323,41 @@ CREATE TABLE IF NOT EXISTS import_identities (
 CREATE INDEX IF NOT EXISTS import_identities_txn_idx ON import_identities(transaction_id);
 """
 
+_MIGRATION_0005 = """
+CREATE TABLE IF NOT EXISTS operation_files (
+    id TEXT PRIMARY KEY,
+    operation_id TEXT NOT NULL REFERENCES operations(id) ON DELETE CASCADE,
+    path TEXT NOT NULL,
+    hash_before TEXT NOT NULL,
+    hash_after TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS operation_files_operation_idx
+    ON operation_files(operation_id);
+CREATE INDEX IF NOT EXISTS operation_files_path_idx
+    ON operation_files(path);
+
+CREATE TABLE IF NOT EXISTS operation_entities (
+    id TEXT PRIMARY KEY,
+    operation_id TEXT NOT NULL REFERENCES operations(id) ON DELETE CASCADE,
+    entity_type TEXT NOT NULL,
+    entity_id TEXT NOT NULL,
+    role TEXT NOT NULL DEFAULT 'affected',
+    payload_json TEXT NOT NULL DEFAULT '{}'
+);
+
+CREATE INDEX IF NOT EXISTS operation_entities_operation_idx
+    ON operation_entities(operation_id);
+CREATE INDEX IF NOT EXISTS operation_entities_entity_idx
+    ON operation_entities(entity_type, entity_id);
+"""
+
 MIGRATIONS: tuple[tuple[int, str, str], ...] = (
     (1, "journal_projection_tables", _MIGRATION_0001),
     (2, "reference_data_tables", _MIGRATION_0002),
     (3, "operations_and_stages_tables", _MIGRATION_0003),
     (4, "import_identity_tables", _MIGRATION_0004),
+    (5, "operation_files_and_entities_tables", _MIGRATION_0005),
 )
 
 

@@ -9,6 +9,8 @@ from uuid import uuid4
 
 from .config_service import AppConfig
 from .import_identity_service import ImportIdentityStore
+from .event_log_service import hash_file, rel_path
+from .operations_service import list_operations, record_operation
 from .transfer_service import (
     ACTIVE_TRANSFER_MATCH_STATES,
     TRANSFER_MATCH_STATE_PENDING,
@@ -46,13 +48,35 @@ def ensure_history_file(config: AppConfig) -> Path:
 
 
 def _read_entries(config: AppConfig) -> list[dict]:
-    path = ensure_history_file(config)
     entries: list[dict] = []
-    for raw_line in path.read_text(encoding="utf-8").splitlines():
-        line = raw_line.strip()
-        if not line:
+    undone_by_id: dict[str, dict] = {}
+    for operation in list_operations(config):
+        if operation.get("type") == "import.undone.v1":
+            target = str(operation.get("compensates") or "")
+            undo_payload = dict(operation.get("payload") or {})
+            entry_payload = dict(undo_payload.get("entry") or {})
+            if target and entry_payload:
+                undone_by_id[target] = entry_payload
             continue
-        entries.append(json.loads(line))
+        if operation.get("type") != "import.applied.v1":
+            continue
+        payload = dict(operation.get("payload") or {})
+        if payload.get("kind") == "import":
+            payload.setdefault("id", operation.get("id"))
+            entries.append(payload)
+    if entries:
+        legacy_path = history_file_path(config)
+        if legacy_path.exists():
+            legacy_path.unlink()
+        return [undone_by_id.get(str(entry.get("id")), entry) for entry in entries]
+
+    path = history_file_path(config)
+    if path.is_file():
+        for raw_line in path.read_text(encoding="utf-8").splitlines():
+            line = raw_line.strip()
+            if not line:
+                continue
+            entries.append(json.loads(line))
     return entries
 
 
@@ -355,8 +379,9 @@ def record_applied_import(config: AppConfig, stage: dict) -> dict:
     ]
 
     result = dict(stage.get("result") or {})
+    entry_id = str(stage.get("operationId") or uuid4().hex)
     entry = {
-        "id": uuid4().hex,
+        "id": entry_id,
         "kind": "import",
         "status": APPLIED_STATUS,
         "createdAt": applied_at,
@@ -378,9 +403,30 @@ def record_applied_import(config: AppConfig, stage: dict) -> dict:
         "importedTransactions": imported_transactions,
     }
 
+    journal_path = Path(str(stage.get("targetJournalPath") or ""))
+    files = []
+    if journal_path:
+        files.append(
+            {
+                "path": rel_path(journal_path, config.root_dir),
+                "hash_before": "sha256:unknown",
+                "hash_after": hash_file(journal_path),
+            }
+        )
+    operation_already_pending = bool(stage.get("operationId"))
+    if not operation_already_pending:
+        record_operation(
+            config,
+            operation_type="import.applied.v1",
+            summary=f"Imported {entry['summary'].get('newCount', 0)} transactions from {entry['csvFileName']}",
+            payload=entry,
+            files=files,
+            operation_id=entry_id,
+            undo_mode="semantic",
+        )
     entries = _read_entries(config)
-    entries.append(entry)
-    _write_entries(config, entries)
+    if operation_already_pending:
+        entries.append(entry)
     decorated = _decorate_entries(config, entries)
     return next(item for item in decorated if str(item["id"]) == entry["id"])
 
@@ -409,7 +455,7 @@ def _restore_archived_csv_to_inbox(config: AppConfig, entry: dict) -> tuple[str 
     return str(original_path.resolve(strict=False)), None
 
 
-def undo_import(config: AppConfig, history_id: str) -> dict:
+def undo_import(config: AppConfig, history_id: str, *, operation_id: str | None = None) -> dict:
     entries = _read_entries(config)
     entry = next((item for item in entries if str(item.get("id")) == history_id), None)
     if entry is None:
@@ -468,6 +514,20 @@ def undo_import(config: AppConfig, history_id: str) -> dict:
         "sourceCsvWarning": source_csv_warning,
     }
 
-    _write_entries(config, entries)
+    if operation_id is None:
+        record_operation(
+            config,
+            operation_type="import.undone.v1",
+            summary=f"Undid import: {entry.get('csvFileName', 'statement.csv')}",
+            payload={"kind": "import_undo", "entry": entry},
+            files=[
+                {
+                    "path": rel_path(journal_path, config.root_dir),
+                    "hash_before": "sha256:unknown",
+                    "hash_after": hash_file(journal_path),
+                }
+            ],
+            compensates_operation_id=history_id,
+        )
     decorated = _decorate_entries(config, entries)
     return next(item for item in decorated if str(item["id"]) == history_id)

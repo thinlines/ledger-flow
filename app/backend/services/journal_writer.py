@@ -42,7 +42,8 @@ from typing import Callable, Iterator
 from uuid import uuid7
 
 from .config_service import AppConfig
-from .event_log_service import check_drift, emit_event, hash_file, rel_path
+from .event_log_service import check_drift, hash_file, rel_path
+from .operations_service import record_operation
 from .projection_service import refresh_projection
 
 
@@ -255,13 +256,13 @@ def mutate(
                 }
             )
 
-    emit_event(
-        workspace,
-        event_type=event_type,
+    record_operation(
+        config,
+        operation_id=event_id,
+        operation_type=event_type,
         summary=mutation.summary,
         payload=dict(mutation.payload),
-        journal_refs=journal_refs,
-        actor=actor,
-        compensates=mutation.compensates,
-        event_id=event_id,
+        files=journal_refs,
+        actor_type=actor,
+        compensates_operation_id=mutation.compensates,
     )

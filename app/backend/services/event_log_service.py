@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid7
@@ -64,7 +65,58 @@ def read_events(workspace_path: Path) -> list[dict]:
     """
     events_file = workspace_path / EVENTS_FILENAME
     if not events_file.is_file():
-        return []
+        db_path = workspace_path / ".workflow" / "state.db"
+        if not db_path.is_file():
+            return []
+        try:
+            with sqlite3.connect(db_path) as conn:
+                operation_rows = conn.execute(
+                    """
+                    SELECT id, type, actor_type, summary, created_at,
+                           compensates_operation_id, payload_json
+                    FROM operations
+                    ORDER BY created_at ASC, id ASC
+                    """
+                ).fetchall()
+                file_rows = conn.execute(
+                    """
+                    SELECT operation_id, path, hash_before, hash_after
+                    FROM operation_files
+                    ORDER BY rowid ASC
+                    """
+                ).fetchall()
+        except sqlite3.Error:
+            return []
+        files_by_operation: dict[str, list[dict]] = {}
+        for operation_id, path, hash_before, hash_after in file_rows:
+            files_by_operation.setdefault(operation_id, []).append(
+                {
+                    "path": path,
+                    "hash_before": hash_before,
+                    "hash_after": hash_after,
+                }
+            )
+        return [
+            {
+                "id": operation_id,
+                "ts": created_at,
+                "actor": actor,
+                "type": operation_type,
+                "summary": summary,
+                "payload": json.loads(payload_json or "{}"),
+                "journal_refs": files_by_operation.get(operation_id, []),
+                "compensates": compensates,
+            }
+            for (
+                operation_id,
+                operation_type,
+                actor,
+                summary,
+                created_at,
+                compensates,
+                payload_json,
+            ) in operation_rows
+        ]
     lines = events_file.read_text(encoding="utf-8").splitlines()
     events: list[dict] = []
     for line in lines:
@@ -84,7 +136,25 @@ def get_last_known_hash(events_file: Path, journal_rel_path: str) -> str | None:
     Returns ``None`` if no event references this path (file predates the log).
     """
     if not events_file.is_file():
-        return None
+        db_path = events_file.parent / ".workflow" / "state.db"
+        if not db_path.is_file():
+            return None
+        try:
+            with sqlite3.connect(db_path) as conn:
+                row = conn.execute(
+                    """
+                    SELECT operation_files.hash_after
+                    FROM operation_files
+                    JOIN operations ON operations.id = operation_files.operation_id
+                    WHERE operation_files.path = ?
+                    ORDER BY operations.created_at DESC, operations.id DESC
+                    LIMIT 1
+                    """,
+                    (journal_rel_path,),
+                ).fetchone()
+        except sqlite3.Error:
+            return None
+        return str(row[0]) if row else None
 
     try:
         lines = events_file.read_text(encoding="utf-8").splitlines()
@@ -157,7 +227,8 @@ def check_startup_drift(workspace_path: Path) -> None:
     Populates ``_hash_cache`` for all discovered journals.
     """
     events_file = workspace_path / EVENTS_FILENAME
-    if not events_file.is_file():
+    db_path = workspace_path / ".workflow" / "state.db"
+    if not events_file.is_file() and not db_path.is_file():
         # No baseline — populate cache only, skip drift checks.
         journal_dir = workspace_path / "journals"
         if journal_dir.is_dir():

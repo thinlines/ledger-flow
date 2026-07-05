@@ -3,6 +3,7 @@ from pathlib import Path
 from services.config_service import AppConfig
 from services.import_history_service import list_import_history, record_applied_import, undo_import
 from services.import_identity_service import ImportIdentityStore
+from services.operations_service import list_operations
 
 
 def _make_config(workspace: Path) -> AppConfig:
@@ -198,6 +199,34 @@ def test_list_import_history_allows_older_imports_to_be_undone_when_their_transa
     assert latest["undoBlockedReason"] is None
     assert older["canUndo"] is True
     assert older["undoBlockedReason"] is None
+
+
+def test_record_applied_import_uses_operations_instead_of_import_log(tmp_path: Path) -> None:
+    config = _make_config(tmp_path / "workspace")
+    journal_path = config.journal_dir / "2026.journal"
+    _write_journal(journal_path, _journal_transaction("first", "txn-1"))
+    csv_path = config.csv_dir / "2026__wf_checking__first.csv"
+    backup_path = config.imports_dir / "2026.first.import.bak"
+    backup_path.write_text("backup\n", encoding="utf-8")
+
+    recorded = record_applied_import(
+        config,
+        _stage(
+            config,
+            stage_id="first",
+            csv_path=csv_path,
+            backup_path=backup_path,
+            archived_csv_path=None,
+            journal_path=journal_path,
+            source_identity="txn-1",
+        ),
+    )
+
+    assert not (config.imports_dir / "import-log.ndjson").exists()
+    operations = list_operations(config)
+    assert operations[0]["id"] == recorded["id"]
+    assert operations[0]["type"] == "import.applied.v1"
+    assert list_import_history(config)[0]["id"] == recorded["id"]
 
 
 def test_undo_import_removes_transactions_restores_source_csv_and_marks_identities_undone(tmp_path: Path) -> None:

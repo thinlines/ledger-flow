@@ -16,7 +16,8 @@ import pytest
 
 from services import event_log_service
 from services.config_service import AppConfig
-from services.event_log_service import EVENTS_FILENAME, emit_event, hash_file, check_drift
+from services.event_log_service import EVENTS_FILENAME, emit_event, hash_file, check_drift, rel_path
+from services.operations_service import list_operations, record_operation
 from services.undo_service import UndoOutcome, undo_event
 
 
@@ -45,10 +46,30 @@ def _clear_hash_cache():
 
 
 def _read_events(workspace: Path) -> list[dict]:
+    config = _make_config(workspace)
+    operation_events = [
+        {
+            "id": op["id"],
+            "type": op["type"],
+            "summary": op["summary"],
+            "payload": op["payload"],
+            "journal_refs": op["files"],
+            "compensates": op["compensates"],
+        }
+        for op in reversed(list_operations(config))
+    ]
     events_file = workspace / EVENTS_FILENAME
     if not events_file.exists():
-        return []
-    return [json.loads(line) for line in events_file.read_text().splitlines() if line.strip()]
+        return operation_events
+    legacy_events = [
+        json.loads(line)
+        for line in events_file.read_text().splitlines()
+        if line.strip()
+    ]
+    legacy_ids = {str(event.get("id")) for event in legacy_events}
+    return legacy_events + [
+        event for event in operation_events if str(event.get("id")) not in legacy_ids
+    ]
 
 
 def _setup_workspace(tmp_path: Path) -> Path:
@@ -90,16 +111,50 @@ class TestUndoDispatcher:
     def test_unsupported_event_type(self, tmp_path: Path) -> None:
         workspace = _setup_workspace(tmp_path)
         _write_journal(workspace, "2026.journal", "")
-        emit_event(
-            workspace,
-            event_type="some.unknown.type.v1",
+        event_id = record_operation(
+            _make_config(workspace),
+            operation_type="some.unknown.type.v1",
             summary="test",
             payload={},
-            journal_refs=[],
+            files=[],
         )
-        events = _read_events(workspace)
-        result = undo_event(_make_config(workspace), events[0]["id"])
+        result = undo_event(_make_config(workspace), event_id)
         assert result.outcome == UndoOutcome.UNSUPPORTED
+
+    def test_refuses_when_operation_file_hash_has_drifted(self, tmp_path: Path) -> None:
+        workspace = _setup_workspace(tmp_path)
+        config = _make_config(workspace)
+        journal = _write_journal(
+            workspace,
+            "2026.journal",
+            "2026-03-15 * Test\n    ; lf_txn_id: txn_test\n    Assets:Bank:Checking  -$10.00\n    Expenses:Groceries  $10.00\n",
+        )
+        before = hash_file(journal)
+        journal.write_text("", encoding="utf-8")
+        after = hash_file(journal)
+        event_id = record_operation(
+            config,
+            operation_type="transaction.deleted.v1",
+            summary="Deleted: Test",
+            payload={
+                "journal_path": "journals/2026.journal",
+                "header_line": "2026-03-15 * Test",
+                "txn_id": "txn_test",
+                "deleted_block": "2026-03-15 * Test\n    ; lf_txn_id: txn_test\n    Assets:Bank:Checking  -$10.00\n    Expenses:Groceries  $10.00",
+            },
+            files=[
+                {
+                    "path": rel_path(journal, workspace),
+                    "hash_before": before,
+                    "hash_after": after,
+                }
+            ],
+        )
+        journal.write_text("; external edit\n", encoding="utf-8")
+
+        result = undo_event(config, event_id)
+
+        assert result.outcome == UndoOutcome.DRIFT
 
     def test_already_compensated(self, tmp_path: Path) -> None:
         workspace = _setup_workspace(tmp_path)
@@ -201,9 +256,8 @@ class TestUndoDeleted:
         # Identity survives delete → undo: the restored block keeps its id.
         assert "; lf_txn_id: txn_wf" in restored
 
-    def test_restore_succeeds_after_unrelated_edit(self, tmp_path: Path) -> None:
-        """The whole-file drift gate is gone (#17): a later unrelated edit no
-        longer blocks restoring a deleted transaction."""
+    def test_restore_refuses_after_unrelated_file_edit(self, tmp_path: Path) -> None:
+        """#22 restores whole-file drift refusal through operation file hashes."""
         workspace = _setup_workspace(tmp_path)
         original = (
             "2026-03-15 * Whole Foods\n"
@@ -218,9 +272,9 @@ class TestUndoDeleted:
         journal.write_text(EXTERNAL_INSERT + journal.read_text(encoding="utf-8"), encoding="utf-8")
 
         result = undo_event(_make_config(workspace), event_id)
-        assert result.outcome == UndoOutcome.SUCCESS
+        assert result.outcome == UndoOutcome.DRIFT
         text = journal.read_text()
-        assert "Whole Foods" in text
+        assert "Whole Foods" not in text
         assert "Inserted Externally" in text
 
     def test_refuses_duplicate_by_id(self, tmp_path: Path) -> None:
@@ -306,9 +360,9 @@ class TestUndoRecategorized:
         journal.write_text(EXTERNAL_INSERT + journal.read_text(encoding="utf-8"), encoding="utf-8")
 
         result = undo_event(_make_config(workspace), event_id)
-        assert result.outcome == UndoOutcome.SUCCESS
+        assert result.outcome == UndoOutcome.DRIFT
         restored = journal.read_text()
-        assert "Expenses:Groceries  $50.00" in restored
+        assert "Expenses:Unknown  $50.00" in restored
         assert "Inserted Externally" in restored
 
     def test_conflicting_same_block_edit_fails(self, tmp_path: Path) -> None:
@@ -475,9 +529,9 @@ class TestUndoManualEntryCreated:
         journal.write_text(EXTERNAL_INSERT + journal.read_text(encoding="utf-8"), encoding="utf-8")
 
         result = undo_event(_make_config(workspace), event_id)
-        assert result.outcome == UndoOutcome.SUCCESS
+        assert result.outcome == UndoOutcome.DRIFT
         text = journal.read_text()
-        assert "Whole Foods" not in text
+        assert "Whole Foods" in text
         assert "Inserted Externally" in text
 
 
@@ -697,9 +751,9 @@ class TestUndoUnmatched:
         journal.write_text(EXTERNAL_INSERT + journal.read_text(encoding="utf-8"), encoding="utf-8")
 
         result = undo_event(_make_config(workspace), event_id)
-        assert result.outcome == UndoOutcome.SUCCESS
+        assert result.outcome == UndoOutcome.DRIFT
         main_text = journal.read_text()
-        assert "; match-id: test-match-uuid" in main_text
+        assert "; match-id: test-match-uuid" not in main_text
         assert "Inserted Externally" in main_text
 
     def test_compensating_event_emitted(self, tmp_path: Path) -> None:
