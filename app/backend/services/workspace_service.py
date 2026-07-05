@@ -36,6 +36,10 @@ SYSTEM_TAGS = (
     "import_account_id",
     "importer_version",
     "institution_template",
+    "lf_operation_id",
+    "lf_posting_id",
+    "lf_source_identity",
+    "lf_txn_id",
     "manual",
     "match-id",
     "minimum_payment",
@@ -806,7 +810,7 @@ class WorkspaceManager:
         if metadata.get("import_account_id") != import_account_id:
             return txn_lines, None
 
-        source_identity = metadata.get("source_identity")
+        source_identity = metadata.get("lf_source_identity")
         if not source_identity:
             return txn_lines, None
 

@@ -45,6 +45,11 @@ class ParsedTransaction:
     # set to ``-1`` (sentinel), and mutation endpoints will reject the request
     # via the same drift path that catches stale data.
     header_line_number: int = -1
+    # Stable projected identity (spec: Mutation-Time Projection). Populated
+    # only by the projection loader; the legacy loader's block boundary
+    # includes trailing blank lines, so its text is not hash-comparable.
+    txn_id: str | None = None
+    block_hash: str | None = None
 
 
 def amount_to_number(value: Decimal) -> float:

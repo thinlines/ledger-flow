@@ -221,7 +221,7 @@ class TestReconcileSuccess:
         journal = config.journal_dir / "2026.journal"
         text = journal.read_text(encoding="utf-8")
         assert "2026-04-17 * Statement reconciliation · Wells Fargo Checking · ending 2026-04-17" in text
-        assert f"; reconciliation_event_id: {result['eventId']}" in text
+        assert f"; lf_operation_id: {result['eventId']}" in text
         assert "; statement_period: 2026-03-18..2026-04-17" in text
         assert "Assets:Checking:Wells Fargo  $0 = $2,500.00" in text
 
@@ -421,7 +421,7 @@ class TestApplyImportRefusesFenceConflict:
                     "reconciledThrough": "2026-04-17",
                     "annotatedRaw": (
                         "2026/04/17 Old Coffee\n"
-                        "    ; source_identity: txn-fenced\n"
+                        "    ; lf_source_identity: txn-fenced\n"
                         "    ; source_payload_hash: payload-fenced\n"
                         "    Assets:Checking:Wells Fargo  $-7.50\n"
                         "    Expenses:Unknown\n"
@@ -468,7 +468,7 @@ class TestReconciliationStatusOnTrackedAccountUi:
             _opening_block("Assets:Checking:Wells Fargo", "$100.00")
             + "\n"
             + "2026-04-17 * Statement reconciliation · Wells Fargo · ending 2026-04-17\n"
-            "    ; reconciliation_event_id: e1\n"
+            "    ; lf_operation_id: e1\n"
             "    ; statement_period: 2026-03-18..2026-04-17\n"
             "    Assets:Checking:Wells Fargo  $0 = $200.00\n",
         )

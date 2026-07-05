@@ -8,6 +8,7 @@ on the projection with an identical payload.
 """
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 from services import unified_transactions_service
@@ -74,7 +75,7 @@ def _make_config(workspace: Path) -> AppConfig:
 
 YEAR_2026 = """\
 2026-01-05 * Grocery Store
-    ; source_identity: abc123
+    ; lf_source_identity: abc123
     Expenses:Groceries    USD 45.67
     Assets:Checking
 
@@ -133,7 +134,11 @@ def test_projected_loader_matches_legacy_loader(tmp_path):
 
     assert len(legacy) == len(projected)
     for legacy_txn, projected_txn in zip(legacy, projected):
-        assert projected_txn == legacy_txn
+        # txn_id/block_hash are projection-only by design (the legacy block
+        # boundary includes trailing blanks, so its text is not hash-comparable).
+        assert projected_txn.txn_id is not None
+        assert projected_txn.block_hash is not None
+        assert replace(projected_txn, txn_id=None, block_hash=None) == legacy_txn
 
 
 def test_projected_loader_include_sentinel_and_line_numbers(tmp_path):
@@ -186,9 +191,36 @@ def test_unified_payload_from_projection_matches_legacy(tmp_path, monkeypatch):
     )
     legacy_payload = build_unified_transactions(config, filters)
 
+    # legs[].txnId/blockHash are the one intentional payload difference:
+    # only the projection loader can supply them (TASK.md decision 10).
+    for row in projected_payload["rows"]:
+        for leg in row["legs"]:
+            leg["txnId"] = None
+            leg["blockHash"] = None
+
     assert projected_payload == legacy_payload
     assert projected_payload["totalCount"] > 0
     assert any(row["runningBalance"] is not None for row in projected_payload["rows"])
+
+
+def test_unified_rows_expose_projected_identity(tmp_path):
+    """Every register row leg carries the projected (txnId, blockHash) pair
+    the stable-identity mutation contract needs — including rows whose
+    transactions live in included files (line-number sentinel -1)."""
+    config = _workspace(tmp_path)
+
+    payload = build_unified_transactions(config, _filters())
+
+    assert payload["rows"]
+    for row in payload["rows"]:
+        leg = row["legs"][0]
+        assert leg["txnId"], row["payee"]
+        assert leg["blockHash"], row["payee"]
+
+    opening_rows = [row for row in payload["rows"] if row["isOpeningBalance"]]
+    assert opening_rows
+    assert opening_rows[0]["legs"][0]["lineNumber"] == -1
+    assert opening_rows[0]["legs"][0]["txnId"]
 
 
 def test_unified_transactions_reads_through_projection(tmp_path):

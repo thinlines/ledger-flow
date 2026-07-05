@@ -441,7 +441,7 @@ def test_apply_unknown_mappings_creates_pending_asset_transfer(tmp_path: Path) -
         """
 2026/02/01 Transfer to savings
     ; import_account_id: checking_import
-    ; source_identity: tx-checking
+    ; lf_source_identity: tx-checking
     Expenses:Unknown  $50.00
     Assets:Bank:Checking
 """.strip()
@@ -494,13 +494,13 @@ def test_apply_unknown_mappings_matches_both_imported_transfer_sides(tmp_path: P
         """
 2026/02/01 Transfer
     ; import_account_id: checking_import
-    ; source_identity: tx-checking
+    ; lf_source_identity: tx-checking
     Expenses:Unknown  $50.00
     Assets:Bank:Checking
 
 2026/02/03 Transfer
     ; import_account_id: savings_import
-    ; source_identity: tx-savings
+    ; lf_source_identity: tx-savings
     Expenses:Unknown  $-50.00
     Assets:Bank:Savings
 """.strip()
@@ -560,7 +560,7 @@ def test_apply_unknown_mappings_creates_pending_liability_transfer(tmp_path: Pat
         """
 2026/02/01 Credit card payment
     ; import_account_id: checking_import
-    ; source_identity: tx-checking
+    ; lf_source_identity: tx-checking
     Expenses:Unknown  $50.00
     Assets:Bank:Checking
 """.strip()
@@ -612,7 +612,7 @@ def test_apply_unknown_mappings_posts_directly_to_manual_asset_account(tmp_path:
         """
 2026/02/01 Vehicle purchase
     ; import_account_id: checking_import
-    ; source_identity: tx-checking
+    ; lf_source_identity: tx-checking
     Expenses:Unknown  $50.00
     Assets:Bank:Checking
 """.strip()
@@ -667,7 +667,7 @@ def test_apply_unknown_mappings_posts_directly_to_manual_liability_account(tmp_p
         """
 2026/02/01 Auto loan payment
     ; import_account_id: checking_import
-    ; source_identity: tx-checking
+    ; lf_source_identity: tx-checking
     Expenses:Unknown  $50.00
     Assets:Bank:Checking
 """.strip()
@@ -723,7 +723,7 @@ def test_apply_unknown_mappings_matches_pending_transfer_when_counterpart_arrive
         f"""
 2026/02/01 Transfer
     ; import_account_id: checking_import
-    ; source_identity: tx-checking
+    ; lf_source_identity: tx-checking
     ; transfer_id: transfer-1
     ; transfer_state: pending
     ; transfer_peer_account_id: savings
@@ -732,7 +732,7 @@ def test_apply_unknown_mappings_matches_pending_transfer_when_counterpart_arrive
 
 2026/02/03 Transfer
     ; import_account_id: savings_import
-    ; source_identity: tx-savings
+    ; lf_source_identity: tx-savings
     Expenses:Unknown  $-50.00
     Assets:Bank:Savings
 """.strip()

@@ -53,12 +53,12 @@ SAMPLE_JOURNAL = """\
     Equity:Opening-Balances
 
 2026-03-15 * Whole Foods
-    ; source_identity: abc123
+    ; lf_source_identity: abc123
     Assets:Bank:Checking  -$50.00
     Expenses:Groceries  $50.00
 
 2026-03-20 * Target
-    ; source_identity: def456
+    ; lf_source_identity: def456
     Assets:Bank:Checking  -$30.00
     Expenses:Unknown  $30.00
 """
@@ -67,7 +67,7 @@ MATCHED_JOURNAL = """\
 2026-03-15 * Whole Foods
     ; :manual:
     ; match-id: test-match-uuid-1234
-    ; source_identity: abc123
+    ; lf_source_identity: abc123
     Assets:Bank:Checking  -$50.00
     Expenses:Groceries  $50.00
 """

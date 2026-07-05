@@ -57,6 +57,11 @@ from services.journal_block_service import (
     locate_header_at,
 )
 from services.journal_query_service import TXN_START_RE
+from services.projection_service import (
+    find_projected_transaction,
+    find_projected_transaction_at,
+    refresh_projection,
+)
 from services.transfer_service import ACCOUNT_LINE_RE, ACCOUNT_ONLY_RE, rewrite_posting_account
 from services.account_register_service import build_account_register
 from services.commodity_service import CommodityMismatchError
@@ -626,23 +631,40 @@ _STATUS_CYCLE = {
 }
 
 
+_STALE_TRANSACTION_DETAIL = (
+    "This transaction changed since it was loaded — refresh and try again."
+)
+
+
 @app.post("/api/transactions/toggle-status")
 def transactions_toggle_status(req: ToggleStatusRequest) -> dict:
+    """Stable-identity mutation contract (spec: Mutation-Time Projection):
+    locate the block by ``lf_txn_id``, reject as stale only when the block
+    hash differs, re-project the touched file, return updated projected data.
+    """
     config = _require_workspace_config()
-    journal_path = Path(req.journalPath)
-    if not journal_path.is_file():
-        raise HTTPException(status_code=404, detail="Journal file not found")
+    refresh_projection(config)
 
-    parsed = parse_header(req.headerLine)
+    ref = find_projected_transaction(config, req.txnId)
+    if ref is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Transaction not found (stale data — try refreshing)",
+        )
+    if req.blockHash != ref.raw_block_hash:
+        raise HTTPException(status_code=409, detail=_STALE_TRANSACTION_DETAIL)
+
+    parsed = parse_header(ref.raw_header)
     if parsed is None:
         raise HTTPException(status_code=400, detail="Invalid header line")
 
     next_status = _STATUS_CYCLE[parsed.status]
-    new_line = set_header_status(req.headerLine, next_status)
+    new_line = set_header_status(ref.raw_header, next_status)
 
     if not _HEADER_RE.match(new_line):
         raise HTTPException(status_code=500, detail="Rewritten header is invalid")
 
+    journal_path = config.root_dir / ref.journal_path
     with journal_writer.mutate(
         config=config,
         paths=[journal_path],
@@ -652,20 +674,34 @@ def transactions_toggle_status(req: ToggleStatusRequest) -> dict:
         text = journal_path.read_text(encoding="utf-8")
         lines = text.splitlines()
 
-        header_idx = _locate_header(lines, req.lineNumber, req.headerLine)
+        header_idx = ref.source_start_line - 1
+        if header_idx >= len(lines) or lines[header_idx] != ref.raw_header:
+            raise HTTPException(status_code=409, detail=_STALE_TRANSACTION_DETAIL)
 
         lines[header_idx] = new_line
         journal_path.write_text("\n".join(lines) + ("\n" if text.endswith("\n") else ""), encoding="utf-8")
 
-        mut.summary = f"Toggled status to {next_status.value}: {req.headerLine[:60]}"
+        mut.summary = f"Toggled status to {next_status.value}: {ref.raw_header[:60]}"
         mut.payload = {
-            "journal_path": rel_path(journal_path, config.root_dir),
-            "header_line": req.headerLine,
+            "journal_path": ref.journal_path,
+            "header_line": ref.raw_header,
             "previous_status": parsed.status.value,
             "new_status": next_status.value,
+            "txn_id": ref.id,
         }
 
-    return {"newStatus": next_status.value, "newHeaderLine": new_line, "eventId": mut.event_id}
+    refresh_projection(config)
+    updated = find_projected_transaction_at(config, ref.journal_file_id, ref.txn_order)
+
+    return {
+        "newStatus": next_status.value,
+        # Transitional: the other row actions are positional until #17 and
+        # need a fresh headerLine after a toggle.
+        "newHeaderLine": new_line,
+        "txnId": updated.id if updated else ref.id,
+        "blockHash": updated.raw_block_hash if updated else None,
+        "eventId": mut.event_id,
+    }
 
 
 # ---------------------------------------------------------------------------

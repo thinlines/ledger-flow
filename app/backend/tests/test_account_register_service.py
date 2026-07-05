@@ -785,7 +785,7 @@ def test_bilateral_match_excludes_both_from_pending_and_shows_as_posted(tmp_path
         f"""
 2026/03/02 Transfer out
     ; import_account_id: checking
-    ; source_identity: tx-checking
+    ; lf_source_identity: tx-checking
     ; transfer_id: transfer-wf
     ; transfer_type: import_match
     ; transfer_match_state: pending
@@ -795,7 +795,7 @@ def test_bilateral_match_excludes_both_from_pending_and_shows_as_posted(tmp_path
 
 2026/03/04 Transfer in
     ; import_account_id: savings
-    ; source_identity: tx-savings
+    ; lf_source_identity: tx-savings
     ; transfer_id: transfer-iccu
     ; transfer_type: import_match
     ; transfer_match_state: pending
@@ -882,7 +882,7 @@ def test_bilateral_match_ambiguous_same_amount_remains_pending(tmp_path: Path) -
         f"""
 2026/03/01 Transfer out 1
     ; import_account_id: checking
-    ; source_identity: tx-c1
+    ; lf_source_identity: tx-c1
     ; transfer_id: transfer-c1
     ; transfer_type: import_match
     ; transfer_match_state: pending
@@ -892,7 +892,7 @@ def test_bilateral_match_ambiguous_same_amount_remains_pending(tmp_path: Path) -
 
 2026/03/01 Transfer out 2
     ; import_account_id: checking
-    ; source_identity: tx-c2
+    ; lf_source_identity: tx-c2
     ; transfer_id: transfer-c2
     ; transfer_type: import_match
     ; transfer_match_state: pending
@@ -902,7 +902,7 @@ def test_bilateral_match_ambiguous_same_amount_remains_pending(tmp_path: Path) -
 
 2026/03/03 Transfer in 1
     ; import_account_id: savings
-    ; source_identity: tx-s1
+    ; lf_source_identity: tx-s1
     ; transfer_id: transfer-s1
     ; transfer_type: import_match
     ; transfer_match_state: pending
@@ -912,7 +912,7 @@ def test_bilateral_match_ambiguous_same_amount_remains_pending(tmp_path: Path) -
 
 2026/03/03 Transfer in 2
     ; import_account_id: savings
-    ; source_identity: tx-s2
+    ; lf_source_identity: tx-s2
     ; transfer_id: transfer-s2
     ; transfer_type: import_match
     ; transfer_match_state: pending
@@ -977,7 +977,7 @@ def test_bilateral_match_date_boundary_exceeds_window_remains_pending(tmp_path: 
         f"""
 2026/03/01 Transfer out
     ; import_account_id: checking
-    ; source_identity: tx-c
+    ; lf_source_identity: tx-c
     ; transfer_id: transfer-c
     ; transfer_type: import_match
     ; transfer_match_state: pending
@@ -987,7 +987,7 @@ def test_bilateral_match_date_boundary_exceeds_window_remains_pending(tmp_path: 
 
 2026/03/09 Transfer in
     ; import_account_id: savings
-    ; source_identity: tx-s
+    ; lf_source_identity: tx-s
     ; transfer_id: transfer-s
     ; transfer_type: import_match
     ; transfer_match_state: pending
@@ -1014,7 +1014,7 @@ def test_bilateral_match_single_sided_pending_still_shows_synthetic_peer(tmp_pat
         f"""
 2026/03/02 Transfer out
     ; import_account_id: checking
-    ; source_identity: tx-c
+    ; lf_source_identity: tx-c
     ; transfer_id: transfer-c
     ; transfer_type: import_match
     ; transfer_match_state: pending

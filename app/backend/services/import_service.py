@@ -29,7 +29,7 @@ from .header_parser import HEADER_RE
 TXN_START_RE = re.compile(r"^\d{4}[-/]\d{2}[-/]\d{2}")
 POSTING_RE = re.compile(r"^(\s+)([^\s].*?)(\s{2,}|\t+)(.*)$")
 META_RE = re.compile(r"^\s*;\s*([^:]+):\s*(.*)$")
-SOURCE_IDENTITY_KEY_RE = re.compile(r"^source_identity(?:_(?P<suffix>\d+))?$")
+SOURCE_IDENTITY_KEY_RE = re.compile(r"^lf_source_identity(?:_(?P<suffix>\d+))?$")
 SOURCE_PAYLOAD_KEY_RE = re.compile(r"^source_payload_hash(?:_(?P<suffix>\d+))?$")
 IMPORTER_VERSION = "mvp2"
 
@@ -565,8 +565,8 @@ def _annotated_raw_txn(
         metadata_lines.append(f"    ; import_account_id: {import_account_id}")
     if "institution_template" not in existing_keys:
         metadata_lines.append(f"    ; institution_template: {institution_template_id}")
-    if "source_identity" not in existing_keys:
-        metadata_lines.append(f"    ; source_identity: {txn['sourceIdentity']}")
+    if "lf_source_identity" not in existing_keys:
+        metadata_lines.append(f"    ; lf_source_identity: {txn['sourceIdentity']}")
     if "source_payload_hash" not in existing_keys:
         metadata_lines.append(f"    ; source_payload_hash: {txn['sourcePayloadHash']}")
     if "source_file_sha256" not in existing_keys:

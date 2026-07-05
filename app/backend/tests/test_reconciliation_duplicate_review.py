@@ -93,7 +93,7 @@ class TestDuplicateReviewHeuristic:
                 "\n"
                 "2026-03-06 Imported coffee\n"
                 "    ; import_account_id: checking\n"
-                "    ; source_identity: import-coffee\n"
+                "    ; lf_source_identity: import-coffee\n"
                 "    ; source_payload_hash: payload-coffee\n"
                 "    Assets:Checking:Wells Fargo  $-24.00\n"
                 "    Expenses:Unknown\n"
@@ -127,7 +127,7 @@ class TestDuplicateReviewHeuristic:
                 "\n"
                 "2026-03-05 LANDLORD LLC\n"
                 "    ; import_account_id: checking\n"
-                "    ; source_identity: rent-1\n"
+                "    ; lf_source_identity: rent-1\n"
                 "    ; source_payload_hash: payload-rent-1\n"
                 "    Assets:Checking:Wells Fargo  $-15.00\n"
                 "    Expenses:Unknown\n"
@@ -156,14 +156,14 @@ class TestDuplicateReviewHeuristic:
             (
                 "2026-03-05 ACH Deposit WELLS FARGO IFI - ACCTVERIFY\n"
                 "    ; import_account_id: checking\n"
-                "    ; source_identity: acctverify-in\n"
+                "    ; lf_source_identity: acctverify-in\n"
                 "    ; source_payload_hash: payload-in\n"
                 "    Assets:Checking:Wells Fargo  $0.12\n"
                 "    Expenses:Food:Dining\n"
                 "\n"
                 "2026-03-05 ACH Withdrawal WELLS FARGO IFI - ACCTVERIFY\n"
                 "    ; import_account_id: checking\n"
-                "    ; source_identity: acctverify-out\n"
+                "    ; lf_source_identity: acctverify-out\n"
                 "    ; source_payload_hash: payload-out\n"
                 "    Assets:Checking:Wells Fargo  $-0.12\n"
                 "    Expenses:Food:Dining\n"
@@ -202,7 +202,7 @@ class TestDuplicateResolution:
                 "\n"
                 "2026-03-02 Winco Foods Store\n"
                 "    ; import_account_id: checking\n"
-                "    ; source_identity: import-1\n"
+                "    ; lf_source_identity: import-1\n"
                 "    ; source_payload_hash: payload-1\n"
                 "    Assets:Checking:Wells Fargo  $-25.00\n"
                 "    Expenses:Unknown\n"
@@ -257,7 +257,7 @@ class TestDuplicateResolution:
             (
                 "2026-03-04 Imported rent\n"
                 "    ; import_account_id: checking\n"
-                "    ; source_identity: rent-1\n"
+                "    ; lf_source_identity: rent-1\n"
                 "    ; source_payload_hash: payload-rent-1\n"
                 "    Assets:Checking:Wells Fargo  $-900.00\n"
                 "    Expenses:Food:Dining\n"
@@ -301,14 +301,14 @@ class TestDuplicateResolution:
             (
                 "2026-03-07 Utility bill\n"
                 "    ; import_account_id: checking\n"
-                "    ; source_identity: util-a\n"
+                "    ; lf_source_identity: util-a\n"
                 "    ; source_payload_hash: payload-a\n"
                 "    Assets:Checking:Wells Fargo  $-120.00\n"
                 "    Expenses:Food:Dining\n"
                 "\n"
                 "2026-03-08 Utility bill online\n"
                 "    ; import_account_id: checking\n"
-                "    ; source_identity: util-b\n"
+                "    ; lf_source_identity: util-b\n"
                 "    ; source_payload_hash: payload-b\n"
                 "    Assets:Checking:Wells Fargo  $-120.00\n"
                 "    Expenses:Food:Dining\n"
@@ -336,7 +336,7 @@ class TestDuplicateResolution:
         assert result["removedSelectionKeys"] == [merged["selectionKey"]]
         assert result["eventId"]
         assert "Utility bill online" not in updated
-        assert "; source_identity_2: util-b" in updated
+        assert "; lf_source_identity_2: util-b" in updated
         assert "; source_payload_hash_2: payload-b" in updated
         assert "Expenses:Food:Dining" in updated
         assert events[-1]["type"] == "reconciliation.imported_duplicates_merged.v1"
@@ -371,7 +371,7 @@ class TestDuplicateResolution:
                 "\n"
                 "2026-03-02 Winco Foods Store\n"
                 "    ; import_account_id: checking\n"
-                "    ; source_identity: import-1\n"
+                "    ; lf_source_identity: import-1\n"
                 "    ; source_payload_hash: payload-1\n"
                 "    Assets:Checking:Wells Fargo  $-25.00\n"
                 "    Expenses:Unknown\n"
@@ -408,7 +408,7 @@ class TestDuplicateResolution:
             (
                 "2026-03-07 Utility bill\n"
                 "    ; import_account_id: checking\n"
-                "    ; source_identity: util-a\n"
+                "    ; lf_source_identity: util-a\n"
                 "    ; source_payload_hash: payload-a\n"
                 "    Assets:Checking:Wells Fargo  $-120.00\n"
                 "    Expenses:Food:Dining\n"
@@ -419,7 +419,7 @@ class TestDuplicateResolution:
             (
                 "2026-03-08 Utility bill online\n"
                 "    ; import_account_id: checking\n"
-                "    ; source_identity: util-b\n"
+                "    ; lf_source_identity: util-b\n"
                 "    ; source_payload_hash: payload-b\n"
                 "    Assets:Checking:Wells Fargo  $-120.00\n"
                 "    Expenses:Food:Dining\n"
@@ -455,23 +455,23 @@ class TestDuplicateResolution:
             (
                 "2026-03-07 Utility bill\n"
                 "    ; import_account_id: checking\n"
-                "    ; source_identity: util-a\n"
+                "    ; lf_source_identity: util-a\n"
                 "    ; source_payload_hash: payload-a\n"
                 "    Assets:Checking:Wells Fargo  $-120.00\n"
                 "    Expenses:Food:Dining\n"
                 "\n"
                 "2026-03-08 Utility bill online\n"
                 "    ; import_account_id: checking\n"
-                "    ; source_identity: util-b\n"
+                "    ; lf_source_identity: util-b\n"
                 "    ; source_payload_hash: payload-b\n"
                 "    Assets:Checking:Wells Fargo  $-120.00\n"
                 "    Expenses:Food:Dining\n"
                 "\n"
                 "2026-03-09 Utility bill mobile\n"
                 "    ; import_account_id: checking\n"
-                "    ; source_identity: util-c\n"
+                "    ; lf_source_identity: util-c\n"
                 "    ; source_payload_hash: payload-c\n"
-                "    ; source_identity_2: util-d\n"
+                "    ; lf_source_identity_2: util-d\n"
                 "    ; source_payload_hash_2: payload-d\n"
                 "    Assets:Checking:Wells Fargo  $-120.00\n"
                 "    Expenses:Food:Dining\n"
@@ -514,9 +514,9 @@ class TestDuplicateResolution:
 
         assert "Utility bill online" not in updated
         assert "Utility bill mobile" not in updated
-        assert "; source_identity_2: util-b" in updated
-        assert "; source_identity_3: util-c" in updated
-        assert "; source_identity_4: util-d" in updated
+        assert "; lf_source_identity_2: util-b" in updated
+        assert "; lf_source_identity_3: util-c" in updated
+        assert "; lf_source_identity_4: util-d" in updated
 
         expected_payloads = {
             "util-a": existing_map["util-a"],

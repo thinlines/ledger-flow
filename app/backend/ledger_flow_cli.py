@@ -9,6 +9,7 @@ from pathlib import Path
 from services import journal_writer
 from services.config_service import AppConfig, load_config
 from services.currency_parser import parse_amount
+from services.journal_migration_service import migrate_lf_metadata
 from services.manual_entry_service import build_manual_transaction_block, create_manual_transaction
 
 
@@ -76,6 +77,11 @@ def _add_transaction(args: argparse.Namespace) -> dict:
     return {**result, "eventId": mut.event_id}
 
 
+def _migrate_lf_metadata(args: argparse.Namespace) -> dict:
+    config = load_config(Path(args.config))
+    return migrate_lf_metadata(config)
+
+
 def _run_server(args: argparse.Namespace) -> dict:
     workspace = Path(args.workspace).expanduser().resolve()
     os.environ["LEDGER_FLOW_ROOT"] = str(workspace)
@@ -116,6 +122,12 @@ def _build_parser() -> argparse.ArgumentParser:
     add.add_argument("--source", default="cli")
     add.add_argument("--dry-run", action="store_true")
     add.set_defaults(handler=_add_transaction)
+
+    migrate = subparsers.add_parser(
+        "migrate-lf-metadata",
+        help="One-time migration: assign lf_txn_id and rename app metadata keys to lf_ house style",
+    )
+    migrate.set_defaults(handler=_migrate_lf_metadata)
 
     server = subparsers.add_parser("server", help="Start the Ledger Flow API server")
     server.add_argument(

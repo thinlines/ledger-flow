@@ -1,133 +1,156 @@
-# Task: Projection foundation proven through Transactions read path
+# Task: Stable transaction identity proven through one edit flow
 
-Issue: https://github.com/thinlines/ledger-flow/issues/15 (parent #14)
+Issue: https://github.com/thinlines/ledger-flow/issues/16 (parent #14)
 Spec: `docs/ledger-flow-projection-schema.md` (Revision 2) — authoritative; deviations update the doc in the same change.
 Method: TDD — every slice starts with a failing test at the approved seam.
 
 ## Goal
 
-Create the workspace-scoped SQLite migration/bootstrap path and the first
-rebuildable journal projection, then serve the Transactions register from it.
-Journals stay canonical; behavior of `GET /api/transactions` is unchanged.
+One-time journal migration to `lf_` house-style metadata (stable `lf_txn_id`
+per managed transaction, schema-named key renames), then prove the new
+`(lf_txn_id, raw_block_hash)` mutation contract end to end through the
+clearing-status toggle: frontend sends id + block hash, backend locates the
+block by id, rejects true staleness by hash, re-projects the touched file,
+and returns updated projected data.
 
 ## Scope decisions (made now, recorded here)
 
-1. **Same database file** as the import index: `<workspace>/.workflow/state.db`,
-   resolved from `config.root_dir` (never the process `ROOT_DIR` — that global
-   is a known wart). New tables live beside `imported_transactions_v2`.
-2. **Migration runner** is a new `services/projection_db.py`: ordered in-code
-   migration list, `schema_migrations(version, name, applied_at)` bookkeeping,
-   idempotent `ensure_database(config)`. WAL + synchronous=NORMAL pragmas,
-   foreign_keys ON per connection (matches ImportIndex conventions).
-3. **Projection tables in this slice** (DDL per spec Core DDL / Comments /
-   Diagnostics sections): `journal_files`, `journal_items`, `transactions`,
-   `postings`, `comments`, `metadata_entries`, `journal_diagnostics`.
-   Reference-data, rules, imports, operations tables are later issues.
-4. **Projected file set**: every physical file reachable from
-   `journal_dir/*.journal` via `include` (recursive, glob-aware), each exactly
-   once. Roles: `archived-manual.journal` → `archive`; files under the opening
-   dir → `opening`; `*.dat` → `directives`; else `journal`. Paths stored
-   relative to `config.root_dir` (POSIX form).
-5. **Managed-subset parse**: a transaction block projects into structured rows
-   only when every posting parses cleanly (header OK, ISO date, amounts parse
-   or are the single elided posting, ≤9 decimal places, no `@`/`@@`, no
-   balance-assertion-only weirdness beyond the supported `= amount` form).
-   Otherwise the block stays a `transaction` item with
-   `transactions.parse_status = 'preserved_raw'` plus a diagnostic — never an
-   app-blocking error.
-6. **Amounts**: `postings.amount_nano` INTEGER nanounits (10^-9), converted
-   from the parsed `Decimal` with exact integer scaling; >9 dp →
-   preserved_raw + `amount_precision_exceeded` diagnostic. Elided posting
-   inference happens at projection time (`amount_inferred = TRUE`), summing in
-   nanounits.
-7. **No `lf_` id assignment during passive rebuild** (spec Rebuild Flow rule 4):
-   `transactions.id` adopts an existing `lf_txn_id` metadata value when the
-   block carries one, else gets a generated ephemeral id. Journal files are
-   never written by this feature.
-8. **Round-trip**: `journal_items.raw_text` holds exact byte slices of the
-   original file (including original line endings / trailing-newline state);
-   rendering a file = concatenation of its items' raw_text, byte-identical.
-9. **Freshness = self-healing content hash** (spec Mutation-Time Projection
-   rule 4): on read, any file whose disk sha256 differs from
-   `journal_files.content_hash` is re-projected; missing files are removed;
-   new files are added. Writer integration (projection inside the mutate
-   ritual) is issue #17 — the hash check keeps every existing mutation flow
-   correct in the meantime.
-10. **Transactions read path**: `build_unified_transactions` switches its
-    loader to `load_transactions_projected(config)` which (a) ensures
-    schema + freshness, (b) reconstructs the exact `ParsedTransaction`
-    contract from projection rows (Decimal amounts from nanounits — exact,
-    metadata dict rebuilt by applying the legacy `META_RE` to stored comment
-    raw text so key semantics match byte-for-byte, `header_line_number`
-    physical offset with the `-1` include sentinel, `source_journal` = the
-    top-level year journal). `preserved_raw` blocks are re-parsed with the
-    legacy `_parse_transaction` so out-of-subset journals behave exactly as
-    today. Row assembly, filters, running balance, and API shape are untouched.
-11. **Ordering parity**: the register keeps today's order — per top-level
-    journal in filename order, include-expansion position within it, stable
-    sort by date. The projection reconstructs expansion order by walking
-    `journal_items` include links. The spec's `(date, path, txn_order)`
-    paragraph gets amended to record expansion order as the register's
-    tiebreaker (doc update in this change).
-12. **Dashboard/activity/other consumers stay on the legacy loader** in this
-    slice; only the unified Transactions path is switched (tracer bullet).
+1. **Tracer flow = clearing-status toggle** (issue offers notes or toggle).
+   It is the highest-frequency edit, it rewrites the header line (the exact
+   text the old positional contract keyed on), and repeated toggling of the
+   same transaction is the scenario stable identity must survive. The
+   existing `newHeaderLine` re-spread contract is the positional coupling
+   being removed.
+2. **Migration is a service + CLI subcommand**, not a loose script:
+   `services/journal_migration_service.py` `migrate_lf_metadata(config)`,
+   exposed as `ledger-flow migrate-lf-metadata`. It runs through
+   `journal_writer.mutate` (backup/rollback/event ritual;
+   `event_type="journal.lf_metadata_migrated.v1"`), then refreshes the
+   projection so assigned ids are adopted. Idempotent: second run changes
+   nothing. (Precedent: `Scripts/migrate_journal_dates_to_iso.py` predates
+   the writer chokepoint; this migration should not bypass it.)
+3. **Id assignment**: every *managed* transaction block (projection
+   `parse_status = 'ok'`) in role `journal` / `opening` / `archive` files
+   without an `lf_txn_id` gets `    ; lf_txn_id: txn_<uuid7>` inserted
+   directly after the header line. `uuid7` is time-ordered (same source as
+   writer event ids). `preserved_raw` blocks are outside the managed subset
+   and are never rewritten; `directives` files carry no transaction blocks
+   and are skipped.
+4. **No `lf_posting_id` minted yet.** House style says postings carry one
+   "when the app needs stable posting identity" — no current flow does. The
+   migration is the single home for future assignment ("needed" = none).
+5. **Key renames = exactly the families the schema names** (issue: "where
+   covered by the projection schema"): `source_identity(_N)` →
+   `lf_source_identity(_N)` and `reconciliation_event_id` →
+   `lf_operation_id`. Other app keys (`import_account_id`,
+   `source_payload_hash`, `statement_period`, `match-id`, transfer keys,
+   `notes`, `statement_payee`) are not schema-named; they migrate in the
+   issues that own their flows (#20 imports, #22 operations, #24 merchant)
+   by extending the same command's rename table. Renames apply inside
+   transaction blocks only; every other byte is preserved.
+6. **Readers/writers rename in the same change** (no backcompat): import
+   write path, import fence/history, unknowns, reconciliation write +
+   context + duplicate services, unified transactions (`is_assertion`
+   detection), and `SYSTEM_METADATA_KEYS`. `lf_txn_id` / `lf_posting_id` /
+   `lf_operation_id` / `lf_source_identity` join the system-key lists so
+   user-metadata extraction (unmatch/apply) never copies identity between
+   blocks.
+7. **Duplicate `lf_txn_id` hardening**: `transactions.id` is a primary key;
+   once journals carry ids, a hand-copied block could collide. The
+   projection adopts the first occurrence; later duplicates get an ephemeral
+   id plus a `duplicate_lf_txn_id` diagnostic instead of crashing the
+   rebuild.
+8. **New toggle contract**: request `{txnId, blockHash}` (replaces
+   `{journalPath, headerLine, lineNumber}` — no backcompat). Backend:
+   `refresh_projection` (self-healing) → look up transaction by id (404
+   "Transaction not found (stale data — try refreshing)" when missing) →
+   compare submitted `blockHash` to projected `raw_block_hash` (409 "This
+   transaction changed since it was loaded — refresh and try again" on
+   mismatch) → rewrite the header line at the projected
+   `source_start_line` inside `journal_writer.mutate` → re-project the
+   touched file → return `{newStatus, newHeaderLine, txnId, blockHash,
+   eventId}` with the *post-edit* projected id + hash.
+9. **Response keeps `newHeaderLine` transitionally**: the other row actions
+   (delete/recategorize/unmatch/notes) stay positional until #17, and the
+   frontend re-spread must keep their `headerLine` fresh after a toggle.
+   Ephemeral-id blocks (`preserved_raw`) stay toggleable: the response
+   returns the re-projected id (recovered via stable `txn_order`), so
+   follow-up toggles keep working even though the hash-derived id changed.
+10. **Register payload carries identity**: `ParsedTransaction` gains
+    `txn_id` / `block_hash` (populated only by the projection loader —
+    the legacy loader's block boundary includes trailing blanks, so its
+    text is not hash-comparable). Unified rows expose them per leg
+    (`legs[].txnId`, `legs[].blockHash`) beside the positional fields.
+    The A/B parity test nulls the two new fields for the legacy side —
+    documented as the one intentional payload difference.
+11. **Toggle works for included-file transactions now**: the old contract
+    rejected them via the `-1` line-number sentinel; id + hash has no such
+    limit. This is a deliberate behavior improvement, not a regression.
+12. **Frontend**: leg type gains `txnId` / `blockHash`; `toggleClearing`
+    sends `{txnId, blockHash}`, re-spreads `legs[0]` with the returned
+    `headerLine`/`txnId`/`blockHash`, keeps optimistic status + silent
+    revert semantics unchanged.
 
 ## TDD slices
 
-Each slice: write the test → run it → watch it fail for the right reason →
-implement → green → refactor.
+Each slice: write the test → watch it fail for the right reason → implement
+→ green → refactor.
 
-- **Slice 1 — migrations/bootstrap** (`tests/test_projection_db.py`)
-  - `ensure_database(config)` creates `.workflow/state.db` with
-    `schema_migrations` + all seven projection tables, beside
-    `imported_transactions_v2` when ImportIndex ran first.
-  - Idempotent: second call applies nothing new; versions recorded once.
-  - Projection tables can be wiped and re-created (rebuild-safe).
-- **Slice 2 — projection golden tests** (`tests/test_projection_service.py` +
-  `tests/fixtures/projection/` golden workspace)
-  - Round-trip: every projected file renders byte-identical (fixtures include
-    file comments, blank runs, directives, includes, unicode, trailing
-    whitespace, missing trailing newline, CRLF-free plain files).
-  - Structure: transactions/postings/comments/metadata rows match expected
-    values incl. nanounits, inferred elision, status, tags (`; :flag:`),
-    typed `key::` metadata, kv metadata.
-  - Rebuild: external edit → refresh re-projects only the changed file;
-    full rebuild from scratch ≡ refreshed state; wipe + rebuild is lossless.
-  - No `lf_` assignment: journals on disk untouched; generated ids only where
-    no `lf_txn_id` metadata exists; existing `lf_txn_id` adopted.
-  - Diagnostics: `@` price, >9 dp, ≥2 elided postings, unknown top-level
-    construct → `journal_diagnostics` rows with file/line/code; blocks
-    preserved raw; rest of the file still projects.
-- **Slice 3 — ledger CLI parity** (same test module; assumes `ledger` in the
-  test env like the reconciliation tests do)
-  - Account balances from `SUM(amount_nano)` (roles journal+opening, archive
-    excluded) equal `ledger bal --flat` on the golden workspace, to the cent.
-- **Slice 4 — Transactions read path** (`tests/test_projection_read_path.py`)
-  - A/B parity: `build_unified_transactions` payload identical between legacy
-    loader and projection loader on a rich fixture (rows, running balances,
-    ordering, legs line numbers incl. `-1` sentinel, summary, accountMeta).
-  - Self-healing: mutate journal on disk between calls → projected read
-    reflects the edit.
-  - Then swap the loader in `unified_transactions_service` and keep the whole
-    existing suite green (`test_unified_transactions_service.py` is the
-    regression harness — it now exercises the projection).
-- **Slice 5 — full suites**: backend `uv run pytest`, frontend `pnpm test`.
+- **Slice A — migration** (`tests/test_journal_lf_migration.py`)
+  - Assigns `lf_txn_id` to managed blocks missing one; adopts, never
+    replaces, existing ids; inserts directly after the header.
+  - Renames `source_identity(_N)` / `reconciliation_event_id` inside blocks.
+  - Byte preservation: untouched blocks, file comments, blank runs, CRLF-free
+    files, missing trailing newline, `preserved_raw` blocks, `.dat` files —
+    all byte-identical outside inserted/renamed lines.
+  - Idempotent second run; report counts; backup files exist; event emitted.
+  - After migration + refresh, `transactions.id` equals the journal's
+    `lf_txn_id` for every managed block.
+  - Duplicate `lf_txn_id` → first adopted, second ephemeral + diagnostic.
+  - CLI subcommand wired (`ledger-flow migrate-lf-metadata`).
+- **Slice B — reader/writer renames** (existing suites, updated first)
+  - Update key expectations in import/reconciliation/unknowns/unified tests
+    to `lf_` names → red → flip the service literals → green.
+  - System-key lists include the new `lf_` keys; user-metadata extraction
+    never carries `lf_txn_id` across blocks (new assertion).
+- **Slice C — toggle by id** (`tests/test_toggle_status_by_id.py`, endpoint
+  seam via FastAPI TestClient like `test_reconcile_endpoint.py`)
+  - Toggle by `{txnId, blockHash}` cycles status in the journal text and
+    returns updated projected id + hash; projection row reflects the edit
+    without a manual refresh.
+  - Stale hash → 409, journal untouched. Unknown id → 404.
+  - External edit *before* the transaction (line shift) then toggle → still
+    succeeds (the positional contract's failure case, now fixed).
+  - Repeated toggles succeed using each response's returned hash.
+  - Included-file transaction toggles successfully.
+  - Register payload exposes `legs[].txnId` / `legs[].blockHash`; parity
+    test updated per decision 10.
+- **Slice D — frontend contract** (`transactionActions` vitest)
+  - `toggleClearing` posts `{txnId, blockHash}`, updates `row.status`,
+    re-spreads leg identity from the response, reverts on error; skips when
+    the leg has no identity.
+- **Slice E — full suites**: backend `uv run pytest`, frontend `pnpm test`.
 
-## Acceptance criteria (from issue #15)
+## Acceptance criteria (from issue #16)
 
-- [ ] Workspace-scoped SQLite DB created from migrations, projection tables
-      wipe-and-rebuild safe.
-- [ ] Journals + includes project into files/items/transactions/postings/
-      comments/metadata/diagnostics; no missing-`lf_` assignment on passive
-      rebuild.
-- [ ] Transactions register served from the projection, UI behavior and API
-      shape preserved.
-- [ ] Integer nanounit arithmetic; deterministic cross-file ordering.
-- [ ] Golden tests: round-trip, ledger parity, rebuild, diagnostics.
-- [ ] Existing backend and frontend suites green.
+- [x] Deliberate migration command assigns stable `lf_txn_id` (and needed
+      `lf_posting_id` — none currently) to existing managed transactions.
+- [x] Schema-named metadata keys rewritten to `lf_` house style; user text
+      outside managed metadata preserved byte-for-byte.
+- [x] Toggle-status flow sends transaction id + block hash; no line-number /
+      header-text dependence.
+- [x] Backend rejects stale block hash (409; 404 for unknown ids).
+- [x] Successful edits re-project the touched file and return updated
+      projected data.
+- [x] Tests: id assignment, metadata rewrite, stale rejection, byte
+      preservation — plus live verification (CLI migration on a scratch
+      workspace; API toggle cycle, 409/404/422 probes, and a 3-click UI
+      round-trip on the running app, journal restored byte-identically).
 
 ## Out of scope
 
-Writer-ritual projection hook, `(lf_txn_id, raw_block_hash)` mutation
-contract, reference data tables, operations spine, imports migration,
-dashboard/activity loader switch, FTS, deleting the mtime cache.
+Converting the remaining mutation flows (#17), writer-transactional
+projection (#17), `lf_posting_id` minting, operations spine / `lf_operation_id`
+row semantics (#22), import-identity tables (#20), renaming non-schema-named
+metadata keys, `::` typed-metadata writing, frontend stale-state copy
+redesign (#17), FTS, reference data.

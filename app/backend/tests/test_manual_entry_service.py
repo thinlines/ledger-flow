@@ -172,6 +172,26 @@ def test_manual_entry_has_no_import_metadata(tmp_path: Path) -> None:
     assert "source_payload_hash" not in content
 
 
+def test_user_metadata_extraction_never_carries_identity_metadata() -> None:
+    """lf_ identity/audit keys are system metadata: unmatch/apply must not
+    copy them from one transaction block to another."""
+    from services.manual_entry_service import _extract_user_metadata_lines
+
+    lines = [
+        "2026-03-28 Coffee",
+        "    ; lf_txn_id: txn_0123456789abcdef0123456789abcdef",
+        "    ; lf_posting_id: post_0123456789abcdef",
+        "    ; lf_source_identity: abc123",
+        "    ; lf_source_identity_1: carried-1",
+        "    ; lf_operation_id: 0197-abc",
+        "    ; a user comment: keep me",
+        "    Expenses:Coffee    USD 4.50",
+        "    Assets:Bank:Checking",
+    ]
+
+    assert _extract_user_metadata_lines(lines) == ["    ; a user comment: keep me"]
+
+
 # ---------------------------------------------------------------------------
 # Match detection tests
 # ---------------------------------------------------------------------------
@@ -379,7 +399,7 @@ def test_scan_unknowns_populates_match_candidates(tmp_path: Path) -> None:
 
 2026/03/28 Uber
     ; import_account_id: checking_import
-    ; source_identity: tx-uber
+    ; lf_source_identity: tx-uber
     Expenses:Unknown  $45.95
     Assets:Bank:Checking
 """,
@@ -406,7 +426,7 @@ def test_scan_unknowns_preselects_single_tier1_match(tmp_path: Path) -> None:
 
 2026/03/28 Uber
     ; import_account_id: checking_import
-    ; source_identity: tx-uber
+    ; lf_source_identity: tx-uber
     Expenses:Unknown  $45.95
     Assets:Bank:Checking
 """,
@@ -435,7 +455,7 @@ def test_apply_match_replaces_unknown_and_removes_manual(tmp_path: Path) -> None
 
 2026/03/28 Uber
     ; import_account_id: checking_import
-    ; source_identity: tx-uber
+    ; lf_source_identity: tx-uber
     Expenses:Unknown  $45.95
     Assets:Bank:Checking
 """,
@@ -484,7 +504,7 @@ account Assets:Bank:Checking
     txn_count = content.count("2026/03/28 Uber")
     assert txn_count == 1
     # Import metadata should still be on the remaining transaction.
-    assert "; source_identity: tx-uber" in content
+    assert "; lf_source_identity: tx-uber" in content
 
 
 def test_apply_match_preserves_import_amount_when_amounts_differ(tmp_path: Path) -> None:
@@ -499,7 +519,7 @@ def test_apply_match_preserves_import_amount_when_amounts_differ(tmp_path: Path)
 
 2026/03/28 Uber
     ; import_account_id: checking_import
-    ; source_identity: tx-uber
+    ; lf_source_identity: tx-uber
     Expenses:Unknown  $47.95
     Assets:Bank:Checking
 """,
@@ -551,7 +571,7 @@ def test_apply_match_warns_on_stale_manual_entry(tmp_path: Path) -> None:
     journal.write_text(
         """2026/03/28 Uber
     ; import_account_id: checking_import
-    ; source_identity: tx-uber
+    ; lf_source_identity: tx-uber
     Expenses:Unknown  $45.95
     Assets:Bank:Checking
 """,
@@ -599,7 +619,7 @@ def test_apply_match_carries_user_metadata(tmp_path: Path) -> None:
 
 2026/03/28 Uber
     ; import_account_id: checking_import
-    ; source_identity: tx-uber
+    ; lf_source_identity: tx-uber
     Expenses:Unknown  $45.95
     Assets:Bank:Checking
 """,
@@ -639,7 +659,7 @@ account Assets:Bank:Checking
     # User metadata "note: business trip" should be carried over.
     assert "; note: business trip" in content
     # The imported transaction should have both import metadata and carried metadata.
-    assert "; source_identity: tx-uber" in content
+    assert "; lf_source_identity: tx-uber" in content
 
 
 def test_existing_category_and_transfer_flows_unaffected(tmp_path: Path) -> None:

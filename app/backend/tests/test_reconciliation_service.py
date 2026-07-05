@@ -246,7 +246,7 @@ class TestWriterOrdering:
         assert journal_path.exists()
         text = journal_path.read_text(encoding="utf-8")
         assert "Statement reconciliation" in text
-        assert "    ; reconciliation_event_id: recon-evt-4" in text
+        assert "    ; lf_operation_id: recon-evt-4" in text
         assert "    ; statement_period: 2026-03-18..2026-04-17" in text
         assert "Assets:Checking:Wells Fargo  $0 = $2,500.00" in text
         assert result.header_line.startswith("2026-04-17 * Statement reconciliation")
@@ -356,12 +356,12 @@ class TestLatestReconciliationDate:
         _seed_journal(
             config,
             "2026-03-31 * Statement reconciliation · checking · ending 2026-03-31\n"
-            "    ; reconciliation_event_id: e1\n"
+            "    ; lf_operation_id: e1\n"
             "    ; statement_period: 2026-03-01..2026-03-31\n"
             "    Assets:Checking:Wells Fargo  $0 = $100.00\n"
             "\n"
             "2026-04-30 * Statement reconciliation · checking · ending 2026-04-30\n"
-            "    ; reconciliation_event_id: e2\n"
+            "    ; lf_operation_id: e2\n"
             "    ; statement_period: 2026-04-01..2026-04-30\n"
             "    Assets:Checking:Wells Fargo  $0 = $200.00\n",
         )
@@ -369,7 +369,7 @@ class TestLatestReconciliationDate:
         assert result == date(2026, 4, 30)
 
     def test_excludes_handwritten_assertions(self, tmp_path: Path) -> None:
-        """Hand-written assertions (no reconciliation_event_id) are honored for failure
+        """Hand-written assertions (no lf_operation_id) are honored for failure
         detection but excluded from the fence."""
         config = _make_config(tmp_path / "workspace")
         _seed_journal(
@@ -391,7 +391,7 @@ class TestLatestReconciliationDate:
         _seed_journal(
             config,
             "2026-04-30 * Statement reconciliation · child\n"
-            "    ; reconciliation_event_id: e1\n"
+            "    ; lf_operation_id: e1\n"
             "    ; statement_period: 2026-04-01..2026-04-30\n"
             "    Assets:Checking:Wells Fargo  $0 = $200.00\n",
         )
@@ -459,7 +459,7 @@ class TestApplyReconciliationFence:
         _seed_journal(
             config,
             "2026-04-17 * Statement reconciliation · checking · ending 2026-04-17\n"
-            "    ; reconciliation_event_id: e1\n"
+            "    ; lf_operation_id: e1\n"
             "    ; statement_period: 2026-03-18..2026-04-17\n"
             "    Assets:Checking:Wells Fargo  $0 = $200.00\n",
         )
@@ -543,7 +543,7 @@ class TestReconciliationStatus:
             _opening_balance_block("Assets:Checking:Wells Fargo", "$100.00")
             + "\n"
             + "2026-04-17 * Statement reconciliation · Wells Fargo · ending 2026-04-17\n"
-            "    ; reconciliation_event_id: e1\n"
+            "    ; lf_operation_id: e1\n"
             "    ; statement_period: 2026-03-18..2026-04-17\n"
             "    Assets:Checking:Wells Fargo  $0 = $200.00\n",
         )

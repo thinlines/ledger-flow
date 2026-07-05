@@ -93,14 +93,14 @@ def _scan_journal_transactions(lines: list[str]) -> list[JournalTransaction]:
             value = match.group(2).strip() or None
             if value is not None:
                 metadata[key] = value
-            if key == "source_identity":
+            if key == "lf_source_identity":
                 source_identity = value
                 identities_by_suffix["1"] = value
             elif key == "source_payload_hash":
                 source_payload_hash = value
                 payloads_by_suffix["1"] = value
             else:
-                identity_match = re.match(r"^source_identity_(\d+)$", key)
+                identity_match = re.match(r"^lf_source_identity_(\d+)$", key)
                 if identity_match and value is not None:
                     identities_by_suffix[identity_match.group(1)] = value
                     continue
@@ -267,7 +267,7 @@ def _remove_metadata_variant(
     metadata = transaction.metadata
     suffix_to_remove: str | None = None
     for key, value in metadata.items():
-        match = re.match(r"^source_identity_(\d+)$", key)
+        match = re.match(r"^lf_source_identity_(\d+)$", key)
         if match and value == source_identity:
             suffix_to_remove = match.group(1)
             break
@@ -276,7 +276,7 @@ def _remove_metadata_variant(
 
     stripped_lines: list[str] = []
     blocked_keys = {
-        f"source_identity_{suffix_to_remove}",
+        f"lf_source_identity_{suffix_to_remove}",
         f"source_payload_hash_{suffix_to_remove}",
         f"source_file_sha256_{suffix_to_remove}",
         f"importer_version_{suffix_to_remove}",

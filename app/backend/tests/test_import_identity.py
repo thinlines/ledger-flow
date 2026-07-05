@@ -77,7 +77,7 @@ def test_annotated_raw_txn_adds_import_metadata() -> None:
     )
     assert "; import_account_id: wf_checking" in out
     assert "; institution_template: wells_fargo" in out
-    assert "; source_identity: identity123" in out
+    assert "; lf_source_identity: identity123" in out
     assert "; source_payload_hash: payload123" in out
     assert "; source_file_sha256: filehash" in out
     assert "; importer_version: mvp2" in out
@@ -159,7 +159,7 @@ def test_build_existing_map_prefers_canonical_journal_hash_over_legacy_stored_ha
     journal_path.write_text(
         "2026/03/01 Coffee Shop\n"
         "    ; import_account_id: checking\n"
-        f"    ; source_identity: {reparsed['sourceIdentity']}\n"
+        f"    ; lf_source_identity: {reparsed['sourceIdentity']}\n"
         f"    ; source_payload_hash: {legacy_hash}\n"
         "    Assets:Bank:Primary:Checking  $-7.50\n"
         "    Expenses:Food\n",

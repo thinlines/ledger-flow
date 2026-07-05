@@ -899,3 +899,11 @@ is `(date, include-expansion position)` rather than raw
 `(date, path, txn_order)` — included files keep their include-site position
 so opening balances sort before same-date year-journal rows. Block boundary
 clarified: a transaction block ends at the first blank or non-indented line.
+
+Amendment (2026-07-04, adoption step 4 + first step 10 flow): a duplicate
+`lf_txn_id` (e.g. a hand-copied block) does not fail the rebuild — the first
+occurrence keeps the id, later occurrences get an ephemeral id plus a
+`duplicate_lf_txn_id` diagnostic. The one-time migration renames the
+schema-named keys (`source_identity(_N)`, `reconciliation_event_id`); other
+app keys migrate when their flows cut over, extending the same command.
+`lf_posting_id` is not minted until a flow needs posting identity.

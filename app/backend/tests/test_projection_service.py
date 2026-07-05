@@ -83,7 +83,7 @@ include ../rules/10-accounts.dat
 include ../opening/_opening_balances.journal
 
 2026-01-05 * Grocery Store 超市
-    ; source_identity: abc123
+    ; lf_source_identity: abc123
     ; effective_date:: [2026-01-06]
     Expenses:Groceries    USD 45.67
     Assets:Checking
@@ -276,8 +276,8 @@ def test_comments_and_metadata_project(tmp_path):
             (grocery["id"],),
         ).fetchall()
         by_key = {m["key"]: m for m in meta}
-        assert by_key["source_identity"]["value_type"] == "string"
-        assert by_key["source_identity"]["value_text"] == "abc123"
+        assert by_key["lf_source_identity"]["value_type"] == "string"
+        assert by_key["lf_source_identity"]["value_text"] == "abc123"
         assert by_key["effective_date"]["value_type"] == "date"
         assert by_key["effective_date"]["value_date"] == "2026-01-06"
 

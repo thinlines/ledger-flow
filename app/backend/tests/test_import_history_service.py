@@ -111,7 +111,7 @@ def _journal_transaction(stage_id: str, source_identity: str) -> str:
         [
             f"2026/03/01 Merchant {stage_id}",
             "    ; import_account_id: wf_checking",
-            f"    ; source_identity: {source_identity}",
+            f"    ; lf_source_identity: {source_identity}",
             f"    ; source_payload_hash: payload-{stage_id}",
             f"    ; source_file_sha256: sha-{stage_id}",
             "    Assets:Bank:Checking  $10.00",
@@ -132,10 +132,10 @@ def _journal_transaction_with_carried_identity(
         [
             f"2026/03/01 Merchant {stage_id}",
             "    ; import_account_id: wf_checking",
-            f"    ; source_identity: {primary_identity}",
+            f"    ; lf_source_identity: {primary_identity}",
             f"    ; source_payload_hash: {primary_payload}",
             "    ; source_file_sha256: sha-merged",
-            f"    ; source_identity_2: {carried_identity}",
+            f"    ; lf_source_identity_2: {carried_identity}",
             f"    ; source_payload_hash_2: {carried_payload}",
             "    ; source_file_sha256_2: sha-carried",
             "    Assets:Bank:Checking  $10.00",
@@ -296,8 +296,8 @@ def test_undo_import_strips_carried_identity_without_deleting_survivor(tmp_path:
     updated = journal_path.read_text(encoding="utf-8")
 
     assert "Merchant merged" in updated
-    assert "; source_identity: txn-keep" in updated
-    assert "; source_identity_2: txn-carried" not in updated
+    assert "; lf_source_identity: txn-keep" in updated
+    assert "; lf_source_identity_2: txn-carried" not in updated
     assert "; source_payload_hash_2: payload-carried" not in updated
     assert undone["undo"]["removedTxnCount"] == 0
     assert undone["undo"]["strippedCarriedIdentityCount"] == 1
@@ -313,7 +313,7 @@ def test_undo_import_downgrades_surviving_transfer_peer_to_pending(tmp_path: Pat
             [
                 "2026/03/01 Transfer out",
                 "    ; import_account_id: wf_checking",
-                "    ; source_identity: txn-undo",
+                "    ; lf_source_identity: txn-undo",
                 "    ; source_payload_hash: payload-undo",
                 "    ; transfer_id: transfer-1",
                 "    ; transfer_type: import_match",
@@ -327,7 +327,7 @@ def test_undo_import_downgrades_surviving_transfer_peer_to_pending(tmp_path: Pat
             [
                 "2026/03/02 Transfer in",
                 "    ; import_account_id: wf_checking",
-                "    ; source_identity: txn-keep",
+                "    ; lf_source_identity: txn-keep",
                 "    ; source_payload_hash: payload-keep",
                 "    ; transfer_id: transfer-1",
                 "    ; transfer_type: import_match",
@@ -388,7 +388,7 @@ def test_undo_import_rejects_downgrading_surviving_direct_transfer_peer(tmp_path
             [
                 "2026/03/01 Vehicle purchase",
                 "    ; import_account_id: wf_checking",
-                "    ; source_identity: txn-undo",
+                "    ; lf_source_identity: txn-undo",
                 "    ; source_payload_hash: payload-undo",
                 "    ; transfer_id: transfer-1",
                 "    ; transfer_type: direct",
@@ -402,7 +402,7 @@ def test_undo_import_rejects_downgrading_surviving_direct_transfer_peer(tmp_path
             [
                 "2026/03/02 Vehicle adjustment",
                 "    ; import_account_id: wf_checking",
-                "    ; source_identity: txn-keep",
+                "    ; lf_source_identity: txn-keep",
                 "    ; source_payload_hash: payload-keep",
                 "    ; transfer_id: transfer-1",
                 "    ; transfer_type: direct",
@@ -462,7 +462,7 @@ def test_undo_import_rejects_downgrading_legacy_false_pending_manual_transfer_pe
             [
                 "2026/03/01 Vehicle purchase",
                 "    ; import_account_id: wf_checking",
-                "    ; source_identity: txn-undo",
+                "    ; lf_source_identity: txn-undo",
                 "    ; source_payload_hash: payload-undo",
                 "    ; transfer_id: transfer-1",
                 "    ; transfer_state: matched",
@@ -475,7 +475,7 @@ def test_undo_import_rejects_downgrading_legacy_false_pending_manual_transfer_pe
             [
                 "2026/03/02 Vehicle adjustment",
                 "    ; import_account_id: wf_checking",
-                "    ; source_identity: txn-keep",
+                "    ; lf_source_identity: txn-keep",
                 "    ; source_payload_hash: payload-keep",
                 "    ; transfer_id: transfer-1",
                 "    ; transfer_state: matched",

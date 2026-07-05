@@ -54,7 +54,7 @@ def _write_match_fixture(tmp_path: Path) -> tuple[Path, Path]:
 
 2026/03/28 Uber
     ; import_account_id: checking_import
-    ; source_identity: tx-uber
+    ; lf_source_identity: tx-uber
     Expenses:Unknown  $45.95
     Assets:Bank:Checking
 """,
@@ -250,7 +250,7 @@ def test_apply_second_match_appends_to_archive(tmp_path: Path) -> None:
 
 2026/03/28 Uber
     ; import_account_id: checking_import
-    ; source_identity: tx-uber-1
+    ; lf_source_identity: tx-uber-1
     Expenses:Unknown  $45.95
     Assets:Bank:Checking
 
@@ -261,7 +261,7 @@ def test_apply_second_match_appends_to_archive(tmp_path: Path) -> None:
 
 2026/03/29 Lyft
     ; import_account_id: checking_import
-    ; source_identity: tx-lyft-1
+    ; lf_source_identity: tx-lyft-1
     Expenses:Unknown  $12.00
     Assets:Bank:Checking
 """,
@@ -401,7 +401,7 @@ def test_apply_match_skips_archive_when_manual_entry_already_has_match_id(
 
 2026/03/28 Uber
     ; import_account_id: checking_import
-    ; source_identity: tx-uber
+    ; lf_source_identity: tx-uber
     Expenses:Unknown  $45.95
     Assets:Bank:Checking
 """,

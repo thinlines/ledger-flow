@@ -645,7 +645,7 @@ def test_upsert_import_account_rewrites_existing_journal_postings_to_new_ledger_
     journal_path.write_text(
         "2026/03/01 Coffee Shop\n"
         f"    ; import_account_id: {account_id}\n"
-        f"    ; source_identity: {original_txn['sourceIdentity']}\n"
+        f"    ; lf_source_identity: {original_txn['sourceIdentity']}\n"
         f"    ; source_payload_hash: {original_txn['sourcePayloadHash']}\n"
         "    ; source_file_sha256: source-file-1\n"
         "    Assets:Bank:Checking  $-7.50\n"
@@ -1025,7 +1025,8 @@ ledger_account = "Assets:Bank:Checking"
 
     tags_content = (rules / "12-tags.dat").read_text(encoding="utf-8")
     assert "tag Imported" in tags_content
-    assert "tag source_identity" in tags_content
+    assert "tag lf_source_identity" in tags_content
+    assert "tag lf_txn_id" in tags_content
     assert "tag tracked_account_id" in tags_content
 
 
@@ -1054,7 +1055,10 @@ def test_ensure_standard_tags_file_appends_missing_system_tags(tmp_path: Path) -
     content = tags_path.read_text(encoding="utf-8")
     assert content.count("tag Imported") == 1
     assert "tag UUID" in content
-    assert "tag source_identity" in content
+    assert "tag lf_source_identity" in content
+    assert "tag lf_txn_id" in content
+    assert "tag lf_posting_id" in content
+    assert "tag lf_operation_id" in content
     assert "tag source_payload_hash" in content
     assert "tag tracked_account_id" in content
     assert "tag transfer_id" in content

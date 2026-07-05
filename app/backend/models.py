@@ -198,9 +198,14 @@ class ManualTransactionCreateRequest(BaseModel):
 
 
 class ToggleStatusRequest(BaseModel):
-    journalPath: str
-    headerLine: str
-    lineNumber: int
+    """Stable-identity mutation contract (spec: Mutation-Time Projection).
+
+    The transaction is located by its projected id; ``blockHash`` is the
+    client's last-known ``raw_block_hash`` and rejects true staleness.
+    """
+
+    txnId: str = Field(min_length=1)
+    blockHash: str = Field(min_length=1)
 
 
 class DeleteTransactionRequest(BaseModel):

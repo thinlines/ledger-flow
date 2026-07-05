@@ -51,6 +51,10 @@ class RegisterEvent:
     notes: str | None = None
     affects_balance: bool = True
     counts_as_transaction: bool = True
+    # Stable projected identity for the (lf_txn_id, raw_block_hash) mutation
+    # contract; None when the row came from the legacy loader.
+    txn_id: str | None = None
+    block_hash: str | None = None
 
 
 @dataclass(frozen=True)
@@ -622,6 +626,8 @@ def pending_transfer_event_for_peer_account(
         header_line_number=transaction.header_line_number,
         affects_balance=False,
         counts_as_transaction=False,
+        txn_id=transaction.txn_id,
+        block_hash=transaction.block_hash,
     )
 
 
@@ -669,4 +675,6 @@ def direct_transfer_event_for_peer_account(
         header_line_number=transaction.header_line_number,
         affects_balance=True,
         counts_as_transaction=True,
+        txn_id=transaction.txn_id,
+        block_hash=transaction.block_hash,
     )

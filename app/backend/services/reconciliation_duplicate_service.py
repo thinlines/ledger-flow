@@ -196,7 +196,7 @@ def _user_metadata_lines(block_lines: list[str]) -> list[str]:
         if not match:
             continue
         key = match.group(1).strip().lower()
-        if key.startswith("source_identity") or key.startswith("source_payload_hash"):
+        if key.startswith("lf_source_identity") or key.startswith("source_payload_hash"):
             continue
         if key in {
             "import_account_id",
@@ -204,7 +204,9 @@ def _user_metadata_lines(block_lines: list[str]) -> list[str]:
             "source_file_sha256",
             "importer_version",
             "match-id",
-            "reconciliation_event_id",
+            "lf_operation_id",
+            "lf_txn_id",
+            "lf_posting_id",
             "statement_period",
         }:
             continue
@@ -221,10 +223,10 @@ def _replace_user_metadata(block_lines: list[str], user_metadata_lines: list[str
             key = match.group(1).strip().lower()
             if key == "notes":
                 continue
-            if key.startswith("source_identity") or key.startswith("source_payload_hash"):
+            if key.startswith("lf_source_identity") or key.startswith("source_payload_hash"):
                 kept.append(line)
                 continue
-            if key in {"source_file_sha256", "importer_version", "import_account_id", "institution_template", "match-id"}:
+            if key in {"source_file_sha256", "importer_version", "import_account_id", "institution_template", "match-id", "lf_txn_id", "lf_posting_id"}:
                 kept.append(line)
                 continue
             if line.strip() == "; :manual:":
@@ -263,7 +265,7 @@ def _import_identity_variants(metadata: dict[str, str]) -> list[dict[str, str | 
 
     def add_variant(suffix: int | None) -> None:
         suffix_part = "" if suffix is None else f"_{suffix}"
-        identity = str(metadata.get(f"source_identity{suffix_part}") or "").strip()
+        identity = str(metadata.get(f"lf_source_identity{suffix_part}") or "").strip()
         if not identity:
             return
         variants.append(
@@ -281,7 +283,7 @@ def _import_identity_variants(metadata: dict[str, str]) -> list[dict[str, str | 
     add_variant(None)
     suffixes: list[int] = []
     for key in metadata:
-        match = re.match(r"^source_identity_(\d+)$", key)
+        match = re.match(r"^lf_source_identity_(\d+)$", key)
         if match:
             suffixes.append(int(match.group(1)))
     for suffix in sorted(set(suffixes)):
@@ -302,14 +304,14 @@ def _upsert_import_identity_metadata(
     existing_identities = {value for key, value in existing.items() if IMPORT_IDENTITY_KEY_RE.match(key)}
     metadata_lines: list[str] = []
     next_suffix = 2
-    while f"source_identity_{next_suffix}" in existing:
+    while f"lf_source_identity_{next_suffix}" in existing:
         next_suffix += 1
 
     for variant in variants:
         identity = str(variant["sourceIdentity"] or "").strip()
         if not identity or identity in existing_identities:
             continue
-        metadata_lines.append(f"    ; source_identity_{next_suffix}: {identity}")
+        metadata_lines.append(f"    ; lf_source_identity_{next_suffix}: {identity}")
         payload = str(variant["sourcePayloadHash"] or "").strip()
         if payload:
             metadata_lines.append(f"    ; source_payload_hash_{next_suffix}: {payload}")

@@ -217,7 +217,7 @@ def build_unified_transactions(
             )
 
             is_assertion = bool(
-                str(transaction.metadata.get("reconciliation_event_id") or "").strip()
+                str(transaction.metadata.get("lf_operation_id") or "").strip()
             )
 
             event = RegisterEvent(
@@ -240,6 +240,8 @@ def build_unified_transactions(
                 match_id=transaction.metadata.get("match-id") or None,
                 notes=transaction.metadata.get("notes") or None,
                 counts_as_transaction=not is_generated_opening,
+                txn_id=transaction.txn_id,
+                block_hash=transaction.block_hash,
             )
             unified_rows.append(_UnifiedRow(
                 event=event,
@@ -529,6 +531,8 @@ def _compute_rows_with_balance(
                 "journalPath": ev.journal_path,
                 "headerLine": ev.header_line,
                 "lineNumber": ev.header_line_number,
+                "txnId": ev.txn_id,
+                "blockHash": ev.block_hash,
             }],
             "matchId": ev.match_id,
             "transferState": ev.transfer_state,

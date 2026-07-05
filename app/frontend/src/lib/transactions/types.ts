@@ -78,7 +78,15 @@ export type TransactionRow = {
   isManual: boolean;
   isOpeningBalance: boolean;
   isAssertion: boolean;
-  legs: Array<{ journalPath: string; headerLine: string; lineNumber: number }>;
+  legs: Array<{
+    journalPath: string;
+    headerLine: string;
+    lineNumber: number;
+    // Stable projected identity for the (lf_txn_id, raw_block_hash)
+    // mutation contract; null on rows served by the legacy loader.
+    txnId?: string | null;
+    blockHash?: string | null;
+  }>;
   matchId?: string | null;
   transferState?: string | null;
   detailLines: Array<{ label: string; account: string; kind: string }>;

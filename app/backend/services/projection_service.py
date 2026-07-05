@@ -604,9 +604,26 @@ def _project_file(
             block = item.block
             assert block is not None
             raw_block_hash = _sha256_text(item.raw_text)
-            transaction_id = block.lf_txn_id or _short_id(
-                "txn", rel_path, str(txn_order), raw_block_hash
-            )
+            transaction_id = block.lf_txn_id
+            if transaction_id is not None:
+                duplicate = conn.execute(
+                    "SELECT 1 FROM transactions WHERE id = ?", (transaction_id,)
+                ).fetchone()
+                if duplicate is not None:
+                    item.diagnostics.append(
+                        _Diagnostic(
+                            item.start_line,
+                            "warning",
+                            "duplicate_lf_txn_id",
+                            f"Duplicate lf_txn_id {transaction_id!r}; "
+                            "keeping the first occurrence, this block gets an ephemeral id.",
+                        )
+                    )
+                    transaction_id = None
+            if transaction_id is None:
+                transaction_id = _short_id(
+                    "txn", rel_path, str(txn_order), raw_block_hash
+                )
             conn.execute(
                 """
                 INSERT INTO transactions (
@@ -780,17 +797,20 @@ def load_transactions_projected(config: AppConfig) -> list[ParsedTransaction]:
                 "SELECT id, path FROM journal_files"
             ).fetchall()
         }
-        items_by_file: dict[str, list[tuple[str, str, int]]] = {}
-        for file_id, item_type, raw_text, start_line in conn.execute(
+        items_by_file: dict[str, list[tuple[str, str, int, str | None, str | None]]] = {}
+        for file_id, item_type, raw_text, start_line, txn_id, block_hash in conn.execute(
             """
-            SELECT journal_file_id, item_type, raw_text, source_start_line
+            SELECT journal_items.journal_file_id, journal_items.item_type,
+                   journal_items.raw_text, journal_items.source_start_line,
+                   transactions.id, transactions.raw_block_hash
             FROM journal_items
-            WHERE item_type IN ('transaction', 'include')
-            ORDER BY journal_file_id, item_order
+            LEFT JOIN transactions ON transactions.id = journal_items.transaction_id
+            WHERE journal_items.item_type IN ('transaction', 'include')
+            ORDER BY journal_items.journal_file_id, journal_items.item_order
             """
         ).fetchall():
             items_by_file.setdefault(file_id, []).append(
-                (item_type, raw_text, start_line)
+                (item_type, raw_text, start_line, txn_id, block_hash)
             )
 
     journal_dir_rel = _rel_path(config, config.journal_dir)
@@ -806,7 +826,9 @@ def load_transactions_projected(config: AppConfig) -> list[ParsedTransaction]:
     transactions: list[ParsedTransaction] = []
 
     def walk(rel: str, top_rel: str, source_journal: str, stack: tuple[str, ...]) -> None:
-        for item_type, raw_text, start_line in items_by_file.get(files[rel], []):
+        for item_type, raw_text, start_line, txn_id, block_hash in items_by_file.get(
+            files[rel], []
+        ):
             if item_type == "transaction":
                 transaction = _parse_transaction(raw_text.splitlines())
                 if transaction is None:
@@ -817,6 +839,8 @@ def load_transactions_projected(config: AppConfig) -> list[ParsedTransaction]:
                         transaction,
                         source_journal=source_journal,
                         header_line_number=line_number,
+                        txn_id=txn_id,
+                        block_hash=block_hash,
                     )
                 )
                 continue
@@ -835,6 +859,56 @@ def load_transactions_projected(config: AppConfig) -> list[ParsedTransaction]:
         walk(top_rel, top_rel, source_journal, (top_rel,))
 
     return sorted(transactions, key=lambda txn: txn.posted_on)
+
+
+@dataclass(frozen=True)
+class ProjectedTransactionRef:
+    """The projected identity a mutation endpoint needs to locate and guard
+    one transaction block: where it lives, what its header says, and the
+    block hash that detects staleness."""
+
+    id: str
+    journal_path: str  # workspace-relative POSIX path
+    journal_file_id: str
+    txn_order: int
+    raw_header: str
+    raw_block_hash: str
+    status: str
+    source_start_line: int
+
+
+_TXN_REF_SQL = """
+    SELECT transactions.id, journal_files.path, transactions.journal_file_id,
+           transactions.txn_order, transactions.raw_header,
+           transactions.raw_block_hash, transactions.status,
+           transactions.source_start_line
+    FROM transactions
+    JOIN journal_files ON journal_files.id = transactions.journal_file_id
+"""
+
+
+def find_projected_transaction(
+    config: AppConfig, txn_id: str
+) -> ProjectedTransactionRef | None:
+    with connect(database_path(config)) as conn:
+        row = conn.execute(
+            f"{_TXN_REF_SQL} WHERE transactions.id = ?", (txn_id,)
+        ).fetchone()
+    return ProjectedTransactionRef(*row) if row is not None else None
+
+
+def find_projected_transaction_at(
+    config: AppConfig, journal_file_id: str, txn_order: int
+) -> ProjectedTransactionRef | None:
+    """Re-fetch a transaction after its file was re-projected. ``txn_order``
+    is stable across in-place block edits, so this recovers the row even when
+    the block carried no ``lf_txn_id`` and its hash-derived id changed."""
+    with connect(database_path(config)) as conn:
+        row = conn.execute(
+            f"{_TXN_REF_SQL} WHERE transactions.journal_file_id = ? AND transactions.txn_order = ?",
+            (journal_file_id, txn_order),
+        ).fetchone()
+    return ProjectedTransactionRef(*row) if row is not None else None
 
 
 def render_file(config: AppConfig, rel_path: str) -> str:

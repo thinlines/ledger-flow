@@ -56,12 +56,12 @@ SAMPLE_JOURNAL = """\
     Equity:Opening-Balances
 
 2026-03-15 * Whole Foods
-    ; source_identity: abc123
+    ; lf_source_identity: abc123
     Assets:Bank:Checking  -$50.00
     Expenses:Groceries  $50.00
 
 2026-03-20 * Target
-    ; source_identity: def456
+    ; lf_source_identity: def456
     Assets:Bank:Checking  -$30.00
     Expenses:Unknown  $30.00
 """
@@ -73,7 +73,7 @@ JOURNAL_WITH_NOTES = """\
     Expenses:Groceries  $50.00
 
 2026-03-20 * Walmart
-    ; source_identity: def456
+    ; lf_source_identity: def456
     Assets:Bank:Checking  -$38.32
     Expenses:Pets  $38.32
 """
@@ -376,10 +376,10 @@ class TestReadNotesFromRegister:
         """A comment without 'notes:' key is not captured as notes."""
         from services.journal_query_service import META_RE
 
-        line = "    ; source_identity: abc123"
+        line = "    ; lf_source_identity: abc123"
         m = META_RE.match(line)
         assert m is not None
-        # Key is 'source_identity', not 'notes'.
+        # Key is 'lf_source_identity', not 'notes'.
         assert m.group(1).strip().lower() != "notes"
 
     def test_register_event_has_notes_field(self) -> None:

@@ -515,7 +515,7 @@ class TestUndoUnmatched:
         # The imported transaction AFTER unmatch: tags stripped, destination = Unknown.
         main_content = (
             "2026-03-15 * Whole Foods\n"
-            "    ; source_identity: abc123\n"
+            "    ; lf_source_identity: abc123\n"
             "    Assets:Bank:Checking  -$50.00\n"
             "    Expenses:Unknown  $50.00\n"
             "\n"

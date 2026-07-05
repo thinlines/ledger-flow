@@ -117,20 +117,27 @@ const CLEARING_CYCLE: Record<string, string> = {
 
 export async function toggleClearing(row: TransactionRow): Promise<void> {
   const leg = row.legs[0];
-  if (!leg?.headerLine || !leg?.journalPath) return;
+  if (!leg?.txnId || !leg?.blockHash) return;
   const previousStatus = row.status;
   const nextStatus = CLEARING_CYCLE[previousStatus] as 'unmarked' | 'pending' | 'cleared';
   row.status = nextStatus;
   try {
-    const res = await apiPost<{ newStatus: string; newHeaderLine: string }>(
-      '/api/transactions/toggle-status',
-      { journalPath: leg.journalPath, headerLine: leg.headerLine, lineNumber: leg.lineNumber }
-    );
+    const res = await apiPost<{
+      newStatus: string;
+      newHeaderLine: string;
+      txnId: string;
+      blockHash: string;
+    }>('/api/transactions/toggle-status', { txnId: leg.txnId, blockHash: leg.blockHash });
     row.status = res.newStatus as 'unmarked' | 'pending' | 'cleared';
-    // Toggle rewrites the header line in place — same line, new text. The
-    // spread preserves lineNumber so a follow-up toggle's drift check uses the
-    // updated headerLine and the same line number.
-    row.legs[0] = { ...leg, headerLine: res.newHeaderLine };
+    // Re-spread the leg with the post-edit projected identity so follow-up
+    // toggles keep working; headerLine stays fresh for the actions that are
+    // still positional (delete/recategorize/unmatch, until #17).
+    row.legs[0] = {
+      ...leg,
+      headerLine: res.newHeaderLine,
+      txnId: res.txnId,
+      blockHash: res.blockHash
+    };
   } catch {
     row.status = previousStatus;
   }

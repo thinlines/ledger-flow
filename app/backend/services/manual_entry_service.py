@@ -37,12 +37,19 @@ ACCOUNT_LINE_RE = re.compile(r"^(\s+)([^\s].*?)(\s{2,}|\t+)(.*)$")
 ACCOUNT_ONLY_RE = re.compile(r"^(\s+)([^\s].*?)\s*$")
 
 SYSTEM_METADATA_KEYS = frozenset({
-    "import_account_id", "institution_template", "source_identity",
+    "import_account_id", "institution_template", "lf_source_identity",
     "source_payload_hash", "source_file_sha256", "importer_version",
     "transfer_id", "transfer_peer_account_id", "transfer_type",
     "transfer_match_state", "transfer_state",
     "match-id",
+    "lf_txn_id", "lf_posting_id", "lf_operation_id",
 })
+
+# Suffixed carried-identity families (merged duplicates): source_identity_2,
+# source_payload_hash_2, ... are system metadata like their unsuffixed forms.
+SYSTEM_METADATA_KEY_RE = re.compile(
+    r"^(?:lf_source_identity|source_payload_hash|source_file_sha256|importer_version)_\d+$"
+)
 
 
 
@@ -200,8 +207,10 @@ def _extract_user_metadata_lines(lines: list[str]) -> list[str]:
         if ":manual:" in stripped:
             continue
         m = META_RE.match(line)
-        if m and m.group(1).strip().lower() in SYSTEM_METADATA_KEYS:
-            continue
+        if m:
+            key = m.group(1).strip().lower()
+            if key in SYSTEM_METADATA_KEYS or SYSTEM_METADATA_KEY_RE.match(key):
+                continue
         result.append(line)
     return result
 

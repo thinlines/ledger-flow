@@ -30,7 +30,7 @@ from .transaction_helpers import (
 )
 from .transfer_service import is_transfer_account, parse_transfer_metadata
 
-IMPORT_IDENTITY_KEY_RE = re.compile(r"^source_identity(?:_\d+)?$")
+IMPORT_IDENTITY_KEY_RE = re.compile(r"^lf_source_identity(?:_\d+)?$")
 
 
 @dataclass(frozen=True)
@@ -95,10 +95,10 @@ def _category_label(config: AppConfig, transaction, ledger_account: str) -> str:
 
 def _is_assertion_only_transaction(transaction) -> bool:
     """True when the transaction is solely a balance-assertion entry written by
-    the reconcile flow.  Identified by the ``reconciliation_event_id`` metadata
+    the reconcile flow.  Identified by the ``lf_operation_id`` metadata
     key the writer always emits.
     """
-    return bool(str(transaction.metadata.get("reconciliation_event_id") or "").strip())
+    return bool(str(transaction.metadata.get("lf_operation_id") or "").strip())
 
 
 def _is_imported_transaction(transaction) -> bool:
@@ -119,7 +119,7 @@ def _selection_fingerprint(transaction, ledger_account: str, signed_amount: Deci
     user_metadata = "|".join(
         f"{key}:{value}"
         for key, value in sorted(transaction.metadata.items())
-        if key not in {"reconciliation_event_id", "statement_period"}
+        if key not in {"lf_operation_id", "statement_period"}
     )
     base = "\n".join(
         [
@@ -136,13 +136,13 @@ def _selection_fingerprint(transaction, ledger_account: str, signed_amount: Deci
 
 
 def _preferred_source_identity(metadata: dict[str, str]) -> str | None:
-    exact = str(metadata.get("source_identity") or "").strip()
+    exact = str(metadata.get("lf_source_identity") or "").strip()
     if exact:
         return exact
 
     keyed_suffixes: list[tuple[int, str]] = []
     for key, value in metadata.items():
-        match = re.match(r"^source_identity_(\d+)$", key)
+        match = re.match(r"^lf_source_identity_(\d+)$", key)
         if not match:
             continue
         candidate = str(value or "").strip()

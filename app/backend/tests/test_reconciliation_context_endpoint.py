@@ -255,7 +255,7 @@ class TestContextFiltering:
             "    Expenses:Food:Coffee\n"
             "\n"
             "2026-03-10 * Statement reconciliation · Wells Fargo Checking · ending 2026-03-10\n"
-            "    ; reconciliation_event_id: deadbeef-cafe\n"
+            "    ; lf_operation_id: deadbeef-cafe\n"
             "    ; statement_period: 2026-03-01..2026-03-10\n"
             "    Assets:Checking:Wells Fargo  $0 = $-4.50\n"
         )
@@ -275,7 +275,7 @@ class TestContextLastReconciliationDate:
         _seed_accounts_dat(config)
         body = (
             "2026-02-28 * Statement reconciliation · Wells Fargo Checking · ending 2026-02-28\n"
-            "    ; reconciliation_event_id: aaaaaaaa-1\n"
+            "    ; lf_operation_id: aaaaaaaa-1\n"
             "    ; statement_period: 2026-02-01..2026-02-28\n"
             "    Assets:Checking:Wells Fargo  $0 = $0.00\n"
         )
@@ -338,7 +338,7 @@ class TestContextEarliestPostingDate:
         _seed_accounts_dat(config)
         body = (
             "2026-01-31 * Statement reconciliation · Wells Fargo Checking · ending 2026-01-31\n"
-            "    ; reconciliation_event_id: aaaaaaaa-1\n"
+            "    ; lf_operation_id: aaaaaaaa-1\n"
             "    ; statement_period: 2026-01-01..2026-01-31\n"
             "    Assets:Checking:Wells Fargo  $0 = $0.00\n"
             "\n"

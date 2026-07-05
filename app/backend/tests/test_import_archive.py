@@ -53,7 +53,7 @@ def _prepared_txn(*, date: str, payee: str, source_identity: str, amount: str) -
         "matchStatus": "new",
         "annotatedRaw": (
             f"{date} {payee}\n"
-            f"    ; source_identity: {source_identity}\n"
+            f"    ; lf_source_identity: {source_identity}\n"
             f"    ; source_payload_hash: payload-{source_identity}\n"
             "    ; source_file_sha256: abc123def4567890\n"
             "    ; importer_version: mvp2\n"
@@ -80,7 +80,7 @@ def test_apply_import_can_archive_inbox_csv_after_success(tmp_path: Path) -> Non
                 "matchStatus": "new",
                 "annotatedRaw": (
                     "2026/03/01 Coffee Shop\n"
-                    "    ; source_identity: txn-1\n"
+                    "    ; lf_source_identity: txn-1\n"
                     "    ; source_payload_hash: payload-1\n"
                     "    ; source_file_sha256: abc123def4567890\n"
                     "    ; importer_version: mvp2\n"
@@ -259,7 +259,7 @@ def test_apply_import_inserts_older_batch_before_later_existing_transactions(tmp
                 "include ../rules/13-commodities.dat",
                 "",
                 "2026/03/15 Later Transaction",
-                "    ; source_identity: existing-txn",
+                "    ; lf_source_identity: existing-txn",
                 "    ; source_payload_hash: payload-existing-txn",
                 "    Assets:Bank:Checking  $-20.00",
                 "    Expenses:Unknown",
@@ -321,7 +321,7 @@ def _prepared_collision_txn(*, date: str, payee: str, source_identity: str) -> d
         "storedPayloadHash": f"stored-payload-{source_identity}",
         "annotatedRaw": (
             f"{date} {payee}\n"
-            f"    ; source_identity: {source_identity}\n"
+            f"    ; lf_source_identity: {source_identity}\n"
             f"    ; source_payload_hash: new-payload-{source_identity}\n"
             "    Assets:Bank:Checking  $-7.50\n"
             "    Expenses:Groceries\n"
@@ -353,7 +353,7 @@ def _prepared_fence_txn(
         ],
         "annotatedRaw": (
             f"{date} {payee}\n"
-            f"    ; source_identity: {source_identity}\n"
+            f"    ; lf_source_identity: {source_identity}\n"
             f"    ; source_payload_hash: payload-{source_identity}\n"
             f"    Assets:Bank:Checking  {amount}\n"
             "    Expenses:Unknown\n"

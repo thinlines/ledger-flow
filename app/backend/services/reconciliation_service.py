@@ -35,8 +35,8 @@ logger = logging.getLogger(__name__)
 # Caller-facing constants
 RECONCILE_HEADER_PREFIX = "Statement reconciliation"
 
-# Match `; reconciliation_event_id: <id>` on a metadata line.
-_RECON_EVENT_ID_RE = re.compile(r"^\s*;\s*reconciliation_event_id\s*:\s*(\S.*?)\s*$")
+# Match `; lf_operation_id: <id>` on a metadata line.
+_RECON_EVENT_ID_RE = re.compile(r"^\s*;\s*lf_operation_id\s*:\s*(\S.*?)\s*$")
 _STATEMENT_PERIOD_RE = re.compile(
     r"^\s*;\s*statement_period\s*:\s*(\d{4}-\d{2}-\d{2})\s*\.\.\s*(\d{4}-\d{2}-\d{2})\s*$"
 )
@@ -151,7 +151,7 @@ def _build_assertion_block(
     )
     return [
         header,
-        f"    ; reconciliation_event_id: {event_id}",
+        f"    ; lf_operation_id: {event_id}",
         f"    ; statement_period: {period_start_iso}..{period_end_iso}",
         posting,
     ]
@@ -446,7 +446,7 @@ def _scan_journal_for_assertions(path: Path) -> list[dict]:
 
     Returns dicts with ``date``, ``ledger_account``, ``event_id``,
     ``period_start``, ``period_end``.  Only transactions carrying a
-    ``reconciliation_event_id`` metadata line count — hand-written assertions
+    ``lf_operation_id`` metadata line count — hand-written assertions
     are intentionally excluded from the fence per the plan.
     """
     if not path.is_file():
@@ -512,7 +512,7 @@ def latest_reconciliation_date(config: AppConfig, ledger_account: str) -> date |
     """Return the most recent reconciled date for *ledger_account*, or None.
 
     Only assertions written by the reconcile flow (carrying
-    ``reconciliation_event_id``) count.  Hand-written assertions are
+    ``lf_operation_id``) count.  Hand-written assertions are
     intentionally excluded — they participate in failure detection but not in
     the import fence.
     """

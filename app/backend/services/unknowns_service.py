@@ -211,7 +211,7 @@ def _tracked_account_context(
 
 
 def _transaction_base_id(journal_path: Path, start_line: int, metadata: dict[str, str]) -> str:
-    source_identity = str(metadata.get("source_identity", "")).strip()
+    source_identity = str(metadata.get("lf_source_identity", "")).strip()
     if source_identity:
         return source_identity
     return f"{journal_path.name}:tx:{start_line}"
