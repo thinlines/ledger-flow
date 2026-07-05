@@ -8,6 +8,7 @@ from datetime import datetime, timezone, timedelta
 
 import pytest
 
+from services.config_service import AppConfig
 from services.git_snapshot_service import (
     _MANAGED_GITIGNORE,
     ensure_gitignore,
@@ -15,6 +16,29 @@ from services.git_snapshot_service import (
     hours_since_last_snapshot,
     snapshot_commit,
 )
+from services.operation_dump_service import check_operation_dump
+from services.operations_service import record_operation
+from services.projection_db import connect, database_path, ensure_database
+
+
+def _make_config(workspace: Path) -> AppConfig:
+    for name in ["settings", "journals", "inbox", "rules", "opening", "imports"]:
+        (workspace / name).mkdir(parents=True, exist_ok=True)
+    return AppConfig(
+        root_dir=workspace,
+        config_toml=workspace / "settings" / "workspace.toml",
+        workspace={"name": "Test", "base_currency": "USD", "start_year": 2026},
+        dirs={
+            "csv_dir": "inbox",
+            "journal_dir": "journals",
+            "init_dir": "rules",
+            "opening_bal_dir": "opening",
+            "imports_dir": "imports",
+        },
+        institution_templates={},
+        import_accounts={},
+        tracked_accounts={},
+    )
 
 
 def _git(workspace: Path, args: list[str]) -> str:
@@ -107,6 +131,136 @@ class TestEnsureWorkspaceRepo:
 
 
 class TestSnapshotCommit:
+    def test_exports_operation_history_dump_before_snapshot(self, tmp_path: Path) -> None:
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        config = _make_config(workspace)
+        ensure_workspace_repo(workspace)
+
+        record_operation(
+            config,
+            operation_type="manual_entry.created.v1",
+            summary="Created Lunch",
+            payload={"txn_id": "txn-2"},
+            files=[
+                {
+                    "path": "journals/2026.journal",
+                    "hash_before": "",
+                    "hash_after": "sha256:after",
+                }
+            ],
+            operation_id="op-2",
+            created_at="2026-07-05T11:00:00+00:00",
+        )
+
+        result = snapshot_commit(workspace, trigger="shutdown")
+
+        assert result is True
+        dump_path = workspace / "operation-history.dump.sql"
+        dump = dump_path.read_text(encoding="utf-8")
+        assert "manual_entry.created.v1" in dump
+        assert "Created Lunch" in dump
+        assert "journals/2026.journal" in dump
+        tracked = _git(workspace, ["ls-files"]).splitlines()
+        assert "operation-history.dump.sql" in tracked
+        assert not any(".workflow" in f for f in tracked)
+
+    def test_projection_and_workflow_table_changes_do_not_churn_dump(self, tmp_path: Path) -> None:
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        config = _make_config(workspace)
+        ensure_workspace_repo(workspace)
+        record_operation(
+            config,
+            operation_type="manual_entry.created.v1",
+            summary="Created Lunch",
+            payload={},
+            files=[],
+            operation_id="op-2",
+            created_at="2026-07-05T11:00:00+00:00",
+        )
+        assert snapshot_commit(workspace, trigger="shutdown") is True
+        dump_path = workspace / "operation-history.dump.sql"
+        before = dump_path.read_text(encoding="utf-8")
+
+        db_path = ensure_database(config)
+        with connect(db_path) as conn:
+            conn.execute(
+                """
+                INSERT INTO journal_files (
+                    id, path, role, content_hash, parsed_at, parse_status
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "file-1",
+                    "journals/2026.journal",
+                    "journal",
+                    "sha256:projection",
+                    "2026-07-05T12:00:00+00:00",
+                    "ok",
+                ),
+            )
+            conn.execute(
+                """
+                INSERT INTO stages (
+                    id, kind, status, created_at, updated_at, payload_json
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "stage-1",
+                    "unknowns",
+                    "ready",
+                    "2026-07-05T12:00:00+00:00",
+                    "2026-07-05T12:00:00+00:00",
+                    "{}",
+                ),
+            )
+
+        assert snapshot_commit(workspace, trigger="shutdown") is False
+        assert dump_path.read_text(encoding="utf-8") == before
+        assert "journal_files" not in before
+        assert "stages" not in before
+
+    def test_operation_dump_check_survives_database_loss(self, tmp_path: Path) -> None:
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        config = _make_config(workspace)
+        ensure_workspace_repo(workspace)
+        record_operation(
+            config,
+            operation_type="manual_entry.created.v1",
+            summary="Created Lunch",
+            payload={"txn_id": "txn-2"},
+            files=[],
+            operation_id="op-2",
+            created_at="2026-07-05T11:00:00+00:00",
+        )
+        assert snapshot_commit(workspace, trigger="shutdown") is True
+
+        db_path = database_path(config)
+        for path in [
+            db_path,
+            db_path.with_name(f"{db_path.name}-wal"),
+            db_path.with_name(f"{db_path.name}-shm"),
+        ]:
+            path.unlink(missing_ok=True)
+
+        result = check_operation_dump(workspace)
+
+        assert result == {
+            "ok": True,
+            "operation_count": 1,
+            "tables": {
+                "operations": 1,
+                "operation_files": 0,
+                "operation_entities": 0,
+                "rules": 0,
+                "rule_condition_groups": 0,
+                "rule_conditions": 0,
+                "rule_actions": 0,
+            },
+        }
+
     def test_creates_commit_when_changes_exist(self, tmp_path: Path) -> None:
         workspace = tmp_path / "workspace"
         workspace.mkdir()

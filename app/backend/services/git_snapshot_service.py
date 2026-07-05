@@ -15,6 +15,8 @@ import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 
+from .operation_dump_service import export_operation_dump
+
 logger = logging.getLogger(__name__)
 
 _MANAGED_GITIGNORE = """\
@@ -55,6 +57,7 @@ def snapshot_commit(workspace_path: Path, *, trigger: str) -> bool:
     Returns ``True`` if a commit was created, ``False`` if nothing to commit.
     """
     ensure_workspace_repo(workspace_path)
+    export_operation_dump(workspace_path)
 
     _run_git(workspace_path, ["add", "-A"])
 
