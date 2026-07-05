@@ -6,7 +6,10 @@ import pytest
 import services.import_service as import_service
 from services.config_service import AppConfig
 from services.event_log_service import EVENTS_FILENAME
+from services.import_identity_service import ImportIdentityStore
+from services.import_history_service import record_applied_import, undo_import
 from services.import_service import (
+    _build_existing_map,
     ImportPreviewBlockedError,
     apply_import,
     archive_inbox_csv,
@@ -119,6 +122,90 @@ def test_apply_import_can_archive_inbox_csv_after_success(tmp_path: Path) -> Non
     assert archived_csv.read_text(encoding="utf-8") == original_csv
     assert not inbox_csv.exists()
     assert archived_csv.parent == config.imports_dir / "processed" / "2026" / "wf_checking"
+
+
+def test_apply_import_records_active_import_identities(tmp_path: Path) -> None:
+    config = _make_config(tmp_path / "workspace")
+
+    stage = {
+        "targetJournalPath": str(config.journal_dir / "2026.journal"),
+        "csvPath": str(config.csv_dir / "2026__wf_checking__statement.csv"),
+        "preparedTransactions": [
+            _prepared_txn(date="2026/03/01", payee="Coffee", source_identity="txn-1", amount="$-4.00"),
+            {
+                "matchStatus": "duplicate",
+                "sourceIdentity": "txn-duplicate",
+                "sourcePayloadHash": "payload-duplicate",
+                "date": "2026/03/02",
+                "payee": "Already Imported",
+                "annotatedRaw": "2026/03/02 Already Imported\n",
+            },
+        ],
+        "importAccountId": "wf_checking",
+        "year": "2026",
+        "sourceFileSha256": "deadbeef",
+    }
+
+    apply_import(config, stage)
+
+    store = ImportIdentityStore(config)
+    assert store.get_active_identity_map("wf_checking") == {"txn-1": "payload-txn-1"}
+
+
+def test_import_undo_reimport_loop_reactivates_identity_without_double_booking(tmp_path: Path) -> None:
+    config = _make_config(tmp_path / "workspace")
+    journal_path = config.journal_dir / "2026.journal"
+    csv_path = config.csv_dir / "2026__wf_checking__statement.csv"
+    stage = {
+        "stageId": "stage-first",
+        "targetJournalPath": str(journal_path),
+        "csvPath": str(csv_path),
+        "preparedTransactions": [
+            _prepared_txn(date="2026/03/01", payee="Coffee", source_identity="txn-1", amount="$-4.00"),
+        ],
+        "importAccountId": "wf_checking",
+        "importAccountDisplayName": "Wells Fargo Checking",
+        "destinationAccount": "Assets:Bank:Checking",
+        "importSourceDisplayName": "Wells Fargo",
+        "year": "2026",
+        "sourceFileSha256": "deadbeef-first",
+        "summary": {"count": 1, "unknownCount": 1, "newCount": 1, "duplicateCount": 0, "fenceCount": 0},
+    }
+
+    journal_abs, appended_count, skipped_count, conflicts = apply_import(config, stage)
+    stage["result"] = {
+        "applied": True,
+        "backupPath": None,
+        "journalPath": journal_abs,
+        "appendedTxnCount": appended_count,
+        "skippedDuplicateCount": skipped_count,
+        "conflicts": conflicts,
+        "archivedCsvPath": None,
+        "sourceCsvWarning": None,
+    }
+    history = record_applied_import(config, stage)
+
+    undo_import(config, history["id"])
+
+    assert _build_existing_map(config, "wf_checking", journal_path) == {}
+    assert journal_path.read_text(encoding="utf-8") == ""
+
+    second_stage = {
+        **stage,
+        "stageId": "stage-second",
+        "sourceFileSha256": "deadbeef-second",
+        "preparedTransactions": [
+            _prepared_txn(date="2026/03/01", payee="Coffee", source_identity="txn-1", amount="$-4.00"),
+        ],
+    }
+    _, second_appended_count, second_skipped_count, second_conflicts = apply_import(config, second_stage)
+
+    text = journal_path.read_text(encoding="utf-8")
+    assert second_appended_count == 1
+    assert second_skipped_count == 0
+    assert second_conflicts == []
+    assert text.count("Coffee") == 1
+    assert ImportIdentityStore(config).get_active_identity_map("wf_checking") == {"txn-1": "payload-txn-1"}
 
 
 def test_archive_inbox_csv_leaves_external_files_untouched(tmp_path: Path) -> None:

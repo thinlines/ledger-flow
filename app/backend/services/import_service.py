@@ -11,8 +11,7 @@ from .commodity_service import canonicalize_base_currency_posting
 from .config_service import AppConfig
 from .csv_normalizer import normalize_csv_to_intermediate
 from .event_log_service import emit_event, rel_path
-from .import_index import ImportIndex
-from .import_identity_service import source_payload_hash_for_lines
+from .import_identity_service import ImportIdentityStore, source_payload_hash_for_lines
 from .import_profile_service import import_source_summary, resolve_import_source
 from .journal_block_service import lf_txn_id_line, mint_lf_txn_id
 from .ledger_runner import CommandError, run_cmd
@@ -583,8 +582,7 @@ def _annotated_raw_txn(
 
 
 def _build_existing_map(config: AppConfig, import_account_id: str, target_journal: Path) -> dict[str, str | None]:
-    db = ImportIndex(config.root_dir / ".workflow" / "state.db")
-    db_map = db.get_identity_map(import_account_id)
+    db_map = ImportIdentityStore(config).get_active_identity_map(import_account_id)
     journal_map = _existing_identity_map_from_journal(config, target_journal)
 
     merged = dict(db_map)
@@ -765,28 +763,22 @@ def apply_import(config: AppConfig, stage: dict) -> tuple[str, int, int, list[di
         # Each written row mints its durable lf_txn_id directly after the
         # header (#17): imported blocks stay mutation-targetable no matter
         # how later edits move them.
-        new_blocks = [
-            [block[0], lf_txn_id_line(mint_lf_txn_id()), *block[1:]]
-            for block in (
-                _normalize_transaction_block(str(t["annotatedRaw"])) for t in new_txns
-            )
-        ]
+        new_blocks = []
+        for txn in new_txns:
+            block = _normalize_transaction_block(str(txn["annotatedRaw"]))
+            transaction_id = mint_lf_txn_id()
+            txn["transactionId"] = transaction_id
+            new_blocks.append([block[0], lf_txn_id_line(transaction_id), *block[1:]])
         merged_blocks = _merge_transaction_blocks(existing_blocks, new_blocks)
         target.write_text(_render_journal_text(preamble_lines, merged_blocks), encoding="utf-8")
 
-    db = ImportIndex(config.root_dir / ".workflow" / "state.db")
-    db.upsert_transactions(
+    ImportIdentityStore(config).upsert_active(
         import_account_id=stage["importAccountId"],
-        year=stage["year"],
-        journal_path=target,
         source_file_sha256=stage.get("sourceFileSha256", ""),
-        txns=[
-            {
-                "sourceIdentity": t["sourceIdentity"],
-                "sourcePayloadHash": t.get("sourcePayloadHash"),
-            }
-            for t in new_txns
-        ],
+        original_path=stage.get("csvPath"),
+        archived_path=None,
+        file_name=Path(str(stage.get("csvPath") or "statement.csv")).name,
+        txns=new_txns,
     )
 
     # Skipped count folds duplicates + identity collisions: both are silent

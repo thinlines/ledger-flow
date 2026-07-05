@@ -8,7 +8,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from .config_service import AppConfig
-from .import_index import ImportIndex
+from .import_identity_service import ImportIdentityStore
 from .transfer_service import (
     ACTIVE_TRANSFER_MATCH_STATES,
     TRANSFER_MATCH_STATE_PENDING,
@@ -456,10 +456,7 @@ def undo_import(config: AppConfig, history_id: str) -> dict:
         for txn in entry.get("importedTransactions", [])
         if txn.get("sourceIdentity")
     ]
-    ImportIndex(config.root_dir / ".workflow" / "state.db").delete_transactions(
-        str(entry["importAccountId"]),
-        source_identities,
-    )
+    ImportIdentityStore(config).mark_undone(str(entry["importAccountId"]), source_identities)
 
     restored_csv_path, source_csv_warning = _restore_archived_csv_to_inbox(config, entry)
     entry["status"] = UNDONE_STATUS

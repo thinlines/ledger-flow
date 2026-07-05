@@ -11,7 +11,6 @@ import sqlite3
 from pathlib import Path
 
 from services.config_service import AppConfig
-from services.import_index import ImportIndex
 from services.projection_db import (
     PROJECTION_TABLES,
     connect,
@@ -102,21 +101,6 @@ def test_ensure_database_is_idempotent_and_records_versions_once(tmp_path):
     assert versions == sorted(set(versions))
 
 
-def test_lives_beside_import_index_table(tmp_path):
-    config = _make_config(tmp_path)
-    index = ImportIndex(config.root_dir / ".workflow" / "state.db")
-    index.ensure_schema()
-
-    db_path = ensure_database(config)
-
-    tables = _table_names(db_path)
-    assert "imported_transactions_v2" in tables
-    assert PROJECTION_TABLE_NAMES <= tables
-    # And the reverse order must not disturb the import index either.
-    index.ensure_schema()
-    assert "imported_transactions_v2" in _table_names(db_path)
-
-
 def test_projection_tables_are_wipe_and_rebuild_safe(tmp_path):
     config = _make_config(tmp_path)
     db_path = ensure_database(config)
@@ -205,6 +189,86 @@ def test_stages_and_operations_tables_created(tmp_path):
         "payload_json",
         "applied_operation_id",
     }
+
+
+def test_import_identity_tables_created(tmp_path):
+    config = _make_config(tmp_path)
+    db_path = ensure_database(config)
+
+    tables = _table_names(db_path)
+    assert "import_sources" in tables
+    assert "import_identities" in tables
+
+    with sqlite3.connect(db_path) as conn:
+        identity_columns = {
+            name
+            for (_, name, *_rest) in conn.execute("PRAGMA table_info(import_identities)").fetchall()
+        }
+        conn.execute(
+            """
+            INSERT INTO import_identities (
+                id, import_account_id, source_identity, source_payload_hash,
+                first_seen_at, last_seen_at, current_status
+            ) VALUES (
+                'ii1', 'checking', 'source-1', 'payload-1',
+                '2026-07-05T00:00:00Z', '2026-07-05T00:00:00Z', 'active'
+            )
+            """
+        )
+        try:
+            conn.execute(
+                """
+                INSERT INTO import_identities (
+                    id, import_account_id, source_identity,
+                    first_seen_at, last_seen_at, current_status
+                ) VALUES (
+                    'ii2', 'checking', 'source-2',
+                    '2026-07-05T00:00:00Z', '2026-07-05T00:00:00Z', 'bogus'
+                )
+                """
+            )
+        except sqlite3.IntegrityError:
+            pass
+        else:
+            raise AssertionError("expected IntegrityError for unknown import identity status")
+
+    assert identity_columns == {
+        "id",
+        "import_account_id",
+        "source_identity",
+        "source_payload_hash",
+        "transaction_id",
+        "import_source_id",
+        "first_seen_at",
+        "last_seen_at",
+        "current_status",
+    }
+
+
+def test_import_identities_survive_projection_wipe(tmp_path):
+    config = _make_config(tmp_path)
+    db_path = ensure_database(config)
+
+    with connect(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO import_identities (
+                id, import_account_id, source_identity,
+                first_seen_at, last_seen_at
+            ) VALUES (
+                'ii1', 'checking', 'source-1',
+                '2026-07-05T00:00:00Z', '2026-07-05T00:00:00Z'
+            )
+            """
+        )
+        assert "import_identities" not in PROJECTION_TABLES
+        for table in PROJECTION_TABLES:
+            conn.execute(f"DELETE FROM {table}")
+
+    ensure_database(config)
+    with sqlite3.connect(db_path) as conn:
+        count = conn.execute("SELECT COUNT(*) FROM import_identities").fetchone()[0]
+    assert count == 1
 
 
 def test_stages_survive_projection_wipe(tmp_path):

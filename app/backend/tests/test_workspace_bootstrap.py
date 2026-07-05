@@ -4,7 +4,7 @@ from main import _tracked_account_ui
 from services.account_register_service import build_account_register
 from services.config_service import load_config
 from services.dashboard_service import build_dashboard_overview
-from services.import_index import ImportIndex
+from services.import_identity_service import ImportIdentityStore
 from services.import_service import _classify_transaction, _parse_transaction
 from services.import_service import scan_candidates
 from services.opening_balance_service import opening_balance_index
@@ -761,11 +761,12 @@ def test_upsert_import_account_rewrites_existing_journal_postings_to_new_ledger_
         "    Expenses:Food\n",
         encoding="utf-8",
     )
-    ImportIndex(workspace_root / ".workflow" / "state.db").upsert_transactions(
+    ImportIdentityStore(config).upsert_active(
         import_account_id=account_id,
-        year="2026",
-        journal_path=journal_path,
         source_file_sha256="source-file-1",
+        original_path=None,
+        archived_path=None,
+        file_name="2026.journal",
         txns=[
             {
                 "sourceIdentity": original_txn["sourceIdentity"],
@@ -803,7 +804,7 @@ def test_upsert_import_account_rewrites_existing_journal_postings_to_new_ledger_
     assert (
         _classify_transaction(
             reparsed_txn,
-            ImportIndex(workspace_root / ".workflow" / "state.db").get_identity_map(account_id),
+            ImportIdentityStore(reloaded).get_active_identity_map(account_id),
         )
         == "duplicate"
     )

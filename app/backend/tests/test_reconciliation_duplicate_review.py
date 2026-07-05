@@ -11,6 +11,7 @@ from models import (
 )
 from services.config_service import AppConfig
 from services.event_log_service import read_events
+from services.import_identity_service import ImportIdentityStore
 from services.import_service import _build_existing_map, _classify_transaction
 
 
@@ -331,6 +332,7 @@ class TestDuplicateResolution:
 
         updated = journal.read_text(encoding="utf-8")
         existing_map = _build_existing_map(config, "checking", journal)
+        durable_map = ImportIdentityStore(config).get_active_identity_map("checking")
         events = read_events(config.root_dir)
 
         assert result["removedSelectionKeys"] == [merged["selectionKey"]]
@@ -343,6 +345,8 @@ class TestDuplicateResolution:
         assert existing_map["util-a"] is not None
         assert existing_map["util-a"] != "payload-b"
         assert existing_map["util-b"] == "payload-b"
+        assert durable_map["util-a"] is not None
+        assert durable_map["util-b"] == "payload-b"
         assert _classify_transaction(
             {
                 "sourceIdentity": "util-b",

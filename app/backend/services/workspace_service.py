@@ -11,8 +11,7 @@ from .reference_data_service import account_subtypes
 from .commodity_service import BASE_CURRENCY_SYMBOLS
 from .config_service import AppConfig, infer_account_kind, load_config
 from .custom_csv_service import normalize_custom_profile
-from .import_identity_service import source_payload_hash_for_lines
-from .import_index import ImportIndex
+from .import_identity_service import ImportIdentityStore, source_payload_hash_for_lines
 from .institution_registry import get_template
 from .opening_balance_service import (
     OPENING_BALANCES_EQUITY,
@@ -878,7 +877,6 @@ class WorkspaceManager:
         if not source or not target or source == target:
             return
 
-        db = ImportIndex(config.root_dir / ".workflow" / "state.db") if import_account_id else None
         for journal_path in sorted(config.journal_dir.glob("*.journal")):
             if not journal_path.exists():
                 continue
@@ -923,18 +921,20 @@ class WorkspaceManager:
             if changed:
                 journal_path.write_text("\n".join(updated_lines).rstrip() + "\n", encoding="utf-8")
 
-            if db is not None and migrated_hashes:
+            if import_account_id and migrated_hashes:
                 grouped_by_source_sha: dict[str, list[dict]] = {}
                 for txn in migrated_hashes:
                     source_file_sha256 = str(txn.pop("sourceFileSha256", ""))
                     grouped_by_source_sha.setdefault(source_file_sha256, []).append(txn)
 
+                identity_store = ImportIdentityStore(config)
                 for source_file_sha256, txns in grouped_by_source_sha.items():
-                    db.upsert_transactions(
+                    identity_store.upsert_active(
                         import_account_id=import_account_id,
-                        year=journal_path.stem,
-                        journal_path=journal_path,
                         source_file_sha256=source_file_sha256,
+                        original_path=None,
+                        archived_path=None,
+                        file_name=f"{journal_path.stem}.journal",
                         txns=txns,
                     )
 

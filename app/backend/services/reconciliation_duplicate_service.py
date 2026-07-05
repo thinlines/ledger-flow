@@ -14,7 +14,7 @@ from . import journal_writer
 from .archive_service import archive_manual_entry
 from .config_service import AppConfig
 from .event_log_service import rel_path
-from .import_index import ImportIndex
+from .import_identity_service import ImportIdentityStore
 from .journal_block_service import find_transaction_block
 from .projection_service import find_projected_transaction
 from .reconciliation_context_service import (
@@ -515,15 +515,15 @@ def resolve_duplicate_candidate(
 
             import_account_id = str(merged_row.import_account_id or survivor_row.import_account_id or "").strip()
             if import_account_id:
-                year = Path(journal_path).stem
                 txns = _import_identity_variants(_extract_metadata(updated_survivor))
                 if txns:
-                    ImportIndex(config.root_dir / ".workflow" / "state.db").upsert_transactions(
-                        import_account_id,
-                        year,
-                        journal_path,
-                        str(txns[0].get("sourceFileSha256") or ""),
-                        txns,
+                    ImportIdentityStore(config).upsert_active(
+                        import_account_id=import_account_id,
+                        source_file_sha256=str(txns[0].get("sourceFileSha256") or ""),
+                        original_path=None,
+                        archived_path=None,
+                        file_name=f"{Path(journal_path).stem}.journal",
+                        txns=txns,
                     )
 
             mut.summary = f"Merged imported duplicates for {survivor_row.payee[:60]} on {survivor_row.date}"

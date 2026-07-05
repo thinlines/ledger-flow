@@ -74,7 +74,6 @@ from services.unified_transactions_service import (
     build_unified_transactions,
 )
 from services.import_history_service import list_import_history, record_applied_import, undo_import
-from services.import_index import ImportIndex
 from services.import_service import (
     ImportPreviewBlockedError,
     apply_import,
@@ -145,7 +144,6 @@ from services.workspace_service import (
 
 
 ROOT_DIR = Path(os.environ.get("LEDGER_FLOW_ROOT", Path(__file__).resolve().parents[2])).expanduser().resolve()
-import_index = ImportIndex(ROOT_DIR / ".workflow" / "state.db")
 workspace_manager = WorkspaceManager(ROOT_DIR)
 
 
@@ -325,7 +323,6 @@ _log = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    import_index.ensure_schema()
     # Stages moved into the workspace database; drop the retired JSON store.
     shutil.rmtree(ROOT_DIR / ".workflow" / "stages", ignore_errors=True)
     config = None

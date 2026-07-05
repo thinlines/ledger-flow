@@ -1,8 +1,42 @@
 from pathlib import Path
 
 from services.config_service import AppConfig
-from services.import_index import ImportIndex
+from services.import_identity_service import ImportIdentityStore
 from services.import_service import _annotated_raw_txn, _build_existing_map, _classify_transaction, _parse_transaction
+
+
+def _make_config(workspace: Path) -> AppConfig:
+    for rel in ["settings", "journals", "inbox", "rules", "opening", "imports"]:
+        (workspace / rel).mkdir(parents=True, exist_ok=True)
+
+    return AppConfig(
+        root_dir=workspace,
+        config_toml=workspace / "settings" / "workspace.toml",
+        workspace={"name": "Test Books", "start_year": 2026, "base_currency": "USD"},
+        dirs={
+            "csv_dir": "inbox",
+            "journal_dir": "journals",
+            "init_dir": "rules",
+            "opening_bal_dir": "opening",
+            "imports_dir": "imports",
+        },
+        institution_templates={},
+        import_accounts={
+            "checking": {
+                "display_name": "Checking",
+                "ledger_account": "Assets:Bank:Primary:Checking",
+                "tracked_account_id": "checking",
+            }
+        },
+        tracked_accounts={
+            "checking": {
+                "display_name": "Checking",
+                "ledger_account": "Assets:Bank:Primary:Checking",
+                "import_account_id": "checking",
+            }
+        },
+        payee_aliases="payee_aliases.csv",
+    )
 
 
 def test_parse_transaction_builds_stable_identity() -> None:
@@ -112,37 +146,7 @@ def test_parse_transaction_payload_hash_treats_base_currency_symbol_and_code_as_
 
 def test_build_existing_map_prefers_canonical_journal_hash_over_legacy_stored_hash(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
-    for rel in ["settings", "journals", "inbox", "rules", "opening", "imports"]:
-        (workspace / rel).mkdir(parents=True, exist_ok=True)
-
-    config = AppConfig(
-        root_dir=workspace,
-        config_toml=workspace / "settings" / "workspace.toml",
-        workspace={"name": "Test Books", "start_year": 2026, "base_currency": "USD"},
-        dirs={
-            "csv_dir": "inbox",
-            "journal_dir": "journals",
-            "init_dir": "rules",
-            "opening_bal_dir": "opening",
-            "imports_dir": "imports",
-        },
-        institution_templates={},
-        import_accounts={
-            "checking": {
-                "display_name": "Checking",
-                "ledger_account": "Assets:Bank:Primary:Checking",
-                "tracked_account_id": "checking",
-            }
-        },
-        tracked_accounts={
-            "checking": {
-                "display_name": "Checking",
-                "ledger_account": "Assets:Bank:Primary:Checking",
-                "import_account_id": "checking",
-            }
-        },
-        payee_aliases="payee_aliases.csv",
-    )
+    config = _make_config(workspace)
 
     reparsed = _parse_transaction(
         [
@@ -165,19 +169,70 @@ def test_build_existing_map_prefers_canonical_journal_hash_over_legacy_stored_ha
         "    Expenses:Food\n",
         encoding="utf-8",
     )
-    ImportIndex(workspace / ".workflow" / "state.db").upsert_transactions(
+    ImportIdentityStore(config).upsert_active(
         import_account_id="checking",
-        year="2026",
-        journal_path=journal_path,
         source_file_sha256="source-file-1",
-        txns=[
-            {
-                "sourceIdentity": reparsed["sourceIdentity"],
-                "sourcePayloadHash": legacy_hash,
-            }
-        ],
+        original_path=None,
+        archived_path=None,
+        file_name="statement.csv",
+        txns=[{"sourceIdentity": reparsed["sourceIdentity"], "sourcePayloadHash": legacy_hash}],
     )
 
     existing_map = _build_existing_map(config, "checking", journal_path)
 
     assert existing_map[reparsed["sourceIdentity"]] == reparsed["sourcePayloadHash"]
+
+
+def test_import_identity_store_treats_undone_identities_as_absent(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    config = _make_config(workspace)
+    store = ImportIdentityStore(config)
+
+    store.upsert_active(
+        import_account_id="checking",
+        source_file_sha256="source-file-1",
+        original_path=None,
+        archived_path=None,
+        file_name="statement.csv",
+        txns=[{"sourceIdentity": "source-1", "sourcePayloadHash": "payload-1"}],
+    )
+    assert store.get_active_identity_map("checking") == {"source-1": "payload-1"}
+
+    store.mark_undone("checking", ["source-1"])
+
+    assert store.get_active_identity_map("checking") == {}
+    assert store.get_all_statuses("checking") == {"source-1": "undone"}
+
+    store.upsert_active(
+        import_account_id="checking",
+        source_file_sha256="source-file-2",
+        original_path=None,
+        archived_path=None,
+        file_name="statement.csv",
+        txns=[{"sourceIdentity": "source-1", "sourcePayloadHash": "payload-2", "transactionId": "txn-new"}],
+    )
+
+    assert store.get_active_identity_map("checking") == {"source-1": "payload-2"}
+    assert store.get_all_statuses("checking") == {"source-1": "active"}
+
+
+def test_build_existing_map_uses_active_import_identities_and_ignores_undone(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    config = _make_config(workspace)
+    journal_path = workspace / "journals" / "2026.journal"
+    journal_path.write_text("", encoding="utf-8")
+    store = ImportIdentityStore(config)
+    store.upsert_active(
+        import_account_id="checking",
+        source_file_sha256="source-file-1",
+        original_path=None,
+        archived_path=None,
+        file_name="statement.csv",
+        txns=[{"sourceIdentity": "source-1", "sourcePayloadHash": "payload-1"}],
+    )
+
+    assert _build_existing_map(config, "checking", journal_path) == {"source-1": "payload-1"}
+
+    store.mark_undone("checking", ["source-1"])
+
+    assert _build_existing_map(config, "checking", journal_path) == {}

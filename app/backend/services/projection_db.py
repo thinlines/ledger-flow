@@ -294,10 +294,40 @@ CREATE TABLE IF NOT EXISTS stages (
 );
 """
 
+_MIGRATION_0004 = """
+CREATE TABLE IF NOT EXISTS import_sources (
+    id TEXT PRIMARY KEY,
+    import_account_id TEXT NOT NULL,
+    source_file_sha256 TEXT NOT NULL,
+    original_path TEXT,
+    archived_path TEXT,
+    file_name TEXT NOT NULL,
+    imported_at TEXT,
+    UNIQUE (import_account_id, source_file_sha256)
+);
+
+CREATE TABLE IF NOT EXISTS import_identities (
+    id TEXT PRIMARY KEY,
+    import_account_id TEXT NOT NULL,
+    source_identity TEXT NOT NULL,
+    source_payload_hash TEXT,
+    transaction_id TEXT REFERENCES transactions(id) ON DELETE SET NULL,
+    import_source_id TEXT REFERENCES import_sources(id) ON DELETE SET NULL,
+    first_seen_at TEXT NOT NULL,
+    last_seen_at TEXT NOT NULL,
+    current_status TEXT NOT NULL DEFAULT 'active'
+        CHECK (current_status IN ('active', 'undone', 'merged', 'missing')),
+    UNIQUE (import_account_id, source_identity)
+);
+
+CREATE INDEX IF NOT EXISTS import_identities_txn_idx ON import_identities(transaction_id);
+"""
+
 MIGRATIONS: tuple[tuple[int, str, str], ...] = (
     (1, "journal_projection_tables", _MIGRATION_0001),
     (2, "reference_data_tables", _MIGRATION_0002),
     (3, "operations_and_stages_tables", _MIGRATION_0003),
+    (4, "import_identity_tables", _MIGRATION_0004),
 )
 
 

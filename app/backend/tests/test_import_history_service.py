@@ -2,7 +2,7 @@ from pathlib import Path
 
 from services.config_service import AppConfig
 from services.import_history_service import list_import_history, record_applied_import, undo_import
-from services.import_index import ImportIndex
+from services.import_identity_service import ImportIdentityStore
 
 
 def _make_config(workspace: Path) -> AppConfig:
@@ -200,7 +200,7 @@ def test_list_import_history_allows_older_imports_to_be_undone_when_their_transa
     assert older["undoBlockedReason"] is None
 
 
-def test_undo_import_removes_transactions_restores_source_csv_and_import_index(tmp_path: Path) -> None:
+def test_undo_import_removes_transactions_restores_source_csv_and_marks_identities_undone(tmp_path: Path) -> None:
     config = _make_config(tmp_path / "workspace")
     journal_path = config.journal_dir / "2026.journal"
     _write_journal(journal_path, _journal_transaction("undo", "txn-undo"))
@@ -213,12 +213,13 @@ def test_undo_import_removes_transactions_restores_source_csv_and_import_index(t
     backup_path = config.imports_dir / "2026.import.bak"
     backup_path.write_text("snapshot not used by transaction undo\n", encoding="utf-8")
 
-    index = ImportIndex(config.root_dir / ".workflow" / "state.db")
-    index.upsert_transactions(
+    identities = ImportIdentityStore(config)
+    identities.upsert_active(
         import_account_id="wf_checking",
-        year="2026",
-        journal_path=journal_path,
         source_file_sha256="sha-stage",
+        original_path=original_csv,
+        archived_path=archived_csv,
+        file_name=original_csv.name,
         txns=[{"sourceIdentity": "txn-undo", "sourcePayloadHash": "payload-stage"}],
     )
 
@@ -245,7 +246,8 @@ def test_undo_import_removes_transactions_restores_source_csv_and_import_index(t
     assert undone["canUndo"] is False
     assert "already undone" in undone["undoBlockedReason"].lower()
     assert undone["undo"]["removedTxnCount"] == 1
-    assert index.get_identity_map("wf_checking") == {}
+    assert identities.get_active_identity_map("wf_checking") == {}
+    assert identities.get_all_statuses("wf_checking") == {"txn-undo": "undone"}
 
 
 def test_undo_import_strips_carried_identity_without_deleting_survivor(tmp_path: Path) -> None:
@@ -266,12 +268,13 @@ def test_undo_import_strips_carried_identity_without_deleting_survivor(tmp_path:
     backup_path = config.imports_dir / "2026.carried.import.bak"
     backup_path.write_text("snapshot\n", encoding="utf-8")
 
-    index = ImportIndex(config.root_dir / ".workflow" / "state.db")
-    index.upsert_transactions(
+    identities = ImportIdentityStore(config)
+    identities.upsert_active(
         import_account_id="wf_checking",
-        year="2026",
-        journal_path=journal_path,
         source_file_sha256="sha-carried",
+        original_path=original_csv,
+        archived_path=None,
+        file_name=original_csv.name,
         txns=[{"sourceIdentity": "txn-carried", "sourcePayloadHash": "payload-carried"}],
     )
 
@@ -301,7 +304,8 @@ def test_undo_import_strips_carried_identity_without_deleting_survivor(tmp_path:
     assert "; source_payload_hash_2: payload-carried" not in updated
     assert undone["undo"]["removedTxnCount"] == 0
     assert undone["undo"]["strippedCarriedIdentityCount"] == 1
-    assert index.get_identity_map("wf_checking") == {}
+    assert identities.get_active_identity_map("wf_checking") == {}
+    assert identities.get_all_statuses("wf_checking") == {"txn-carried": "undone"}
 
 
 def test_undo_import_downgrades_surviving_transfer_peer_to_pending(tmp_path: Path) -> None:
@@ -342,12 +346,12 @@ def test_undo_import_downgrades_surviving_transfer_peer_to_pending(tmp_path: Pat
     backup_path = config.imports_dir / "2026.transfer.import.bak"
     backup_path.write_text("snapshot\n", encoding="utf-8")
 
-    index = ImportIndex(config.root_dir / ".workflow" / "state.db")
-    index.upsert_transactions(
+    ImportIdentityStore(config).upsert_active(
         import_account_id="wf_checking",
-        year="2026",
-        journal_path=journal_path,
         source_file_sha256="sha-transfer",
+        original_path=None,
+        archived_path=None,
+        file_name="transfer.csv",
         txns=[
             {"sourceIdentity": "txn-undo", "sourcePayloadHash": "payload-undo"},
             {"sourceIdentity": "txn-keep", "sourcePayloadHash": "payload-keep"},
@@ -417,12 +421,12 @@ def test_undo_import_rejects_downgrading_surviving_direct_transfer_peer(tmp_path
     backup_path = config.imports_dir / "2026.direct-transfer.import.bak"
     backup_path.write_text("snapshot\n", encoding="utf-8")
 
-    index = ImportIndex(config.root_dir / ".workflow" / "state.db")
-    index.upsert_transactions(
+    ImportIdentityStore(config).upsert_active(
         import_account_id="wf_checking",
-        year="2026",
-        journal_path=journal_path,
         source_file_sha256="sha-transfer",
+        original_path=None,
+        archived_path=None,
+        file_name="direct-transfer.csv",
         txns=[
             {"sourceIdentity": "txn-undo", "sourcePayloadHash": "payload-undo"},
             {"sourceIdentity": "txn-keep", "sourcePayloadHash": "payload-keep"},
@@ -489,12 +493,12 @@ def test_undo_import_rejects_downgrading_legacy_false_pending_manual_transfer_pe
     backup_path = config.imports_dir / "2026.legacy-direct-transfer.import.bak"
     backup_path.write_text("snapshot\n", encoding="utf-8")
 
-    index = ImportIndex(config.root_dir / ".workflow" / "state.db")
-    index.upsert_transactions(
+    ImportIdentityStore(config).upsert_active(
         import_account_id="wf_checking",
-        year="2026",
-        journal_path=journal_path,
         source_file_sha256="sha-transfer",
+        original_path=None,
+        archived_path=None,
+        file_name="legacy-direct-transfer.csv",
         txns=[
             {"sourceIdentity": "txn-undo", "sourcePayloadHash": "payload-undo"},
             {"sourceIdentity": "txn-keep", "sourcePayloadHash": "payload-keep"},
@@ -541,12 +545,13 @@ def test_undo_import_keeps_newer_import_transactions_and_their_undoability(tmp_p
     first_backup.write_text("before first import\n", encoding="utf-8")
     second_backup.write_text("before second import\n", encoding="utf-8")
 
-    index = ImportIndex(config.root_dir / ".workflow" / "state.db")
-    index.upsert_transactions(
+    identities = ImportIdentityStore(config)
+    identities.upsert_active(
         import_account_id="wf_checking",
-        year="2026",
-        journal_path=journal_path,
         source_file_sha256="sha-both",
+        original_path=None,
+        archived_path=None,
+        file_name="both.csv",
         txns=[
             {"sourceIdentity": "txn-1", "sourcePayloadHash": "payload-first"},
             {"sourceIdentity": "txn-2", "sourcePayloadHash": "payload-second"},
@@ -592,7 +597,8 @@ def test_undo_import_keeps_newer_import_transactions_and_their_undoability(tmp_p
     assert "already undone" in first_after["undoBlockedReason"].lower()
     assert second_after["canUndo"] is True
     assert second_after["undoBlockedReason"] is None
-    assert index.get_identity_map("wf_checking") == {"txn-2": "payload-second"}
+    assert identities.get_active_identity_map("wf_checking") == {"txn-2": "payload-second"}
+    assert identities.get_all_statuses("wf_checking") == {"txn-1": "undone", "txn-2": "active"}
 
 
 def test_list_import_history_blocks_undo_when_import_transactions_are_missing(tmp_path: Path) -> None:
