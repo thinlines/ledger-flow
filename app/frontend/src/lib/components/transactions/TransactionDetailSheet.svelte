@@ -358,6 +358,16 @@
                 {/if}
               </div>
 
+              <!-- Statement text — raw payee as the institution wrote it -->
+              {#if row.statementPayee && row.statementPayee !== row.payee}
+                <div>
+                  <p class="eyebrow">Statement text</p>
+                  <p class="mt-0.5 text-sm text-muted-foreground" title={row.statementPayee}>
+                    {row.statementPayee}
+                  </p>
+                </div>
+              {/if}
+
               <!-- Running balance (if present) -->
               {#if row.runningBalance !== null}
                 <div>

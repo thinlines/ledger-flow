@@ -91,6 +91,8 @@ export type TransactionRow = {
   transferState?: string | null;
   detailLines: Array<{ label: string; account: string; kind: string }>;
   notes?: string | null;
+  // Raw statement text preserved by the import merchant layer.
+  statementPayee?: string | null;
 };
 
 export type AccountMeta = {

@@ -20,6 +20,7 @@
   import AccountCombobox from '$lib/components/AccountCombobox.svelte';
   import CreateAccountModal from '$lib/components/CreateAccountModal.svelte';
   import RuleEditor from '$lib/components/RuleEditor.svelte';
+  import { escapeAliasPattern, merchantDefaultAccount, type Merchant } from '$lib/merchants';
   import type { RuleAction, RuleCondition } from '$lib/components/rule-editor-types';
   import {
     createDefaultRuleActions,
@@ -100,6 +101,7 @@
     sourceTrackedAccountId?: string | null;
     sourceTrackedAccountKind?: string | null;
     suggestedAccount: string | null;
+    suggestedSource?: 'rule' | 'merchant' | null;
     matchedRuleId?: string | null;
     matchedRulePattern?: string | null;
     txns: TxnRow[];
@@ -191,6 +193,7 @@
   let accounts: string[] = [];
   let trackedAccounts: TrackedAccount[] = [];
   let rules: Rule[] = [];
+  let merchants: Merchant[] = [];
 
   let stage: UnknownStage | null = null;
   let historyStage: RuleHistoryStage | null = null;
@@ -213,6 +216,14 @@
   let ruleActions: RuleAction[] = createDefaultRuleActions();
   let selectedRuleAccount = '';
   let existingRuleCandidates: ExistingRuleCandidate[] = [];
+
+  let showMerchantModal = false;
+  let merchantError = '';
+  let merchantGroupKey: string | null = null;
+  let merchantName = '';
+  let merchantAlias = '';
+  let merchantCategory = '';
+  let merchantSaving = false;
 
   let showCreateAccountModal = false;
   let newAccountParent = '';
@@ -359,17 +370,19 @@
       workspacePath = state.workspacePath ?? '';
       if (!initialized) return;
 
-      const [journalsData, accountsData, trackedAccountsData, rulesData] = await Promise.all([
+      const [journalsData, accountsData, trackedAccountsData, rulesData, merchantsData] = await Promise.all([
         apiGet<{ journals: Array<{ fileName: string; absPath: string }> }>('/api/journals'),
         apiGet<{ accounts: string[]; categoryAccounts?: string[] }>('/api/accounts'),
         apiGet<{ trackedAccounts: TrackedAccount[] }>('/api/tracked-accounts'),
-        apiGet<{ rules: Rule[] }>('/api/rules')
+        apiGet<{ rules: Rule[] }>('/api/rules'),
+        apiGet<{ merchants: Merchant[] }>('/api/merchants')
       ]);
 
       journals = journalsData.journals;
       accounts = accountsData.categoryAccounts ?? accountsData.accounts;
       trackedAccounts = trackedAccountsData.trackedAccounts;
       rules = rulesData.rules.map(normalizeRule);
+      merchants = merchantsData.merchants;
       if (journals.length) {
         journalPath = journals[journals.length - 1].absPath;
       }
@@ -869,8 +882,11 @@
     for (const group of stage.groups ?? []) {
       const previousSuggested = (group.suggestedAccount ?? '').trim();
       const match = resolveGroupRuleMatch(group, nextRules);
-      const suggestedAccount = match.suggestedAccount;
+      // Categorization precedence: rule → merchant default account.
+      const merchantDefault = merchantDefaultAccount(group.payeeDisplay, merchants);
+      const suggestedAccount = match.suggestedAccount ?? merchantDefault;
       group.suggestedAccount = suggestedAccount;
+      group.suggestedSource = match.suggestedAccount ? 'rule' : merchantDefault ? 'merchant' : null;
       group.matchedRuleId = match.ruleId;
       group.matchedRulePattern = match.matchedPattern;
 
@@ -1179,6 +1195,72 @@
 
   async function saveRule() {
     await persistRule({ allowCreateAccountModal: true });
+  }
+
+  function openMerchantModal(group: UnknownGroup, txn: TxnRow) {
+    merchantGroupKey = group.groupKey;
+    merchantName = group.payeeDisplay;
+    merchantAlias = escapeAliasPattern(group.payeeDisplay);
+    merchantCategory = rowCategoryAccount(txn, group) || group.suggestedAccount || '';
+    merchantError = '';
+    showMerchantModal = true;
+  }
+
+  async function saveMerchant() {
+    const name = merchantName.trim();
+    if (!name) {
+      merchantError = 'Merchant name is required.';
+      return;
+    }
+    const alias = merchantAlias.trim();
+    const category = merchantCategory.trim();
+    if (category && !isCategoryAccountName(category)) {
+      merchantError = 'Merchant defaults can only target income or expense accounts.';
+      return;
+    }
+
+    merchantSaving = true;
+    merchantError = '';
+    try {
+      await apiPost<{ merchant: { name: string; created: boolean } }>('/api/merchants', {
+        name,
+        alias: alias || null,
+        defaultAccount: category || null
+      });
+
+      const existing = merchants.find((merchant) => merchant.name === name);
+      merchants = existing
+        ? merchants.map((merchant) =>
+            merchant.name === name
+              ? {
+                  ...merchant,
+                  defaultAccount: category || merchant.defaultAccount,
+                  aliases:
+                    alias && !merchant.aliases.includes(alias)
+                      ? [...merchant.aliases, alias]
+                      : merchant.aliases
+                }
+              : merchant
+          )
+        : [...merchants, { name, defaultAccount: category || null, aliases: alias ? [alias] : [] }];
+
+      if (merchantGroupKey && category) {
+        // The merchant default now covers this payee group; assign it in
+        // context like a saved rule does.
+        setCategoryForAllTxnsInGroup(merchantGroupKey, category);
+        const group = stage?.groups.find((candidate) => candidate.groupKey === merchantGroupKey);
+        if (group && !group.matchedRuleId && stage) {
+          group.suggestedAccount = category;
+          group.suggestedSource = 'merchant';
+          stage = { ...stage, groups: [...stage.groups] };
+        }
+      }
+      showMerchantModal = false;
+    } catch (e) {
+      merchantError = String(e);
+    } finally {
+      merchantSaving = false;
+    }
   }
 
   function setRowMode(group: UnknownGroup, txn: TxnRow, selectionType: 'category' | 'transfer' | 'match') {
@@ -1745,6 +1827,8 @@
                   <p class="m-0 text-xs text-muted-foreground">Transfer suggestion</p>
                 {:else if row.matchedRuleId}
                   <p class="m-0 text-xs text-muted-foreground">Rule suggestion</p>
+                {:else if row.group.suggestedSource === 'merchant'}
+                  <p class="m-0 text-xs text-muted-foreground">Merchant default</p>
                 {/if}
               </div>
 
@@ -1868,9 +1952,14 @@
 
               <div class="min-w-0 grid gap-2 justify-items-start content-center">
                 {#if row.selectionType === 'category'}
-                  <button class="btn" type="button" on:click={() => openRuleModal(row.group, row.txn)}>
-                    {row.matchedRuleId ? 'Edit rule' : 'Save rule'}
-                  </button>
+                  <div class="flex flex-wrap gap-2">
+                    <button class="btn" type="button" on:click={() => openRuleModal(row.group, row.txn)}>
+                      {row.matchedRuleId ? 'Edit rule' : 'Save rule'}
+                    </button>
+                    <button class="btn" type="button" on:click={() => openMerchantModal(row.group, row.txn)}>
+                      Save merchant
+                    </button>
+                  </div>
                 {:else if row.selectionType === 'match'}
                   <p class="muted m-0 text-xs">Matching replaces the manual entry with the import.</p>
                 {:else}
@@ -1980,6 +2069,61 @@
           on:click={saveRule}
         >
           {ruleMode === 'edit' ? 'Save Rule Changes' : 'Save Rule'}
+        </button>
+      </div>
+    </DialogPrimitive.Content>
+  </DialogPrimitive.Portal>
+</DialogPrimitive.Root>
+
+<DialogPrimitive.Root bind:open={showMerchantModal}>
+  <DialogPrimitive.Portal>
+    <DialogPrimitive.Overlay class="fixed inset-0 z-30 bg-black/35" />
+
+    <DialogPrimitive.Content
+      class="fixed top-1/2 left-1/2 z-31 -translate-x-1/2 -translate-y-1/2 w-[min(560px,calc(100vw-2rem))] max-h-[calc(100vh-2rem)] overflow-auto grid gap-3.5 rounded-[14px] border border-line bg-white p-4 shadow-card"
+      aria-labelledby="merchant-modal-title"
+      aria-describedby="merchant-modal-description"
+    >
+      <h3 id="merchant-modal-title" class="m-0 mt-0.5 mb-3">Save Merchant</h3>
+      <p id="merchant-modal-description" class="muted">
+        Save this payee as a merchant: future imports matching the alias pattern get the canonical
+        name and default category automatically. Saved rules still win over merchant defaults.
+      </p>
+
+      <div class="field max-w-lg">
+        <label for="merchantName">Merchant name</label>
+        <input id="merchantName" bind:value={merchantName} placeholder="e.g. Walmart" />
+      </div>
+
+      <div class="field max-w-lg">
+        <label for="merchantAlias">Alias pattern</label>
+        <input id="merchantAlias" bind:value={merchantAlias} placeholder="e.g. WAL-?MART" />
+        <p class="muted m-0 text-xs">
+          Matched against the raw statement text of future imports (regular expression, case-insensitive).
+        </p>
+      </div>
+
+      <div class="field max-w-lg">
+        <label for="merchantCategory">Default category</label>
+        <AccountCombobox
+          accounts={accounts}
+          value={merchantCategory}
+          placeholder="Choose default category..."
+          allowCreate={false}
+          onChange={(account) => (merchantCategory = account)}
+        />
+      </div>
+
+      {#if merchantError}<p class="error-text">{merchantError}</p>{/if}
+      <div class="flex flex-wrap gap-2.5">
+        <button class="btn" type="button" on:click={() => (showMerchantModal = false)}>Cancel</button>
+        <button
+          class="btn btn-primary"
+          type="button"
+          disabled={merchantSaving || !merchantName.trim()}
+          on:click={saveMerchant}
+        >
+          Save Merchant
         </button>
       </div>
     </DialogPrimitive.Content>
