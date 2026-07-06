@@ -1,8 +1,8 @@
-"""Append-only event log with drift detection for journal mutations.
+"""Operation-backed event compatibility helpers.
 
-Every journal mutation emits a structured event to ``workspace/events.jsonl``.
-Events are advisory — they never block or fail a mutation.  Journals remain
-the canonical source of truth.
+Journal mutations now record durable operations. This module keeps the old
+event-shaped helper API for drift detection and legacy callers without writing
+``events.jsonl`` for new history.
 """
 
 from __future__ import annotations
@@ -14,6 +14,9 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid7
+
+from .config_service import AppConfig
+from .operations_service import record_operation
 
 logger = logging.getLogger(__name__)
 
@@ -285,7 +288,7 @@ def emit_event(
     compensates: str | None = None,
     event_id: str | None = None,
 ) -> str:
-    """Append one structured event to ``workspace/events.jsonl``.
+    """Record one event-shaped operation.
 
     Returns the event ``id`` (UUIDv7 string). When *event_id* is supplied the
     caller's id is used verbatim instead of generating a new one — this is how
@@ -294,21 +297,36 @@ def emit_event(
     """
     if event_id is None:
         event_id = str(uuid7())
-    event = {
-        "id": event_id,
-        "ts": datetime.now(timezone.utc).isoformat(),
-        "actor": actor,
-        "type": event_type,
-        "summary": summary,
-        "payload": payload,
-        "journal_refs": journal_refs,
-        "compensates": compensates,
-    }
-
-    line = json.dumps(event, separators=(",", ":"))
+    timestamp = datetime.now(timezone.utc).isoformat()
+    config = AppConfig(
+        root_dir=workspace_path,
+        config_toml=workspace_path / "settings" / "workspace.toml",
+        workspace={},
+        dirs={
+            "csv_dir": "csv",
+            "journal_dir": "journals",
+            "init_dir": "init",
+            "opening_bal_dir": "opening",
+            "imports_dir": "imports",
+        },
+        institution_templates={},
+        import_accounts={},
+    )
+    record_operation(
+        config,
+        operation_id=event_id,
+        operation_type=event_type,
+        summary=summary,
+        payload=payload,
+        files=journal_refs,
+        actor_type=actor,
+        compensates_operation_id=compensates,
+        created_at=timestamp,
+        applied_at=timestamp,
+    )
     events_file = workspace_path / EVENTS_FILENAME
-    with open(events_file, "a", encoding="utf-8") as f:
-        f.write(line + "\n")
+    if events_file.is_file():
+        events_file.unlink()
 
     # Update hash cache from journal_refs.
     for ref in journal_refs:

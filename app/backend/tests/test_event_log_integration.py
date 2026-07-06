@@ -1,4 +1,4 @@
-"""Integration tests — verify event emission from each mutation endpoint pattern.
+"""Integration tests — verify operation-backed event emission patterns.
 
 These tests exercise the event emission logic as wired in main.py by calling the
 same service functions and event_log_service functions used by the route handlers.
@@ -6,7 +6,6 @@ same service functions and event_log_service functions used by the route handler
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import pytest
@@ -17,6 +16,7 @@ from services.event_log_service import (
     check_drift,
     emit_event,
     hash_file,
+    read_events,
     rel_path,
 )
 from services.manual_entry_service import create_manual_transaction
@@ -30,10 +30,7 @@ def _clear_hash_cache():
 
 
 def _read_events(workspace: Path) -> list[dict]:
-    events_file = workspace / EVENTS_FILENAME
-    if not events_file.exists():
-        return []
-    return [json.loads(line) for line in events_file.read_text().splitlines() if line.strip()]
+    return read_events(workspace)
 
 
 def _setup_workspace(tmp_path: Path) -> Path:
@@ -234,20 +231,16 @@ class TestDriftDetectionIntegration:
 
 
 class TestEmissionFailureResilience:
-    def test_emit_event_does_not_raise_on_readonly_dir(self, tmp_path: Path) -> None:
-        """If emit_event is called from a try/except wrapper (as in the handlers),
-        failures are logged but don't propagate."""
+    def test_emit_event_ignores_events_jsonl_path(self, tmp_path: Path) -> None:
+        """A stale events.jsonl directory does not affect operation-backed writes."""
         workspace = tmp_path / "workspace"
         workspace.mkdir()
-        # Make events file a directory to cause write failure
         (workspace / EVENTS_FILENAME).mkdir()
 
-        with pytest.raises(IsADirectoryError):
-            emit_event(workspace, event_type="t.v1", summary="s", payload={}, journal_refs=[])
+        emit_event(workspace, event_type="t.v1", summary="s", payload={}, journal_refs=[])
 
-        # The caller (route handler) wraps this in try/except, so failure is safe.
-        # This test documents that emit_event does raise — it's the caller's
-        # responsibility to catch.
+        events = _read_events(workspace)
+        assert [event["type"] for event in events] == ["t.v1"]
 
 
 # ---------------------------------------------------------------------------
@@ -296,7 +289,7 @@ class TestHashChain:
 
         assert hash_after_1 == hash_before_2
 
-    def test_all_events_are_valid_json(self, tmp_path: Path) -> None:
+    def test_all_emitted_events_have_envelope_fields(self, tmp_path: Path) -> None:
         workspace = _setup_workspace(tmp_path)
         for i in range(5):
             emit_event(
@@ -306,9 +299,8 @@ class TestHashChain:
                 payload={"i": i},
                 journal_refs=[],
             )
-        raw_lines = (workspace / EVENTS_FILENAME).read_text().splitlines()
-        for line in raw_lines:
-            parsed = json.loads(line)  # Should not raise
-            assert "id" in parsed
-            assert "ts" in parsed
-            assert "type" in parsed
+        assert not (workspace / EVENTS_FILENAME).exists()
+        for event in _read_events(workspace):
+            assert "id" in event
+            assert "ts" in event
+            assert "type" in event

@@ -16,6 +16,7 @@ from services.event_log_service import (
     emit_event,
     get_last_known_hash,
     hash_file,
+    read_events,
     rel_path,
 )
 from services.operations_service import record_operation
@@ -30,10 +31,7 @@ def _clear_hash_cache():
 
 
 def _read_events(workspace: Path) -> list[dict]:
-    events_file = workspace / EVENTS_FILENAME
-    if not events_file.exists():
-        return []
-    return [json.loads(line) for line in events_file.read_text().splitlines() if line.strip()]
+    return read_events(workspace)
 
 
 def _make_config(workspace: Path) -> AppConfig:
@@ -98,7 +96,7 @@ class TestHashFile:
 
 
 class TestEmitEvent:
-    def test_creates_file_on_first_event(self, tmp_path: Path) -> None:
+    def test_records_operation_without_events_file(self, tmp_path: Path) -> None:
         events_file = tmp_path / EVENTS_FILENAME
         assert not events_file.exists()
         emit_event(
@@ -108,12 +106,12 @@ class TestEmitEvent:
             payload={"key": "value"},
             journal_refs=[],
         )
-        assert events_file.exists()
+        assert not events_file.exists()
         events = _read_events(tmp_path)
         assert len(events) == 1
         assert events[0]["type"] == "test.v1"
 
-    def test_appends_to_existing_file(self, tmp_path: Path) -> None:
+    def test_records_multiple_operations_in_event_order(self, tmp_path: Path) -> None:
         emit_event(tmp_path, event_type="e1.v1", summary="one", payload={}, journal_refs=[])
         emit_event(tmp_path, event_type="e2.v1", summary="two", payload={}, journal_refs=[])
         events = _read_events(tmp_path)
@@ -150,11 +148,15 @@ class TestEmitEvent:
         parts = event_id.split("-")
         assert len(parts) == 5
 
-    def test_compact_json_no_pretty_print(self, tmp_path: Path) -> None:
+    def test_does_not_write_jsonl(self, tmp_path: Path) -> None:
         emit_event(tmp_path, event_type="t.v1", summary="s", payload={}, journal_refs=[])
-        raw = (tmp_path / EVENTS_FILENAME).read_text()
-        # Compact JSON uses no spaces after separators
-        assert '"type":"t.v1"' in raw
+        assert not (tmp_path / EVENTS_FILENAME).exists()
+
+    def test_deletes_existing_events_file_after_operation_write(self, tmp_path: Path) -> None:
+        events_file = tmp_path / EVENTS_FILENAME
+        events_file.write_text('{"id":"legacy"}\n', encoding="utf-8")
+        emit_event(tmp_path, event_type="t.v1", summary="s", payload={}, journal_refs=[])
+        assert not events_file.exists()
 
     def test_updates_hash_cache(self, tmp_path: Path) -> None:
         journal = tmp_path / "journals" / "2026.journal"
@@ -242,12 +244,28 @@ class TestGetLastKnownHash:
     def test_handles_corrupt_jsonl_line_gracefully(self, tmp_path: Path) -> None:
         events_file = tmp_path / EVENTS_FILENAME
         # Write a valid event, then a corrupt line, then another valid event
-        emit_event(
-            tmp_path,
-            event_type="e1.v1",
-            summary="s",
-            payload={},
-            journal_refs=[{"path": "journals/2026.journal", "hash_before": "sha256:a", "hash_after": "sha256:b"}],
+        events_file.write_text(
+            json.dumps(
+                {
+                    "id": "legacy-1",
+                    "ts": "2026-07-05T00:00:00+00:00",
+                    "actor": "user",
+                    "type": "e1.v1",
+                    "summary": "s",
+                    "payload": {},
+                    "journal_refs": [
+                        {
+                            "path": "journals/2026.journal",
+                            "hash_before": "sha256:a",
+                            "hash_after": "sha256:b",
+                        }
+                    ],
+                    "compensates": None,
+                },
+                separators=(",", ":"),
+            )
+            + "\n",
+            encoding="utf-8",
         )
         with open(events_file, "a") as f:
             f.write("NOT VALID JSON\n")

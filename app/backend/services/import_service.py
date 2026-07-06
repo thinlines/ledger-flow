@@ -10,13 +10,14 @@ from pathlib import Path
 from .commodity_service import canonicalize_base_currency_posting
 from .config_service import AppConfig
 from .csv_normalizer import normalize_csv_to_intermediate
-from .event_log_service import emit_event, rel_path
+from .event_log_service import rel_path
 from .import_identity_service import ImportIdentityStore, source_payload_hash_for_lines
 from .import_profile_service import import_source_summary, resolve_import_source
 from .journal_block_service import lf_txn_id_line, mint_lf_txn_id
 from .header_parser import HEADER_RE, set_header_payee
 from .ledger_runner import CommandError, run_cmd
 from .merchant_service import Merchant, load_merchants, match_merchant, resolve_category
+from .operations_service import record_operation
 from .rules_service import ensure_rules_store, load_rules
 from .transfer_service import rewrite_posting_account
 from .workspace_service import ensure_standard_commodities_file, ensure_workspace_journal_includes
@@ -899,11 +900,11 @@ def _emit_identity_collision_events(
     import_account_id: str,
     all_txns: list[dict],
 ) -> None:
-    """Emit one ``import.identity_collision.v1`` per identity-collision row.
+    """Record one ``import.identity_collision.v1`` operation per identity-collision row.
 
     Identity collisions are silently skipped at write time (excluded from
     new_txns) and never surface in the UI. Per DECISIONS §21 we log them
-    to the event stream so support and debugging have a record of which
+    to operations so support and debugging have a record of which
     rows the importer refused to overwrite, with both the stored and the
     newly-computed payload hashes for diff inspection.
 
@@ -917,9 +918,9 @@ def _emit_identity_collision_events(
         if txn.get("conflictReason") != "identity_collision":
             continue
         try:
-            emit_event(
-                config.root_dir,
-                event_type="import.identity_collision.v1",
+            record_operation(
+                config,
+                operation_type="import.identity_collision.v1",
                 summary=(
                     f"Identity collision skipped: {txn.get('payee') or 'unknown payee'} "
                     f"on {txn.get('date') or 'unknown date'}"
@@ -933,9 +934,10 @@ def _emit_identity_collision_events(
                     "date": txn.get("date"),
                     "payee": txn.get("payee"),
                 },
-                # Diagnostic, not a mutation: no journal_refs.
-                journal_refs=[],
-                actor="system",
+                # Diagnostic, not a mutation: no affected files.
+                files=[],
+                actor_type="system",
+                undo_mode="unavailable",
             )
         except Exception:
             _log.warning(

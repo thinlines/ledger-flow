@@ -11,7 +11,7 @@ to the same journal no longer blocks undo. A conflicting edit to the target
 transaction fails the handler's semantic precondition instead.
 
 Journals remain the canonical source of truth — undo writes journals and records
-the change in the event log.  The event log is never rewritten.
+the change as a compensating operation.  Operation history is never rewritten.
 """
 
 from __future__ import annotations
@@ -25,7 +25,7 @@ from typing import Callable
 from services import journal_writer
 from services.archive_service import archive_manual_entry
 from services.config_service import AppConfig
-from services.event_log_service import hash_file, read_events
+from services.event_log_service import hash_file
 from services.header_parser import TransactionStatus, set_header_status
 from services.journal_block_service import find_transaction_block
 from services.journal_query_service import TXN_START_RE
@@ -133,10 +133,7 @@ def _is_compensated(events: list[dict], event_id: str) -> str | None:
 
 
 def _read_history(config: AppConfig) -> list[dict]:
-    operations = list(reversed(list_operations(config)))
-    legacy = read_events(config.root_dir)
-    seen = {str(event.get("id")) for event in legacy}
-    return legacy + [operation for operation in operations if str(operation.get("id")) not in seen]
+    return list(reversed(list_operations(config)))
 
 
 def _has_file_drift(config: AppConfig, event: dict) -> bool:
@@ -704,7 +701,29 @@ def _undo_transaction_notes_updated(config: AppConfig, event: dict) -> str:
     return mut.event_id
 
 
+def _undo_import_applied(config: AppConfig, event: dict) -> str:
+    """Undo an import through the shared compensation dispatcher."""
+    from services.import_history_service import undo_import
+
+    forward_event_id = str(event.get("id") or "")
+    if not forward_event_id:
+        raise UndoFailedError("Import operation is missing an id")
+
+    try:
+        undo_import(config, forward_event_id)
+    except KeyError as exc:
+        raise UndoFailedError("Import history entry not found") from exc
+    except (FileNotFoundError, OSError, ValueError) as exc:
+        raise UndoFailedError(str(exc)) from exc
+
+    compensating_id = operation_is_compensated(config, forward_event_id)
+    if compensating_id is None:
+        raise UndoFailedError("Import undo did not record a compensating operation")
+    return compensating_id
+
+
 _HANDLERS: dict[str, HandlerFn] = {
+    "import.applied.v1": _undo_import_applied,
     "transaction.deleted.v1": _undo_transaction_deleted,
     "transaction.recategorized.v1": _undo_transaction_recategorized,
     "transaction.account_reassigned.v1": _undo_transaction_account_reassigned,

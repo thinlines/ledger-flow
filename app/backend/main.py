@@ -55,7 +55,6 @@ from services.git_snapshot_service import hours_since_last_snapshot, snapshot_co
 from services.header_parser import TransactionStatus, parse_header, set_header_status, HEADER_RE as _HEADER_RE
 from services import journal_writer
 from services.undo_service import UndoOutcome, is_undoable_type, undo_event
-from services.event_log_service import read_events as _read_events_log
 from services.journal_block_service import find_transaction_block
 from services.journal_query_service import TXN_START_RE
 from services.projection_service import (
@@ -74,7 +73,7 @@ from services.unified_transactions_service import (
     UnifiedTransactionFilters,
     build_unified_transactions,
 )
-from services.import_history_service import list_import_history, record_applied_import, undo_import
+from services.import_history_service import list_import_history, record_applied_import
 from services.operations_service import list_operations
 from services.import_service import (
     ImportPreviewBlockedError,
@@ -1297,12 +1296,16 @@ def events_recent() -> dict:
         eid = op.get("id", "")
         etype = op.get("type", "")
         compensating_id = compensated_by.get(eid)
+        payload = op.get("payload") if isinstance(op.get("payload"), dict) else {}
+        undoable = is_undoable_type(etype)
+        if etype == "import.applied.v1" and payload.get("kind") != "import":
+            undoable = False
         rows.append({
             "id": eid,
             "type": etype,
             "summary": op.get("summary", ""),
             "timestamp": op.get("ts", ""),
-            "undoable": is_undoable_type(etype),
+            "undoable": undoable,
             "compensated": compensating_id is not None,
             "compensatedBy": compensating_id,
         })
@@ -2255,36 +2258,20 @@ def import_history() -> dict:
 def import_undo(req: ImportUndoRequest) -> dict:
     config = _require_workspace_config()
 
-    journal_path: Path | None = None
-    for entry_item in list_import_history(config):
-        if str(entry_item.get("id")) == req.historyId:
-            jp = entry_item.get("targetJournalPath")
-            if jp:
-                journal_path = Path(str(jp))
-            break
-
-    if journal_path is None:
+    history = list_import_history(config)
+    if not any(str(entry_item.get("id")) == req.historyId for entry_item in history):
         raise HTTPException(status_code=404, detail="import history entry not found")
 
-    entry: dict = {}
-    with journal_writer.mutate(
-        config=config,
-        paths=[journal_path],
-        tag="import-undo",
-        event_type="import.undone.v1",
-    ) as mut:
-        try:
-            entry = undo_import(config, req.historyId, operation_id=mut.event_id)
-        except KeyError as e:
-            raise HTTPException(status_code=404, detail="import history entry not found") from e
-        except (FileNotFoundError, OSError, ValueError) as e:
-            raise HTTPException(status_code=400, detail=str(e)) from e
+    result = undo_event(config, req.historyId)
+    if result.outcome == UndoOutcome.NOT_FOUND:
+        raise HTTPException(status_code=404, detail="import history entry not found")
+    if result.outcome != UndoOutcome.SUCCESS:
+        raise HTTPException(status_code=400, detail=result.message)
 
-        removed_count = entry.get("undo", {}).get("removedTxnCount", 0)
-        mut.summary = f"Undid import {req.historyId}: removed {removed_count} transactions"
-        mut.payload = {"kind": "import_undo", "entry": entry}
-        mut.compensates = req.historyId
-
+    entry = next(
+        item for item in list_import_history(config)
+        if str(item.get("id")) == req.historyId
+    )
     return {"entry": entry}
 
 

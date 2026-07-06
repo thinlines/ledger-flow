@@ -467,6 +467,7 @@ def undo_import(config: AppConfig, history_id: str, *, operation_id: str | None 
         raise ValueError(reason or "This import cannot be undone.")
 
     journal_path = Path(str(entry["targetJournalPath"]))
+    journal_hash_before = hash_file(journal_path)
     lines, journal_transactions = _load_journal_transactions(journal_path)
     matched_results, reason = _match_transactions_for_undo(entry, journal_transactions)
     if matched_results is None:
@@ -523,7 +524,7 @@ def undo_import(config: AppConfig, history_id: str, *, operation_id: str | None 
             files=[
                 {
                     "path": rel_path(journal_path, config.root_dir),
-                    "hash_before": "sha256:unknown",
+                    "hash_before": journal_hash_before,
                     "hash_after": hash_file(journal_path),
                 }
             ],
