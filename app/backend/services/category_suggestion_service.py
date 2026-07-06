@@ -8,28 +8,16 @@ Three-pass prediction for transaction category (destination account):
 
 from __future__ import annotations
 
-import os
-import threading
-from pathlib import Path
-
 from .config_service import AppConfig
-from .journal_query_service import ParsedTransaction, get_transactions_cached
+from .journal_query_service import ParsedTransaction
 from .merchant_service import load_merchants
 from .payee_similarity import normalize_payee, payee_similarity
+from .projection_service import load_transactions_projected
 from .rules_service import ensure_rules_store, extract_set_account, find_matching_rule, load_rules
 
 # Category posting prefixes — these are the "destination" side of a transaction,
 # as opposed to the "source" side (Assets/Liabilities = bank/tracked accounts).
 _CATEGORY_PREFIXES = ("Expenses:", "Income:", "Equity:")
-
-# ---------------------------------------------------------------------------
-# Frequency-map cache (mtime-based invalidation, same pattern as _tx_cache)
-# ---------------------------------------------------------------------------
-
-_freq_cache: dict[str, dict[str, int]] | None = None
-_freq_cache_mtime: float | None = None
-_freq_cache_lock = threading.Lock()
-
 
 def _is_category_account(account: str) -> bool:
     """Return True if the account looks like a category (not a bank/tracked account)."""
@@ -51,17 +39,8 @@ def _build_frequency_map(transactions: list[ParsedTransaction]) -> dict[str, dic
 
 
 def _get_frequency_map(config: AppConfig) -> dict[str, dict[str, int]]:
-    """Return the frequency map, rebuilding only when journal files change."""
-    max_mtime = max(
-        (os.path.getmtime(p) for p in config.journal_dir.glob("*.journal") if p.exists()),
-        default=0.0,
-    )
-    with _freq_cache_lock:
-        global _freq_cache, _freq_cache_mtime
-        if _freq_cache is None or max_mtime != _freq_cache_mtime:
-            _freq_cache = _build_frequency_map(get_transactions_cached(config))
-            _freq_cache_mtime = max_mtime
-        return _freq_cache
+    """Return the frequency map from the self-healing projection read path."""
+    return _build_frequency_map(load_transactions_projected(config))
 
 
 def suggest_category(payee: str, config: AppConfig) -> dict:

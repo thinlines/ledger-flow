@@ -484,7 +484,6 @@ account Assets:Bank:Checking
         selections={
             txn["txnId"]: {
                 "groupKey": groups[0]["groupKey"],
-                "headerLine": txn["headerLine"],
                 "selectionType": "match",
                 "matchedManualTxnId": candidate["manualTxnId"],
                 "matchedManualLineRange": [candidate["lineStart"], candidate["lineEnd"]],
@@ -546,7 +545,6 @@ account Assets:Bank:Checking
         selections={
             txn["txnId"]: {
                 "groupKey": groups[0]["groupKey"],
-                "headerLine": txn["headerLine"],
                 "selectionType": "match",
                 "matchedManualTxnId": candidate["manualTxnId"],
                 "matchedManualLineRange": [candidate["lineStart"], candidate["lineEnd"]],
@@ -593,7 +591,6 @@ def test_apply_match_warns_on_stale_manual_entry(tmp_path: Path) -> None:
         selections={
             txn["txnId"]: {
                 "groupKey": groups[0]["groupKey"],
-                "headerLine": txn["headerLine"],
                 "selectionType": "match",
                 "matchedManualTxnId": "manual:999",
                 "matchedManualLineRange": [999, 1002],
@@ -646,7 +643,6 @@ account Assets:Bank:Checking
         selections={
             txn["txnId"]: {
                 "groupKey": groups[0]["groupKey"],
-                "headerLine": txn["headerLine"],
                 "selectionType": "match",
                 "matchedManualTxnId": candidate["manualTxnId"],
                 "matchedManualLineRange": [candidate["lineStart"], candidate["lineEnd"]],
@@ -694,7 +690,6 @@ account Assets:Bank:Checking
         selections={
             txn["txnId"]: {
                 "groupKey": groups[0]["groupKey"],
-                "headerLine": txn["headerLine"],
                 "selectionType": "category",
                 "categoryAccount": "Expenses:Food",
             }
@@ -761,7 +756,6 @@ account Assets:Bank:Checking
         selections={
             txn["txnId"]: {
                 "groupKey": groups[0]["groupKey"],
-                "headerLine": txn["headerLine"],
                 "selectionType": "match",
                 "matchedManualTxnId": candidate["manualTxnId"],
                 "matchedManualLfTxnId": candidate["lfTxnId"],

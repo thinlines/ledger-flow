@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -36,17 +35,6 @@ class JournalTransaction:
     metadata: dict[str, str]
 
 
-def history_file_path(config: AppConfig) -> Path:
-    return config.imports_dir / "import-log.ndjson"
-
-
-def ensure_history_file(config: AppConfig) -> Path:
-    path = history_file_path(config)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.touch(exist_ok=True)
-    return path
-
-
 def _read_entries(config: AppConfig) -> list[dict]:
     entries: list[dict] = []
     undone_by_id: dict[str, dict] = {}
@@ -64,28 +52,11 @@ def _read_entries(config: AppConfig) -> list[dict]:
         if payload.get("kind") == "import":
             payload.setdefault("id", operation.get("id"))
             entries.append(payload)
-    if entries:
-        legacy_path = history_file_path(config)
-        if legacy_path.exists():
-            legacy_path.unlink()
-        return [undone_by_id.get(str(entry.get("id")), entry) for entry in entries]
 
-    path = history_file_path(config)
-    if path.is_file():
-        for raw_line in path.read_text(encoding="utf-8").splitlines():
-            line = raw_line.strip()
-            if not line:
-                continue
-            entries.append(json.loads(line))
-    return entries
-
-
-def _write_entries(config: AppConfig, entries: list[dict]) -> None:
-    path = ensure_history_file(config)
-    text = "\n".join(json.dumps(entry, sort_keys=True) for entry in entries)
-    if text:
-        text += "\n"
-    path.write_text(text, encoding="utf-8")
+    legacy_path = config.imports_dir / "import-log.ndjson"
+    if legacy_path.exists():
+        legacy_path.unlink()
+    return [undone_by_id.get(str(entry.get("id")), entry) for entry in entries]
 
 
 def _sort_key(entry: dict) -> str:

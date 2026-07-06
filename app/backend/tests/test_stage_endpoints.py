@@ -278,7 +278,6 @@ def test_unknowns_autosave_resume_apply_and_discard(tmp_path: Path, monkeypatch)
             selections=[
                 UnknownSelection(
                     txnId=txn["txnId"],
-                    headerLine=txn["headerLine"],
                     selectionType="category",
                     categoryAccount="Expenses:Food:Coffee",
                 )

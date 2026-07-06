@@ -24,6 +24,7 @@ from decimal import Decimal
 from pathlib import Path
 
 from services.config_service import AppConfig
+from services.journal_block_service import hash_block_text
 from services.projection_db import database_path, ensure_database
 from services.projection_service import (
     refresh_projection,
@@ -237,6 +238,14 @@ def test_transactions_and_postings_project_with_nanounits(tmp_path):
         assert txns[2]["code"] == "(JAN-PAY)"
 
         grocery = txns[0]
+        grocery_raw = conn.execute(
+            """
+            SELECT raw_text FROM journal_items
+            WHERE transaction_id = ?
+            """,
+            (grocery["id"],),
+        ).fetchone()["raw_text"]
+        assert grocery["raw_block_hash"] == hash_block_text(grocery_raw)
         postings = conn.execute(
             "SELECT * FROM postings WHERE transaction_id = ? ORDER BY posting_order",
             (grocery["id"],),

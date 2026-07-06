@@ -45,7 +45,6 @@ SYSTEM_TAGS = (
     "manual",
     "match-id",
     "minimum_payment",
-    "reconciliation_event_id",
     "source_file_sha256",
     "source_identity",
     "source_payload_hash",
@@ -1036,14 +1035,8 @@ class WorkspaceManager:
             import_accounts=normalized_accounts,
         )
 
-        (imports / "import-log.ndjson").touch(exist_ok=True)
-
         payees_dat = rules / "11-payees.dat"
         ensure_payees_file(payees_dat)
-
-        match_rules = rules / "20-match-rules.ndjson"
-        if not match_rules.exists():
-            match_rules.write_text("", encoding="utf-8")
 
         accounts_dat = rules / "10-accounts.dat"
         self._ensure_seeded_accounts(accounts_dat, list(tracked_accounts.values()))

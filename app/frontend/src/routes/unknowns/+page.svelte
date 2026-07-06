@@ -78,7 +78,6 @@
     lineNo: number;
     transactionStartLine?: number;
     transactionEndLine?: number;
-    headerLine: string;
     amount: string;
     counterpartyAccount: string;
     line: string;
@@ -653,17 +652,15 @@
   }
 
   function stageSelectionPayload(currentSelections: Record<string, GroupSelection>) {
-    type CategoryEntry = { txnId: string; headerLine: string; selectionType: 'category'; categoryAccount: string };
+    type CategoryEntry = { txnId: string; selectionType: 'category'; categoryAccount: string };
     type TransferEntry = {
       txnId: string;
-      headerLine: string;
       selectionType: 'transfer';
       targetTrackedAccountId: string;
       matchedCandidateId?: string;
     };
     type MatchEntry = {
       txnId: string;
-      headerLine: string;
       selectionType: 'match';
       matchedManualTxnId: string;
       matchedManualLfTxnId?: string | null;
@@ -681,14 +678,12 @@
       (payload, [txnId, selection]) => {
         const txn = txnIndex.get(txnId);
         if (!txn) return payload;
-        const headerLine = txn.headerLine ?? '';
 
         if (selection.selectionType === 'match') {
           const matchedManualTxnId = (selection.matchedManualTxnId ?? '').trim();
           if (!matchedManualTxnId || !selection.matchedManualLineRange) return payload;
           payload.push({
             txnId,
-            headerLine,
             selectionType: 'match',
             matchedManualTxnId,
             matchedManualLfTxnId: selection.matchedManualLfTxnId ?? null,
@@ -702,7 +697,6 @@
           if (!targetTrackedAccountId) return payload;
           payload.push({
             txnId,
-            headerLine,
             selectionType: 'transfer',
             targetTrackedAccountId,
             matchedCandidateId: selection.matchedCandidateId?.trim() || undefined
@@ -714,7 +708,6 @@
         if (!categoryAccount) return payload;
         payload.push({
           txnId,
-          headerLine,
           selectionType: 'category',
           categoryAccount
         });

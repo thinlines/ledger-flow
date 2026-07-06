@@ -20,6 +20,12 @@ def hash_block(lines: list[str], start: int, end: int) -> str:
     return hashlib.sha256("\n".join(lines[start:end]).encode("utf-8")).hexdigest()
 
 
+def hash_block_text(raw_text: str) -> str:
+    """Content hash for a transaction block already captured as raw text."""
+    lines = raw_text.splitlines()
+    return hash_block(lines, 0, len(lines))
+
+
 def locate_block_by_id(lines: list[str], lf_txn_id: str) -> tuple[int, int] | None:
     """Find the ``[start, end)`` range of the block whose ``lf_txn_id``
     metadata matches, wherever later edits moved it."""

@@ -34,6 +34,7 @@ from .archive_service import ARCHIVED_MANUAL_JOURNAL_NAME
 from .commodity_service import parse_amount, split_balance_assertion
 from .config_service import AppConfig
 from .header_parser import parse_header
+from .journal_block_service import hash_block_text
 from .journal_query_service import (
     INCLUDE_RE,
     POSTING_RE,
@@ -603,7 +604,7 @@ def _project_file(
         if item.item_type == "transaction":
             block = item.block
             assert block is not None
-            raw_block_hash = _sha256_text(item.raw_text)
+            raw_block_hash = hash_block_text(item.raw_text)
             transaction_id = block.lf_txn_id
             if transaction_id is not None:
                 duplicate = conn.execute(

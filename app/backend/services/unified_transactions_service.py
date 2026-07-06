@@ -236,7 +236,6 @@ def build_unified_transactions(
                 clearing_status=transaction.status.value,
                 header_line=transaction.header_line,
                 journal_path=transaction.source_journal,
-                header_line_number=transaction.header_line_number,
                 match_id=transaction.metadata.get("match-id") or None,
                 notes=transaction.metadata.get("notes") or None,
                 statement_payee=transaction.metadata.get("statement_payee") or None,
@@ -530,8 +529,6 @@ def _compute_rows_with_balance(
             "isAssertion": urow.is_assertion,
             "legs": [{
                 "journalPath": ev.journal_path,
-                "headerLine": ev.header_line,
-                "lineNumber": ev.header_line_number,
                 "txnId": ev.txn_id,
                 "blockHash": ev.block_hash,
             }],

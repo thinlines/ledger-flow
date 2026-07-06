@@ -45,7 +45,7 @@ class ManualTransactionRequest(BaseModel):
     date: str = Field(pattern=DATE_PATTERN)
     payee: str = ""
     amount: str = Field(min_length=1)
-    destinationAccount: str = Field(min_length=1)
+    destinationAccount: str | None = Field(default=None, min_length=1)
     notes: str | None = None
 
 
@@ -55,7 +55,6 @@ class UnknownScanRequest(BaseModel):
 
 class UnknownSelection(BaseModel):
     txnId: str
-    headerLine: str
     selectionType: Literal["category", "transfer", "match"]
     categoryAccount: str | None = None
     targetTrackedAccountId: str | None = None

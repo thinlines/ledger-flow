@@ -15,9 +15,9 @@ from .dashboard_service import (
 from .journal_query_service import (
     amount_to_number,
     is_generated_opening_balance_transaction,
-    load_transactions,
     ParsedTransaction,
 )
+from . import projection_service
 
 
 @dataclass(frozen=True)
@@ -251,7 +251,7 @@ def build_activity_view(
 ) -> dict:
     current_day = today or date.today()
     effective_period = period or "last-3-months"
-    transactions = load_transactions(config)
+    transactions = projection_service.load_transactions_projected(config)
 
     current_range = _resolve_current_range(month, effective_period, current_day)
     prior_range = _resolve_prior_range(month, effective_period, current_day, current_range)

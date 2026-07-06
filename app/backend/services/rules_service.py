@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from datetime import UTC, date as calendar_date, datetime
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
@@ -11,7 +10,6 @@ from .operations_service import record_operation
 from .projection_db import connect, ensure_database
 
 
-RULES_FILE = "20-match-rules.ndjson"
 ALLOWED_FIELDS = {"payee", "merchant", "date", "amount", "account"}
 FIELD_OPERATORS = {
     "payee": {"exact", "contains"},
@@ -38,10 +36,6 @@ AMOUNT_OPERATOR_ALIASES = {
 ALLOWED_JOINERS = {"and", "or"}
 ALLOWED_ACTION_TYPES = {"set_account", "add_tag", "set_kv", "append_comment"}
 NANO_UNITS = Decimal("1000000000")
-
-
-def rules_path(rules_dir: Path) -> Path:
-    return rules_dir / RULES_FILE
 
 
 def _rules_dir(path: Path) -> Path:
@@ -518,48 +512,24 @@ def _record_rule_operation(path: Path, operation_type: str, summary: str, payloa
 
 
 def save_rules(path: Path, rules: list[dict]) -> None:
-    if path.is_dir() or (path.parent / ".workflow").exists():
-        _rules_dir(path).mkdir(parents=True, exist_ok=True)
-        _replace_rules_in_db(path, rules)
-        return
-    path.parent.mkdir(parents=True, exist_ok=True)
-    normalized = _normalize_rules(rules)
-    lines = [json.dumps(rule, ensure_ascii=True, separators=(",", ":")) for rule in normalized]
-    text = "\n".join(lines)
-    if lines:
-        text += "\n"
-    path.write_text(text, encoding="utf-8")
-
-
-def _load_rules_from_file(path: Path) -> list[dict]:
-    if not path.exists():
-        return []
-    rules: list[dict] = []
-    for raw in path.read_text(encoding="utf-8").splitlines():
-        line = raw.strip()
-        if not line:
-            continue
-        rules.append(json.loads(line))
-    return _normalize_rules(rules)
+    _rules_dir(path).mkdir(parents=True, exist_ok=True)
+    _replace_rules_in_db(path, rules)
 
 
 def load_rules(path: Path) -> list[dict]:
-    if path.is_dir() or (path.parent / ".workflow" / "state.db").exists():
-        return _load_rules_from_db(path)
-    return _load_rules_from_file(path)
+    return _load_rules_from_db(path)
 
 
 def ensure_rules_store(rules_dir: Path, accounts_dat: Path) -> Path:
     rules_dir.mkdir(parents=True, exist_ok=True)
-    path = rules_path(rules_dir)
     db_path = _db_path_for(rules_dir)
     with connect(db_path) as conn:
         seeded = conn.execute("SELECT 1 FROM rules LIMIT 1").fetchone() is not None
     if not seeded:
-        seed_rules = _load_rules_from_file(path) if path.exists() else _parse_legacy_payee_rules(accounts_dat)
-        _replace_rules_in_db(rules_dir, seed_rules)
-    if path.exists():
-        path.unlink()
+        _replace_rules_in_db(rules_dir, _parse_legacy_payee_rules(accounts_dat))
+    legacy_path = rules_dir / "20-match-rules.ndjson"
+    if legacy_path.exists():
+        legacy_path.unlink()
     return rules_dir
 
 

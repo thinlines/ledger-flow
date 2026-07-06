@@ -9,6 +9,7 @@ from services.rules_service import (
     find_matching_rule,
     load_rules,
     reorder_rules,
+    save_rules,
     update_rule,
     upsert_payee_rule,
 )
@@ -34,7 +35,7 @@ def _make_config(workspace: Path) -> AppConfig:
     )
 
 
-def test_ensure_rules_store_seeds_ndjson_into_database_once(tmp_path: Path) -> None:
+def test_ensure_rules_store_ignores_and_removes_stale_ndjson(tmp_path: Path) -> None:
     config = _make_config(tmp_path / "workspace")
     db_path = ensure_database(config)
     rules_file = config.init_dir / "20-match-rules.ndjson"
@@ -52,26 +53,13 @@ def test_ensure_rules_store_seeds_ndjson_into_database_once(tmp_path: Path) -> N
     rules = load_rules(store)
 
     assert not rules_file.exists()
-    assert rules[0]["id"] == "r1"
-    assert rules[0]["conditions"] == [
-        {"field": "payee", "operator": "contains", "value": "coffee", "joiner": "and"},
-        {"field": "date", "operator": "on_or_after", "value": "2026-01-01", "joiner": "and"},
-        {"field": "payee", "operator": "contains", "value": "cafe", "joiner": "or"},
-    ]
-    assert find_matching_rule({"payee": "Corner Cafe", "date": "2025-12-31"}, rules)["id"] == "r1"
-    assert find_matching_rule({"payee": "Coffee Shop", "date": "2026-02-01"}, rules)["id"] == "r1"
-    assert find_matching_rule({"payee": "Coffee Shop", "date": "2025-12-31"}, rules) is None
+    assert rules == []
 
     with connect(db_path) as conn:
-        assert conn.execute("SELECT COUNT(*) FROM rules").fetchone()[0] == 1
-        assert conn.execute("SELECT COUNT(*) FROM rule_condition_groups").fetchone()[0] == 2
-        assert conn.execute("SELECT COUNT(*) FROM rule_conditions").fetchone()[0] == 3
-        assert conn.execute("SELECT COUNT(*) FROM rule_actions").fetchone()[0] == 1
-
-    ensure_rules_store(config.init_dir, config.init_dir / "10-accounts.dat")
-    with connect(db_path) as conn:
-        assert conn.execute("SELECT COUNT(*) FROM rules").fetchone()[0] == 1
-
+        assert conn.execute("SELECT COUNT(*) FROM rules").fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM rule_condition_groups").fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM rule_conditions").fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM rule_actions").fetchone()[0] == 0
 
 def test_rule_mutations_are_recorded_as_operations(tmp_path: Path) -> None:
     config = _make_config(tmp_path / "workspace")
@@ -421,10 +409,21 @@ def test_rule_name_can_be_saved_and_updated(tmp_path: Path) -> None:
 def test_rule_name_defaults_from_conditions_when_missing(tmp_path: Path) -> None:
     rules_dir = tmp_path / "rules"
     rules_dir.mkdir(parents=True, exist_ok=True)
-    path = rules_dir / "20-match-rules.ndjson"
-    path.write_text(
-        '{"id":"r1","type":"match","conditions":[{"field":"payee","operator":"exact","value":"Coffee Shop"}],"actions":[{"type":"set_account","account":"Expenses:Coffee"}],"enabled":true,"position":1}\n',
-        encoding="utf-8",
+    path = ensure_rules_store(rules_dir, rules_dir / "10-accounts.dat")
+    save_rules(
+        path,
+        [
+            {
+                "id": "r1",
+                "type": "match",
+                "conditions": [
+                    {"field": "payee", "operator": "exact", "value": "Coffee Shop"}
+                ],
+                "actions": [{"type": "set_account", "account": "Expenses:Coffee"}],
+                "enabled": True,
+                "position": 1,
+            }
+        ],
     )
 
     loaded = load_rules(path)

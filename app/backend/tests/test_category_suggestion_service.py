@@ -1,5 +1,8 @@
 from pathlib import Path
 
+import pytest
+
+from services import category_suggestion_service
 from services.category_suggestion_service import (
     _build_frequency_map,
     _is_category_account,
@@ -143,6 +146,40 @@ def test_journal_frequency_returns_most_common_category(tmp_path: Path) -> None:
     assert result["suggestion"] == "Expenses:Food:Coffee"
     assert result["source"] == "history"
     assert result["confidence"] > 0.5
+
+
+def test_journal_frequency_is_served_from_projection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _make_config(tmp_path)
+    accounts_dat = config.init_dir / "10-accounts.dat"
+    accounts_dat.write_text("", encoding="utf-8")
+    ensure_rules_store(config.init_dir, accounts_dat)
+    _write_journal(
+        config.journal_dir,
+        """
+2026-01-10 Starbucks
+    Expenses:Food:Coffee  $5.00
+    Assets:Bank:Checking
+""",
+    )
+    category_suggestion_service._freq_cache = None
+    category_suggestion_service._freq_cache_mtime = None
+
+    def fail_legacy_cache(config: AppConfig) -> list:
+        raise AssertionError("legacy transaction cache should not serve category suggestions")
+
+    if hasattr(category_suggestion_service, "get_transactions_cached"):
+        monkeypatch.setattr(
+            category_suggestion_service,
+            "get_transactions_cached",
+            fail_legacy_cache,
+        )
+
+    result = suggest_category("Starbucks", config)
+
+    assert result["suggestion"] == "Expenses:Food:Coffee"
+    assert result["source"] == "history"
 
 
 # ---------------------------------------------------------------------------

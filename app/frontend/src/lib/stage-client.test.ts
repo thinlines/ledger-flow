@@ -69,7 +69,7 @@ describe('stage client', () => {
   it('saveUnknownSelections autosaves staged selections', async () => {
     apiPostMock.mockResolvedValue({ stageId: 'abc123' });
     const selections = [
-      { txnId: 't1', headerLine: 'h', selectionType: 'category' as const, categoryAccount: 'Expenses:Food' }
+      { txnId: 't1', selectionType: 'category' as const, categoryAccount: 'Expenses:Food' }
     ];
 
     await saveUnknownSelections('abc123', selections);

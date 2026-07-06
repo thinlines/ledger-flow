@@ -3,6 +3,9 @@ from __future__ import annotations
 from datetime import date
 from pathlib import Path
 
+import pytest
+
+from services import activity_service
 from services.activity_service import build_activity_view
 from services.config_service import AppConfig
 from services.workspace_service import ensure_workspace_journal_includes
@@ -108,6 +111,28 @@ def test_unfiltered_returns_last_3_months(tmp_path: Path) -> None:
     # Most recent first
     assert result["transactions"][0]["date"] == "2026-03-08"
     assert result["transactions"][-1]["date"] == "2026-01-10"
+
+
+def test_activity_view_is_served_from_projection(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    config = _make_config(tmp_path / "workspace")
+    _write_journal(config)
+
+    def fail_legacy_loader(config: AppConfig) -> list:
+        raise AssertionError("legacy regex loader should not serve activity")
+
+    if hasattr(activity_service, "load_transactions"):
+        monkeypatch.setattr(activity_service, "load_transactions", fail_legacy_loader)
+
+    result = build_activity_view(
+        config,
+        category="Expenses:Food:Groceries",
+        month="2026-03",
+        today=date(2026, 3, 9),
+    )
+
+    assert result["totalCount"] == 1
+    assert result["transactions"][0]["payee"] == "Grocery Market"
+    assert result["summary"]["periodTotal"] == -84.3
 
 
 def test_month_filter(tmp_path: Path) -> None:

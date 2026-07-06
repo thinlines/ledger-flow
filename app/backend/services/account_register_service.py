@@ -7,8 +7,8 @@ from .config_service import AppConfig
 from .journal_query_service import (
     amount_to_number,
     is_generated_opening_balance_transaction,
-    load_transactions,
 )
+from . import projection_service
 from .transaction_helpers import (
     RegisterEvent,
     account_amount,
@@ -32,7 +32,7 @@ def build_account_register(config: AppConfig, account_id: str) -> dict:
     if not ledger_account:
         raise ValueError(f"Tracked account is missing a ledger account: {account_id}")
 
-    transactions = load_transactions(config)
+    transactions = projection_service.load_transactions_projected(config)
     grouped_settled_orders = grouped_settled_pending_transfer_orders(config, transactions)
     bilateral_matched_orders = bilateral_matched_pending_transfer_orders(config, transactions, grouped_settled_orders)
     pending_excluded_orders = grouped_settled_orders | bilateral_matched_orders
@@ -82,7 +82,6 @@ def build_account_register(config: AppConfig, account_id: str) -> dict:
                     clearing_status=transaction.status.value,
                     header_line=transaction.header_line,
                     journal_path=transaction.source_journal,
-                    header_line_number=transaction.header_line_number,
                     match_id=transaction.metadata.get("match-id") or None,
                     notes=transaction.metadata.get("notes") or None,
                     counts_as_transaction=not is_generated_opening,

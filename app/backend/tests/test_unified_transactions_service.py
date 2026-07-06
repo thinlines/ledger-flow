@@ -173,7 +173,8 @@ def test_single_account_basic(tmp_path: Path) -> None:
     # Legs should exist
     assert len(rows[0]["legs"]) >= 1
     assert "journalPath" in rows[0]["legs"][0]
-    assert "headerLine" in rows[0]["legs"][0]
+    assert rows[0]["legs"][0]["txnId"]
+    assert rows[0]["legs"][0]["blockHash"]
 
     # accountMeta should be present for single-account filter
     assert result["accountMeta"] is not None
@@ -1275,15 +1276,13 @@ def test_rows_newest_first(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Line-number plumbing (position-based identity)
+# Stable identity plumbing
 # ---------------------------------------------------------------------------
 
 
-def test_row_legs_carry_line_number_for_top_level_transactions(tmp_path: Path) -> None:
-    """Every row's ``legs[0]`` carries the zero-indexed ``lineNumber`` of the
-    header line within the physical journal file. The frontend sends this
-    back with every mutation so the backend can seek directly and verify
-    the text has not drifted."""
+def test_row_legs_carry_projected_identity_for_top_level_transactions(tmp_path: Path) -> None:
+    """Every row leg carries the projected identity/hash pair the frontend
+    sends back for mutations."""
     config = _make_config(tmp_path / "workspace")
     journal_body = """\
 2026-03-10 * First
@@ -1300,20 +1299,19 @@ def test_row_legs_carry_line_number_for_top_level_transactions(tmp_path: Path) -
     rows = result["rows"]
     assert len(rows) == 2
 
-    # Verify each row's lineNumber points to a header line in the raw file.
     journal_path = config.journal_dir / "2026.journal"
-    raw_lines = journal_path.read_text(encoding="utf-8").splitlines()
     for row in rows:
         leg = row["legs"][0]
         assert leg["journalPath"] == str(journal_path)
-        assert leg["lineNumber"] >= 0
-        assert raw_lines[leg["lineNumber"]] == leg["headerLine"]
+        assert leg["txnId"]
+        assert leg["blockHash"]
+        assert "lineNumber" not in leg
+        assert "headerLine" not in leg
 
 
-def test_identical_header_lines_get_distinct_line_numbers(tmp_path: Path) -> None:
+def test_identical_header_lines_get_distinct_projected_ids(tmp_path: Path) -> None:
     """Two transactions with byte-identical header lines (same date, status,
-    payee) each get their own physical line number — the ambiguity that
-    motivated this task."""
+    payee) each get their own projected identity."""
     config = _make_config(tmp_path / "workspace")
     journal_body = """\
 2026-03-15 * Starbucks
@@ -1330,31 +1328,22 @@ def test_identical_header_lines_get_distinct_line_numbers(tmp_path: Path) -> Non
     rows = result["rows"]
     assert len(rows) == 2
 
-    line_numbers = {row["legs"][0]["lineNumber"] for row in rows}
-    # Distinct line numbers — not collapsed into one via string matching.
-    assert len(line_numbers) == 2
-
-    header_lines = {row["legs"][0]["headerLine"] for row in rows}
-    # Both header lines are byte-identical text.
-    assert header_lines == {"2026-03-15 * Starbucks"}
+    txn_ids = {row["legs"][0]["txnId"] for row in rows}
+    assert len(txn_ids) == 2
 
 
 def test_include_file_transactions_get_sentinel_line_number(tmp_path: Path) -> None:
     """Transactions hoisted from an ``include`` directive point at a file
-    the mutation endpoints do not read, so they get the ``-1`` sentinel.
-    The frontend still renders the row; the drift check rejects any
-    mutation attempt with a 404."""
-    from services.journal_query_service import load_transactions
+    the mutation endpoints do not read, so the lower-level projected
+    transaction keeps the ``-1`` sentinel while still carrying stable
+    identity/hash."""
+    from services.projection_service import load_transactions_projected
 
     config = _make_config(tmp_path / "workspace")
     # Put a transaction in a sibling file and reference it via ``include`` from
-    # the top-level year journal. ``load_transactions`` parses the expanded
-    # text but the mutation endpoints read only the top-level file's raw text,
-    # so the included transaction's ``header_line_number`` must be the ``-1``
-    # sentinel.
-    sibling = config.journal_dir / "2026_extra.journal"
-    # Don't give it a ``.journal`` name that would be picked up as its own
-    # top-level file by ``load_transactions``.
+    # the top-level year journal. The projected read path expands it for reads,
+    # but mutation endpoints read only the top-level file's raw text, so the
+    # included transaction's ``header_line_number`` must be the ``-1`` sentinel.
     sibling = config.journal_dir / "extra.dat"
     sibling.write_text(
         """\
@@ -1373,13 +1362,15 @@ include extra.dat
 """
     _write_year_journal(config, journal_body)
 
-    transactions = load_transactions(config)
+    transactions = load_transactions_projected(config)
     by_payee = {t.payee: t for t in transactions}
 
     assert "In top-level file" in by_payee
     assert by_payee["In top-level file"].header_line_number >= 0
+    assert by_payee["In top-level file"].txn_id
+    assert by_payee["In top-level file"].block_hash
 
-    # Transaction loaded via ``include`` gets the -1 sentinel — mutation
-    # endpoints reject with 404 via the drift check.
     assert "From included file" in by_payee
     assert by_payee["From included file"].header_line_number == -1
+    assert by_payee["From included file"].txn_id
+    assert by_payee["From included file"].block_hash

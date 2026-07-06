@@ -188,11 +188,12 @@ def test_dashboard_overview_reads_from_projection_without_legacy_journal_parse(
     def fail_legacy_loader(config: AppConfig):
         raise AssertionError("dashboard overview must not parse journals directly")
 
-    monkeypatch.setattr(
-        journal_query_service,
-        "get_transactions_cached",
-        fail_legacy_loader,
-    )
+    if hasattr(journal_query_service, "get_transactions_cached"):
+        monkeypatch.setattr(
+            journal_query_service,
+            "get_transactions_cached",
+            fail_legacy_loader,
+        )
 
     overview = build_dashboard_overview(config, today=date(2026, 3, 9))
 
@@ -477,11 +478,12 @@ def test_dashboard_transactions_reads_from_projection_without_legacy_journal_par
     def fail_legacy_loader(config: AppConfig):
         raise AssertionError("dashboard transactions must not parse journals directly")
 
-    monkeypatch.setattr(
-        journal_query_service,
-        "get_transactions_cached",
-        fail_legacy_loader,
-    )
+    if hasattr(journal_query_service, "get_transactions_cached"):
+        monkeypatch.setattr(
+            journal_query_service,
+            "get_transactions_cached",
+            fail_legacy_loader,
+        )
 
     result = query_dashboard_transactions(
         config, period="2026-03", category="Expenses:Food"

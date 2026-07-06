@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import os
-import threading
 from dataclasses import dataclass, replace
 from datetime import date
 from decimal import Decimal, InvalidOperation
@@ -9,9 +7,7 @@ import glob
 from pathlib import Path
 import re
 
-from .archive_service import ARCHIVED_MANUAL_JOURNAL_NAME
 from .commodity_service import CommodityMismatchError, commodity_label, parse_amount
-from .config_service import AppConfig
 from .header_parser import HEADER_RE, TransactionStatus, parse_header
 
 
@@ -46,8 +42,7 @@ class ParsedTransaction:
     # via the same drift path that catches stale data.
     header_line_number: int = -1
     # Stable projected identity (spec: Mutation-Time Projection). Populated
-    # only by the projection loader; the legacy loader's block boundary
-    # includes trailing blank lines, so its text is not hash-comparable.
+    # by the projection loader.
     txn_id: str | None = None
     block_hash: str | None = None
 
@@ -63,33 +58,6 @@ def pretty_account_name(account: str) -> str:
     if len(parts) == 1:
         return parts[0].title()
     return " / ".join(part.title() for part in parts[1:])
-
-
-def _split_transactions(journal_text: str) -> list[tuple[int, list[str]]]:
-    """Split a (possibly include-expanded) journal text into transaction blocks.
-
-    Returns a list of ``(start_line_index, block_lines)`` tuples, where
-    ``start_line_index`` is the zero-indexed offset of the header line within
-    ``journal_text.splitlines()``. The expanded text's line numbering is *not*
-    the same as the on-disk top-level file's numbering when ``include``
-    directives were followed; ``load_transactions`` resolves that to a real
-    on-disk offset (or the ``-1`` sentinel) by re-scanning the raw top-level
-    text after parsing.
-    """
-    transactions: list[tuple[int, list[str]]] = []
-    current: list[str] = []
-    current_start = -1
-    for index, raw in enumerate(journal_text.splitlines()):
-        if TXN_START_RE.match(raw):
-            if current:
-                transactions.append((current_start, current))
-            current = [raw]
-            current_start = index
-        elif current:
-            current.append(raw)
-    if current:
-        transactions.append((current_start, current))
-    return transactions
 
 
 def _normalize_include_target(raw: str) -> str:
@@ -109,49 +77,6 @@ def _resolve_include_paths(base_dir: Path, target: str) -> list[Path]:
     if pattern.exists():
         return [pattern]
     return []
-
-
-def _expand_journal_lines(path: Path, stack: tuple[Path, ...] = ()) -> list[str]:
-    """Backward-compatible expansion that drops origin metadata.
-
-    Prefer :func:`_expand_journal_lines_with_origins` when callers need to
-    map an expanded-line index back to a physical (file, line) pair.
-    """
-    return [line for line, _ in _expand_journal_lines_with_origins(path, stack)]
-
-
-def _expand_journal_lines_with_origins(
-    path: Path,
-    stack: tuple[Path, ...] = (),
-) -> list[tuple[str, tuple[Path, int] | None]]:
-    """Expand ``include`` directives, retaining the (file, line-index) origin
-    for each emitted line.
-
-    The origin is ``(physical_path, zero_indexed_line_in_that_file)`` for
-    lines that came from a real file, or ``None`` if the line could not be
-    attributed (e.g., a cycle was suppressed). Mutation endpoints read the
-    *top-level* file's raw text, so only lines whose origin matches the
-    top-level path can be mutated; everything else is drift-protected.
-    """
-    resolved_path = path.resolve()
-    if resolved_path in stack or not path.exists():
-        return []
-
-    out: list[tuple[str, tuple[Path, int] | None]] = []
-    next_stack = (*stack, resolved_path)
-    for raw_idx, raw in enumerate(path.read_text(encoding="utf-8").splitlines()):
-        include_match = INCLUDE_RE.match(raw)
-        if not include_match:
-            out.append((raw, (resolved_path, raw_idx)))
-            continue
-
-        include_target = _normalize_include_target(include_match.group(1))
-        include_paths = _resolve_include_paths(path.parent, include_target)
-        if not include_paths:
-            continue
-        for include_path in include_paths:
-            out.extend(_expand_journal_lines_with_origins(include_path, next_stack))
-    return out
 
 
 def _parse_transaction(lines: list[str]) -> ParsedTransaction | None:
@@ -220,60 +145,3 @@ def _parse_transaction(lines: list[str]) -> ParsedTransaction | None:
 
 def is_generated_opening_balance_transaction(transaction: ParsedTransaction) -> bool:
     return bool(str(transaction.metadata.get("tracked_account_id", "")).strip())
-
-
-def load_transactions(config: AppConfig) -> list[ParsedTransaction]:
-    transactions: list[ParsedTransaction] = []
-    for journal_path in sorted(config.journal_dir.glob("*.journal")):
-        if not journal_path.exists():
-            continue
-        # archived-manual.journal is a sidecar that holds matched manual entries
-        # for undo. Loading it duplicates each matched transaction next to its
-        # imported counterpart in the register.
-        if journal_path.name == ARCHIVED_MANUAL_JOURNAL_NAME:
-            continue
-        # Track each expanded line's physical origin so we can attribute a real
-        # on-disk line number to every transaction. Mutation endpoints read the
-        # *top-level* file (without include expansion), so only transactions
-        # whose header line lives in that file can be mutated; everything else
-        # gets the -1 sentinel and is drift-protected.
-        top_level_resolved = journal_path.resolve()
-        expanded = _expand_journal_lines_with_origins(journal_path)
-        text = "\n".join(line for line, _ in expanded)
-        for expanded_start, lines in _split_transactions(text):
-            transaction = _parse_transaction(lines)
-            if transaction is None:
-                continue
-            origin = expanded[expanded_start][1] if 0 <= expanded_start < len(expanded) else None
-            if origin is not None and origin[0] == top_level_resolved:
-                physical_line_number = origin[1]
-            else:
-                physical_line_number = -1
-            transactions.append(
-                replace(
-                    transaction,
-                    source_journal=str(journal_path),
-                    header_line_number=physical_line_number,
-                )
-            )
-    return sorted(transactions, key=lambda txn: txn.posted_on)
-
-
-_tx_cache: list[ParsedTransaction] | None = None
-_tx_cache_mtime: float | None = None
-_tx_cache_lock = threading.Lock()
-
-
-def get_transactions_cached(config: AppConfig) -> list[ParsedTransaction]:
-    """Return parsed transactions, using an mtime-based cache to skip re-parsing
-    when no journal files have changed since the last call."""
-    max_mtime = max(
-        (os.path.getmtime(p) for p in config.journal_dir.glob("*.journal") if p.exists()),
-        default=0.0,
-    )
-    with _tx_cache_lock:
-        global _tx_cache, _tx_cache_mtime
-        if _tx_cache is None or max_mtime != _tx_cache_mtime:
-            _tx_cache = load_transactions(config)
-            _tx_cache_mtime = max_mtime
-        return _tx_cache

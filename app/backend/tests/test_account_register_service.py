@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from services import account_register_service
 from services.account_register_service import build_account_register
 from services.commodity_service import CommodityMismatchError
 from services.config_service import AppConfig
@@ -145,6 +146,36 @@ def test_account_register_returns_latest_first_rows_with_running_balances(tmp_pa
     assert opening["isOpeningBalance"] is True
     assert opening["amount"] == 500.0
     assert opening["runningBalance"] == 500.0
+
+
+def test_account_register_is_served_from_projection(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    config = _make_config(tmp_path / "workspace")
+    _write_year_journal(
+        config,
+        """
+2026/02/02 Grocer
+    ; import_account_id: checking
+    Expenses:Food:Groceries  USD 20.00
+    Assets:Bank:Checking
+
+2026/02/03 Paycheck
+    ; import_account_id: checking
+    Assets:Bank:Checking  USD 100.00
+    Income:Salary
+""".strip()
+        + "\n",
+    )
+
+    def fail_legacy_loader(config: AppConfig) -> list:
+        raise AssertionError("legacy regex loader should not serve account register")
+
+    if hasattr(account_register_service, "load_transactions"):
+        monkeypatch.setattr(account_register_service, "load_transactions", fail_legacy_loader)
+
+    register = build_account_register(config, "checking")
+
+    assert register["currentBalance"] == 80.0
+    assert [entry["payee"] for entry in register["entries"]] == ["Paycheck", "Grocer"]
 
 
 def test_account_register_parses_balance_assertions_for_matching_commodities(tmp_path: Path) -> None:

@@ -5,7 +5,6 @@ import { apiDelete, apiGet, apiPost } from '$lib/api';
 
 export type UnknownSelectionPayload = {
   txnId: string;
-  headerLine: string;
   selectionType: 'category' | 'transfer' | 'match';
   categoryAccount?: string;
   targetTrackedAccountId?: string;

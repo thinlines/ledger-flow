@@ -82,7 +82,6 @@ def _apply_first_match(journal: Path, accounts: Path) -> tuple[int, list[dict]]:
         selections={
             txn["txnId"]: {
                 "groupKey": groups[0]["groupKey"],
-                "headerLine": txn["headerLine"],
                 "selectionType": "match",
                 "matchedManualTxnId": candidate["manualTxnId"],
                 "matchedManualLineRange": [candidate["lineStart"], candidate["lineEnd"]],

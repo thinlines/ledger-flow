@@ -24,8 +24,6 @@ function makeRow(extra: Partial<TransactionRow> = {}): TransactionRow {
     legs: [
       {
         journalPath: 'journals/2026.journal',
-        headerLine: '2026-01-05 Grocery Store',
-        lineNumber: 4,
         txnId: 'txn_grocery',
         blockHash: 'sha256:before'
       }

@@ -1,8 +1,8 @@
 """Periodic git snapshot commits for workspace escape hatch.
 
 Snapshots are taken on server shutdown and on startup when >24 hours have
-passed since the last commit.  Git is the safety net beneath the event log —
-if ``events.jsonl`` is lost, ``git log -p`` still shows every file state.
+passed since the last commit. Git is the safety net beneath the operation
+dump and journal files.
 
 All operations degrade gracefully: if ``git`` is not installed or any command
 fails, the error is logged and the caller continues normally.

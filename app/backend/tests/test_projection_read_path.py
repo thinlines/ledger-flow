@@ -1,19 +1,16 @@
 """Slice 4: the Transactions read path served from the projection.
 
-``load_transactions_projected`` must reproduce the legacy
-``load_transactions`` contract exactly — same ``ParsedTransaction`` values,
-same ordering, same ``-1`` include sentinel — and self-heal after external
-edits via the content-hash check. ``build_unified_transactions`` then runs
-on the projection with an identical payload.
+``load_transactions_projected`` returns the public ``ParsedTransaction``
+contract from SQLite — stable ordering, top-level line numbers, ``-1``
+include sentinel, and self-healing after external edits via the content-hash
+check. ``build_unified_transactions`` then runs on the projection payload.
 """
 from __future__ import annotations
 
-from dataclasses import replace
 from pathlib import Path
 
 from services import unified_transactions_service
 from services.config_service import AppConfig
-from services.journal_query_service import load_transactions
 from services.projection_db import database_path
 from services.projection_service import load_transactions_projected
 from services.unified_transactions_service import build_unified_transactions
@@ -126,19 +123,31 @@ def _workspace(tmp_path: Path) -> AppConfig:
     return config
 
 
-def test_projected_loader_matches_legacy_loader(tmp_path):
+def test_projected_loader_returns_public_transaction_contract(tmp_path):
     config = _workspace(tmp_path)
 
-    legacy = load_transactions(config)
     projected = load_transactions_projected(config)
 
-    assert len(legacy) == len(projected)
-    for legacy_txn, projected_txn in zip(legacy, projected):
-        # txn_id/block_hash are projection-only by design (the legacy block
-        # boundary includes trailing blanks, so its text is not hash-comparable).
-        assert projected_txn.txn_id is not None
-        assert projected_txn.block_hash is not None
-        assert replace(projected_txn, txn_id=None, block_hash=None) == legacy_txn
+    assert [txn.payee for txn in projected] == [
+        "Opening Balance",
+        "Grocery Store",
+        "Split Purchase",
+        "Pending Transfer",
+        "Card Payment",
+        "Salary",
+    ]
+    grocery = projected[1]
+    assert grocery.posted_on.isoformat() == "2026-01-05"
+    assert grocery.header_line == "2026-01-05 * Grocery Store"
+    assert grocery.metadata["lf_source_identity"] == "abc123"
+    assert [posting.account for posting in grocery.postings] == [
+        "Expenses:Groceries",
+        "Assets:Checking",
+    ]
+    assert grocery.postings[1].inferred is True
+    for txn in projected:
+        assert txn.txn_id is not None
+        assert txn.block_hash is not None
 
 
 def test_projected_loader_include_sentinel_and_line_numbers(tmp_path):
@@ -151,13 +160,12 @@ def test_projected_loader_include_sentinel_and_line_numbers(tmp_path):
     assert opening.header_line_number == -1
     assert opening.source_journal.endswith("journals/2026.journal")
 
-    legacy_by_payee = {txn.payee: txn for txn in load_transactions(config)}
+    top_level_lines = (tmp_path / "journals" / "2026.journal").read_text(
+        encoding="utf-8"
+    ).splitlines()
     for payee in ["Grocery Store", "Split Purchase", "Salary"]:
-        assert (
-            by_payee[payee].header_line_number
-            == legacy_by_payee[payee].header_line_number
-        )
         assert by_payee[payee].header_line_number >= 0
+        assert top_level_lines[by_payee[payee].header_line_number] == by_payee[payee].header_line
 
 
 def test_projected_loader_self_heals_after_external_edit(tmp_path):
@@ -178,29 +186,14 @@ def test_projected_loader_self_heals_after_external_edit(tmp_path):
     assert reloaded[-1].payee == "Late Addition"
 
 
-def test_unified_payload_from_projection_matches_legacy(tmp_path, monkeypatch):
+def test_unified_payload_from_projection_exposes_register_data(tmp_path):
     config = _workspace(tmp_path)
-    filters = _filters()
 
-    projected_payload = build_unified_transactions(config, filters)
+    payload = build_unified_transactions(config, _filters())
 
-    monkeypatch.setattr(
-        unified_transactions_service,
-        "load_transactions_projected",
-        load_transactions,
-    )
-    legacy_payload = build_unified_transactions(config, filters)
-
-    # legs[].txnId/blockHash are the one intentional payload difference:
-    # only the projection loader can supply them (TASK.md decision 10).
-    for row in projected_payload["rows"]:
-        for leg in row["legs"]:
-            leg["txnId"] = None
-            leg["blockHash"] = None
-
-    assert projected_payload == legacy_payload
-    assert projected_payload["totalCount"] > 0
-    assert any(row["runningBalance"] is not None for row in projected_payload["rows"])
+    assert payload["totalCount"] == 6
+    assert any(row["payee"] == "Salary" and row["amount"] == 1500.0 for row in payload["rows"])
+    assert any(row["runningBalance"] is not None for row in payload["rows"])
 
 
 def test_unified_rows_expose_projected_identity(tmp_path):
@@ -219,8 +212,9 @@ def test_unified_rows_expose_projected_identity(tmp_path):
 
     opening_rows = [row for row in payload["rows"] if row["isOpeningBalance"]]
     assert opening_rows
-    assert opening_rows[0]["legs"][0]["lineNumber"] == -1
     assert opening_rows[0]["legs"][0]["txnId"]
+    assert opening_rows[0]["legs"][0]["blockHash"]
+    assert "lineNumber" not in opening_rows[0]["legs"][0]
 
 
 def test_unified_transactions_reads_through_projection(tmp_path):

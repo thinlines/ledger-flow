@@ -9,8 +9,7 @@ from services.transfer_service import transfer_pair_account
 def _selections(groups: list[dict], by_group_key: dict[str, dict]) -> dict[str, dict]:
     """Expand a ``{groupKey: selection}`` mapping to ``{txnId: selection}``.
 
-    Each txn in the group inherits the selection plus its ``headerLine``
-    (required by the post-bea0f296 drift check).
+    Each txn in the group inherits the selection.
     """
     out: dict[str, dict] = {}
     for group in groups:
@@ -21,7 +20,6 @@ def _selections(groups: list[dict], by_group_key: dict[str, dict]) -> dict[str, 
             out[txn["txnId"]] = {
                 **selection,
                 "groupKey": group["groupKey"],
-                "headerLine": txn["headerLine"],
             }
     return out
 
@@ -389,7 +387,6 @@ account Assets:Bank:Checking
         selections={
             second_txn["txnId"]: {
                 "groupKey": groups[0]["groupKey"],
-                "headerLine": second_txn["headerLine"],
                 "selectionType": "category",
                 "categoryAccount": "Expenses:Groceries",
             }
@@ -453,7 +450,6 @@ account Assets:Bank:Checking
         selections={
             txn["txnId"]: {
                 "groupKey": groups[0]["groupKey"],
-                "headerLine": txn["headerLine"],
                 "selectionType": "category",
                 "categoryAccount": "Expenses:Groceries",
             }
@@ -1061,7 +1057,6 @@ def test_apply_survives_line_shift_when_block_carries_identity(tmp_path: Path) -
         selections={
             second_txn["txnId"]: {
                 "groupKey": groups[0]["groupKey"],
-                "headerLine": second_txn["headerLine"],
                 "selectionType": "category",
                 "categoryAccount": "Expenses:Groceries",
             }
@@ -1102,7 +1097,6 @@ def test_apply_rejects_changed_block_with_transaction_copy(tmp_path: Path) -> No
         selections={
             first_txn["txnId"]: {
                 "groupKey": groups[0]["groupKey"],
-                "headerLine": first_txn["headerLine"],
                 "selectionType": "category",
                 "categoryAccount": "Expenses:Groceries",
             }
@@ -1139,7 +1133,6 @@ def test_apply_rejects_deleted_block_with_transaction_copy(tmp_path: Path) -> No
         selections={
             first_txn["txnId"]: {
                 "groupKey": groups[0]["groupKey"],
-                "headerLine": first_txn["headerLine"],
                 "selectionType": "category",
                 "categoryAccount": "Expenses:Groceries",
             }

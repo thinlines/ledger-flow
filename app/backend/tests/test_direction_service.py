@@ -3,7 +3,10 @@ from __future__ import annotations
 from datetime import date
 from pathlib import Path
 
+import pytest
+
 from services.config_service import AppConfig
+from services import direction_service
 from services.direction_service import build_dashboard_direction
 from services.workspace_service import ensure_workspace_journal_includes
 
@@ -116,6 +119,36 @@ def test_runway_gauge_computed_correctly(tmp_path: Path) -> None:
     assert result["runway"]["spendableCash"] == 6000.0
     assert result["runway"]["avgMonthlySpending"] == 1000.0
     assert result["runway"]["months"] == 6.0
+
+
+def test_dashboard_direction_is_served_from_projection(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    config = _make_config(tmp_path / "workspace")
+    _write_journal(
+        config,
+        "2026.journal",
+        """
+2026/04/10 Unknown Merchant
+    ; import_account_id: checking
+    Assets:Bank:Checking  $-50.00
+    Expenses:Unknown
+
+2026/04/12 Another Unknown
+    ; import_account_id: checking
+    Assets:Bank:Checking  $-30.00
+    Expenses:Unknown
+""".strip()
+        + "\n",
+    )
+
+    def fail_legacy_loader(config: AppConfig) -> list:
+        raise AssertionError("legacy regex loader should not serve direction")
+
+    if hasattr(direction_service, "load_transactions"):
+        monkeypatch.setattr(direction_service, "load_transactions", fail_legacy_loader)
+
+    result = build_dashboard_direction(config, today=date(2026, 4, 18))
+
+    assert result["looseEnds"]["reviewQueueCount"] == 2
 
 
 def test_runway_excludes_fixed_assets_by_projected_subtype(tmp_path: Path) -> None:

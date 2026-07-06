@@ -36,10 +36,8 @@ from .transfer_service import (
 
 from .header_parser import HEADER_RE
 from .journal_block_service import (
-    HeaderNotFoundError,
     hash_block as _hash_block,
     locate_block_by_id as _locate_block_by_id,
-    locate_header_at,
 )
 
 ACCOUNT_LINE_RE = re.compile(r"^(\s+)([^\s].*?)(\s{2,}|\t+)(.*)$")
@@ -97,7 +95,7 @@ def _iter_transaction_ranges(lines: list[str]) -> list[tuple[int, int]]:
     return ranges
 
 
-def _rebase_record(lines: list[str], record: dict, expected_header: str = "") -> tuple[dict | None, str | None]:
+def _rebase_record(lines: list[str], record: dict) -> tuple[dict | None, str | None]:
     """Re-locate a scanned transaction record against the current file.
 
     Blocks carrying an ``lf_txn_id`` are found by identity and rejected only
@@ -121,12 +119,10 @@ def _rebase_record(lines: list[str], record: dict, expected_header: str = "") ->
             rebased["lineNo"] = int(record["lineNo"]) + delta
         return rebased, None
 
-    header = expected_header or str(record.get("headerLine") or "")
-    if header:
-        try:
-            locate_header_at(lines, int(record["transactionStartLine"]) - 1, header)
-        except HeaderNotFoundError:
-            return None, "This transaction changed since it was scanned (stale data — try refreshing)"
+    start = int(record["transactionStartLine"]) - 1
+    end = int(record["transactionEndLine"])
+    if start < 0 or end > len(lines) or _hash_block(lines, start, end) != record.get("blockHash"):
+        return None, "This transaction changed since it was scanned (stale data — try refreshing)"
     return record, None
 
 
@@ -262,8 +258,7 @@ def _build_transaction_records(
     transaction_records: list[dict] = []
 
     for start, end in _iter_transaction_ranges(lines):
-        header_line = lines[start]
-        match = HEADER_RE.match(header_line)
+        match = HEADER_RE.match(lines[start])
         if match:
             current_date = match.group("date")
             current_payee = match.group("payee").strip() or "(no payee)"
@@ -334,7 +329,6 @@ def _build_transaction_records(
                 "lineNo": posting["lineNo"],
                 "transactionStartLine": start + 1,
                 "transactionEndLine": end,
-                "headerLine": header_line,
                 "currentAccount": posting["account"],
                 "amount": posting["amount"],
                 "counterpartyAccount": counterparty,
@@ -620,9 +614,7 @@ def apply_unknown_mappings(
             warnings.append({"txnId": txn_id, "warning": "Transaction is no longer in this stage"})
             continue
         group, txn = entry
-        rebased, stale_warning = _rebase_record(
-            original_lines, txn, str(selection.get("headerLine") or "")
-        )
+        rebased, stale_warning = _rebase_record(original_lines, txn)
         if rebased is None:
             warnings.append(
                 {"txnId": txn_id, "groupKey": group["groupKey"], "warning": stale_warning}
@@ -1070,4 +1062,3 @@ def add_payee_rule(accounts_dat: Path, payee: str, account: str) -> tuple[bool, 
     rules_lines.insert(insert_at, rule_line)
     accounts_dat.write_text("\n".join(rules_lines) + "\n", encoding="utf-8")
     return True, None
-

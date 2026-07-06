@@ -172,13 +172,13 @@ def mutate(
     """Mutate one or more journal-class files atomically.
 
     Args:
-        config: workspace config — supplies ``root_dir`` for event-log writes.
+        config: workspace config — supplies ``root_dir`` for operation writes.
         paths: every journal-class file the op might touch. Must contain at
             least one ``*.journal`` path. Co-candidates such as
             ``10-accounts.dat`` may ride along.
         tag: short slug used in backup filenames (e.g. ``"manual-entry"``,
             ``"reconcile"``, ``"undo"``).
-        event_type: event type written to ``events.jsonl`` on success.
+        event_type: operation type recorded on success.
         verify: optional post-mutation verifier. ``None`` → pass.
             ``VerifyFailure`` → reject (rollback + ``WriterRejected``).
             ``raise RuntimeError`` → unavailable (rollback +

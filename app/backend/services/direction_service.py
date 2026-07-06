@@ -11,9 +11,9 @@ from .journal_query_service import (
     Posting,
     amount_to_number,
     is_generated_opening_balance_transaction,
-    load_transactions,
     pretty_account_name,
 )
+from . import projection_service
 from .opening_balance_service import opening_balance_index
 from .reconciliation_service import reconciliation_status as compute_reconciliation_status
 from .reference_data_service import account_subtypes
@@ -50,7 +50,7 @@ def _matches_base_currency(posting: Posting, base_currency: str) -> bool:
 
 def build_dashboard_direction(config: AppConfig, *, today: date | None = None) -> dict:
     current_day = today or date.today()
-    transactions = load_transactions(config)
+    transactions = projection_service.load_transactions_projected(config)
     _, opening_by_ledger_account = opening_balance_index(config)
     base_currency = str(config.workspace.get("base_currency", "USD"))
 

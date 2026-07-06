@@ -80,10 +80,8 @@ export type TransactionRow = {
   isAssertion: boolean;
   legs: Array<{
     journalPath: string;
-    headerLine: string;
-    lineNumber: number;
     // Stable projected identity for the (lf_txn_id, raw_block_hash)
-    // mutation contract; null on rows served by the legacy loader.
+    // mutation contract.
     txnId?: string | null;
     blockHash?: string | null;
   }>;

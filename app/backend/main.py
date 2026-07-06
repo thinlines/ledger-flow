@@ -7,7 +7,6 @@ import logging
 import os
 from pathlib import Path
 import re
-import shutil
 from uuid import uuid4, uuid7
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
@@ -325,8 +324,6 @@ _log = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    # Stages moved into the workspace database; drop the retired JSON store.
-    shutil.rmtree(ROOT_DIR / ".workflow" / "stages", ignore_errors=True)
     config = None
     try:
         config = workspace_manager.load_active_config()

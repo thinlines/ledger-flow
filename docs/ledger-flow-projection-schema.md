@@ -537,15 +537,15 @@ CREATE TABLE rule_actions (
 CREATE INDEX rule_actions_value_idx ON rule_actions(action_type, value);
 ```
 
-Seed once from the NDJSON (legacy flat condition chains split on `or`
-joiners into groups — `and` binds tighter, so this yields the same DNF),
-then delete the file. No id or history compatibility is required. Rule
-create/edit/delete are recorded as operations.
+Rules live only in SQLite. The retired `rules/20-match-rules.ndjson` file is
+not a read fallback; if a stale copy is found during rule-store setup it is
+deleted. Rule create/edit/delete/reorder are recorded as operations.
 
 ## Imports
 
-These tables replace the current `imported_transactions_v2` table and
-`imports/import-log.ndjson` over time.
+These tables replace the old `imported_transactions_v2` table. Import history
+is read from `operations`; the retired `imports/import-log.ndjson` file is not
+a read fallback and is deleted opportunistically if encountered.
 
 ```sql
 CREATE TABLE import_sources (
@@ -608,8 +608,9 @@ Operations fully replace `events.jsonl` and `imports/import-log.ndjson`:
   renamed to `lf_operation_id` in the one-time journal migration (no
   compatibility constraints); the import fence scans for it via
   `metadata_entries`.
-- **Existing `events.jsonl` history is not migrated.** Operations start
-  fresh at cutover; the old file is deleted once the new path works.
+- **Existing `events.jsonl` / `imports/import-log.ndjson` history is not
+  migrated.** Operations start fresh at cutover; the old files are retired
+  and are not read as fallbacks.
 - **Rule and reference-data mutations are operations too**, even though they
   are not journal mutations — one audit trail for everything the app
   changes.
@@ -639,24 +640,27 @@ CREATE INDEX operations_created_idx ON operations(created_at);
 CREATE INDEX operations_compensates_idx ON operations(compensates_operation_id);
 
 CREATE TABLE operation_files (
+    id TEXT PRIMARY KEY,
     operation_id TEXT NOT NULL REFERENCES operations(id) ON DELETE CASCADE,
-    journal_file_id TEXT REFERENCES journal_files(id) ON DELETE SET NULL,
     path TEXT NOT NULL,
-    hash_before TEXT,
-    hash_after TEXT,
-    PRIMARY KEY (operation_id, path)
+    hash_before TEXT NOT NULL,
+    hash_after TEXT NOT NULL
 );
 
+CREATE INDEX operation_files_operation_idx ON operation_files(operation_id);
+CREATE INDEX operation_files_path_idx ON operation_files(path);
+
 CREATE TABLE operation_entities (
+    id TEXT PRIMARY KEY,
     operation_id TEXT NOT NULL REFERENCES operations(id) ON DELETE CASCADE,
-    entity_type TEXT NOT NULL CHECK (entity_type IN ('transaction', 'posting')),
+    entity_type TEXT NOT NULL,
     entity_id TEXT NOT NULL,
-    change_type TEXT NOT NULL
-        CHECK (change_type IN ('created', 'updated', 'deleted', 'merged', 'split', 'preserved')),
-    block_hash_before TEXT,
-    block_hash_after TEXT,
-    PRIMARY KEY (operation_id, entity_type, entity_id)
+    role TEXT NOT NULL DEFAULT 'affected',
+    payload_json TEXT NOT NULL DEFAULT '{}'
 );
+
+CREATE INDEX operation_entities_operation_idx ON operation_entities(operation_id);
+CREATE INDEX operation_entities_entity_idx ON operation_entities(entity_type, entity_id);
 
 CREATE TABLE stages (
     id TEXT PRIMARY KEY,
@@ -771,13 +775,12 @@ the projection hooks into it:
    re-projection of that file (self-healing after crashes or external
    edits).
 
-This replaces the UI's positional mutation contract. Today the client
-submits `(journalPath, lineNumber, headerLine)` and the server rejects on
-any byte drift; stored line numbers go stale on every earlier edit in the
-file. The new contract is `(lf_txn_id, raw_block_hash)`: locate the block by
-id, reject as stale when the block hash differs. `source_start_line` /
-`source_end_line` stay accurate because the touched file is re-projected on
-every write.
+This replaces the UI's retired positional mutation contract. The client no
+longer submits `(journalPath, lineNumber, headerLine)` for transaction
+mutations. The active contract is `(lf_txn_id, raw_block_hash)`: locate the
+block by id, reject as stale when the block hash differs. `source_start_line`
+/ `source_end_line` stay accurate because the touched file is re-projected
+on every write.
 
 ## Durability
 
@@ -804,10 +807,11 @@ files do not.
 2. Build a parser projection that fills `journal_files`, `journal_items`,
    `transactions`, `postings`, `comments`, `metadata_entries`, and
    diagnostics.
-3. Project reference data from the `NN-*.dat` files into `accounts`,
+3. Project reference data from the directive `.dat` files into `accounts`,
    `payees`, `payee_aliases`, `tags`, and `commodities`; wire the
-   declared/used diagnostics. Drop the `NN-*` file naming convention in place
-   of plain file names.
+   declared/used diagnostics. Current workspaces retain the ordered
+   directive filenames (`10-accounts.dat`, `11-payees.dat`, `12-tags.dat`,
+   `13-commodities.dat`) because their include order is useful and stable.
 4. One-time journal migration: assign `lf_txn_id` / `lf_posting_id` and
    rename existing app metadata keys to house style (`source_identity` →
    `lf_source_identity`, `reconciliation_event_id` → `lf_operation_id`,
@@ -819,8 +823,9 @@ files do not.
    `operation_files`, `operation_entities`, and `import_sources`; port both
    undo paths to the compensation model; start history fresh and delete the
    old files.
-8. Seed `rules` tables from `rules/20-match-rules.ndjson`, then delete it;
-   route rule edits through operations.
+8. Route rules through the DB tables and operations. The old
+   `rules/20-match-rules.ndjson` file is retired and deleted if stale; it is
+   not a compatibility source.
 9. Retire `payee_aliases.csv` and its generated `.dat`: payee and alias
    directives live in the payees `.dat`, projected into
    `payees`/`payee_aliases`; the import pipeline does app-side alias
@@ -847,9 +852,9 @@ the database can absorb. Not scheduled; each is a deliberate yes/no:
   writer can roll back. Storing the pre-image text in `operation_files`
   gives rollback *and* `undo_mode = 'exact'` restore from the database, and
   the backup files disappear.
-- **Delete the in-memory parse cache.** `get_transactions_cached` and its
-  mtime invalidation are obsolete once reads hit the projection; the
-  content-hash check is the invalidation.
+- **Deleted the in-memory parse cache.** `get_transactions_cached` and its
+  mtime invalidation are gone; projection content hashes are the
+  invalidation mechanism.
 - **Aggregates in SQL (ADR-0005).** Dashboard/activity/register numbers are
   Python loops over parsed rows today. `GROUP BY` over `postings` is the
   deferred Explore aggregation engine's substrate — served directly by the
@@ -907,3 +912,14 @@ occurrence keeps the id, later occurrences get an ephemeral id plus a
 schema-named keys (`source_identity(_N)`, `reconciliation_event_id`); other
 app keys migrate when their flows cut over, extending the same command.
 `lf_posting_id` is not minted until a flow needs posting identity.
+
+Amendment (2026-07-06, adoption closeout): account register, activity,
+dashboard, category-suggestion, and transactions read paths are served from
+the projection. The legacy regex transaction loader and mtime parse cache are
+deleted. `operation_files` / `operation_entities` use surrogate ids plus
+`role` / `payload_json` for flexible audit metadata. `events.jsonl`,
+`imports/import-log.ndjson`, and `rules/20-match-rules.ndjson` are retired
+without compatibility fallbacks. Ordered directive filenames remain
+(`10-accounts.dat`, `11-payees.dat`, `12-tags.dat`, `13-commodities.dat`).
+Frontend mutation payloads no longer carry positional `lineNumber` /
+`headerLine` fields.
