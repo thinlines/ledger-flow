@@ -242,6 +242,129 @@ def test_rule_supports_date_conditions(tmp_path: Path) -> None:
     assert not_matched is None
 
 
+def test_rule_supports_amount_conditions_with_exact_nano_boundaries(tmp_path: Path) -> None:
+    rules_dir = tmp_path / "rules"
+    rules_dir.mkdir(parents=True, exist_ok=True)
+    accounts = rules_dir / "10-accounts.dat"
+    accounts.write_text("", encoding="utf-8")
+    path = ensure_rules_store(rules_dir, accounts)
+
+    rule = create_rule(
+        path,
+        conditions=[
+            {"field": "payee", "operator": "contains", "value": "coffee"},
+            {"field": "amount", "operator": "less_than", "value": "20.000000001", "joiner": "and"},
+        ],
+        actions=[{"type": "set_account", "account": "Expenses:Coffee"}],
+        enabled=True,
+    )
+    rules = load_rules(path)
+
+    assert find_matching_rule({"payee": "Coffee Shop", "amount": "20.00"}, rules)["id"] == rule["id"]
+    assert find_matching_rule({"payee": "Coffee Shop", "amount": "20.000000001"}, rules) is None
+    assert find_matching_rule({"payee": "Coffee Shop", "amount": "20.000000002"}, rules) is None
+
+
+def test_rule_supports_amount_between_against_any_posting_amount(tmp_path: Path) -> None:
+    rules_dir = tmp_path / "rules"
+    rules_dir.mkdir(parents=True, exist_ok=True)
+    accounts = rules_dir / "10-accounts.dat"
+    accounts.write_text("", encoding="utf-8")
+    path = ensure_rules_store(rules_dir, accounts)
+
+    rule = create_rule(
+        path,
+        conditions=[
+            {"field": "amount", "operator": "between", "value": "5.00", "secondaryValue": "10.00"},
+        ],
+        actions=[{"type": "set_account", "account": "Expenses:Small"}],
+        enabled=True,
+    )
+    rules = load_rules(path)
+
+    assert find_matching_rule({"amounts": ["USD -7.00", "$7.00"]}, rules)["id"] == rule["id"]
+    assert find_matching_rule({"amounts": ["$4.999999999", "$10.000000001"]}, rules) is None
+
+
+def test_rule_supports_account_conditions_against_posting_accounts(tmp_path: Path) -> None:
+    rules_dir = tmp_path / "rules"
+    rules_dir.mkdir(parents=True, exist_ok=True)
+    accounts = rules_dir / "10-accounts.dat"
+    accounts.write_text("", encoding="utf-8")
+    path = ensure_rules_store(rules_dir, accounts)
+
+    rule = create_rule(
+        path,
+        conditions=[
+            {"field": "account", "operator": "contains", "value": "Checking"},
+            {"field": "payee", "operator": "contains", "value": "coffee", "joiner": "and"},
+        ],
+        actions=[{"type": "set_account", "account": "Expenses:Coffee"}],
+        enabled=True,
+    )
+    rules = load_rules(path)
+
+    assert find_matching_rule(
+        {"payee": "Coffee Shop", "accounts": ["Expenses:Unknown", "Assets:Bank:Checking"]},
+        rules,
+    )["id"] == rule["id"]
+    assert find_matching_rule(
+        {"payee": "Coffee Shop", "accounts": ["Expenses:Unknown", "Assets:Bank:Savings"]},
+        rules,
+    ) is None
+
+
+def test_rule_supports_merchant_conditions(tmp_path: Path) -> None:
+    rules_dir = tmp_path / "rules"
+    rules_dir.mkdir(parents=True, exist_ok=True)
+    accounts = rules_dir / "10-accounts.dat"
+    accounts.write_text("", encoding="utf-8")
+    path = ensure_rules_store(rules_dir, accounts)
+
+    rule = create_rule(
+        path,
+        conditions=[{"field": "merchant", "operator": "exact", "value": "Walmart"}],
+        actions=[{"type": "set_account", "account": "Expenses:Groceries"}],
+        enabled=True,
+    )
+    rules = load_rules(path)
+
+    assert find_matching_rule({"payee": "WAL-MART #123", "merchant": "Walmart"}, rules)["id"] == rule["id"]
+    assert find_matching_rule({"payee": "WAL-MART #123", "merchant": "Target"}, rules) is None
+
+
+def test_rule_supports_new_fields_in_dnf_groups(tmp_path: Path) -> None:
+    rules_dir = tmp_path / "rules"
+    rules_dir.mkdir(parents=True, exist_ok=True)
+    accounts = rules_dir / "10-accounts.dat"
+    accounts.write_text("", encoding="utf-8")
+    path = ensure_rules_store(rules_dir, accounts)
+
+    rule = create_rule(
+        path,
+        conditions=[
+            {"field": "payee", "operator": "contains", "value": "coffee"},
+            {"field": "amount", "operator": "less_than", "value": "20", "joiner": "and"},
+            {"field": "merchant", "operator": "exact", "value": "Bookshop", "joiner": "or"},
+            {"field": "account", "operator": "contains", "value": "Checking", "joiner": "and"},
+        ],
+        actions=[{"type": "set_account", "account": "Expenses:Mixed"}],
+        enabled=True,
+    )
+    rules = load_rules(path)
+
+    assert find_matching_rule({"payee": "Coffee Shop", "amount": "$19.99"}, rules)["id"] == rule["id"]
+    assert find_matching_rule(
+        {"payee": "Other", "merchant": "Bookshop", "accounts": ["Assets:Bank:Checking"]},
+        rules,
+    )["id"] == rule["id"]
+    assert find_matching_rule({"payee": "Coffee Shop", "amount": "$20.00"}, rules) is None
+    assert find_matching_rule(
+        {"payee": "Other", "merchant": "Bookshop", "accounts": ["Assets:Bank:Savings"]},
+        rules,
+    ) is None
+
+
 def test_rule_supports_multiple_action_types(tmp_path: Path) -> None:
     rules_dir = tmp_path / "rules"
     rules_dir.mkdir(parents=True, exist_ok=True)

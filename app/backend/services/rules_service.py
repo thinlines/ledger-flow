@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, date as calendar_date, datetime
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from uuid import uuid4
 
@@ -11,13 +12,32 @@ from .projection_db import connect, ensure_database
 
 
 RULES_FILE = "20-match-rules.ndjson"
-ALLOWED_FIELDS = {"payee", "date"}
+ALLOWED_FIELDS = {"payee", "merchant", "date", "amount", "account"}
 FIELD_OPERATORS = {
     "payee": {"exact", "contains"},
+    "merchant": {"exact", "contains"},
     "date": {"on_or_after", "before", "between"},
+    "amount": {
+        "exact",
+        "less_than",
+        "less_than_or_equal",
+        "greater_than",
+        "greater_than_or_equal",
+        "between",
+    },
+    "account": {"exact", "contains"},
+}
+AMOUNT_OPERATOR_ALIASES = {
+    "eq": "exact",
+    "equals": "exact",
+    "lt": "less_than",
+    "lte": "less_than_or_equal",
+    "gt": "greater_than",
+    "gte": "greater_than_or_equal",
 }
 ALLOWED_JOINERS = {"and", "or"}
 ALLOWED_ACTION_TYPES = {"set_account", "add_tag", "set_kv", "append_comment"}
+NANO_UNITS = Decimal("1000000000")
 
 
 def rules_path(rules_dir: Path) -> Path:
@@ -149,6 +169,36 @@ def _normalize_date_value(value: str) -> str | None:
         return None
 
 
+def _normalize_operator(field: str, operator: str) -> str:
+    if field == "amount":
+        return AMOUNT_OPERATOR_ALIASES.get(operator, operator)
+    return operator
+
+
+def _amount_to_nano(value: str) -> int | None:
+    cleaned = str(value or "").strip().replace(",", "")
+    if not cleaned:
+        return None
+    if cleaned.startswith("$"):
+        cleaned = cleaned[1:].strip()
+    parts = cleaned.split()
+    if len(parts) == 2:
+        if parts[0].isalpha():
+            cleaned = parts[1]
+        elif parts[1].isalpha():
+            cleaned = parts[0]
+    if cleaned.startswith("$"):
+        cleaned = cleaned[1:].strip()
+    try:
+        amount = Decimal(cleaned)
+    except InvalidOperation:
+        return None
+    nano = amount * NANO_UNITS
+    if nano != nano.to_integral_value():
+        return None
+    return int(nano)
+
+
 def _normalize_conditions(raw_conditions: list[dict] | None, pattern: str | None = None) -> list[dict]:
     if raw_conditions is None:
         fallback = (pattern or "").strip()
@@ -159,7 +209,7 @@ def _normalize_conditions(raw_conditions: list[dict] | None, pattern: str | None
     normalized: list[dict] = []
     for c in raw_conditions:
         field = str(c.get("field", "")).strip().lower()
-        operator = str(c.get("operator", "")).strip().lower()
+        operator = _normalize_operator(field, str(c.get("operator", "")).strip().lower())
         value = str(c.get("value", "")).strip()
         secondary_value = str(c.get("secondaryValue", "")).strip()
         joiner = str(c.get("joiner", "and")).strip().lower()
@@ -184,6 +234,17 @@ def _normalize_conditions(raw_conditions: list[dict] | None, pattern: str | None
                     )
             elif not normalized_value:
                 continue
+        elif field == "amount":
+            normalized_amount = _amount_to_nano(value)
+            if normalized_amount is None:
+                continue
+            if operator == "between":
+                normalized_secondary_amount = _amount_to_nano(secondary_value)
+                if normalized_secondary_amount is None:
+                    continue
+                if normalized_amount > normalized_secondary_amount:
+                    value, secondary_value = secondary_value, value
+                normalized_secondary_value = secondary_value
         elif not value:
             continue
 
@@ -502,22 +563,75 @@ def ensure_rules_store(rules_dir: Path, accounts_dat: Path) -> Path:
     return rules_dir
 
 
-def _matches_condition(condition: dict, context: dict[str, str]) -> bool:
+def _context_values(context: dict, field: str) -> list[str]:
+    candidates = []
+    plural = f"{field}s"
+    if field in context:
+        candidates.append(context.get(field))
+    if plural in context:
+        candidates.append(context.get(plural))
+
+    out: list[str] = []
+    for candidate in candidates:
+        if candidate is None:
+            continue
+        if isinstance(candidate, (list, tuple, set)):
+            out.extend(str(value).strip() for value in candidate if str(value).strip())
+        else:
+            value = str(candidate).strip()
+            if value:
+                out.append(value)
+    return out
+
+
+def _matches_text_condition(condition: dict, values: list[str]) -> bool:
+    operator = condition["operator"]
+    expected = condition["value"].strip().lower()
+    actuals = [value.lower() for value in values]
+    if operator == "exact":
+        return any(actual == expected for actual in actuals)
+    if operator == "contains":
+        return any(expected in actual for actual in actuals)
+    return False
+
+
+def _matches_amount_condition(condition: dict, values: list[str]) -> bool:
+    operator = condition["operator"]
+    expected = _amount_to_nano(condition["value"])
+    if expected is None:
+        return False
+    actuals = [nano for value in values if (nano := _amount_to_nano(value)) is not None]
+    if not actuals:
+        return False
+    if operator == "exact":
+        return any(actual == expected for actual in actuals)
+    if operator == "less_than":
+        return any(actual < expected for actual in actuals)
+    if operator == "less_than_or_equal":
+        return any(actual <= expected for actual in actuals)
+    if operator == "greater_than":
+        return any(actual > expected for actual in actuals)
+    if operator == "greater_than_or_equal":
+        return any(actual >= expected for actual in actuals)
+    if operator == "between":
+        secondary = _amount_to_nano(str(condition.get("secondaryValue", "")))
+        if secondary is None:
+            return False
+        low, high = sorted((expected, secondary))
+        return any(low <= actual <= high for actual in actuals)
+    return False
+
+
+def _matches_condition(condition: dict, context: dict) -> bool:
     field = condition["field"]
     operator = condition["operator"]
     expected = condition["value"].strip()
-    actual = context.get(field, "").strip()
 
-    if field == "payee":
-        expected_lower = expected.lower()
-        actual_lower = actual.lower()
-        if operator == "exact":
-            return actual_lower == expected_lower
-        if operator == "contains":
-            return expected_lower in actual_lower
-        return False
+    if field in {"payee", "merchant", "account"}:
+        return _matches_text_condition(condition, _context_values(context, field))
 
     if field == "date":
+        actual = str(context.get(field, "")).strip()
         actual_date = _normalize_date_value(actual)
         expected_date = _normalize_date_value(expected)
         if not actual_date or not expected_date:
@@ -531,10 +645,12 @@ def _matches_condition(condition: dict, context: dict[str, str]) -> bool:
             if not secondary_value:
                 return False
             return expected_date <= actual_date <= secondary_value
+    if field == "amount":
+        return _matches_amount_condition(condition, _context_values(context, field))
     return False
 
 
-def find_matching_rule(context: dict[str, str], rules: list[dict]) -> dict | None:
+def find_matching_rule(context: dict, rules: list[dict]) -> dict | None:
     for rule in _normalize_rules(rules):
         if not rule["enabled"]:
             continue

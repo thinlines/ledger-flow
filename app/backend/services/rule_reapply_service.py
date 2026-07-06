@@ -91,11 +91,21 @@ def scan_rule_reapply(journal_path: Path, rule: dict, import_accounts: dict[str,
             current_date = ""
             current_payee = "(no payee)"
 
-        if not find_matching_rule({"payee": current_payee, "date": current_date}, [rule]):
+        metadata = _parse_metadata(lines, start, end)
+        postings = _parse_postings(lines, start, end)
+        if not find_matching_rule(
+            {
+                "payee": current_payee,
+                "merchant": current_payee,
+                "date": current_date,
+                "accounts": [posting["account"] for posting in postings],
+                "amounts": [posting["amount"] for posting in postings],
+            },
+            [rule],
+        ):
             continue
 
         matched_count += 1
-        metadata = _parse_metadata(lines, start, end)
         import_account_id = metadata.get("import_account_id") or None
         if not import_account_id:
             warnings.append(
@@ -119,7 +129,6 @@ def scan_rule_reapply(journal_path: Path, rule: dict, import_accounts: dict[str,
             )
             continue
 
-        postings = _parse_postings(lines, start, end)
         category_postings = [posting for posting in postings if posting["account"] != source_ledger_account]
         if len(category_postings) != 1:
             warnings.append(
