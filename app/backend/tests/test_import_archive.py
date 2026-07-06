@@ -16,6 +16,7 @@ from services.import_service import (
     preview_import_safely,
     remove_inbox_csv,
 )
+from services.operations_service import list_operations
 
 
 def _make_config(workspace: Path) -> AppConfig:
@@ -486,7 +487,19 @@ def test_apply_import_skipped_count_folds_identity_collisions(tmp_path: Path) ->
 def _read_events(workspace_root: Path) -> list[dict]:
     events_file = workspace_root / EVENTS_FILENAME
     if not events_file.exists():
-        return []
+        config = _make_config(workspace_root)
+        return [
+            {
+                "id": op["id"],
+                "type": op["type"],
+                "summary": op["summary"],
+                "payload": op["payload"],
+                "journal_refs": op["files"],
+                "actor": op["actor"],
+                "compensates": op["compensates"],
+            }
+            for op in reversed(list_operations(config))
+        ]
     return [
         json.loads(line)
         for line in events_file.read_text(encoding="utf-8").splitlines()
@@ -518,6 +531,7 @@ def test_apply_import_emits_identity_collision_diagnostic_event(tmp_path: Path) 
 
     apply_import(config, stage)
 
+    assert not (config.root_dir / EVENTS_FILENAME).exists()
     events = _read_events(config.root_dir)
     collision_events = [e for e in events if e["type"] == "import.identity_collision.v1"]
     assert len(collision_events) == 2, "One event per identity-collision row"

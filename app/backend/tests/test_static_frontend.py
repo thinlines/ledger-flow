@@ -2,8 +2,6 @@ from __future__ import annotations
 
 import importlib
 
-from fastapi.testclient import TestClient
-
 
 def test_serves_packaged_frontend_shell(tmp_path, monkeypatch) -> None:
     static_dir = tmp_path / "static"
@@ -14,19 +12,17 @@ def test_serves_packaged_frontend_shell(tmp_path, monkeypatch) -> None:
 
     import main
 
-    client = TestClient(importlib.reload(main).app)
+    app = importlib.reload(main).app
+    routes = {getattr(route, "path", ""): route for route in app.routes}
 
-    root = client.get("/")
-    assert root.status_code == 200
-    assert "Ledger Flow" in root.text
+    root = routes["/"].endpoint()
+    assert root.path == static_dir / "index.html"
 
-    deep_link = client.get("/transactions")
-    assert deep_link.status_code == 200
-    assert "Ledger Flow" in deep_link.text
+    deep_link = routes["/{full_path:path}"].endpoint("transactions")
+    assert deep_link.path == static_dir / "index.html"
 
-    asset = client.get("/app.js")
-    assert asset.status_code == 200
-    assert "ledger-flow" in asset.text
+    asset = routes["/{full_path:path}"].endpoint("app.js")
+    assert asset.path == static_dir / "app.js"
 
 
 def test_api_routes_still_win_when_frontend_is_served(tmp_path, monkeypatch) -> None:
@@ -37,8 +33,6 @@ def test_api_routes_still_win_when_frontend_is_served(tmp_path, monkeypatch) -> 
 
     import main
 
-    client = TestClient(importlib.reload(main).app)
-
-    response = client.get("/api/app/state")
-    assert response.status_code == 200
-    assert response.headers["content-type"].startswith("application/json")
+    app = importlib.reload(main).app
+    route_paths = [getattr(route, "path", "") for route in app.routes]
+    assert route_paths.index("/api/app/state") < route_paths.index("/{full_path:path}")

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import re
 from datetime import date
 from decimal import Decimal
@@ -12,7 +11,7 @@ import pytest
 
 from services import event_log_service
 from services.config_service import AppConfig
-from services.event_log_service import EVENTS_FILENAME, emit_event
+from services.event_log_service import EVENTS_FILENAME, emit_event, read_events
 from services.import_service import apply_reconciliation_fence
 from services.reconciliation_service import (
     AssertionFailure,
@@ -586,6 +585,6 @@ class TestEventIdLinkage:
         )
         assert returned == eid
 
-        events = (tmp_path / EVENTS_FILENAME).read_text().splitlines()
-        parsed = json.loads(events[0])
-        assert parsed["id"] == eid
+        assert not (tmp_path / EVENTS_FILENAME).exists()
+        events = read_events(tmp_path)
+        assert events[0]["id"] == eid
