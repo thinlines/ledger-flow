@@ -61,6 +61,26 @@ def parse_header(line: str) -> ParsedHeader | None:
     )
 
 
+def set_header_payee(line: str, new_payee: str) -> str:
+    """Rewrite a header line with a new payee.
+
+    Preserves date, clearing flag, and code.  Returns the original line
+    unchanged if it cannot be parsed.
+    """
+    parsed = parse_header(line)
+    if parsed is None:
+        return line
+
+    parts: list[str] = [parsed.date]
+    flag_char = _STATUS_TO_CHAR[parsed.status]
+    if flag_char is not None:
+        parts.append(flag_char)
+    if parsed.code is not None:
+        parts.append(parsed.code)
+    parts.append(new_payee)
+    return " ".join(parts)
+
+
 def set_header_status(line: str, new_status: TransactionStatus) -> str:
     """Rewrite a header line with a new clearing flag.
 

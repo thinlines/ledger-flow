@@ -47,7 +47,6 @@ def _make_config(workspace: Path) -> AppConfig:
                 "ledger_account": "Assets:Bank:Checking",
             }
         },
-        payee_aliases="payee_aliases.csv",
     )
 
 

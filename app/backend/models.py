@@ -77,6 +77,15 @@ class PayeeRuleRequest(BaseModel):
     account: str
 
 
+class MerchantCreateRequest(BaseModel):
+    """Create or extend a merchant (payee directive): optional alias
+    pattern and default category account."""
+
+    name: str
+    alias: str | None = None
+    defaultAccount: str | None = None
+
+
 class RuleCondition(BaseModel):
     field: str
     operator: str

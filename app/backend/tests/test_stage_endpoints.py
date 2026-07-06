@@ -72,7 +72,6 @@ def _make_config(workspace: Path) -> AppConfig:
                 "import_account_id": "wf_checking",
             }
         },
-        payee_aliases="payee_aliases.csv",
     )
 
 

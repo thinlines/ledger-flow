@@ -1,8 +1,9 @@
 """Category suggestion service.
 
-Two-pass prediction for transaction category (destination account):
+Three-pass prediction for transaction category (destination account):
   1. Deterministic rule match via rules_service
-  2. Statistical journal frequency weighted by payee similarity
+  2. Merchant default account (categorization precedence, issue #24)
+  3. Statistical journal frequency weighted by payee similarity
 """
 
 from __future__ import annotations
@@ -13,6 +14,7 @@ from pathlib import Path
 
 from .config_service import AppConfig
 from .journal_query_service import ParsedTransaction, get_transactions_cached
+from .merchant_service import load_merchants
 from .payee_similarity import normalize_payee, payee_similarity
 from .rules_service import ensure_rules_store, extract_set_account, find_matching_rule, load_rules
 
@@ -96,7 +98,22 @@ def suggest_category(payee: str, config: AppConfig) -> dict:
             }
 
     # ------------------------------------------------------------------
-    # Pass 2 — Journal frequency weighted by payee similarity
+    # Pass 2 — Merchant default account
+    # ------------------------------------------------------------------
+    payee_clean = payee.strip()
+    merchant = next(
+        (m for m in load_merchants(config) if m.name == payee_clean), None
+    )
+    if merchant is not None and merchant.default_account:
+        return {
+            "suggestion": merchant.default_account,
+            "confidence": 1.0,
+            "source": "merchant",
+            "alternatives": [],
+        }
+
+    # ------------------------------------------------------------------
+    # Pass 3 — Journal frequency weighted by payee similarity
     # ------------------------------------------------------------------
     freq_map = _get_frequency_map(config)
     if not freq_map:

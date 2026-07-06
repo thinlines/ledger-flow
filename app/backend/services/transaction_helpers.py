@@ -49,6 +49,8 @@ class RegisterEvent:
     header_line_number: int = -1
     match_id: str | None = None
     notes: str | None = None
+    # Raw statement text preserved by the import merchant layer (issue #24).
+    statement_payee: str | None = None
     affects_balance: bool = True
     counts_as_transaction: bool = True
     # Stable projected identity for the (lf_txn_id, raw_block_hash) mutation

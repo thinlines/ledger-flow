@@ -27,6 +27,7 @@ ACCOUNT_ONLY_RE = re.compile(r"^(\s+)([^\s].*?)\s*$")
 META_RE = re.compile(r"^\s*;\s*([^:]+):\s*(.*)$")
 JOURNAL_INCLUDE_LINES = (
     "include ../rules/10-accounts.dat",
+    "include ../rules/11-payees.dat",
     "include ../rules/12-tags.dat",
     "include ../rules/13-commodities.dat",
 )
@@ -48,6 +49,7 @@ SYSTEM_TAGS = (
     "source_file_sha256",
     "source_identity",
     "source_payload_hash",
+    "statement_payee",
     "statement_period",
     "tracked_account_id",
     "transfer_id",
@@ -152,6 +154,15 @@ def ensure_standard_tags_file(tags_path: Path) -> None:
     tags_path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
 
 
+def ensure_payees_file(payees_path: Path) -> None:
+    """The payees ``.dat`` must exist before ledger reads the include line;
+    merchant declarations accumulate in it via the merchant layer."""
+    if payees_path.exists():
+        return
+    payees_path.parent.mkdir(parents=True, exist_ok=True)
+    payees_path.write_text("", encoding="utf-8")
+
+
 def ensure_journal_includes(
     journal_path: Path,
     *,
@@ -183,6 +194,7 @@ def _relative_include_path(from_dir: Path, target_path: Path) -> str:
 
 def ensure_workspace_journal_includes(config: AppConfig) -> None:
     sync_opening_balance_include_index(config)
+    ensure_payees_file(config.init_dir / "11-payees.dat")
     start_year = f"{config.start_year:04d}"
 
     for journal_path in sorted(config.journal_dir.glob("*.journal")):
@@ -610,7 +622,6 @@ class WorkspaceManager:
         self,
         config_toml: Path,
         *,
-        payee_aliases: str,
         workspace: dict,
         dirs: dict,
         institution_templates: dict[str, dict],
@@ -619,8 +630,6 @@ class WorkspaceManager:
         import_accounts: dict[str, dict],
     ) -> None:
         cfg_lines = [
-            f"payee_aliases = {json.dumps(payee_aliases)}",
-            "",
             "[workspace]",
             f"name = {json.dumps(str(workspace.get('name', 'Workspace')))}",
             f"base_currency = {json.dumps(str(workspace.get('base_currency', 'USD')))}",
@@ -1009,7 +1018,6 @@ class WorkspaceManager:
 
         self._write_workspace_config(
             settings / "workspace.toml",
-            payee_aliases="payee_aliases.csv",
             workspace={
                 "name": workspace_name,
                 "base_currency": base_currency,
@@ -1030,9 +1038,8 @@ class WorkspaceManager:
 
         (imports / "import-log.ndjson").touch(exist_ok=True)
 
-        payee_alias_csv = rules / "payee_aliases.csv"
-        if not payee_alias_csv.exists():
-            payee_alias_csv.write_text("payee,alias\n", encoding="utf-8")
+        payees_dat = rules / "11-payees.dat"
+        ensure_payees_file(payees_dat)
 
         match_rules = rules / "20-match-rules.ndjson"
         if not match_rules.exists():
@@ -1143,7 +1150,6 @@ class WorkspaceManager:
 
         self._write_workspace_config(
             config.config_toml,
-            payee_aliases=config.payee_aliases,
             workspace=dict(config.workspace),
             dirs=dict(config.dirs),
             institution_templates=institution_templates,
@@ -1249,7 +1255,6 @@ class WorkspaceManager:
 
         self._write_workspace_config(
             config.config_toml,
-            payee_aliases=config.payee_aliases,
             workspace=dict(config.workspace),
             dirs=dict(config.dirs),
             institution_templates=dict(config.institution_templates),
@@ -1333,7 +1338,6 @@ class WorkspaceManager:
 
         self._write_workspace_config(
             config.config_toml,
-            payee_aliases=config.payee_aliases,
             workspace=dict(config.workspace),
             dirs=dict(config.dirs),
             institution_templates=dict(config.institution_templates),

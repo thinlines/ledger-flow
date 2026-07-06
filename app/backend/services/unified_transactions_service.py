@@ -239,6 +239,7 @@ def build_unified_transactions(
                 header_line_number=transaction.header_line_number,
                 match_id=transaction.metadata.get("match-id") or None,
                 notes=transaction.metadata.get("notes") or None,
+                statement_payee=transaction.metadata.get("statement_payee") or None,
                 counts_as_transaction=not is_generated_opening,
                 txn_id=transaction.txn_id,
                 block_hash=transaction.block_hash,
@@ -538,6 +539,7 @@ def _compute_rows_with_balance(
             "transferState": ev.transfer_state,
             "detailLines": ev.detail_lines,
             "notes": ev.notes,
+            "statementPayee": ev.statement_payee,
         })
 
     return (rows, multi_currency)

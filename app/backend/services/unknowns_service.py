@@ -10,6 +10,7 @@ from uuid import uuid4
 from .account_declaration_service import load_known_accounts
 from .archive_service import archive_manual_entry, rollback_archive
 from .config_service import infer_account_kind
+from .merchant_service import Merchant
 from .manual_entry_service import (
     _extract_user_metadata_lines,
     _parse_manual_entry_destination,
@@ -426,6 +427,7 @@ def scan_unknowns(
     rules: list[dict],
     import_accounts: dict[str, dict] | None = None,
     tracked_accounts: dict[str, dict] | None = None,
+    merchants: list[Merchant] | None = None,
 ) -> dict:
     transaction_records, groups = _build_transaction_records(
         journal_path,
@@ -438,7 +440,18 @@ def scan_unknowns(
     for group in groups:
         for txn in group["txns"]:
             matched = find_matching_rule(
-                {"payee": group["payeeDisplay"], "date": txn["date"].replace("/", "-")},
+                {
+                    "payee": group["payeeDisplay"],
+                    "merchant": group["payeeDisplay"],
+                    "date": txn["date"].replace("/", "-"),
+                    "amount": txn["amount"],
+                    "account": txn["currentAccount"],
+                    "accounts": [
+                        txn["currentAccount"],
+                        txn["counterpartyAccount"],
+                        group["sourceLedgerAccount"],
+                    ],
+                },
                 rules,
             )
             group["_matchSignatures"].append(
@@ -449,6 +462,11 @@ def scan_unknowns(
                 )
             )
 
+    defaults_by_merchant = {
+        merchant.name: merchant.default_account
+        for merchant in merchants or []
+        if merchant.default_account
+    }
     for group in groups:
         signatures = {tuple(signature) for signature in group.pop("_matchSignatures", [])}
         if len(signatures) == 1:
@@ -460,6 +478,15 @@ def scan_unknowns(
             group["suggestedAccount"] = None
             group["matchedRuleId"] = None
             group["matchedRulePattern"] = None
+
+        # Categorization precedence: rule → merchant default account.
+        if group["suggestedAccount"] is not None:
+            group["suggestedSource"] = "rule"
+        elif defaults_by_merchant.get(group["payeeDisplay"]):
+            group["suggestedAccount"] = defaults_by_merchant[group["payeeDisplay"]]
+            group["suggestedSource"] = "merchant"
+        else:
+            group["suggestedSource"] = None
 
     return {"groups": groups}
 
@@ -1043,5 +1070,4 @@ def add_payee_rule(accounts_dat: Path, payee: str, account: str) -> tuple[bool, 
     rules_lines.insert(insert_at, rule_line)
     accounts_dat.write_text("\n".join(rules_lines) + "\n", encoding="utf-8")
     return True, None
-
 

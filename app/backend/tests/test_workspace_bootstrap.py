@@ -63,10 +63,16 @@ def test_bootstrap_workspace_writes_import_accounts_and_templates(tmp_path: Path
     assert "account Expenses:Unknown" in content
     assert "account Equity:Opening-Balances" in content
 
+    # The payee-alias CSV/generated-dat path is retired (issue #24): the
+    # merchant layer's payees dat replaces it.
+    assert not (workspace_root / "rules" / "payee_aliases.csv").exists()
+    assert (workspace_root / "rules" / "11-payees.dat").exists()
+
     year_journal = workspace_root / "journals" / "2026.journal"
     journal_content = year_journal.read_text(encoding="utf-8")
     assert journal_content.startswith(
         "include ../rules/10-accounts.dat\n"
+        "include ../rules/11-payees.dat\n"
         "include ../rules/12-tags.dat\n"
         "include ../rules/13-commodities.dat\n"
         "include ../opening/_opening_balances.journal\n"
@@ -1064,6 +1070,7 @@ def test_ensure_journal_includes_prepends_standard_include_block(tmp_path: Path)
     content = journal_path.read_text(encoding="utf-8")
     assert content.startswith(
         "include ../rules/10-accounts.dat\n"
+        "include ../rules/11-payees.dat\n"
         "include ../rules/12-tags.dat\n"
         "include ../rules/13-commodities.dat\n\n"
     )
@@ -1145,6 +1152,10 @@ ledger_account = "Assets:Bank:Checking"
     assert "tag lf_txn_id" in tags_content
     assert "tag tracked_account_id" in tags_content
 
+    # The payees dat referenced by the standard include block is created so
+    # ledger never sees a dangling include.
+    assert (rules / "11-payees.dat").exists()
+
 
 def test_ensure_standard_commodities_file_appends_symbol_format_for_base_currency(tmp_path: Path) -> None:
     commodities_path = tmp_path / "13-commodities.dat"
@@ -1175,6 +1186,7 @@ def test_ensure_standard_tags_file_appends_missing_system_tags(tmp_path: Path) -
     assert "tag lf_txn_id" in content
     assert "tag lf_posting_id" in content
     assert "tag lf_operation_id" in content
+    assert "tag statement_payee" in content
     assert "tag source_payload_hash" in content
     assert "tag tracked_account_id" in content
     assert "tag transfer_id" in content

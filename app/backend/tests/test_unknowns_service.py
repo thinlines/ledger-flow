@@ -1,6 +1,7 @@
 from pathlib import Path
 
 from services.account_declaration_service import create_account
+from services.merchant_service import Merchant
 from services.unknowns_service import add_payee_rule, apply_unknown_mappings, scan_unknowns
 from services.transfer_service import transfer_pair_account
 
@@ -120,6 +121,61 @@ account Expenses:Eating Out
     assert group["matchedRuleId"] == "r1"
     assert group["sourceAccountLabel"] == "Assets:Wells Fargo Checking"
     assert group["sourceLedgerAccount"] == "Assets:Wells Fargo Checking"
+
+
+def test_scan_unknowns_suggests_merchant_default_when_no_rule_matches(tmp_path: Path) -> None:
+    journal = tmp_path / "sample.journal"
+    journal.write_text(
+        """
+2026/02/01 Walmart
+    Expenses:Unknown  $5.00
+    Assets:Wells Fargo Checking
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    result = scan_unknowns(
+        journal,
+        [],
+        merchants=[Merchant(name="Walmart", default_account="Expenses:Groceries")],
+    )
+
+    group = result["groups"][0]
+    assert group["suggestedAccount"] == "Expenses:Groceries"
+    assert group["suggestedSource"] == "merchant"
+    assert group["matchedRuleId"] is None
+
+
+def test_scan_unknowns_rule_wins_over_merchant_default(tmp_path: Path) -> None:
+    journal = tmp_path / "sample.journal"
+    journal.write_text(
+        """
+2026/02/01 Walmart
+    Expenses:Unknown  $5.00
+    Assets:Wells Fargo Checking
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    result = scan_unknowns(
+        journal,
+        [{
+            "id": "r1",
+            "type": "match",
+            "conditions": [{"field": "payee", "operator": "exact", "value": "Walmart"}],
+            "actions": [{"type": "set_account", "account": "Expenses:Household"}],
+            "enabled": True,
+            "position": 1,
+        }],
+        merchants=[Merchant(name="Walmart", default_account="Expenses:Groceries")],
+    )
+
+    group = result["groups"][0]
+    assert group["suggestedAccount"] == "Expenses:Household"
+    assert group["suggestedSource"] == "rule"
+    assert group["matchedRuleId"] == "r1"
 
 
 def test_scan_unknowns_splits_groups_by_import_account(tmp_path: Path) -> None:

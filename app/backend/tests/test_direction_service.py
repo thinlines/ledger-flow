@@ -56,7 +56,6 @@ def _make_config(workspace: Path) -> AppConfig:
                 "import_account_id": "visa",
             },
         },
-        payee_aliases="payee_aliases.csv",
     )
 
 

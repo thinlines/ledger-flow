@@ -26,6 +26,7 @@ from models import (
     ImportPreviewRequest,
     ImportUndoRequest,
     ManualTransactionRequest,
+    MerchantCreateRequest,
     PayeeRuleRequest,
     ReassignAccountRequest,
     RecategorizeTransactionRequest,
@@ -124,6 +125,7 @@ from services.account_declaration_service import (
     reopen_account,
     set_subtype,
 )
+from services.merchant_service import list_undeclared_payees, load_merchants, upsert_merchant
 from services.projection_service import refresh_projection
 from services.reference_data_service import (
     account_subtypes,
@@ -1980,6 +1982,47 @@ def rules_create(req: RuleCreateRequest) -> dict:
     return {"rule": rule}
 
 
+@app.get("/api/merchants")
+def merchants_list() -> dict:
+    """Declared merchants plus the used-but-undeclared payee suggestion
+    surface ("create merchant from this payee?")."""
+    config = _require_workspace_config()
+    return {
+        "merchants": [
+            {
+                "name": merchant.name,
+                "defaultAccount": merchant.default_account,
+                "aliases": list(merchant.aliases),
+            }
+            for merchant in load_merchants(config)
+        ],
+        "suggestions": [
+            {"name": name} for name in list_undeclared_payees(config)
+        ],
+    }
+
+
+@app.post("/api/merchants")
+def merchants_create(req: MerchantCreateRequest) -> dict:
+    config = _require_workspace_config()
+    default_account = (req.defaultAccount or "").strip()
+    if default_account:
+        accounts_dat = config.init_dir / "10-accounts.dat"
+        known_accounts = set(list_known_accounts(accounts_dat))
+        if default_account not in known_accounts:
+            raise HTTPException(status_code=400, detail=f"Unknown account: {default_account}")
+    try:
+        merchant = upsert_merchant(
+            config,
+            name=req.name,
+            alias=req.alias,
+            default_account=default_account or None,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return {"merchant": merchant}
+
+
 @app.post("/api/accounts")
 def accounts_create(req: CreateAccountRequest) -> dict:
     config = _require_workspace_config()
@@ -2254,7 +2297,13 @@ def unknown_scan(req: UnknownScanRequest) -> dict:
 
     accounts_dat = config.init_dir / "10-accounts.dat"
     rule_path = ensure_rules_store(config.init_dir, accounts_dat)
-    data = scan_unknowns(journal_path, load_rules(rule_path), config.import_accounts, config.tracked_accounts)
+    data = scan_unknowns(
+        journal_path,
+        load_rules(rule_path),
+        config.import_accounts,
+        config.tracked_accounts,
+        merchants=load_merchants(config),
+    )
     stages = StageStore(config)
     existing_stage = _find_resumable_unknown_stage(config, journal_path)
     if existing_stage is not None:

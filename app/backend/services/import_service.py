@@ -14,8 +14,11 @@ from .event_log_service import emit_event, rel_path
 from .import_identity_service import ImportIdentityStore, source_payload_hash_for_lines
 from .import_profile_service import import_source_summary, resolve_import_source
 from .journal_block_service import lf_txn_id_line, mint_lf_txn_id
+from .header_parser import HEADER_RE, set_header_payee
 from .ledger_runner import CommandError, run_cmd
-from .payee_alias_service import ensure_payee_alias_dat
+from .merchant_service import Merchant, load_merchants, match_merchant, resolve_category
+from .rules_service import ensure_rules_store, load_rules
+from .transfer_service import rewrite_posting_account
 from .workspace_service import ensure_standard_commodities_file, ensure_workspace_journal_includes
 
 _log = logging.getLogger(__name__)
@@ -24,7 +27,6 @@ _log = logging.getLogger(__name__)
 INBOX_FILE_RE = re.compile(
     r"^(?P<year>\d{4})__(?P<import_account_id>[a-z0-9_]+)__(?P<label>.+)\.csv$"
 )
-from .header_parser import HEADER_RE
 
 TXN_START_RE = re.compile(r"^\d{4}[-/]\d{2}[-/]\d{2}")
 POSTING_RE = re.compile(r"^(\s+)([^\s].*?)(\s{2,}|\t+)(.*)$")
@@ -32,6 +34,7 @@ META_RE = re.compile(r"^\s*;\s*([^:]+):\s*(.*)$")
 SOURCE_IDENTITY_KEY_RE = re.compile(r"^lf_source_identity(?:_(?P<suffix>\d+))?$")
 SOURCE_PAYLOAD_KEY_RE = re.compile(r"^source_payload_hash(?:_(?P<suffix>\d+))?$")
 IMPORTER_VERSION = "mvp2"
+UNKNOWN_ACCOUNT = "Expenses:Unknown"
 
 
 @dataclass(frozen=True)
@@ -366,12 +369,35 @@ def _extract_institution_amount(postings: list[dict], institution_account: str) 
     return ""
 
 
+def _statement_payee_from_csv_metadata(metadata: dict[str, str]) -> str | None:
+    """Raw statement description from the ``--rich-data`` CSV metadata row.
+
+    The intermediate CSV columns are ``date,code,description,amount,total,
+    note``; the description is the statement payee as the institution wrote
+    it, before any read-time aliasing by ledger."""
+    row = metadata.get("csv")
+    if not row:
+        return None
+    import csv as _csv
+
+    try:
+        fields = next(_csv.reader([row]))
+    except (StopIteration, _csv.Error):
+        return None
+    if len(fields) < 3:
+        return None
+    description = fields[2].strip()
+    return description or None
+
+
 def _parse_transaction(
     lines: list[str],
     import_account_id: str,
     institution_account: str,
     *,
     base_currency: str,
+    merchants: list[Merchant] | None = None,
+    rules: list[dict] | None = None,
 ) -> dict:
     header = lines[0]
     hm = HEADER_RE.match(header)
@@ -393,11 +419,57 @@ def _parse_transaction(
         if pm:
             postings.append({"account": pm.group(2).strip(), "amount": pm.group(4).strip()})
 
+    # Merchant layer: the app matches raw statement text against payee
+    # aliases and writes the canonical merchant name on the payee line.
+    # ``ledger convert`` may have applied the same aliases at read time, so
+    # the raw text comes from the ``--rich-data`` CSV metadata row, not the
+    # header. Dedupe identity stays keyed to the raw statement payee so
+    # declaring an alias later never re-imports old rows; the payload hash
+    # covers the rewritten lines so it agrees with what the journal will
+    # contain.
+    statement_payee = _statement_payee_from_csv_metadata(metadata) or payee
+    merchant = (
+        match_merchant(statement_payee, merchants)
+        if merchants and statement_payee
+        else None
+    )
+    if merchant is not None and merchant.name != payee:
+        payee = merchant.name
+        lines = [set_header_payee(lines[0], payee), *lines[1:]]
+
     inst_amount = _extract_institution_amount(postings, institution_account)
+
+    # Categorization precedence: explicit rule → merchant default account →
+    # keep the Expenses:Unknown placeholder for Review.
+    resolution = resolve_category(
+        {
+            "payee": payee,
+            "merchant": merchant.name if merchant is not None else payee,
+            "date": date.replace("/", "-"),
+            "amount": inst_amount,
+            "accounts": [posting["account"] for posting in postings],
+            "amounts": [posting["amount"] for posting in postings],
+        },
+        rules or [],
+        merchants or [],
+    )
+    if resolution is not None:
+        category_account, _source = resolution
+        rewritten_lines = list(lines)
+        for index, line in enumerate(rewritten_lines):
+            pm = POSTING_RE.match(line)
+            if pm is None or pm.group(2).strip() != UNKNOWN_ACCOUNT:
+                continue
+            rewritten_lines[index], _ = rewrite_posting_account(line, category_account)
+        lines = rewritten_lines
+        for posting in postings:
+            if posting["account"] == UNKNOWN_ACCOUNT:
+                posting["account"] = category_account
+
     identity_base = "|".join([
         import_account_id,
         date,
-        _normalize_payee(payee),
+        _normalize_payee(statement_payee),
         inst_amount,
     ])
     source_identity = _sha256_text(identity_base)
@@ -412,6 +484,7 @@ def _parse_transaction(
     return {
         "date": date,
         "payee": payee,
+        "statementPayee": statement_payee,
         "postings": postings,
         "raw": normalized_body,
         "metadata": metadata,
@@ -561,6 +634,9 @@ def _annotated_raw_txn(
             existing_keys.add(mm.group(1).strip().lower())
 
     metadata_lines = []
+    statement_payee = str(txn.get("statementPayee") or "").strip()
+    if statement_payee and "statement_payee" not in existing_keys:
+        metadata_lines.append(f"    ; statement_payee: {statement_payee}")
     if "import_account_id" not in existing_keys:
         metadata_lines.append(f"    ; import_account_id: {import_account_id}")
     if "institution_template" not in existing_keys:
@@ -614,7 +690,6 @@ def preview_import(
         else "%Y/%m/%d"
     )
 
-    ensure_payee_alias_dat(config)
     ensure_standard_commodities_file(config.init_dir / "13-commodities.dat", str(config.workspace.get("base_currency", "USD")))
     converted_csv = normalize_csv_to_intermediate(config, csv_path, account_cfg)
 
@@ -648,12 +723,16 @@ def preview_import(
     txns = []
     existing_map = _build_existing_map(config, import_account_id, target_journal)
     base_currency = str(config.workspace.get("base_currency", "USD"))
+    merchants = load_merchants(config)
+    rules = load_rules(ensure_rules_store(config.init_dir, config.init_dir / "10-accounts.dat"))
     for lines in _split_transactions(converted_journal):
         txn = _parse_transaction(
             lines,
             import_account_id,
             account,
             base_currency=base_currency,
+            merchants=merchants,
+            rules=rules,
         )
         txn["matchStatus"] = _classify_transaction(txn, existing_map)
         if txn["matchStatus"] == "conflict":
@@ -703,7 +782,14 @@ def preview_import(
         "trackedAccountId": _tracked_account_id_for_import_account(config, import_account_id),
         "summary": {
             "count": len(txns),
-            "unknownCount": converted_journal.count("Expenses:Unknown"),
+            # Counted after categorization: rule and merchant-default matches
+            # no longer land in Review.
+            "unknownCount": sum(
+                1
+                for t in txns
+                for p in t["postings"]
+                if p["account"] == UNKNOWN_ACCOUNT
+            ),
             "newCount": len(new_txns),
             # Identity collisions fold into duplicateCount — both mean "already
             # imported, nothing to add" from the user's perspective. See

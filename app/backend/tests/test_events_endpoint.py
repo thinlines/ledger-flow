@@ -26,7 +26,6 @@ def _make_config(workspace: Path) -> AppConfig:
         institution_templates={},
         import_accounts={},
         tracked_accounts={},
-        payee_aliases="payee_aliases.csv",
     )
 
 

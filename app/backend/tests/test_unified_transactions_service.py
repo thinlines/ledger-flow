@@ -87,7 +87,6 @@ def _make_config(workspace: Path) -> AppConfig:
                 "import_account_id": "savings",
             },
         },
-        payee_aliases="payee_aliases.csv",
     )
 
 
@@ -1113,6 +1112,44 @@ def test_notes_field(tmp_path: Path) -> None:
     rows = result["rows"]
     assert len(rows) == 1
     assert rows[0]["notes"] == "Bought this for the office"
+
+
+# ---------------------------------------------------------------------------
+# 26b. Statement payee metadata (merchant layer, issue #24)
+# ---------------------------------------------------------------------------
+def test_statement_payee_metadata_is_exposed(tmp_path: Path) -> None:
+    config = _make_config(tmp_path / "workspace")
+    _write_year_journal(
+        config,
+        """
+2026/02/20 * Walmart
+    ; import_account_id: checking
+    ; statement_payee: WAL-MART #2734 PURCHASE
+    Assets:Bank:Checking    $-30.00
+    Expenses:Groceries       $30.00
+
+2026/02/21 * Manual Entry
+    Assets:Bank:Checking    $-5.00
+    Expenses:Misc            $5.00
+""".strip()
+        + "\n",
+    )
+
+    filters = UnifiedTransactionFilters(
+        accounts=["checking"],
+        categories=[],
+        period=None,
+        from_date=None,
+        to_date=None,
+        month=None,
+        status=None,
+        search=None,
+    )
+    result = build_unified_transactions(config, filters)
+
+    rows = {row["payee"]: row for row in result["rows"]}
+    assert rows["Walmart"]["statementPayee"] == "WAL-MART #2734 PURCHASE"
+    assert rows["Manual Entry"]["statementPayee"] is None
 
 
 # ---------------------------------------------------------------------------

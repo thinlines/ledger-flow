@@ -35,7 +35,6 @@ def _make_config(workspace: Path) -> AppConfig:
                 "import_account_id": "checking_import",
             }
         },
-        payee_aliases="payee_aliases.csv",
     )
 
 

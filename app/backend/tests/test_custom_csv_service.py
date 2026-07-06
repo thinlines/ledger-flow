@@ -154,7 +154,6 @@ def test_normalize_csv_to_intermediate_reverses_newest_first_institution_rows(tm
                 "ledger_account": "Assets:Bank:Checking",
             }
         },
-        payee_aliases="payee_aliases.csv",
     )
 
     out = normalize_csv_to_intermediate(config, csv_path, config.import_accounts["wf_checking"])

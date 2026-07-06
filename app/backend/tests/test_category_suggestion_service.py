@@ -32,7 +32,6 @@ def _make_config(workspace: Path) -> AppConfig:
                 "import_account_id": "checking",
             },
         },
-        payee_aliases="payee_aliases.csv",
     )
 
 
@@ -61,6 +60,50 @@ def test_rule_match_returns_category_with_full_confidence(tmp_path: Path) -> Non
     assert result["confidence"] == 1.0
     assert result["source"] == "rule"
     assert result["alternatives"] == []
+
+
+# ---------------------------------------------------------------------------
+# Merchant default tests (issue #24)
+# ---------------------------------------------------------------------------
+
+
+PAYEES_DAT = """\
+payee Walmart
+    alias WAL-?MART
+    ; lf_default_account: Expenses:Groceries
+"""
+
+
+def _declare_merchants(config: AppConfig) -> None:
+    (config.init_dir / "11-payees.dat").write_text(PAYEES_DAT, encoding="utf-8")
+    _write_journal(config.journal_dir, "include ../rules/11-payees.dat")
+
+
+def test_merchant_default_account_suggested_when_no_rule_matches(tmp_path: Path) -> None:
+    config = _make_config(tmp_path)
+    accounts_dat = config.init_dir / "10-accounts.dat"
+    accounts_dat.write_text("", encoding="utf-8")
+    ensure_rules_store(config.init_dir, accounts_dat)
+    _declare_merchants(config)
+
+    result = suggest_category("Walmart", config)
+    assert result["suggestion"] == "Expenses:Groceries"
+    assert result["confidence"] == 1.0
+    assert result["source"] == "merchant"
+    assert result["alternatives"] == []
+
+
+def test_rule_beats_merchant_default_account(tmp_path: Path) -> None:
+    config = _make_config(tmp_path)
+    accounts_dat = config.init_dir / "10-accounts.dat"
+    accounts_dat.write_text("", encoding="utf-8")
+    rules_file = ensure_rules_store(config.init_dir, accounts_dat)
+    upsert_payee_rule(rules_file, "Walmart", "Expenses:Household")
+    _declare_merchants(config)
+
+    result = suggest_category("Walmart", config)
+    assert result["suggestion"] == "Expenses:Household"
+    assert result["source"] == "rule"
 
 
 # ---------------------------------------------------------------------------
