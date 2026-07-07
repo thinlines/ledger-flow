@@ -29,10 +29,17 @@ def _clear_hash_cache():
 
 
 JOURNAL = """\
+include ../rules/11-payees.dat
+
 2026-03-15 * Whole Foods
     ; lf_txn_id: txn_wf
     Assets:Bank:Checking  -$50.00
     Expenses:Groceries  $50.00
+"""
+
+PAYEES_DAT = """\
+payee Burger King
+    ; lf_default_account: Expenses:Eating Out
 """
 
 
@@ -41,6 +48,7 @@ def _make_config(workspace: Path) -> AppConfig:
         (workspace / rel).mkdir(parents=True, exist_ok=True)
     (workspace / "rules" / "10-accounts.dat").write_text(
         "account Expenses:Groceries\n"
+        "account Expenses:Eating Out\n"
         "account Assets:Bank:Checking\naccount Assets:Bank:Savings\n",
         encoding="utf-8",
     )
@@ -72,6 +80,7 @@ def _make_config(workspace: Path) -> AppConfig:
 
 def _workspace(tmp_path: Path, monkeypatch) -> AppConfig:
     config = _make_config(tmp_path / "workspace")
+    (config.init_dir / "11-payees.dat").write_text(PAYEES_DAT, encoding="utf-8")
     (config.journal_dir / "2026.journal").write_text(JOURNAL, encoding="utf-8")
     monkeypatch.setattr(main, "_require_workspace_config", lambda: config)
     refresh_projection(config)
@@ -175,6 +184,59 @@ def test_tracked_account_id_payload_creates_transaction(tmp_path, monkeypatch):
     journal_text = (config.journal_dir / "2026.journal").read_text(encoding="utf-8")
     assert "2026-03-18 Burger King" in journal_text
     assert "Assets:Bank:Checking" in journal_text
+
+
+def test_omitted_destination_uses_payee_default_account(tmp_path, monkeypatch):
+    config = _workspace(tmp_path, monkeypatch)
+
+    result = main.transactions_create(_request(destinationAccount=None))
+
+    assert result["created"] is True
+    assert result["destinationAccount"] == "Expenses:Eating Out"
+    journal_text = (config.journal_dir / "2026.journal").read_text(encoding="utf-8")
+    assert "2026-03-18 Burger King" in journal_text
+    assert "Expenses:Eating Out" in journal_text
+    assert "Expenses:Unknown" not in journal_text
+
+
+def test_omitted_destination_without_payee_default_is_rejected(tmp_path, monkeypatch):
+    config = _workspace(tmp_path, monkeypatch)
+    journal_before = (config.journal_dir / "2026.journal").read_text(encoding="utf-8")
+
+    with pytest.raises(HTTPException) as exc_info:
+        main.transactions_create(
+            _request(payee="One-Off Plumber", destinationAccount=None)
+        )
+
+    assert exc_info.value.status_code == 400
+    assert "No default destination account" in exc_info.value.detail
+    assert "One-Off Plumber" in exc_info.value.detail
+    assert (
+        journal_before
+        == (config.journal_dir / "2026.journal").read_text(encoding="utf-8")
+    )
+
+
+def test_omitted_destination_with_unavailable_payee_default_lookup_is_rejected(
+    tmp_path, monkeypatch
+):
+    config = _workspace(tmp_path, monkeypatch)
+    journal_before = (config.journal_dir / "2026.journal").read_text(encoding="utf-8")
+
+    def unavailable(_config):
+        raise RuntimeError("projection unavailable")
+
+    monkeypatch.setattr(main, "load_merchants", unavailable)
+
+    with pytest.raises(HTTPException) as exc_info:
+        main.transactions_create(_request(destinationAccount=None))
+
+    assert exc_info.value.status_code == 400
+    assert "Payee default account lookup is unavailable" in exc_info.value.detail
+    assert (
+        journal_before
+        == (config.journal_dir / "2026.journal").read_text(encoding="utf-8")
+    )
 
 
 def test_notes_payload_creates_normal_notes_metadata(tmp_path, monkeypatch):

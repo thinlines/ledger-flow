@@ -647,10 +647,38 @@ def _resolve_source_tracked_account(config, req: ManualTransactionRequest) -> tu
     return matches[0]
 
 
+def _resolve_destination_account(config, req: ManualTransactionRequest) -> str:
+    explicit = (req.destinationAccount or "").strip()
+    if explicit:
+        return explicit
+
+    payee = (req.payee or "").strip()
+    try:
+        merchant = next((m for m in load_merchants(config) if m.name == payee), None)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Payee default account lookup is unavailable. "
+                "Provide destinationAccount explicitly."
+            ),
+        ) from exc
+    if merchant is not None and merchant.default_account:
+        return merchant.default_account
+    raise HTTPException(
+        status_code=400,
+        detail=(
+            f"No default destination account is declared for payee '{payee}'. "
+            "Provide destinationAccount or declare a payee default account."
+        ),
+    )
+
+
 @app.post("/api/transactions/create")
 def transactions_create(req: ManualTransactionRequest) -> dict:
     config = _require_workspace_config()
     tracked_account_id, tracked_account_cfg = _resolve_source_tracked_account(config, req)
+    destination_account = _resolve_destination_account(config, req)
 
     year = req.date[:4]
     journal_path = config.journal_dir / f"{year}.journal"
@@ -673,7 +701,7 @@ def transactions_create(req: ManualTransactionRequest) -> dict:
                 txn_date=req.date,
                 payee=req.payee,
                 amount_str=req.amount,
-                destination_account=req.destinationAccount,
+                destination_account=destination_account,
                 currency=currency,
                 notes=req.notes,
             )
@@ -685,7 +713,7 @@ def transactions_create(req: ManualTransactionRequest) -> dict:
             "payee": req.payee or "",
             "amount": req.amount,
             "currency": currency,
-            "destination_account": req.destinationAccount,
+            "destination_account": destination_account,
             "source_account": source_account,
             "txn_id": result["txnId"],
             "notes": req.notes or "",

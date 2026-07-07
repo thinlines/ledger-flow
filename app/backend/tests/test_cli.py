@@ -192,6 +192,55 @@ def test_transactions_create_posts_api_payload_and_prints_json(monkeypatch, caps
     ]
 
 
+def test_transactions_create_omits_destination_when_to_is_not_provided(
+    monkeypatch, capsys
+) -> None:
+    calls: list[dict] = []
+
+    class FakeResponse:
+        def __enter__(self):
+            return BytesIO(
+                b'{"created":true,"destinationAccount":"Expenses:Eating Out"}'
+            )
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    def fake_urlopen(request, timeout):
+        calls.append(json.loads(request.data.decode("utf-8")))
+        return FakeResponse()
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    status = main([
+        "transactions",
+        "create",
+        "--account",
+        "Assets:Checking",
+        "--payee",
+        "Burger King",
+        "--amount",
+        "20.00",
+        "--date",
+        "2026-07-02",
+        "--json",
+    ])
+
+    assert status == 0
+    assert json.loads(capsys.readouterr().out) == {
+        "created": True,
+        "destinationAccount": "Expenses:Eating Out",
+    }
+    assert calls == [
+        {
+            "sourceAccount": "Assets:Checking",
+            "date": "2026-07-02",
+            "payee": "Burger King",
+            "amount": "20.00",
+        }
+    ]
+
+
 def test_transactions_create_defaults_api_url_date_and_quiet_output(monkeypatch, capsys) -> None:
     calls: list[dict] = []
 
