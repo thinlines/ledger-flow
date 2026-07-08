@@ -206,7 +206,11 @@ def _build_parser() -> argparse.ArgumentParser:
     create = transaction_subparsers.add_parser("create", help="Create a manual transaction through the API")
     create.add_argument("--api-url")
     create.add_argument("--account", required=True)
-    create.add_argument("--to", dest="to_account")
+    create.add_argument(
+        "--to",
+        dest="to_account",
+        help="Destination posting account for the manual transaction.",
+    )
     create.add_argument("--payee", required=True)
     create.add_argument("--amount", required=True)
     create.add_argument("--date")

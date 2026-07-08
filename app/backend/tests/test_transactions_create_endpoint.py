@@ -49,7 +49,9 @@ def _make_config(workspace: Path) -> AppConfig:
     (workspace / "rules" / "10-accounts.dat").write_text(
         "account Expenses:Groceries\n"
         "account Expenses:Eating Out\n"
-        "account Assets:Bank:Checking\naccount Assets:Bank:Savings\n",
+        "account Assets:Bank:Checking\n"
+        "account Assets:Bank:Savings\n"
+        "account Liabilities:Credit Card\n",
         encoding="utf-8",
     )
     return AppConfig(
@@ -197,6 +199,53 @@ def test_omitted_destination_uses_payee_default_account(tmp_path, monkeypatch):
     assert "2026-03-18 Burger King" in journal_text
     assert "Expenses:Eating Out" in journal_text
     assert "Expenses:Unknown" not in journal_text
+
+
+@pytest.mark.parametrize(
+    "destination_account",
+    ["Assets:Bank:Savings", "Liabilities:Credit Card"],
+)
+def test_explicit_asset_or_liability_destination_creates_normal_manual_transaction(
+    tmp_path, monkeypatch, destination_account
+):
+    config = _workspace(tmp_path, monkeypatch)
+
+    result = main.transactions_create(
+        _request(
+            trackedAccountId=None,
+            sourceAccount="Assets:Bank:Checking",
+            destinationAccount=destination_account,
+            payee="Move to savings",
+            notes="monthly sweep",
+        )
+    )
+
+    assert result["created"] is True
+    assert result["destinationAccount"] == destination_account
+    journal_text = (config.journal_dir / "2026.journal").read_text(encoding="utf-8")
+    assert "2026-03-18 Move to savings" in journal_text
+    assert "    ; notes: monthly sweep" in journal_text
+    assert "    ; :manual:" in journal_text
+    assert f"    {destination_account}  $20.00" in journal_text
+    assert "    Assets:Bank:Checking" in journal_text
+    assert "transfer_id" not in journal_text
+    assert "transfer_match_state" not in journal_text
+
+
+def test_invalid_explicit_destination_account_is_rejected(tmp_path, monkeypatch):
+    config = _workspace(tmp_path, monkeypatch)
+    journal_before = (config.journal_dir / "2026.journal").read_text(encoding="utf-8")
+
+    with pytest.raises(HTTPException) as exc_info:
+        main.transactions_create(_request(destinationAccount="Assets:Bank:Vacation"))
+
+    assert exc_info.value.status_code == 400
+    assert "Assets:Bank:Vacation" in exc_info.value.detail
+    assert "destinationAccount" in exc_info.value.detail
+    assert (
+        journal_before
+        == (config.journal_dir / "2026.journal").read_text(encoding="utf-8")
+    )
 
 
 def test_omitted_destination_without_payee_default_is_rejected(tmp_path, monkeypatch):

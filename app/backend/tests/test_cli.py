@@ -5,10 +5,12 @@ import os
 import sys
 import tomllib
 import types
-import ledger_flow_cli
 from io import BytesIO
 from pathlib import Path
 from urllib.error import HTTPError
+
+import ledger_flow_cli
+import pytest
 
 from ledger_flow_cli import main
 from services.event_log_service import read_events
@@ -190,6 +192,16 @@ def test_transactions_create_posts_api_payload_and_prints_json(monkeypatch, caps
             "timeout": 10,
         }
     ]
+
+
+def test_transactions_create_help_describes_to_as_destination_posting_account(capsys) -> None:
+    with pytest.raises(SystemExit) as exc_info:
+        main(["transactions", "create", "--help"])
+
+    assert exc_info.value.code == 0
+    help_text = capsys.readouterr().out
+    assert "--to" in help_text
+    assert "destination posting account" in " ".join(help_text.split()).lower()
 
 
 def test_transactions_create_omits_destination_when_to_is_not_provided(

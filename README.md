@@ -77,6 +77,34 @@ pnpm dev
 
 Open `http://127.0.0.1:5173` in your browser for the dev UI.
 
+### Create a manual transaction from the CLI
+
+With the API server running, `ledger-flow transactions create` creates a normal
+two-posting manual transaction. Use `--account` for the source tracked Ledger
+account and `--to` for the destination posting account:
+
+```sh
+ledger-flow transactions create \
+  --account "Assets:Bank:Checking" \
+  --to "Expenses:Eating Out" \
+  --payee "Burger King" \
+  --amount "20.00" \
+  --date "2026-07-02"
+```
+
+`--to` is destination posting vocabulary, not category-only vocabulary. It can
+point at any declared Ledger account, including another asset or liability
+account:
+
+```sh
+ledger-flow transactions create \
+  --account "Assets:Bank:Checking" \
+  --to "Assets:Bank:Savings" \
+  --payee "Move to savings" \
+  --amount "200.00" \
+  --date "2026-07-02"
+```
+
 ### Run the backend as a systemd user service
 
 Copy the template into your user units directory, edit the workspace path, then
