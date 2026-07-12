@@ -320,8 +320,8 @@
     result = result ? { ...result } : result;
   }
 
-  async function handleAddSuccess(r: { payee: string; date: string; warning: string | null; eventId: string | null }) {
-    addSuccess = `Added: ${r.payee} on ${r.date}${r.warning ? ` (${r.warning})` : ''}`;
+  async function handleAddSuccess(r: { payee: string; date: string; eventId: string | null }) {
+    addSuccess = `Added: ${r.payee} on ${r.date}`;
     showAddForm = false;
     if (r.eventId) {
       const { showUndoToast } = await import('$lib/undo-toast');

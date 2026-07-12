@@ -58,6 +58,10 @@ ledger_account = "Assets:Credit Card"
         "account Assets:Credit Card\naccount Expenses:Eating Out\n",
         encoding="utf-8",
     )
+    (workspace / "journals" / "main.journal").write_text(
+        "include ../rules/10-accounts.dat\n",
+        encoding="utf-8",
+    )
     return workspace
 
 
@@ -94,6 +98,33 @@ def test_add_creates_manual_entry_in_year_journal(tmp_path: Path, capsys) -> Non
     events = read_events(workspace)
     assert events[-1]["type"] == "manual_entry.created.v1"
     assert events[-1]["payload"]["source_account"] == "Assets:Credit Card"
+
+
+def test_add_rejects_unknown_destination_when_accounts_file_is_missing(
+    tmp_path: Path, capsys
+) -> None:
+    workspace = _workspace(tmp_path)
+    (workspace / "rules" / "10-accounts.dat").unlink()
+
+    status = main([
+        "--config",
+        str(workspace / "settings" / "workspace.toml"),
+        "add",
+        "--payee",
+        "Mystery Shop",
+        "--amount",
+        "20.00",
+        "--date",
+        "2026-07-02",
+        "--to",
+        "Expenses:Unknown Destination",
+        "--from",
+        "Assets:Credit Card",
+    ])
+
+    assert status == 1
+    assert "Invalid destination account 'Expenses:Unknown Destination'" in capsys.readouterr().err
+    assert not (workspace / "journals" / "2026.journal").exists()
 
 
 def test_add_dry_run_prints_preview_without_writing(tmp_path: Path, capsys) -> None:

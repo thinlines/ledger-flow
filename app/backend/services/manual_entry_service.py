@@ -55,16 +55,6 @@ SYSTEM_METADATA_KEY_RE = re.compile(
 
 
 
-def _load_known_accounts(accounts_dat: Path) -> set[str]:
-    known = set()
-    if not accounts_dat.exists():
-        return known
-    for line in accounts_dat.read_text(encoding="utf-8").splitlines():
-        if line.startswith("account "):
-            known.add(line[len("account "):].strip())
-    return known
-
-
 def _parse_amount_str(raw: str) -> Decimal:
     return parse_amount(raw)
 
@@ -126,6 +116,7 @@ def build_manual_transaction_block(
 
 def create_manual_transaction(
     *,
+    config=None,
     journal_path: Path,
     accounts_dat: Path,
     tracked_account_cfg: dict,
@@ -141,10 +132,14 @@ def create_manual_transaction(
     if not tracked_ledger_account:
         raise ValueError("Tracked account is missing a ledger account.")
 
-    known_accounts = _load_known_accounts(accounts_dat) if accounts_dat.exists() else set()
-    destination_warning = None
-    if destination_account not in known_accounts:
-        destination_warning = f"Account '{destination_account}' is not in accounts.dat. The transaction will still be created."
+    if config is not None:
+        from .reference_data_service import list_account_names
+
+        if destination_account not in list_account_names(config):
+            raise ValueError(
+                f"Invalid destination account '{destination_account}'. "
+                "Use an account offered by the account picker."
+            )
 
     txn_id = mint_lf_txn_id()
     block = build_manual_transaction_block(
@@ -175,7 +170,6 @@ def create_manual_transaction(
         "destinationAccount": destination_account,
         "trackedLedgerAccount": tracked_ledger_account,
         "txnId": txn_id,
-        "warning": destination_warning,
     }
 
 

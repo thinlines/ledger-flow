@@ -60,6 +60,7 @@ def _add_transaction(args: argparse.Namespace) -> dict:
         event_type="manual_entry.created.v1",
     ) as mut:
         result = create_manual_transaction(
+            config=config,
             journal_path=journal_path,
             accounts_dat=accounts_dat,
             tracked_account_cfg=tracked_account_cfg,

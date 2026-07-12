@@ -268,7 +268,7 @@
 		submitting = true;
 		try {
 			const result = await apiPost<{
-				created: boolean; warning?: string | null; eventId?: string | null;
+				created: boolean; eventId?: string | null;
 			}>('/api/transactions/create', {
 				trackedAccountId: selectedAccountId, date: txnDate,
 				payee: payee.trim(), amount: amount.trim(), destinationAccount: category.trim()
@@ -289,7 +289,6 @@
 				closeEntryModal();
 				lastSaved = '';
 			}
-			if (result.warning) error = result.warning;
 		} catch (e) { error = String(e); }
 		finally { submitting = false; }
 	}

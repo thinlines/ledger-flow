@@ -651,16 +651,6 @@ def _resolve_source_tracked_account(config, req: ManualTransactionRequest) -> tu
 def _resolve_destination_account(config, req: ManualTransactionRequest) -> str:
     explicit = (req.destinationAccount or "").strip()
     if explicit:
-        accounts_dat = config.init_dir / "10-accounts.dat"
-        known_accounts = load_known_accounts(accounts_dat)
-        if known_accounts and explicit not in known_accounts:
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    f"Invalid destinationAccount '{explicit}'. "
-                    "Use a declared Ledger account from 10-accounts.dat."
-                ),
-            )
         return explicit
 
     payee = (req.payee or "").strip()
@@ -706,6 +696,7 @@ def transactions_create(req: ManualTransactionRequest) -> dict:
     ) as mut:
         try:
             result = create_manual_transaction(
+                config=config,
                 journal_path=journal_path,
                 accounts_dat=accounts_dat,
                 tracked_account_cfg=tracked_account_cfg,

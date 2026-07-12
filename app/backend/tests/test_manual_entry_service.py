@@ -87,7 +87,6 @@ def test_create_manual_transaction_writes_to_journal(tmp_path: Path) -> None:
     )
 
     assert result["created"] is True
-    assert result["warning"] is None
 
     content = journal.read_text(encoding="utf-8")
     assert "2026-03-28 Coffee Shop" in content
@@ -128,27 +127,6 @@ def test_create_manual_transaction_inserts_in_date_order(tmp_path: Path) -> None
     middle_pos = content.index("Middle Entry")
     later_pos = content.index("Later")
     assert earlier_pos < middle_pos < later_pos
-
-
-def test_create_manual_transaction_warns_on_unknown_account(tmp_path: Path) -> None:
-    journal = tmp_path / "2026.journal"
-    accounts = tmp_path / "10-accounts.dat"
-    journal.write_text("", encoding="utf-8")
-    accounts.write_text("account Expenses:Food\n    ; type: Expense\n", encoding="utf-8")
-
-    result = create_manual_transaction(
-        journal_path=journal,
-        accounts_dat=accounts,
-        tracked_account_cfg={"ledger_account": "Assets:Bank:Checking"},
-        txn_date="2026-03-28",
-        payee="Uber",
-        amount_str="45.95",
-        destination_account="Expenses:Transport:New",
-    )
-
-    assert result["created"] is True
-    assert result["warning"] is not None
-    assert "not in accounts.dat" in result["warning"]
 
 
 def test_manual_entry_has_no_import_metadata(tmp_path: Path) -> None:

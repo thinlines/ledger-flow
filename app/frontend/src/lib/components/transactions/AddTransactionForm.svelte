@@ -11,7 +11,6 @@
   export let onSuccess: (result: {
     payee: string;
     date: string;
-    warning: string | null;
     eventId: string | null;
   }) => void = () => {};
   export let onAccountsChanged: (accounts: string[]) => void = () => {};
@@ -100,7 +99,7 @@
     addError = '';
     addSubmitting = true;
     try {
-      const result = await apiPost<{ created: boolean; warning?: string | null; eventId?: string | null }>(
+      const result = await apiPost<{ created: boolean; eventId?: string | null }>(
         '/api/transactions/create',
         {
           trackedAccountId: selectedAccountId,
@@ -113,7 +112,6 @@
       onSuccess({
         payee: addPayee.trim(),
         date: addDate,
-        warning: result.warning ?? null,
         eventId: result.eventId ?? null
       });
     } catch (e) {

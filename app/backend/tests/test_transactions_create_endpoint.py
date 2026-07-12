@@ -35,11 +35,21 @@ include ../rules/11-payees.dat
     ; lf_txn_id: txn_wf
     Assets:Bank:Checking  -$50.00
     Expenses:Groceries  $50.00
+
+2026-03-16 * Farmers Market
+    ; lf_txn_id: txn_market
+    Assets:Bank:Checking  -$12.00
+    Expenses:Seasonal  $12.00
 """
 
 PAYEES_DAT = """\
+account Expenses:Seasonal
+
 payee Burger King
     ; lf_default_account: Expenses:Eating Out
+
+payee Bad Default Cafe
+    ; lf_default_account: Expenses:Unlisted
 """
 
 
@@ -84,6 +94,12 @@ def _workspace(tmp_path: Path, monkeypatch) -> AppConfig:
     config = _make_config(tmp_path / "workspace")
     (config.init_dir / "11-payees.dat").write_text(PAYEES_DAT, encoding="utf-8")
     (config.journal_dir / "2026.journal").write_text(JOURNAL, encoding="utf-8")
+    (config.journal_dir / "main.journal").write_text(
+        "include ../rules/10-accounts.dat\n"
+        "include ../rules/11-payees.dat\n"
+        "include 2026.journal\n",
+        encoding="utf-8",
+    )
     monkeypatch.setattr(main, "_require_workspace_config", lambda: config)
     refresh_projection(config)
     return config
@@ -188,6 +204,23 @@ def test_tracked_account_id_payload_creates_transaction(tmp_path, monkeypatch):
     assert "Assets:Bank:Checking" in journal_text
 
 
+def test_projection_known_undeclared_destination_creates_transaction(
+    tmp_path, monkeypatch
+):
+    """An account offered by projection-backed pickers is a valid destination."""
+    config = _workspace(tmp_path, monkeypatch)
+
+    result = main.transactions_create(
+        _request(destinationAccount="Expenses:Seasonal")
+    )
+
+    assert result["created"] is True
+    assert result["destinationAccount"] == "Expenses:Seasonal"
+    journal_text = (config.journal_dir / "2026.journal").read_text(encoding="utf-8")
+    assert "2026-03-18 Burger King" in journal_text
+    assert "Expenses:Seasonal" in journal_text
+
+
 def test_omitted_destination_uses_payee_default_account(tmp_path, monkeypatch):
     config = _workspace(tmp_path, monkeypatch)
 
@@ -241,11 +274,45 @@ def test_invalid_explicit_destination_account_is_rejected(tmp_path, monkeypatch)
 
     assert exc_info.value.status_code == 400
     assert "Assets:Bank:Vacation" in exc_info.value.detail
-    assert "destinationAccount" in exc_info.value.detail
+    assert "destination account" in exc_info.value.detail
     assert (
         journal_before
         == (config.journal_dir / "2026.journal").read_text(encoding="utf-8")
     )
+
+
+def test_unknown_explicit_and_payee_default_destinations_are_rejected_identically(
+    tmp_path, monkeypatch
+):
+    config = _workspace(tmp_path, monkeypatch)
+
+    errors = []
+    for request in (
+        _request(destinationAccount="Expenses:Unlisted"),
+        _request(payee="Bad Default Cafe", destinationAccount=None),
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            main.transactions_create(request)
+        errors.append(exc_info.value)
+
+    assert [error.status_code for error in errors] == [400, 400]
+    assert errors[0].detail == errors[1].detail
+    assert "Expenses:Unlisted" in errors[0].detail
+    journal_text = (config.journal_dir / "2026.journal").read_text(encoding="utf-8")
+    assert "Bad Default Cafe" not in journal_text
+
+
+def test_missing_accounts_dat_does_not_disable_destination_validation(
+    tmp_path, monkeypatch
+):
+    config = _workspace(tmp_path, monkeypatch)
+    (config.init_dir / "10-accounts.dat").unlink()
+
+    with pytest.raises(HTTPException) as exc_info:
+        main.transactions_create(_request(destinationAccount="Expenses:Unlisted"))
+
+    assert exc_info.value.status_code == 400
+    assert "Expenses:Unlisted" in exc_info.value.detail
 
 
 def test_omitted_destination_without_payee_default_is_rejected(tmp_path, monkeypatch):
