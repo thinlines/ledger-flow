@@ -763,12 +763,47 @@ def refresh_projection(config: AppConfig) -> dict[str, list[str]]:
         )
         if reference_stale:
             rebuild_reference_data(conn, parsed_at)
+        if projected or removed:
+            _rebuild_transaction_matches(conn)
 
     return {
         "projected": sorted(projected),
         "removed": sorted(removed),
         "unchanged": sorted(unchanged),
     }
+
+
+def _rebuild_transaction_matches(conn: sqlite3.Connection) -> None:
+    """Derive active matches from journal-canonical ``lf_match_id`` metadata."""
+    conn.execute("DELETE FROM transaction_matches")
+    rows = conn.execute(
+        """
+        SELECT metadata_entries.value_text, transactions.id, journal_files.role
+        FROM metadata_entries
+        JOIN transactions ON transactions.id = metadata_entries.owner_id
+        JOIN journal_files ON journal_files.id = transactions.journal_file_id
+        WHERE metadata_entries.owner_type = 'transaction'
+          AND metadata_entries.key IN ('lf_match_id', 'match-id')
+        """
+    ).fetchall()
+    by_match: dict[str, dict[str, str]] = {}
+    for match_id, transaction_id, role in rows:
+        side = "archived" if role == "archive" else "imported"
+        match = by_match.setdefault(match_id, {})
+        if side in match:
+            continue
+        match[side] = transaction_id
+    for match_id, sides in by_match.items():
+        if set(sides) != {"imported", "archived"}:
+            continue
+        conn.execute(
+            """
+            INSERT INTO transaction_matches (
+                id, imported_transaction_id, archived_manual_transaction_id
+            ) VALUES (?, ?, ?)
+            """,
+            (match_id, sides["imported"], sides["archived"]),
+        )
 
 
 def rebuild_projection(config: AppConfig) -> dict[str, list[str]]:
@@ -876,6 +911,42 @@ class ProjectedTransactionRef:
     raw_block_hash: str
     status: str
     source_start_line: int
+
+
+@dataclass(frozen=True)
+class ProjectedTransactionMatch:
+    id: str
+    imported_transaction_id: str
+    archived_manual_transaction_id: str
+
+
+def find_projected_transaction_match(
+    config: AppConfig, match_id: str
+) -> ProjectedTransactionMatch | None:
+    refresh_projection(config)
+    with connect(database_path(config)) as conn:
+        row = conn.execute(
+            """
+            SELECT id, imported_transaction_id, archived_manual_transaction_id
+            FROM transaction_matches WHERE id = ?
+            """,
+            (match_id,),
+        ).fetchone()
+    return ProjectedTransactionMatch(*row) if row is not None else None
+
+
+def projected_transaction_block(config: AppConfig, txn_id: str) -> str | None:
+    """Return one transaction's canonical raw block through the projection."""
+    with connect(database_path(config)) as conn:
+        row = conn.execute(
+            """
+            SELECT journal_items.raw_text
+            FROM journal_items
+            WHERE journal_items.transaction_id = ?
+            """,
+            (txn_id,),
+        ).fetchone()
+    return row[0] if row is not None else None
 
 
 _TXN_REF_SQL = """

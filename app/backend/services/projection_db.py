@@ -25,6 +25,7 @@ PROJECTION_TABLES: tuple[str, ...] = (
     "postings",
     "comments",
     "metadata_entries",
+    "transaction_matches",
     "journal_diagnostics",
     "accounts",
     "payees",
@@ -60,7 +61,6 @@ CREATE TABLE IF NOT EXISTS transactions (
     raw_block_hash TEXT NOT NULL,
     source_start_line INTEGER NOT NULL,
     source_end_line INTEGER NOT NULL,
-    managed_by_app BOOLEAN NOT NULL DEFAULT FALSE,
     parse_status TEXT NOT NULL DEFAULT 'ok'
         CHECK (parse_status IN ('ok', 'preserved_raw', 'warning', 'error')),
     created_from_operation_id TEXT,
@@ -112,7 +112,6 @@ CREATE TABLE IF NOT EXISTS postings (
     raw_line TEXT NOT NULL,
     raw_line_hash TEXT NOT NULL,
     source_line INTEGER NOT NULL,
-    managed_by_app BOOLEAN NOT NULL DEFAULT FALSE,
     UNIQUE (transaction_id, posting_order)
 );
 
@@ -204,8 +203,7 @@ CREATE TABLE IF NOT EXISTS accounts (
     note TEXT,
     closed_on TEXT,
     declared BOOLEAN NOT NULL DEFAULT FALSE,
-    used BOOLEAN NOT NULL DEFAULT FALSE,
-    managed_by_app BOOLEAN NOT NULL DEFAULT FALSE
+    used BOOLEAN NOT NULL DEFAULT FALSE
 );
 
 CREATE INDEX IF NOT EXISTS accounts_type_idx ON accounts(account_type, subtype);
@@ -396,6 +394,16 @@ CREATE TABLE IF NOT EXISTS rule_actions (
 CREATE INDEX IF NOT EXISTS rule_actions_value_idx ON rule_actions(action_type, value);
 """
 
+_MIGRATION_0007 = """
+CREATE TABLE IF NOT EXISTS transaction_matches (
+    id TEXT PRIMARY KEY,
+    imported_transaction_id TEXT NOT NULL UNIQUE
+        REFERENCES transactions(id) ON DELETE CASCADE,
+    archived_manual_transaction_id TEXT NOT NULL UNIQUE
+        REFERENCES transactions(id) ON DELETE CASCADE
+);
+"""
+
 MIGRATIONS: tuple[tuple[int, str, str], ...] = (
     (1, "journal_projection_tables", _MIGRATION_0001),
     (2, "reference_data_tables", _MIGRATION_0002),
@@ -403,6 +411,7 @@ MIGRATIONS: tuple[tuple[int, str, str], ...] = (
     (4, "import_identity_tables", _MIGRATION_0004),
     (5, "operation_files_and_entities_tables", _MIGRATION_0005),
     (6, "rules_tables", _MIGRATION_0006),
+    (7, "transaction_matches", _MIGRATION_0007),
 )
 
 

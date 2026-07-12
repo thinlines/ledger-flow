@@ -730,7 +730,7 @@ class TestUndoUnmatched:
 
         main_text = journal.read_text()
         assert "; :manual:" in main_text
-        assert "; match-id: test-match-uuid" in main_text
+        assert "; lf_match_id: test-match-uuid" in main_text
 
         # The restored manual entry was removed from the main journal.
         header_count = sum(1 for line in main_text.splitlines() if line.strip().endswith("Whole Foods"))
@@ -743,7 +743,7 @@ class TestUndoUnmatched:
         # Archive file re-created.
         archive = workspace / "journals" / "archived-manual.journal"
         assert archive.is_file()
-        assert "match-id: test-match-uuid" in archive.read_text()
+        assert "lf_match_id: test-match-uuid" in archive.read_text()
 
     def test_rematch_survives_line_shift(self, tmp_path: Path) -> None:
         workspace, journal, event_id = self._setup_unmatched_state(tmp_path)

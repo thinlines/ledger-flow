@@ -25,6 +25,7 @@ PROJECTION_TABLE_NAMES = {
     "postings",
     "comments",
     "metadata_entries",
+    "transaction_matches",
     "journal_diagnostics",
     "accounts",
     "payees",

@@ -20,7 +20,7 @@ from services.ledger_runner import CommandError, run_cmd
 from services.unknowns_service import apply_unknown_mappings, scan_unknowns
 
 
-_MATCH_ID_RE = re.compile(r"match-id:\s*([0-9a-f-]{36})")
+_MATCH_ID_RE = re.compile(r"lf_match_id:\s*(match_[0-9a-f-]{36})")
 
 
 def _tracked_accounts() -> dict[str, dict]:
@@ -113,7 +113,7 @@ def test_archive_manual_entry_creates_file_with_header(tmp_path: Path) -> None:
     assert "Do NOT include this file" in content
     assert "match-id:" in content
     # match-id is the second line of the block, right after the header.
-    assert "2026/03/15 Whole Foods Market\n    ; match-id: uuid-abc\n" in content
+    assert "2026/03/15 Whole Foods Market\n    ; lf_match_id: uuid-abc\n" in content
     # Original block lines are preserved after the stamp.
     assert "; :manual:" in content
     assert "Expenses:Groceries" in content
@@ -198,7 +198,7 @@ def test_apply_match_writes_archive_file(tmp_path: Path) -> None:
     # Header is present.
     assert archive_content.startswith("; Ledger Flow archived manual entries.\n")
     # Archived entry has match-id: as line 2 (after transaction header).
-    assert re.search(r"2026/03/28 Uber\n    ; match-id: [0-9a-f-]{36}\n", archive_content)
+    assert re.search(r"2026/03/28 Uber\n    ; lf_match_id: match_[0-9a-f-]{36}\n", archive_content)
     # Original manual entry content is preserved.
     assert "Expenses:Transportation:Rides" in archive_content
     assert "; :manual:" in archive_content
@@ -232,7 +232,8 @@ def test_apply_match_stamps_manual_tag_before_match_id_tag(tmp_path: Path) -> No
     # The imported Uber transaction should have both tags, in the right order.
     # Find the 2026/03/28 Uber block (there's only one after match).
     block_re = re.compile(
-        r"2026/03/28 Uber\n    ; :manual:\n    ; match-id: [0-9a-f-]{36}\n"
+        r"2026/03/28 Uber\n    ; lf_txn_id: txn_[0-9a-f-]{36}\n"
+        r"    ; :manual:\n    ; lf_match_id: match_[0-9a-f-]{36}\n"
     )
     assert block_re.search(main_content) is not None
 

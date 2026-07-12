@@ -31,8 +31,11 @@ from services.journal_block_service import find_transaction_block
 from services.journal_query_service import TXN_START_RE
 from services.projection_service import (
     ProjectedTransactionRef,
+    find_projected_transaction_match,
     find_projected_transaction,
+    projected_transaction_block,
     refresh_projection,
+    render_file,
 )
 from services.operations_service import list_operations, operation_is_compensated
 from services.transfer_service import ACCOUNT_LINE_RE, ACCOUNT_ONLY_RE, rewrite_posting_account
@@ -569,7 +572,7 @@ def _undo_transaction_unmatched(config: AppConfig, event: dict) -> str:
 
         # Insert :manual: and match-id: tags after the header (same order as unknowns_service).
         # Process in reverse so indices stay valid: match-id first, then :manual:.
-        lines.insert(block_start + 1, f"    ; match-id: {match_id}")
+        lines.insert(block_start + 1, f"    ; lf_match_id: {match_id}")
         lines.insert(block_start + 1, "    ; :manual:")
         # block_end shifted by 2 due to insertions.
         block_end += 2
@@ -623,7 +626,14 @@ def _undo_transaction_unmatched(config: AppConfig, event: dict) -> str:
         # --- Step 3: Re-archive the manual entry ---
         # Use the original block lines (without the match-id tag that archive_manual_entry adds).
         # archive_manual_entry inserts the match-id tag itself on the second line.
-        block_for_archive = [l for l in manual_lines if l.strip() != f"; match-id: {match_id}"]
+        block_for_archive = [
+            l
+            for l in manual_lines
+            if l.strip() not in {
+                f"; match-id: {match_id}",
+                f"; lf_match_id: {match_id}",
+            }
+        ]
         archive_manual_entry(archive_path, match_id, block_for_archive)
 
         mut.summary = f"Undid: {forward_summary}"
@@ -722,6 +732,97 @@ def _undo_import_applied(config: AppConfig, event: dict) -> str:
     return compensating_id
 
 
+def _undo_matches_applied(config: AppConfig, event: dict) -> str:
+    """Restore the exact pre-match imported and manual transaction blocks."""
+    payload = event.get("payload", {})
+    matches = payload.get("matches")
+    if not matches and payload.get("match_id"):
+        matches = [payload]
+    if not matches:
+        raise UndoFailedError("Match event lacks durable per-match records")
+
+    paths: list = []
+    prepared: list[tuple[dict, ProjectedTransactionRef, ProjectedTransactionRef]] = []
+    refresh_projection(config)
+    for record in matches:
+        match_id = str(record.get("match_id") or "")
+        projected = find_projected_transaction_match(config, match_id)
+        if projected is None:
+            raise UndoFailedError(f"Active match {match_id!r} no longer exists")
+        imported_ref = find_projected_transaction(config, projected.imported_transaction_id)
+        archived_ref = find_projected_transaction(config, projected.archived_manual_transaction_id)
+        if imported_ref is None or archived_ref is None:
+            raise UndoFailedError("Matched transaction is missing")
+        prepared.append((record, imported_ref, archived_ref))
+        paths.extend(
+            [config.root_dir / imported_ref.journal_path, config.root_dir / archived_ref.journal_path]
+        )
+        manual_rel = str(record.get("manual_journal_path") or "").strip()
+        if manual_rel:
+            paths.append(config.root_dir / manual_rel)
+
+    with journal_writer.mutate(
+        config=config,
+        paths=list(dict.fromkeys(paths)),
+        tag="undo",
+        event_type=f"{event.get('type', '')}.compensated.v1",
+    ) as mut:
+        for record, imported_ref, archived_ref in prepared:
+            original_imported = str(record.get("original_imported_block") or "")
+            original_manual = str(record.get("original_manual_block") or "")
+            if not original_imported or not original_manual:
+                raise UndoFailedError("Match record lacks original transaction blocks")
+
+            imported_path = config.root_dir / imported_ref.journal_path
+            text = imported_path.read_text(encoding="utf-8")
+            lines = text.splitlines()
+            start = _header_index(lines, imported_ref)
+            _, end = find_transaction_block(lines, start)
+            lines[start:end] = original_imported.splitlines()
+            insert_at = int(record.get("manual_insert_index") or 0)
+            manual_lines = original_manual.splitlines()
+            manual_rel = str(
+                record.get("manual_journal_path") or imported_ref.journal_path
+            )
+            manual_path = config.root_dir / manual_rel
+            if manual_path == imported_path:
+                lines[insert_at:insert_at] = manual_lines + [""]
+            imported_path.write_text(
+                "\n".join(lines) + ("\n" if text.endswith("\n") else ""),
+                encoding="utf-8",
+            )
+            if manual_path != imported_path:
+                manual_text = manual_path.read_text(encoding="utf-8")
+                manual_journal_lines = manual_text.splitlines()
+                manual_journal_lines[insert_at:insert_at] = manual_lines + [""]
+                manual_path.write_text(
+                    "\n".join(manual_journal_lines)
+                    + ("\n" if manual_text.endswith("\n") else ""),
+                    encoding="utf-8",
+                )
+
+            archive_path = config.root_dir / archived_ref.journal_path
+            archive_text = render_file(config, archived_ref.journal_path)
+            archive_lines = archive_text.splitlines()
+            archive_block = projected_transaction_block(config, archived_ref.id)
+            if archive_block is None:
+                raise UndoFailedError("Archived manual transaction block is missing")
+            archive_start = archived_ref.source_start_line - 1
+            archive_end = archive_start + len(archive_block.rstrip("\n").splitlines())
+            while archive_end < len(archive_lines) and not archive_lines[archive_end].strip():
+                archive_end += 1
+            del archive_lines[archive_start:archive_end]
+            if any(line.strip() and not line.strip().startswith(";") for line in archive_lines):
+                archive_path.write_text("\n".join(archive_lines) + "\n", encoding="utf-8")
+            else:
+                archive_path.unlink(missing_ok=True)
+
+        mut.summary = f"Undid: {event.get('summary', '')}"
+        mut.payload = {**payload, "compensated_event_id": event.get("id", "")}
+        mut.compensates = event.get("id", "")
+    return mut.event_id
+
+
 _HANDLERS: dict[str, HandlerFn] = {
     "import.applied.v1": _undo_import_applied,
     "transaction.deleted.v1": _undo_transaction_deleted,
@@ -731,6 +832,8 @@ _HANDLERS: dict[str, HandlerFn] = {
     "manual_entry.created.v1": _undo_manual_entry_created,
     "transaction.unmatched.v1": _undo_transaction_unmatched,
     "transaction.notes_updated.v1": _undo_transaction_notes_updated,
+    "unknowns.applied.v1": _undo_matches_applied,
+    "reconciliation.imported_transaction_used.v1": _undo_matches_applied,
 }
 
 

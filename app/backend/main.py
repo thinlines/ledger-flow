@@ -58,8 +58,11 @@ from services.undo_service import UndoOutcome, is_undoable_type, undo_event
 from services.journal_block_service import find_transaction_block
 from services.journal_query_service import TXN_START_RE
 from services.projection_service import (
+    find_projected_transaction_match,
     find_projected_transaction,
     find_projected_transaction_at,
+    projected_transaction_block,
+    render_file,
     refresh_projection,
 )
 from services.transfer_service import ACCOUNT_LINE_RE, ACCOUNT_ONLY_RE, rewrite_posting_account
@@ -1117,9 +1120,18 @@ def transactions_unmatch(req: UnmatchTransactionRequest) -> dict:
     ref = _locate_projected_transaction(config, req.txnId, req.blockHash)
     journal_path = config.root_dir / ref.journal_path
 
-    archive_path = config.root_dir / "journals" / "archived-manual.journal"
-    if not archive_path.is_file():
-        raise HTTPException(status_code=404, detail="No archived entries exist")
+    match = find_projected_transaction_match(config, req.matchId)
+    if match is None or match.imported_transaction_id != req.txnId:
+        raise HTTPException(status_code=404, detail="Transaction match not found")
+    archived_ref = find_projected_transaction(
+        config, match.archived_manual_transaction_id
+    )
+    archived_block = projected_transaction_block(
+        config, match.archived_manual_transaction_id
+    )
+    if archived_ref is None or archived_block is None:
+        raise HTTPException(status_code=404, detail="Archived manual transaction not found")
+    archive_path = config.root_dir / archived_ref.journal_path
 
     tracked_ledger_accounts: set[str] = set()
     for ta in config.tracked_accounts.values():
@@ -1137,34 +1149,13 @@ def transactions_unmatch(req: UnmatchTransactionRequest) -> dict:
         tag="unmatch",
         event_type="transaction.unmatched.v1",
     ) as mut:
-        # --- Locate the archived manual entry by match-id ---
-        archive_text = archive_path.read_text(encoding="utf-8")
+        # The relationship and block are resolved from the projection. Render
+        # the enclosing file from projected journal items only to remove it.
+        archive_text = render_file(config, archived_ref.journal_path)
         archive_lines = archive_text.splitlines()
-        archived_block_start: int | None = None
-        archived_block_end: int | None = None
-
-        for i, line in enumerate(archive_lines):
-            stripped = line.strip()
-            if stripped == f"; match-id: {req.matchId}":
-                # The match-id tag is on line 2 of the block (header is the previous line).
-                if i == 0 or not TXN_START_RE.match(archive_lines[i - 1]):
-                    continue
-                archived_block_start = i - 1
-                # Find end of this block.
-                archived_block_end = i + 1
-                while archived_block_end < len(archive_lines):
-                    if TXN_START_RE.match(archive_lines[archived_block_end]):
-                        break
-                    archived_block_end += 1
-                # Trim trailing blank lines.
-                while archived_block_end > archived_block_start + 1 and archive_lines[archived_block_end - 1].strip() == "":
-                    archived_block_end -= 1
-                break
-
-        if archived_block_start is None:
-            raise HTTPException(status_code=404, detail="Archived manual entry not found for this match")
-
-        archived_block_lines = archive_lines[archived_block_start:archived_block_end]
+        archived_block_start = archived_ref.source_start_line - 1
+        archived_block_lines = archived_block.rstrip("\n").splitlines()
+        archived_block_end = archived_block_start + len(archived_block_lines)
 
         # --- Modify the main journal: remove :manual: and match-id: tags,
         #     rewrite destination to Expenses:Unknown ---
@@ -1179,7 +1170,10 @@ def transactions_unmatch(req: UnmatchTransactionRequest) -> dict:
             stripped = main_lines[i].strip()
             if stripped == "; :manual:":
                 lines_to_remove.append(i)
-            elif stripped == f"; match-id: {req.matchId}":
+            elif stripped in {
+                f"; lf_match_id: {req.matchId}",
+                f"; match-id: {req.matchId}",
+            }:
                 lines_to_remove.append(i)
             elif not stripped.startswith(";") and stripped != "":
                 m = ACCOUNT_LINE_RE.match(main_lines[i]) or ACCOUNT_ONLY_RE.match(main_lines[i])
@@ -1208,7 +1202,10 @@ def transactions_unmatch(req: UnmatchTransactionRequest) -> dict:
         restored_lines: list[str] = []
         for line in archived_block_lines:
             stripped = line.strip()
-            if stripped == f"; match-id: {req.matchId}":
+            if stripped in {
+                f"; lf_match_id: {req.matchId}",
+                f"; match-id: {req.matchId}",
+            }:
                 continue
             restored_lines.append(line)
         restored_block = "\n".join(restored_lines)
@@ -2410,18 +2407,28 @@ def unknown_apply(req: StageApplyRequest) -> dict:
         }
         stages.save(req.stageId, stage)
 
-        match_ids = [
-            sel.get("matchId") or ""
+        matches = [
+            {
+                "match_id": sel.get("matchId"),
+                "imported_txn_id": sel.get("importedTxnId"),
+                "archived_manual_txn_id": sel.get("archivedManualTxnId"),
+                "original_manual_block": sel.get("originalManualBlock"),
+                "original_imported_block": sel.get("originalImportedBlock"),
+                "prior_category": sel.get("priorCategory"),
+                "manual_journal_path": rel_path(journal_path, config.root_dir),
+                "imported_journal_path": rel_path(journal_path, config.root_dir),
+                "manual_insert_index": sel.get("manualInsertIndex"),
+            }
             for sel in selections.values()
             if sel.get("selectionType") == "match"
         ]
         mappings_applied = sum(1 for sel in selections.values() if sel.get("selectionType") == "category")
-        mut.summary = f"Applied {mappings_applied} mappings and {len(match_ids)} matches"
+        mut.summary = f"Applied {mappings_applied} mappings and {len(matches)} matches"
         mut.payload = {
             "journal_path": rel_path(journal_path, config.root_dir),
             "mappings_applied": mappings_applied,
-            "matches_applied": len(match_ids),
-            "match_ids": match_ids,
+            "matches_applied": len(matches),
+            "matches": matches,
             "warnings": warnings,
         }
 

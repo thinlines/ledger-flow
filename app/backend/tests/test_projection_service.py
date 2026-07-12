@@ -27,6 +27,7 @@ from services.config_service import AppConfig
 from services.journal_block_service import hash_block_text
 from services.projection_db import database_path, ensure_database
 from services.projection_service import (
+    find_projected_transaction_match,
     refresh_projection,
     rebuild_projection,
     render_file,
@@ -115,6 +116,38 @@ ARCHIVED_MANUAL = """\
     Expenses:Coffee    USD 4.50
     Assets:Checking
 """
+
+
+def test_matched_transactions_rebuild_as_a_queryable_relationship(tmp_path):
+    config = _make_config(tmp_path)
+    (tmp_path / "journals" / "2026.journal").write_text(
+        """2026-03-15 Whole Foods Imported
+    ; lf_txn_id: txn_imported
+    ; lf_match_id: match_01JZ0000000000000000000000
+    Expenses:Groceries    USD 42.00
+    Assets:Checking
+""",
+        encoding="utf-8",
+    )
+    (tmp_path / "journals" / "archived-manual.journal").write_text(
+        """2026-03-14 Whole Foods Manual
+    ; lf_txn_id: txn_manual
+    ; lf_match_id: match_01JZ0000000000000000000000
+    ; :manual:
+    Expenses:Groceries    USD 42.00
+    Assets:Checking
+""",
+        encoding="utf-8",
+    )
+
+    refresh_projection(config)
+
+    match = find_projected_transaction_match(
+        config, "match_01JZ0000000000000000000000"
+    )
+    assert match is not None
+    assert match.imported_transaction_id == "txn_imported"
+    assert match.archived_manual_transaction_id == "txn_manual"
 
 
 def _golden_workspace(tmp_path: Path) -> AppConfig:

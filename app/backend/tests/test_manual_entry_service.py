@@ -749,7 +749,7 @@ account Assets:Bank:Checking
     # The imported transaction got the manual destination + tags; the manual
     # entry was archived out of the journal.
     assert "Expenses:Unknown" not in content
-    assert "; match-id:" in content
+    assert "; lf_match_id:" in content
     assert "txn_manual_uber" not in content
     archived = (tmp_path / "archived-manual.journal").read_text(encoding="utf-8")
     assert "txn_manual_uber" in archived

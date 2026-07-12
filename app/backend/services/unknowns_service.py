@@ -78,10 +78,11 @@ def _load_payee_rules(accounts_dat: Path) -> dict[str, str]:
 
 
 def _block_has_match_id_tag(lines: list[str]) -> bool:
-    """Return True if any line in the block is a ``; match-id:`` comment."""
     for line in lines:
         stripped = line.strip()
-        if stripped.startswith(";") and "match-id:" in stripped:
+        if stripped.startswith(";") and (
+            "match-id:" in stripped or "lf_match_id:" in stripped
+        ):
             return True
     return False
 
@@ -890,9 +891,20 @@ def apply_unknown_mappings(
             range_key = (manual_start, manual_end)
             match_id = match_ids_by_range.get(range_key)
             if match_id is None:
-                match_id = str(uuid4())
+                match_id = f"match_{uuid4()}"
                 match_ids_by_range[range_key] = match_id
                 manual_removal_ranges.append((manual_start - 1, manual_end, group["groupKey"], match_id))
+            selection["matchId"] = match_id
+            selection["importedTxnId"] = str(txn.get("lfTxnId") or txn_id)
+            selection["archivedManualTxnId"] = matched_manual_lf_txn_id
+            selection["originalManualBlock"] = "\n".join(manual_lines)
+            selection["originalImportedBlock"] = "\n".join(
+                original_lines[
+                    int(txn["transactionStartLine"]) - 1 : int(txn["transactionEndLine"])
+                ]
+            )
+            selection["manualInsertIndex"] = manual_start - 1
+            selection["priorCategory"] = destination
 
             if txn["lineNo"] in processed_line_nos:
                 warnings.append(
@@ -942,12 +954,22 @@ def apply_unknown_mappings(
                     break
                 if ":manual:" in lines[i]:
                     has_manual = True
-                if "match-id:" in lines[i]:
+                if "match-id:" in lines[i] or "lf_match_id:" in lines[i]:
                     has_match_id = True
             if not has_match_id:
-                lines.insert(start_idx + 1, f"    ; match-id: {match_id}")
+                lines.insert(start_idx + 1, f"    ; lf_match_id: {match_id}")
             if not has_manual:
                 lines.insert(start_idx + 1, "    ; :manual:")
+            block_end = next(
+                (i for i in range(start_idx + 1, len(lines)) if TXN_START_RE.match(lines[i])),
+                len(lines),
+            )
+            if not any("lf_txn_id:" in line for line in lines[start_idx + 1:block_end]):
+                imported_txn_id = f"txn_{uuid4()}"
+                lines.insert(start_idx + 1, f"    ; lf_txn_id: {imported_txn_id}")
+                for selection in selections.values():
+                    if selection.get("matchId") == match_id:
+                        selection["importedTxnId"] = imported_txn_id
 
         # Archive then remove matched manual entries in reverse order to keep line indices stable.
         for start_idx, end_idx, group_key, match_id in sorted(manual_removal_ranges, key=lambda r: r[0], reverse=True):
@@ -998,7 +1020,10 @@ def apply_unknown_mappings(
                     "warning": "Manual entry already carries a match-id tag; skipping archive write (possible prior match)",
                 })
             else:
-                archive_manual_entry(archived_path, match_id, block_lines)
+                archived_txn_id = archive_manual_entry(archived_path, match_id, block_lines)
+                for selection in selections.values():
+                    if selection.get("matchId") == match_id:
+                        selection["archivedManualTxnId"] = archived_txn_id
 
             # Remove trailing blank lines from the main journal range (existing behavior).
             while found_end < len(lines) and not lines[found_end].strip():

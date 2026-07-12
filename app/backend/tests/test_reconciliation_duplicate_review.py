@@ -13,6 +13,7 @@ from services.config_service import AppConfig
 from services.event_log_service import read_events
 from services.import_identity_service import ImportIdentityStore
 from services.import_service import _build_existing_map, _classify_transaction
+from services.undo_service import UndoOutcome, undo_event
 
 
 def _make_config(workspace: Path) -> AppConfig:
@@ -209,6 +210,7 @@ class TestDuplicateResolution:
             ),
         )
         rows = _context_rows(config, monkeypatch)
+        before_match = journal.read_text(encoding="utf-8")
         manual = _row_by_payee(rows, "Winco groceries")
         imported = _row_by_payee(rows, "Winco Foods Store")
 
@@ -243,9 +245,15 @@ class TestDuplicateResolution:
         assert "Winco groceries" not in updated
         assert "Expenses:Food:Groceries" in updated
         assert "; notes: remembered later" in updated
-        assert "; match-id:" in updated
+        assert "; lf_match_id:" in updated
         assert "Winco groceries" in archive
         assert events[-1]["type"] == "reconciliation.imported_transaction_used.v1"
+
+        undo = undo_event(config, result["eventId"])
+
+        assert undo.outcome == UndoOutcome.SUCCESS
+        assert journal.read_text(encoding="utf-8") == before_match
+        assert not (config.journal_dir / "archived-manual.journal").exists()
 
     def test_remove_manual_duplicate_deletes_unchecked_manual_row(
         self, tmp_path: Path, monkeypatch

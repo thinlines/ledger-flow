@@ -122,7 +122,6 @@ CREATE TABLE transactions (
     raw_block_hash TEXT NOT NULL,
     source_start_line INTEGER NOT NULL,
     source_end_line INTEGER NOT NULL,
-    managed_by_app BOOLEAN NOT NULL DEFAULT FALSE,
     parse_status TEXT NOT NULL DEFAULT 'ok'
         CHECK (parse_status IN ('ok', 'preserved_raw', 'warning', 'error')),
     created_from_operation_id TEXT,
@@ -171,7 +170,6 @@ CREATE TABLE postings (
     raw_line TEXT NOT NULL,
     raw_line_hash TEXT NOT NULL,
     source_line INTEGER NOT NULL,
-    managed_by_app BOOLEAN NOT NULL DEFAULT FALSE,
     UNIQUE (transaction_id, posting_order)
 );
 
@@ -356,6 +354,32 @@ Parser rule:
 - Inline comments with multiple key/value pairs stay raw at first.
 - App code should query `metadata_entries`, not parse raw comment text.
 
+## Transaction Matches
+
+Manual/import matches remain journal-canonical. Both the surviving imported
+transaction and the archived manual transaction carry the same
+`lf_match_id`; both also carry stable `lf_txn_id` values. A rebuild derives
+the active one-to-one relationship:
+
+```sql
+CREATE TABLE transaction_matches (
+    id TEXT PRIMARY KEY,
+    imported_transaction_id TEXT NOT NULL UNIQUE
+        REFERENCES transactions(id) ON DELETE CASCADE,
+    archived_manual_transaction_id TEXT NOT NULL UNIQUE
+        REFERENCES transactions(id) ON DELETE CASCADE
+);
+```
+
+`archived-manual.journal` remains a plaintext, git-trackable journal with the
+`archive` role. It is excluded from balances but projected normally. Apply
+operations additionally retain the original manual/imported blocks and prior
+category so standard operation undo can restore the exact pre-match state.
+Unmatch resolves the relationship and archived block through this projection;
+it does not scan archive text for a shared identifier. Legacy `match-id`
+metadata is accepted when rebuilding existing workspaces, while all new writes
+use `lf_match_id` with a `match_`-prefixed value.
+
 ## Reference Data
 
 The `NN-*.dat` files (`role = 'directives'`) declare accounts, payees, tags,
@@ -388,8 +412,7 @@ CREATE TABLE accounts (
     note TEXT,
     closed_on TEXT,
     declared BOOLEAN NOT NULL DEFAULT FALSE,
-    used BOOLEAN NOT NULL DEFAULT FALSE,
-    managed_by_app BOOLEAN NOT NULL DEFAULT FALSE
+    used BOOLEAN NOT NULL DEFAULT FALSE
 );
 
 CREATE INDEX accounts_type_idx ON accounts(account_type, subtype);

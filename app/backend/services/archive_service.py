@@ -14,6 +14,8 @@ between the two records.
 from __future__ import annotations
 
 from pathlib import Path
+import re
+from uuid import uuid4
 
 ARCHIVED_MANUAL_JOURNAL_NAME = "archived-manual.journal"
 
@@ -29,7 +31,7 @@ def archive_manual_entry(
     archive_path: Path,
     match_id: str,
     block_lines: list[str],
-) -> None:
+) -> str:
     """Append a matched manual entry block to the archive journal.
 
     On first call the archive file is created with a three-line header plus the
@@ -42,18 +44,30 @@ def archive_manual_entry(
 
     archive_path.parent.mkdir(parents=True, exist_ok=True)
 
-    stamped = [block_lines[0], f"    ; match-id: {match_id}"] + list(block_lines[1:])
+    txn_id = next(
+        (
+            match.group(1)
+            for line in block_lines[1:]
+            if (match := re.match(r"^\s*;\s*lf_txn_id:\s*(\S+)\s*$", line))
+        ),
+        f"txn_{uuid4()}",
+    )
+    body = list(block_lines[1:])
+    if not any("lf_txn_id:" in line for line in body):
+        body.insert(0, f"    ; lf_txn_id: {txn_id}")
+    stamped = [block_lines[0], f"    ; lf_match_id: {match_id}"] + body
     block_text = "\n".join(stamped) + "\n"
 
     if not archive_path.exists():
         archive_path.write_text(_ARCHIVE_HEADER + block_text, encoding="utf-8")
-        return
+        return txn_id
 
     # File exists — append with one blank line separator. We always leave the
     # file ending in a single trailing newline, so prepending one newline here
     # yields exactly one blank line between consecutive entries.
     with open(archive_path, "a", encoding="utf-8") as fp:
         fp.write("\n" + block_text)
+    return txn_id
 
 
 def rollback_archive(archive_path: Path, size_before: int | None) -> None:

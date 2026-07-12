@@ -69,3 +69,10 @@ and left when there is work to do: Import, Review, Reconcile. Workflows are
 surfaced contextually (e.g. Overview says "12 to review →") rather than holding
 permanent equal real estate. Rules is neither — it is an in-context capability
 woven into Review, not a destination.
+
+## transaction match
+
+A durable relationship where an imported transaction replaces or absorbs a
+manual transaction that represented the same real-world movement of money. The
+match exists while the current journal state links the surviving imported
+transaction to the archived manual transaction.

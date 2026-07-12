@@ -41,8 +41,8 @@ include ../opening/checking.journal
 
 2026-03-15 * Whole Foods
     ; lf_txn_id: txn_wf
-    Assets:Bank:Checking  -$50.00
-    Expenses:Groceries  $50.00
+    Assets:Bank:Checking  USD -50.00
+    Expenses:Groceries  USD 50.00
 
 2026-03-20 * Target
     ; lf_txn_id: txn_target
@@ -61,19 +61,20 @@ MATCHED_JOURNAL = """\
 2026-03-15 * Whole Foods
     ; lf_txn_id: txn_matched
     ; :manual:
-    ; match-id: test-match-uuid-1234
-    Assets:Bank:Checking  -$50.00
-    Expenses:Groceries  $50.00
+    ; lf_match_id: match_01JZ0000000000000000000000
+    Assets:Bank:Checking  USD -50.00
+    Expenses:Groceries  USD 50.00
 """
 
 ARCHIVE_CONTENT = """\
 ; Ledger Flow archived manual entries.
 
 2026-03-15 Whole Foods
-    ; match-id: test-match-uuid-1234
+    ; lf_txn_id: txn_archived_manual
+    ; lf_match_id: match_01JZ0000000000000000000000
     ; :manual:
-    Assets:Bank:Checking  -$50.00
-    Expenses:Groceries  $50.00
+    Assets:Bank:Checking  USD -50.00
+    Expenses:Groceries  USD 50.00
 """
 
 EXTERNAL_INSERT = (
@@ -441,14 +442,14 @@ class TestUnmatchById:
             UnmatchTransactionRequest(
                 txnId="txn_matched",
                 blockHash=_block_hash(config, "txn_matched"),
-                matchId="test-match-uuid-1234",
+                matchId="match_01JZ0000000000000000000000",
             )
         )
 
         assert result["success"] is True
         text = (config.journal_dir / "2026.journal").read_text(encoding="utf-8")
         # Imported txn: tags stripped, destination reset.
-        assert "; match-id:" not in text.split("2026-03-15 Whole Foods")[0]
+        assert "; lf_match_id:" not in text.split("2026-03-15 Whole Foods")[0]
         assert "Expenses:Unknown" in text
         # Restored manual entry re-inserted.
         assert "2026-03-15 Whole Foods" in text
@@ -464,7 +465,7 @@ class TestUnmatchById:
                 UnmatchTransactionRequest(
                     txnId="txn_matched",
                     blockHash="sha256:stale",
-                    matchId="test-match-uuid-1234",
+                    matchId="match_01JZ0000000000000000000000",
                 )
             )
 
@@ -481,7 +482,7 @@ class TestUnmatchById:
                 UnmatchTransactionRequest(
                     txnId="txn_matched",
                     blockHash=_block_hash(config, "txn_matched"),
-                    matchId="test-match-uuid-1234",
+                    matchId="match_01JZ0000000000000000000000",
                 )
             )
 

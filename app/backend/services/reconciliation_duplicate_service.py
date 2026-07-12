@@ -265,17 +265,22 @@ def _upsert_match_tags(block_lines: list[str], match_id: str) -> list[str]:
     out = [block_lines[0]]
     has_manual_tag = False
     has_match_id = False
+    has_txn_id = False
     for line in block_lines[1:]:
         if line.strip() == "; :manual:":
             has_manual_tag = True
-        if line.strip() == f"; match-id: {match_id}":
+        if line.strip() == f"; lf_match_id: {match_id}":
             has_match_id = True
+        if line.strip().startswith("; lf_txn_id:"):
+            has_txn_id = True
         out.append(line)
     insert_at = 1
     if not has_match_id:
-        out.insert(insert_at, f"    ; match-id: {match_id}")
+        out.insert(insert_at, f"    ; lf_match_id: {match_id}")
     if not has_manual_tag:
         out.insert(insert_at, "    ; :manual:")
+    if not has_txn_id:
+        out.insert(insert_at, f"    ; lf_txn_id: txn_{uuid4()}")
     return out
 
 
@@ -444,10 +449,10 @@ def resolve_duplicate_candidate(
                     destination_account,
                 )
             updated_imported = _replace_user_metadata(updated_imported, _user_metadata_lines(manual_block))
-            match_id = str(uuid4())
+            match_id = f"match_{uuid4()}"
             updated_imported = _upsert_match_tags(updated_imported, match_id)
 
-            archive_manual_entry(archive_path, match_id, manual_block)
+            archived_manual_txn_id = archive_manual_entry(archive_path, match_id, manual_block)
             if manual_journal == imported_journal:
                 shared_lines[imported_start:imported_end] = updated_imported
                 if imported_start < manual_start:
@@ -474,6 +479,18 @@ def resolve_duplicate_candidate(
                 "imported_selection_key": imported_row.selection_key,
                 "imported_header_line": imported_row.header_line,
                 "match_id": match_id,
+                "imported_txn_id": next(
+                    line.split(":", 1)[1].strip()
+                    for line in updated_imported
+                    if line.strip().startswith("; lf_txn_id:")
+                ),
+                "archived_manual_txn_id": archived_manual_txn_id,
+                "original_manual_block": "\n".join(manual_block),
+                "original_imported_block": "\n".join(imported_block),
+                "prior_category": destination_account,
+                "manual_journal_path": rel_path(manual_journal, config.root_dir),
+                "imported_journal_path": rel_path(imported_journal, config.root_dir),
+                "manual_insert_index": manual_start,
             }
 
         return {
