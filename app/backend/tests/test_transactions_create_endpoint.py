@@ -9,6 +9,7 @@ tracked accounts fail with a clear validation error instead of guessing.
 
 from __future__ import annotations
 
+import sqlite3
 from pathlib import Path
 
 import pytest
@@ -340,19 +341,31 @@ def test_omitted_destination_with_unavailable_payee_default_lookup_is_rejected(
     journal_before = (config.journal_dir / "2026.journal").read_text(encoding="utf-8")
 
     def unavailable(_config):
-        raise RuntimeError("projection unavailable")
+        raise sqlite3.OperationalError("database is locked")
 
     monkeypatch.setattr(main, "load_merchants", unavailable)
 
     with pytest.raises(HTTPException) as exc_info:
         main.transactions_create(_request(destinationAccount=None))
 
-    assert exc_info.value.status_code == 400
+    assert exc_info.value.status_code == 503
     assert "Payee default account lookup is unavailable" in exc_info.value.detail
     assert (
         journal_before
         == (config.journal_dir / "2026.journal").read_text(encoding="utf-8")
     )
+
+
+def test_unexpected_payee_default_lookup_error_propagates(tmp_path, monkeypatch):
+    _workspace(tmp_path, monkeypatch)
+
+    def broken_lookup(_config):
+        raise RuntimeError("unexpected lookup bug")
+
+    monkeypatch.setattr(main, "load_merchants", broken_lookup)
+
+    with pytest.raises(RuntimeError, match="unexpected lookup bug"):
+        main.transactions_create(_request(destinationAccount=None))
 
 
 def test_notes_payload_creates_normal_notes_metadata(tmp_path, monkeypatch):

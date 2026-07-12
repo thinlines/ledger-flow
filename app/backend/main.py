@@ -7,6 +7,7 @@ import logging
 import os
 from pathlib import Path
 import re
+import sqlite3
 from uuid import uuid4, uuid7
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
@@ -656,9 +657,9 @@ def _resolve_destination_account(config, req: ManualTransactionRequest) -> str:
     payee = (req.payee or "").strip()
     try:
         merchant = next((m for m in load_merchants(config) if m.name == payee), None)
-    except Exception as exc:
+    except sqlite3.Error as exc:
         raise HTTPException(
-            status_code=400,
+            status_code=503,
             detail=(
                 "Payee default account lookup is unavailable. "
                 "Provide destinationAccount explicitly."
