@@ -15,7 +15,7 @@ from .archive_service import archive_manual_entry
 from .config_service import AppConfig
 from .event_log_service import rel_path
 from .import_identity_service import ImportIdentityStore
-from .journal_block_service import find_transaction_block
+from .journal_block_service import hash_block, locate_block_by_hash, locate_block_by_id
 from .projection_service import find_projected_transaction
 from .reconciliation_context_service import (
     IMPORT_IDENTITY_KEY_RE,
@@ -143,10 +143,12 @@ def _row_ref(config: AppConfig, row: ReconciliationContextRow):
 
 
 def _locate_in_lines(lines: list[str], ref) -> tuple[int, int]:
-    header_idx = ref.source_start_line - 1
-    if header_idx >= len(lines) or lines[header_idx] != ref.raw_header:
+    located = locate_block_by_id(lines, ref.id) or locate_block_by_hash(
+        lines, ref.raw_block_hash
+    )
+    if located is None or hash_block(lines, *located) != ref.raw_block_hash:
         raise HTTPException(status_code=409, detail=_STALE_ROW_DETAIL)
-    return find_transaction_block(lines, header_idx)
+    return located
 
 
 def _read_block(config: AppConfig, row: ReconciliationContextRow) -> tuple[Path, list[str], int, int]:

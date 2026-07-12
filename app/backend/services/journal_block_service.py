@@ -35,8 +35,23 @@ def locate_block_by_id(lines: list[str], lf_txn_id: str) -> tuple[int, int] | No
         for line in lines[start + 1 : end]:
             match = LF_TXN_ID_META_RE.match(line)
             if match and match.group(1) == lf_txn_id:
+                while end > start + 1 and lines[end - 1].strip() == "":
+                    end -= 1
                 return start, end
     return None
+
+
+def locate_block_by_hash(lines: list[str], block_hash: str) -> tuple[int, int] | None:
+    """Find a unique block by content hash for pre-identity legacy rows."""
+    starts = [i for i, line in enumerate(lines) if TXN_START_RE.match(line)]
+    matches: list[tuple[int, int]] = []
+    for idx, start in enumerate(starts):
+        end = starts[idx + 1] if idx + 1 < len(starts) else len(lines)
+        while end > start + 1 and lines[end - 1].strip() == "":
+            end -= 1
+        if hash_block(lines, start, end) == block_hash:
+            matches.append((start, end))
+    return matches[0] if len(matches) == 1 else None
 
 
 def mint_lf_txn_id() -> str:

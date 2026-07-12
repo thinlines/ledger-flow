@@ -27,7 +27,7 @@ from services.archive_service import archive_manual_entry
 from services.config_service import AppConfig
 from services.event_log_service import hash_file
 from services.header_parser import TransactionStatus, set_header_status
-from services.journal_block_service import find_transaction_block
+from services.journal_block_service import locate_block_by_id
 from services.journal_query_service import TXN_START_RE
 from services.projection_service import (
     ProjectedTransactionRef,
@@ -99,12 +99,12 @@ def _locate_projected(config: AppConfig, txn_id: str) -> ProjectedTransactionRef
     return ref
 
 
-def _header_index(lines: list[str], ref: ProjectedTransactionRef) -> int:
-    """The projected header position, re-checked against the file bytes."""
-    header_idx = ref.source_start_line - 1
-    if header_idx >= len(lines) or lines[header_idx] != ref.raw_header:
+def _block_range(lines: list[str], ref: ProjectedTransactionRef) -> tuple[int, int]:
+    """Relocate a transaction by durable identity inside a mutation."""
+    located = locate_block_by_id(lines, ref.id)
+    if located is None:
         raise UndoFailedError("This transaction changed since the action — cannot undo")
-    return header_idx
+    return located
 
 
 def _block_txn_id(block_text: str) -> str | None:
@@ -325,8 +325,7 @@ def _undo_transaction_recategorized(config: AppConfig, event: dict) -> str:
         text = journal_path.read_text(encoding="utf-8")
         lines = text.splitlines()
 
-        header_idx = _header_index(lines, ref)
-        block_start, block_end = find_transaction_block(lines, header_idx)
+        block_start, block_end = _block_range(lines, ref)
 
         # Find the posting with new_account and rewrite it back.
         found = False
@@ -383,8 +382,7 @@ def _undo_transaction_account_reassigned(config: AppConfig, event: dict) -> str:
         text = journal_path.read_text(encoding="utf-8")
         lines = text.splitlines()
 
-        header_idx = _header_index(lines, ref)
-        block_start, block_end = find_transaction_block(lines, header_idx)
+        block_start, block_end = _block_range(lines, ref)
 
         # Find the posting with new_account and rewrite it back.
         found = False
@@ -452,7 +450,7 @@ def _undo_transaction_status_toggled(config: AppConfig, event: dict) -> str:
         text = journal_path.read_text(encoding="utf-8")
         lines = text.splitlines()
 
-        header_idx = _header_index(lines, ref)
+        header_idx, _ = _block_range(lines, ref)
         restored_line = set_header_status(ref.raw_header, previous_status)
         lines[header_idx] = restored_line
         journal_path.write_text("\n".join(lines) + ("\n" if text.endswith("\n") else ""), encoding="utf-8")
@@ -488,8 +486,7 @@ def _undo_manual_entry_created(config: AppConfig, event: dict) -> str:
         text = journal_path.read_text(encoding="utf-8")
         lines = text.splitlines()
 
-        header_idx = _header_index(lines, ref)
-        block_start, block_end = find_transaction_block(lines, header_idx)
+        block_start, block_end = _block_range(lines, ref)
 
         # Consume a preceding blank line to avoid double-blank-line gaps.
         remove_start = block_start
@@ -567,8 +564,7 @@ def _undo_transaction_unmatched(config: AppConfig, event: dict) -> str:
         text = journal_path.read_text(encoding="utf-8")
         lines = text.splitlines()
 
-        header_idx = _header_index(lines, ref)
-        block_start, block_end = find_transaction_block(lines, header_idx)
+        block_start, block_end = _block_range(lines, ref)
 
         # Insert :manual: and match-id: tags after the header (same order as unknowns_service).
         # Process in reverse so indices stay valid: match-id first, then :manual:.
@@ -594,27 +590,18 @@ def _undo_transaction_unmatched(config: AppConfig, event: dict) -> str:
         # projected identity; fall back to a header scan for blocks that
         # never carried an lf_txn_id. Step 1 inserted two tag lines, so any
         # projected position after the imported header has shifted by two.
-        manual_header = manual_lines[0] if manual_lines else ""
         manual_entry_idx: int | None = None
+        manual_block_end: int | None = None
         if manual_ref is not None and manual_ref.journal_path == ref.journal_path:
-            candidate_idx = manual_ref.source_start_line - 1
-            if candidate_idx > header_idx:
-                candidate_idx += 2
-            if candidate_idx < len(lines) and lines[candidate_idx] == manual_ref.raw_header:
-                manual_entry_idx = candidate_idx
-        if manual_entry_idx is None:
-            for i, line in enumerate(lines):
-                if line == manual_header and i != header_idx:
-                    # Verify it's a plausible match by checking for the manual tag.
-                    block_head = "\n".join(lines[i : i + 3])
-                    if ":manual:" in block_head:
-                        manual_entry_idx = i
-                        break
+            located_manual = locate_block_by_id(lines, manual_ref.id)
+            if located_manual is not None:
+                manual_entry_idx, manual_block_end = located_manual
 
         if manual_entry_idx is None:
             raise UndoFailedError("Could not locate restored manual entry in journal")
 
-        manual_block_start, manual_block_end = find_transaction_block(lines, manual_entry_idx)
+        manual_block_start = manual_entry_idx
+        assert manual_block_end is not None
         # Consume a preceding blank line.
         remove_start = manual_block_start
         if remove_start > 0 and lines[remove_start - 1].strip() == "":
@@ -679,8 +666,7 @@ def _undo_transaction_notes_updated(config: AppConfig, event: dict) -> str:
         text = journal_path.read_text(encoding="utf-8")
         lines = text.splitlines()
 
-        header_idx = _header_index(lines, ref)
-        block_start, block_end = find_transaction_block(lines, header_idx)
+        block_start, block_end = _block_range(lines, ref)
 
         # Find the current notes line in the block (post-forward-write state).
         notes_idx: int | None = None
@@ -776,8 +762,7 @@ def _undo_matches_applied(config: AppConfig, event: dict) -> str:
             imported_path = config.root_dir / imported_ref.journal_path
             text = imported_path.read_text(encoding="utf-8")
             lines = text.splitlines()
-            start = _header_index(lines, imported_ref)
-            _, end = find_transaction_block(lines, start)
+            start, end = _block_range(lines, imported_ref)
             lines[start:end] = original_imported.splitlines()
             insert_at = int(record.get("manual_insert_index") or 0)
             manual_lines = original_manual.splitlines()
@@ -807,8 +792,10 @@ def _undo_matches_applied(config: AppConfig, event: dict) -> str:
             archive_block = projected_transaction_block(config, archived_ref.id)
             if archive_block is None:
                 raise UndoFailedError("Archived manual transaction block is missing")
-            archive_start = archived_ref.source_start_line - 1
-            archive_end = archive_start + len(archive_block.rstrip("\n").splitlines())
+            located_archive = locate_block_by_id(archive_lines, archived_ref.id)
+            if located_archive is None:
+                raise UndoFailedError("Archived manual transaction block is missing")
+            archive_start, archive_end = located_archive
             while archive_end < len(archive_lines) and not archive_lines[archive_end].strip():
                 archive_end += 1
             del archive_lines[archive_start:archive_end]

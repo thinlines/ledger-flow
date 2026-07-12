@@ -55,7 +55,7 @@ from services.git_snapshot_service import hours_since_last_snapshot, snapshot_co
 from services.header_parser import TransactionStatus, parse_header, set_header_status, HEADER_RE as _HEADER_RE
 from services import journal_writer
 from services.undo_service import UndoOutcome, is_undoable_type, undo_event
-from services.journal_block_service import find_transaction_block
+from services.journal_block_service import hash_block, locate_block_by_id
 from services.journal_query_service import TXN_START_RE
 from services.projection_service import (
     find_projected_transaction_match,
@@ -798,10 +798,7 @@ def transactions_toggle_status(req: ToggleStatusRequest) -> dict:
         text = journal_path.read_text(encoding="utf-8")
         lines = text.splitlines()
 
-        header_idx = ref.source_start_line - 1
-        if header_idx >= len(lines) or lines[header_idx] != ref.raw_header:
-            raise HTTPException(status_code=409, detail=_STALE_TRANSACTION_DETAIL)
-
+        header_idx, _ = _locate_current_block(lines, ref)
         lines[header_idx] = new_line
         journal_path.write_text("\n".join(lines) + ("\n" if text.endswith("\n") else ""), encoding="utf-8")
 
@@ -827,13 +824,16 @@ def transactions_toggle_status(req: ToggleStatusRequest) -> dict:
 # ---------------------------------------------------------------------------
 
 
-def _stale_block_guard(lines: list[str], ref) -> int:
-    """Belt-and-suspenders re-check inside the writer block: the projected
-    header must still sit at the projected line. Returns the header index."""
-    header_idx = ref.source_start_line - 1
-    if header_idx >= len(lines) or lines[header_idx] != ref.raw_header:
+def _locate_current_block(lines: list[str], ref) -> tuple[int, int]:
+    """Relocate a projected transaction by durable id inside the writer.
+
+    The projection hash is checked again after relocation so an edit to the
+    target is stale, while edits elsewhere in the file are harmless.
+    """
+    located = locate_block_by_id(lines, ref.id)
+    if located is None or hash_block(lines, *located) != ref.raw_block_hash:
         raise HTTPException(status_code=409, detail=_STALE_TRANSACTION_DETAIL)
-    return header_idx
+    return located
 
 
 @app.post("/api/transactions/delete")
@@ -854,8 +854,7 @@ def transactions_delete(req: DeleteTransactionRequest) -> dict:
     ) as mut:
         text = journal_path.read_text(encoding="utf-8")
         lines = text.splitlines()
-        header_idx = _stale_block_guard(lines, ref)
-        block_start, block_end = find_transaction_block(lines, header_idx)
+        block_start, block_end = _locate_current_block(lines, ref)
         deleted_block = "\n".join(lines[block_start:block_end])
 
         # Also consume a preceding blank line to avoid double-blank-line gaps.
@@ -905,8 +904,7 @@ def transactions_recategorize(req: RecategorizeTransactionRequest) -> dict:
     ) as mut:
         text = journal_path.read_text(encoding="utf-8")
         lines = text.splitlines()
-        header_idx = _stale_block_guard(lines, ref)
-        block_start, block_end = find_transaction_block(lines, header_idx)
+        block_start, block_end = _locate_current_block(lines, ref)
 
         # Find the single destination posting to rewrite.
         destination_idx: int | None = None
@@ -999,8 +997,7 @@ def transactions_reassign_account(req: ReassignAccountRequest) -> dict:
     ) as mut:
         text = journal_path.read_text(encoding="utf-8")
         lines = text.splitlines()
-        header_idx = _stale_block_guard(lines, ref)
-        block_start, block_end = find_transaction_block(lines, header_idx)
+        block_start, block_end = _locate_current_block(lines, ref)
 
         # Find the single source (tracked) posting to rewrite.
         source_idx: int | None = None
@@ -1075,8 +1072,7 @@ def transactions_notes(req: UpdateNotesRequest) -> dict:
     ) as mut:
         text = journal_path.read_text(encoding="utf-8")
         lines = text.splitlines()
-        header_idx = _stale_block_guard(lines, ref)
-        block_start, block_end = find_transaction_block(lines, header_idx)
+        block_start, block_end = _locate_current_block(lines, ref)
 
         # Find existing notes line within the block and capture its prior value.
         notes_idx: int | None = None
@@ -1153,16 +1149,18 @@ def transactions_unmatch(req: UnmatchTransactionRequest) -> dict:
         # the enclosing file from projected journal items only to remove it.
         archive_text = render_file(config, archived_ref.journal_path)
         archive_lines = archive_text.splitlines()
-        archived_block_start = archived_ref.source_start_line - 1
         archived_block_lines = archived_block.rstrip("\n").splitlines()
+        located_archive = locate_block_by_id(archive_lines, archived_ref.id)
+        if located_archive is None:
+            raise HTTPException(status_code=409, detail=_STALE_TRANSACTION_DETAIL)
+        archived_block_start, _ = located_archive
         archived_block_end = archived_block_start + len(archived_block_lines)
 
         # --- Modify the main journal: remove :manual: and match-id: tags,
         #     rewrite destination to Expenses:Unknown ---
         main_text = journal_path.read_text(encoding="utf-8")
         main_lines = main_text.splitlines()
-        header_idx = _stale_block_guard(main_lines, ref)
-        block_start, block_end = find_transaction_block(main_lines, header_idx)
+        block_start, block_end = _locate_current_block(main_lines, ref)
 
         lines_to_remove: list[int] = []
         destination_idx: int | None = None
