@@ -3,14 +3,15 @@ from __future__ import annotations
 from dataclasses import dataclass
 from decimal import Decimal
 from pathlib import Path
-from .journal_query_service import LF_TXN_ID_META_RE, META_RE, POSTING_RE, TXN_START_RE
+from .journal_query_service import LF_TXN_ID_META_RE
 
 from .config_service import AppConfig, infer_account_kind
 from .currency_parser import parse_optional_amount
 
 
-from .header_parser import HEADER_RE
 from .journal_block_service import lf_txn_id_line, mint_lf_txn_id
+from .projection_db import connect, database_path
+from .projection_service import refresh_projection
 
 OPENING_BALANCES_EQUITY = "Equity:Opening-Balances"
 OPENING_BALANCES_INDEX = "_opening_balances.journal"
@@ -30,88 +31,52 @@ def _parse_amount(raw: str) -> Decimal | None:
     return parse_optional_amount(raw)
 
 
-def _split_transactions(journal_text: str) -> list[list[str]]:
-    transactions: list[list[str]] = []
-    current: list[str] = []
-    for raw in journal_text.splitlines():
-        if TXN_START_RE.match(raw):
-            if current:
-                transactions.append(current)
-            current = [raw]
-        elif current:
-            current.append(raw)
-    if current:
-        transactions.append(current)
-    return transactions
-
-
-def _entry_from_transaction(lines: list[str]) -> OpeningBalanceEntry | None:
-    header_match = HEADER_RE.match(lines[0])
-    if not header_match:
-        return None
-
-    tracked_account_id: str | None = None
-    minimum_payment: Decimal | None = None
-    postings: list[tuple[str, Decimal | None]] = []
-
-    for line in lines[1:]:
-        meta_match = META_RE.match(line)
-        if meta_match:
-            key = meta_match.group(1).strip().lower()
-            if key == "tracked_account_id":
-                tracked_account_id = meta_match.group(2).strip() or None
-            elif key == "minimum_payment":
-                minimum_payment = _parse_amount(meta_match.group(2).strip())
-            continue
-
-        posting_match = POSTING_RE.match(line)
-        if not posting_match:
-            continue
-
-        account = posting_match.group(1).strip()
-        postings.append((account, _parse_amount(posting_match.group(2) or "")))
-
-    primary_index = next(
-        (
-            idx
-            for idx, (account, amount) in enumerate(postings)
-            if amount is not None and infer_account_kind(account) in {"asset", "liability"}
-        ),
-        None,
-    )
-    if primary_index is None:
-        return None
-
-    primary_account, primary_amount = postings[primary_index]
-    offset_account = next(
-        (
-            account
-            for idx, (account, _) in enumerate(postings)
-            if idx != primary_index
-        ),
-        OPENING_BALANCES_EQUITY,
-    )
-
-    return OpeningBalanceEntry(
-        tracked_account_id=tracked_account_id,
-        ledger_account=primary_account,
-        offset_account=offset_account,
-        amount=primary_amount,
-        date=header_match.group("date").replace("/", "-"),
-        minimum_payment=minimum_payment,
-    )
-
-
 def load_opening_balance_entries(config: AppConfig) -> list[OpeningBalanceEntry]:
+    refresh_projection(config)
     entries: list[OpeningBalanceEntry] = []
-    for journal_path in sorted(config.opening_bal_dir.glob("*.journal")):
-        if not journal_path.exists():
+    with connect(database_path(config)) as conn:
+        rows = conn.execute(
+            """
+            SELECT transactions.id, transactions.date, postings.posting_order,
+                   postings.account, postings.amount_nano, postings.amount_inferred,
+                   tracked.value_text AS tracked_account_id,
+                   minimum.value_text AS minimum_payment
+            FROM transactions
+            JOIN journal_files ON journal_files.id = transactions.journal_file_id
+            JOIN postings ON postings.transaction_id = transactions.id
+            LEFT JOIN metadata_entries AS tracked
+              ON tracked.owner_type = 'transaction' AND tracked.owner_id = transactions.id
+             AND tracked.key = 'tracked_account_id'
+            LEFT JOIN metadata_entries AS minimum
+              ON minimum.owner_type = 'transaction' AND minimum.owner_id = transactions.id
+             AND minimum.key = 'minimum_payment'
+            WHERE journal_files.role = 'opening'
+            ORDER BY journal_files.path, transactions.txn_order, postings.posting_order
+            """
+        ).fetchall()
+
+    grouped: dict[str, list] = {}
+    for row in rows:
+        grouped.setdefault(row[0], []).append(row)
+    for txn_rows in grouped.values():
+        primary = next(
+            (row for row in txn_rows if not row[5] and row[4] is not None
+             and infer_account_kind(row[3]) in {"asset", "liability"}),
+            None,
+        )
+        if primary is None:
             continue
-        text = journal_path.read_text(encoding="utf-8")
-        for lines in _split_transactions(text):
-            entry = _entry_from_transaction(lines)
-            if entry is not None:
-                entries.append(entry)
+        offset = next((row[3] for row in txn_rows if row[2] != primary[2]), OPENING_BALANCES_EQUITY)
+        entries.append(OpeningBalanceEntry(
+            tracked_account_id=primary[6].strip() or None if primary[6] is not None else None,
+            ledger_account=primary[3],
+            offset_account=offset,
+            amount=(Decimal(primary[4]) / Decimal(1_000_000_000)).quantize(
+                Decimal("0.01")
+            ),
+            date=primary[1],
+            minimum_payment=_parse_amount(primary[7]) if primary[7] is not None else None,
+        ))
     return entries
 
 

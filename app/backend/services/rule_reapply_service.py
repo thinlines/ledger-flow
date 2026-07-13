@@ -1,91 +1,36 @@
 from __future__ import annotations
 
-from .journal_query_service import ACCOUNT_LINE_RE, ACCOUNT_ONLY_RE, META_RE, TXN_START_RE
+from .journal_query_service import ACCOUNT_LINE_RE, ACCOUNT_ONLY_RE
 from pathlib import Path
 
-from .config_service import infer_account_kind
+from .config_service import AppConfig, infer_account_kind
 from .journal_block_service import hash_block, locate_block_by_id
+from .projection_service import load_projected_transaction_rows
 from .rules_service import extract_set_account, find_matching_rule
 
 
-from .header_parser import HEADER_RE
-
-def _iter_transaction_ranges(lines: list[str]) -> list[tuple[int, int]]:
-    starts = [i for i, line in enumerate(lines) if TXN_START_RE.match(line)]
-    ranges: list[tuple[int, int]] = []
-    for idx, start in enumerate(starts):
-        end = starts[idx + 1] if idx + 1 < len(starts) else len(lines)
-        ranges.append((start, end))
-    return ranges
+def _scan_config(journal_path: Path) -> AppConfig:
+    return AppConfig(journal_path.parent, journal_path.parent / "config.toml", {}, {
+        "csv_dir": ".", "journal_dir": ".", "init_dir": ".",
+        "opening_bal_dir": ".", "imports_dir": ".",
+    }, {}, {})
 
 
-def _parse_postings(lines: list[str], start: int, end: int) -> list[dict]:
-    postings = []
-    for i in range(start + 1, end):
-        line = lines[i]
-        match = ACCOUNT_LINE_RE.match(line)
-        if match:
-            postings.append(
-                {
-                    "lineNo": i + 1,
-                    "indent": match.group(1),
-                    "account": match.group(2).strip(),
-                    "sep": match.group(3),
-                    "amount": match.group(4).strip(),
-                }
-            )
-            continue
-
-        if line.lstrip().startswith(";"):
-            continue
-
-        match = ACCOUNT_ONLY_RE.match(line)
-        if not match:
-            continue
-
-        postings.append(
-            {
-                "lineNo": i + 1,
-                "indent": match.group(1),
-                "account": match.group(2).strip(),
-                "sep": "",
-                "amount": "",
-            }
-        )
-    return postings
-
-
-def _parse_metadata(lines: list[str], start: int, end: int) -> dict[str, str]:
-    metadata: dict[str, str] = {}
-    for i in range(start + 1, end):
-        match = META_RE.match(lines[i])
-        if match:
-            metadata[match.group(1).strip().lower()] = match.group(2).strip()
-    return metadata
-
-
-def scan_rule_reapply(journal_path: Path, rule: dict, import_accounts: dict[str, dict]) -> dict:
+def scan_rule_reapply(journal_path: Path, rule: dict, import_accounts: dict[str, dict], config: AppConfig | None = None) -> dict:
     target_account = extract_set_account(rule)
     if not target_account:
         raise ValueError("Rule must set an account before it can be applied to history.")
 
-    lines = journal_path.read_text(encoding="utf-8").splitlines()
     candidates: list[dict] = []
     warnings: list[dict] = []
     matched_count = 0
     up_to_date_count = 0
 
-    for start, end in _iter_transaction_ranges(lines):
-        header_match = HEADER_RE.match(lines[start])
-        if header_match:
-            current_date = header_match.group("date").replace("/", "-")
-            current_payee = header_match.group("payee").strip() or "(no payee)"
-        else:
-            current_date = ""
-            current_payee = "(no payee)"
-
-        metadata = _parse_metadata(lines, start, end)
-        postings = _parse_postings(lines, start, end)
+    for transaction in load_projected_transaction_rows(config or _scan_config(journal_path), journal_path):
+        current_date = transaction["date"].replace("/", "-")
+        current_payee = transaction["payee"]
+        metadata = transaction["metadata"]
+        postings = transaction["postings"]
         if not find_matching_rule(
             {
                 "payee": current_payee,
@@ -152,8 +97,8 @@ def scan_rule_reapply(journal_path: Path, rule: dict, import_accounts: dict[str,
             {
                 "id": f"{journal_path.name}:{posting['lineNo']}",
                 "lfTxnId": str(metadata.get("lf_txn_id", "")).strip() or None,
-                "blockHash": hash_block(lines, start, end),
-                "transactionStartLine": start + 1,
+                "blockHash": transaction["blockHash"],
+                "transactionStartLine": transaction["transactionStartLine"],
                 "date": current_date,
                 "payee": current_payee,
                 "amount": posting["amount"],

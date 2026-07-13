@@ -946,3 +946,13 @@ without compatibility fallbacks. Ordered directive filenames remain
 (`10-accounts.dat`, `11-payees.dat`, `12-tags.dat`, `13-commodities.dat`).
 Frontend mutation payloads no longer carry positional `lineNumber` /
 `headerLine` fields.
+
+Amendment (2026-07-12, stable-identity closeout): runtime transaction reads
+and scan/discovery flows query the projection; journal regex parsing remains
+only in projection parsing, write/render transformations, and isolated pure
+compatibility helpers used by tests. Mutations locate durable rows by
+`lf_txn_id` and validate `raw_block_hash`. A unique block-hash fallback is
+retained only for pre-migration rows that have no durable id; undo of such a
+legacy deletion may use its recorded header. Newly projected and app-created
+transactions carry `lf_txn_id`, so current runtime flows do not take these
+legacy branches.

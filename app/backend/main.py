@@ -2305,6 +2305,7 @@ def unknown_scan(req: UnknownScanRequest) -> dict:
         config.import_accounts,
         config.tracked_accounts,
         merchants=load_merchants(config),
+        config=config,
     )
     stages = StageStore(config)
     existing_stage = _find_resumable_unknown_stage(config, journal_path)
@@ -2498,7 +2499,7 @@ def rules_history_scan(rule_id: str, req: RuleHistoryScanRequest) -> dict:
     path = ensure_rules_store(config.init_dir)
     rule = _rule_or_404(path, rule_id)
     try:
-        data = scan_rule_reapply(journal_path, rule, config.import_accounts)
+        data = scan_rule_reapply(journal_path, rule, config.import_accounts, config)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
 

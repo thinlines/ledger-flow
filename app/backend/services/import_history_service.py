@@ -11,6 +11,7 @@ from .config_service import AppConfig
 from .import_identity_service import ImportIdentityStore
 from .event_log_service import hash_file, rel_path
 from .operations_service import list_operations, record_operation
+from .projection_service import load_projected_transaction_rows
 from .transfer_service import (
     ACTIVE_TRANSFER_MATCH_STATES,
     TRANSFER_MATCH_STATE_PENDING,
@@ -66,7 +67,8 @@ def _iter_transaction_ranges(lines: list[str]) -> list[tuple[int, int]]:
     return ranges
 
 
-def _scan_journal_transactions(lines: list[str]) -> list[JournalTransaction]:
+def _parse_rendered_transactions(lines: list[str]) -> list[JournalTransaction]:
+    """Re-index an in-memory journal rendering during an undo mutation."""
     transactions: list[JournalTransaction] = []
     for start, end in _iter_transaction_ranges(lines):
         source_identity = None
@@ -112,9 +114,35 @@ def _scan_journal_transactions(lines: list[str]) -> list[JournalTransaction]:
     return transactions
 
 
-def _load_journal_transactions(journal_path: Path) -> tuple[list[str], list[JournalTransaction]]:
+def _load_journal_transactions(
+    config: AppConfig, journal_path: Path
+) -> tuple[list[str], list[JournalTransaction]]:
     lines = journal_path.read_text(encoding="utf-8").splitlines()
-    return lines, _scan_journal_transactions(lines)
+    # Source-identity discovery is projection-backed. Source coordinates are
+    # converted to the zero-based, end-exclusive indexes used by the mutation
+    # renderer below.
+    rows = load_projected_transaction_rows(config, journal_path)
+    transactions: list[JournalTransaction] = []
+    for row in rows:
+        metadata = dict(row["metadata"])
+        identities_with_suffix: list[tuple[int, str, str | None]] = []
+        for key, value in metadata.items():
+            match = re.fullmatch(r"lf_source_identity(?:_(\d+))?", key)
+            if not match or not value:
+                continue
+            suffix = match.group(1) or "1"
+            payload_key = "source_payload_hash" if suffix == "1" else f"source_payload_hash_{suffix}"
+            identities_with_suffix.append((int(suffix), value, metadata.get(payload_key)))
+        identities_with_suffix.sort(key=lambda item: item[0])
+        transactions.append(JournalTransaction(
+            start=int(row["transactionStartLine"]) - 1,
+            end=int(row["transactionEndLine"]),
+            source_identity=metadata.get("lf_source_identity"),
+            source_payload_hash=metadata.get("source_payload_hash"),
+            identity_variants=tuple((identity, payload) for _, identity, payload in identities_with_suffix),
+            metadata=metadata,
+        ))
+    return lines, transactions
 
 
 def _upsert_transaction_metadata(
@@ -143,7 +171,7 @@ def _downgrade_remaining_transfer_peers(
         return lines
 
     updated_lines = list(lines)
-    journal_transactions = _scan_journal_transactions(updated_lines)
+    journal_transactions = _parse_rendered_transactions(updated_lines)
     for transfer_id in sorted(removed_transfer_ids):
         remaining = [
             transaction
@@ -174,7 +202,7 @@ def _downgrade_remaining_transfer_peers(
                 transfer_match_state=TRANSFER_MATCH_STATE_PENDING,
             ),
         )
-        journal_transactions = _scan_journal_transactions(updated_lines)
+        journal_transactions = _parse_rendered_transactions(updated_lines)
 
     return updated_lines
 
@@ -306,7 +334,7 @@ def _undo_state_by_id(config: AppConfig, entries: list[dict]) -> dict[str, tuple
 
         cache_key = str(journal_path.resolve(strict=False))
         if cache_key not in journal_cache:
-            journal_cache[cache_key] = _load_journal_transactions(journal_path)
+            journal_cache[cache_key] = _load_journal_transactions(config, journal_path)
 
         _, journal_transactions = journal_cache[cache_key]
         _, reason = _match_transactions_for_undo(entry, journal_transactions)
@@ -433,7 +461,7 @@ def undo_import(config: AppConfig, history_id: str, *, operation_id: str | None 
 
     journal_path = Path(str(entry["targetJournalPath"]))
     journal_hash_before = hash_file(journal_path)
-    lines, journal_transactions = _load_journal_transactions(journal_path)
+    lines, journal_transactions = _load_journal_transactions(config, journal_path)
     matched_results, reason = _match_transactions_for_undo(entry, journal_transactions)
     if matched_results is None:
         raise ValueError(reason or "This import cannot be undone.")
@@ -449,14 +477,14 @@ def undo_import(config: AppConfig, history_id: str, *, operation_id: str | None 
         cursor = end
     kept_lines.extend(lines[cursor:])
     kept_lines = _downgrade_remaining_transfer_peers(config, kept_lines, removed_transactions)
-    stripped_transactions = _scan_journal_transactions(kept_lines)
+    stripped_transactions = _parse_rendered_transactions(kept_lines)
     by_start = {transaction.start: transaction for transaction in stripped_transactions}
     for match in strip_only_matches:
         surviving = by_start.get(match.transaction.start)
         if surviving is None:
             continue
         kept_lines = _remove_metadata_variant(kept_lines, surviving, match.identity)
-        stripped_transactions = _scan_journal_transactions(kept_lines)
+        stripped_transactions = _parse_rendered_transactions(kept_lines)
         by_start = {transaction.start: transaction for transaction in stripped_transactions}
     if kept_lines:
         journal_path.write_text("\n".join(kept_lines).rstrip() + "\n", encoding="utf-8")

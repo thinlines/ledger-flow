@@ -29,18 +29,14 @@ from .journal_query_service import TXN_START_RE
 from .journal_writer import VerifyFailure
 from .ledger_runner import CommandError, run_cmd
 from .manual_entry_service import _format_currency_amount
+from .projection_db import connect, database_path
+from .projection_service import refresh_projection
 
 logger = logging.getLogger(__name__)
 
 
 # Caller-facing constants
 RECONCILE_HEADER_PREFIX = "Statement reconciliation"
-
-# Match `; lf_operation_id: <id>` on a metadata line.
-_RECON_EVENT_ID_RE = re.compile(r"^\s*;\s*lf_operation_id\s*:\s*(\S.*?)\s*$")
-_STATEMENT_PERIOD_RE = re.compile(
-    r"^\s*;\s*statement_period\s*:\s*(\d{4}-\d{2}-\d{2})\s*\.\.\s*(\d{4}-\d{2}-\d{2})\s*$"
-)
 
 # Match a posting line with an explicit balance assertion: `<account> <amount> = <balance>`.
 # Group 1 is the account name (whitespace-padded), group 2 is the asserted balance text.
@@ -448,70 +444,30 @@ def verify_assertion(config: AppConfig) -> AssertionFailure | None:
 # ---------------------------------------------------------------------------
 
 
-def _scan_journal_for_assertions(path: Path) -> list[dict]:
-    """Yield every reconciliation-marked assertion in *path*.
-
-    Returns dicts with ``date``, ``ledger_account``, ``event_id``,
-    ``period_start``, ``period_end``.  Only transactions carrying a
-    ``lf_operation_id`` metadata line count — hand-written assertions
-    are intentionally excluded from the fence per the plan.
-    """
-    if not path.is_file():
-        return []
-
-    out: list[dict] = []
-    text = path.read_text(encoding="utf-8")
-    lines = text.splitlines()
-
-    starts = [i for i, line in enumerate(lines) if TXN_START_RE.match(line)]
-    for idx, start in enumerate(starts):
-        end = starts[idx + 1] if idx + 1 < len(starts) else len(lines)
-        block = lines[start:end]
-
-        event_id: str | None = None
-        period_start: str | None = None
-        period_end: str | None = None
-        assertion_account: str | None = None
-
-        for raw in block[1:]:
-            event_match = _RECON_EVENT_ID_RE.match(raw)
-            if event_match:
-                event_id = event_match.group(1).strip()
-                continue
-            period_match = _STATEMENT_PERIOD_RE.match(raw)
-            if period_match:
-                period_start = period_match.group(1)
-                period_end = period_match.group(2)
-                continue
-            posting_match = _ASSERTION_POSTING_RE.match(raw)
-            if posting_match and assertion_account is None:
-                assertion_account = posting_match.group("account").strip()
-
-        if event_id and assertion_account:
-            out.append({
-                "date": block[0][:10].replace("/", "-"),
-                "ledger_account": assertion_account,
-                "event_id": event_id,
-                "period_start": period_start,
-                "period_end": period_end,
-                "journal_path": path,
-            })
-    return out
-
-
 def _latest_dates_by_ledger_account(config: AppConfig) -> dict[str, date]:
     """Return ``{ledger_account: most_recent_reconciled_date}`` across all journals."""
+    refresh_projection(config)
     latest: dict[str, date] = {}
-    for journal in _journal_files(config):
-        for entry in _scan_journal_for_assertions(journal):
-            try:
-                d = date.fromisoformat(entry["date"])
-            except ValueError:
-                continue
-            account = entry["ledger_account"]
-            existing = latest.get(account)
-            if existing is None or d > existing:
-                latest[account] = d
+    with connect(database_path(config)) as conn:
+        rows = conn.execute(
+            """
+            SELECT postings.account, MAX(transactions.date)
+            FROM transactions
+            JOIN journal_files ON journal_files.id = transactions.journal_file_id
+            JOIN postings ON postings.transaction_id = transactions.id
+            JOIN metadata_entries AS operation
+              ON operation.owner_type = 'transaction' AND operation.owner_id = transactions.id
+             AND operation.key = 'lf_operation_id' AND operation.value_text != ''
+            WHERE journal_files.role = 'journal'
+              AND postings.balance_assertion_text IS NOT NULL
+            GROUP BY postings.account
+            """
+        ).fetchall()
+    for account, raw_date in rows:
+        try:
+            latest[account] = date.fromisoformat(raw_date)
+        except (TypeError, ValueError):
+            continue
     return latest
 
 

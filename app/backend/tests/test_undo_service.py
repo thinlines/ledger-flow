@@ -202,10 +202,11 @@ class TestUndoDeleted:
     def _delete_and_emit(self, workspace: Path, journal: Path, header: str, txn_id: str) -> str:
         hash_before = check_drift(workspace, journal)
         lines = journal.read_text(encoding="utf-8").splitlines()
-        from services.journal_block_service import find_transaction_block
+        from services.journal_block_service import locate_block_by_id
 
-        idx = next(i for i, line in enumerate(lines) if line == header)
-        bs, be = find_transaction_block(lines, idx)
+        located = locate_block_by_id(lines, txn_id)
+        assert located is not None
+        bs, be = located
         deleted_block = "\n".join(lines[bs:be])
 
         remove_start = bs

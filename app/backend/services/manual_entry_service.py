@@ -6,6 +6,7 @@ from datetime import date
 from decimal import Decimal
 from pathlib import Path
 
+from .config_service import AppConfig
 from .currency_parser import parse_amount
 from .header_parser import HEADER_RE
 from .journal_block_service import lf_txn_id_line, mint_lf_txn_id
@@ -401,6 +402,52 @@ def find_match_candidates(
     return candidates
 
 
+def find_projected_match_candidates(
+    entries,
+    import_txn_date: date,
+    import_amount: Decimal | None,
+    import_payee: str,
+) -> list[dict]:
+    """Score projection-backed manual entries using the existing tier model."""
+    candidates: list[dict] = []
+    for entry in entries:
+        if entry.status == "cleared":
+            continue
+        txn_date = _parse_posted_on(entry.date)
+        if txn_date is None:
+            continue
+        date_diff = abs((import_txn_date - txn_date).days)
+        try:
+            p_score = payee_similarity(import_payee, entry.payee) if import_payee and entry.payee else 0.0
+        except Exception:
+            p_score = 0.0
+        exact_amt = _is_exact_amount(import_amount, entry.amount)
+        close_amt = _is_close_amount(import_amount, entry.amount)
+        tier = _assign_tier(p_score, date_diff, exact_amt, close_amt)
+        if tier is None:
+            continue
+        candidates.append({
+            "manualTxnId": f"manual:{entry.source_start_line}",
+            "lfTxnId": entry.id,
+            "date": entry.date,
+            "payee": entry.payee,
+            "amount": str(entry.amount) if entry.amount is not None else None,
+            "destinationAccount": entry.destination_account,
+            "lineStart": entry.source_start_line,
+            "lineEnd": entry.source_end_line,
+            "matchScore": TIER_SCORES[tier],
+            "matchQuality": TIER_QUALITY[tier],
+            "matchReason": _tier_reason(tier, p_score, date_diff),
+            "matchTier": tier,
+            "dateDiff": date_diff,
+            "_amountProximity": _amount_proximity(import_amount, entry.amount),
+        })
+    candidates.sort(key=lambda c: (c["matchTier"], c["dateDiff"], -c["_amountProximity"]))
+    for candidate in candidates:
+        del candidate["_amountProximity"]
+    return candidates
+
+
 def _auto_suggest(candidates: list[dict]) -> str | None:
     """Apply tier-based auto-suggest rules. Returns manualTxnId or None."""
     if not candidates:
@@ -431,6 +478,7 @@ def populate_match_candidates(
     journal_path: Path,
     import_accounts: dict[str, dict],
     tracked_accounts: dict[str, dict],
+    config: AppConfig | None = None,
 ) -> None:
     from .transfer_service import parse_amount as _parse_amount
 
@@ -447,8 +495,7 @@ def populate_match_candidates(
     if not import_enabled_tracked_ids or not journal_path.exists():
         return
 
-    journal_lines = journal_path.read_text(encoding="utf-8").splitlines()
-
+    projected_entries_by_ledger = {}
     for group in groups:
         source_tracked_id = str(group.get("sourceTrackedAccountId") or "").strip()
         if not source_tracked_id or source_tracked_id not in import_enabled_tracked_ids:
@@ -468,9 +515,22 @@ def populate_match_candidates(
             imported_amount = _parse_amount(amount_raw) if amount_raw else None
             imported_payee = str(group.get("payeeDisplay", "")).strip()
 
-            candidates = find_match_candidates(
-                journal_lines, imported_date, imported_amount, imported_payee, tracked_ledger,
-            )
+            if config is not None:
+                from .projection_service import projected_manual_entries
+
+                if tracked_ledger not in projected_entries_by_ledger:
+                    projected_entries_by_ledger[tracked_ledger] = projected_manual_entries(
+                        config, journal_path, tracked_ledger
+                    )
+                entries = projected_entries_by_ledger[tracked_ledger]
+                candidates = find_projected_match_candidates(
+                    entries, imported_date, imported_amount, imported_payee
+                )
+            else:
+                journal_lines = journal_path.read_text(encoding="utf-8").splitlines()
+                candidates = find_match_candidates(
+                    journal_lines, imported_date, imported_amount, imported_payee, tracked_ledger,
+                )
 
             if candidates:
                 txn["matchCandidates"] = candidates
@@ -482,43 +542,3 @@ def populate_match_candidates(
 # ---------------------------------------------------------------------------
 # Apply match: remove manual entry + carry metadata
 # ---------------------------------------------------------------------------
-
-def remove_manual_entry_lines(journal_path: Path, line_start: int, line_end: int) -> bool:
-    if not journal_path.exists():
-        return False
-
-    lines = journal_path.read_text(encoding="utf-8").splitlines()
-    start_idx = line_start - 1
-    if start_idx < 0 or line_end > len(lines):
-        return False
-
-    txn_lines = lines[start_idx:line_end]
-    if not txn_lines or not has_manual_tag(txn_lines):
-        return False
-
-    updated = lines[:start_idx] + lines[line_end:]
-    while len(updated) >= 2 and not updated[-1].strip() and not updated[-2].strip():
-        updated.pop()
-
-    journal_path.write_text("\n".join(updated) + "\n" if updated else "", encoding="utf-8")
-    return True
-
-
-def extract_manual_entry_metadata(
-    journal_path: Path, line_start: int, line_end: int, tracked_ledger_account: str,
-) -> tuple[str | None, list[str]]:
-    if not journal_path.exists():
-        return None, []
-
-    lines = journal_path.read_text(encoding="utf-8").splitlines()
-    start_idx = line_start - 1
-    if start_idx < 0 or line_end > len(lines):
-        return None, []
-
-    txn_lines = lines[start_idx:line_end]
-    if not txn_lines or not has_manual_tag(txn_lines):
-        return None, []
-
-    destination = _parse_manual_entry_destination(txn_lines, tracked_ledger_account)
-    user_metadata = _extract_user_metadata_lines(txn_lines)
-    return destination, user_metadata

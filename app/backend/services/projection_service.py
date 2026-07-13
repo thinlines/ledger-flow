@@ -36,6 +36,8 @@ from .config_service import AppConfig
 from .header_parser import parse_header
 from .journal_block_service import hash_block_text
 from .journal_query_service import (
+    ACCOUNT_LINE_RE,
+    ACCOUNT_ONLY_RE,
     INCLUDE_RE,
     POSTING_RE,
     TXN_START_RE,
@@ -471,6 +473,11 @@ def _discover_files(config: AppConfig) -> dict[str, dict]:
 
     for journal_path in sorted(config.journal_dir.glob("*.journal")):
         visit(journal_path, ())
+    # Opening-balance readers are projection-served even while a workspace is
+    # being bootstrapped, before the generated include index is reachable from
+    # a year journal.
+    for opening_path in sorted(config.opening_bal_dir.glob("*.journal")):
+        visit(opening_path, ())
     return discovered
 
 
@@ -897,6 +904,73 @@ def load_transactions_projected(config: AppConfig) -> list[ParsedTransaction]:
     return sorted(transactions, key=lambda txn: txn.posted_on)
 
 
+def load_projected_transaction_rows(config: AppConfig, journal_path: Path) -> list[dict]:
+    """Load scan-oriented transaction rows from the projection.
+
+    Unlike the legacy scanners this never walks or reparses the journal.  It
+    exposes the stored source coordinates and raw posting presentation needed
+    by staging flows whose eventual writes still preserve the original line.
+    """
+    refresh_projection(config)
+    rel_path = _rel_path(config, journal_path)
+    with connect(database_path(config)) as conn:
+        transaction_rows = conn.execute(
+            """
+            SELECT transactions.id, transactions.date, transactions.payee,
+                   transactions.raw_block_hash, transactions.source_start_line,
+                   transactions.source_end_line
+            FROM transactions
+            JOIN journal_files ON journal_files.id = transactions.journal_file_id
+            WHERE journal_files.path = ?
+            ORDER BY transactions.txn_order
+            """,
+            (rel_path,),
+        ).fetchall()
+        result: list[dict] = []
+        for txn_id, posted_on, payee, block_hash, start_line, end_line in transaction_rows:
+            metadata = dict(conn.execute(
+                """
+                SELECT key, value_text FROM metadata_entries
+                WHERE owner_type = 'transaction' AND owner_id = ?
+                ORDER BY source_order
+                """,
+                (txn_id,),
+            ).fetchall())
+            postings = []
+            for account, raw_line, source_line in conn.execute(
+                """
+                SELECT account, raw_line, source_line FROM postings
+                WHERE transaction_id = ? ORDER BY posting_order
+                """,
+                (txn_id,),
+            ).fetchall():
+                match = ACCOUNT_LINE_RE.match(raw_line)
+                if match:
+                    indent, sep, amount = match.group(1), match.group(3), match.group(4).strip()
+                else:
+                    match = ACCOUNT_ONLY_RE.match(raw_line)
+                    indent, sep, amount = (match.group(1), "", "") if match else ("", "", "")
+                postings.append({
+                    "lineNo": source_line,
+                    "indent": indent,
+                    "account": account,
+                    "sep": sep,
+                    "amount": amount,
+                    "line": raw_line,
+                })
+            result.append({
+                "id": txn_id,
+                "date": posted_on,
+                "payee": payee or "(no payee)",
+                "blockHash": block_hash,
+                "transactionStartLine": start_line,
+                "transactionEndLine": end_line,
+                "metadata": metadata,
+                "postings": postings,
+            })
+    return result
+
+
 @dataclass(frozen=True)
 class ProjectedTransactionRef:
     """The projected identity a mutation endpoint needs to locate and guard
@@ -918,6 +992,60 @@ class ProjectedTransactionMatch:
     id: str
     imported_transaction_id: str
     archived_manual_transaction_id: str
+
+
+@dataclass(frozen=True)
+class ProjectedManualEntry:
+    id: str
+    date: str
+    status: str
+    payee: str
+    source_start_line: int
+    source_end_line: int
+    destination_account: str
+    amount: Decimal | None
+
+
+def projected_manual_entries(
+    config: AppConfig, journal_path: Path, tracked_ledger_account: str
+) -> list[ProjectedManualEntry]:
+    """Return manual-entry match inputs from the projection, not journal text."""
+    refresh_projection(config)
+    try:
+        rel = journal_path.resolve().relative_to(config.root_dir.resolve()).as_posix()
+    except ValueError:
+        return []
+    with connect(database_path(config)) as conn:
+        rows = conn.execute(
+            """
+            SELECT transactions.id, transactions.date, transactions.status,
+                   transactions.payee, transactions.source_start_line,
+                   transactions.source_end_line,
+                   postings.account, postings.amount_nano
+            FROM transactions
+            JOIN journal_files ON journal_files.id = transactions.journal_file_id
+            JOIN comments manual_tag
+              ON manual_tag.owner_type = 'transaction'
+             AND manual_tag.owner_id = transactions.id
+             AND manual_tag.parse_status = 'tag'
+             AND lower(manual_tag.parsed_key) = 'manual'
+            JOIN postings ON postings.transaction_id = transactions.id
+            WHERE journal_files.path = ?
+              AND postings.account <> ?
+              AND postings.account NOT LIKE '%Unknown%'
+            ORDER BY transactions.txn_order, postings.posting_order
+            """,
+            (rel, tracked_ledger_account),
+        ).fetchall()
+    seen: set[str] = set()
+    entries: list[ProjectedManualEntry] = []
+    for row in rows:
+        if row[0] in seen:
+            continue
+        seen.add(row[0])
+        amount = Decimal(row[7]) / Decimal(1_000_000_000) if row[7] is not None else None
+        entries.append(ProjectedManualEntry(*row[:7], amount))
+    return entries
 
 
 def find_projected_transaction_match(

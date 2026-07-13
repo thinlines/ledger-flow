@@ -181,6 +181,28 @@ def test_external_edit_before_transaction_no_longer_breaks_toggle(tmp_path, monk
     assert "2026-01-02 Inserted Externally" in text
 
 
+def test_reprojected_target_content_change_is_rejected(tmp_path, monkeypatch):
+    config = _workspace(tmp_path, monkeypatch)
+    before = _txn_row(config, "txn_coffee")
+
+    journal = config.journal_dir / "2026.journal"
+    journal.write_text(
+        journal.read_text(encoding="utf-8").replace("Coffee", "Coffee Roasters"),
+        encoding="utf-8",
+    )
+    refresh_projection(config)
+
+    with pytest.raises(HTTPException) as exc_info:
+        main.transactions_toggle_status(
+            ToggleStatusRequest(
+                txnId="txn_coffee", blockHash=before["raw_block_hash"]
+            )
+        )
+
+    assert exc_info.value.status_code == 409
+    assert "2026-01-10 * Coffee Roasters" in journal.read_text(encoding="utf-8")
+
+
 def test_repeated_toggles_use_each_returned_hash(tmp_path, monkeypatch):
     config = _workspace(tmp_path, monkeypatch)
     row = _txn_row(config, "txn_grocery")

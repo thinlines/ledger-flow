@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from .journal_query_service import ACCOUNT_LINE_RE, ACCOUNT_ONLY_RE, META_RE, TXN_START_RE
+from .journal_query_service import ACCOUNT_LINE_RE, ACCOUNT_ONLY_RE
 from collections import defaultdict
 from datetime import date
 from decimal import Decimal
@@ -8,7 +8,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from .archive_service import archive_manual_entry, rollback_archive
-from .config_service import infer_account_kind
+from .config_service import AppConfig, infer_account_kind
 from .merchant_service import Merchant
 from .manual_entry_service import (
     _extract_user_metadata_lines,
@@ -17,6 +17,7 @@ from .manual_entry_service import (
     populate_match_candidates,
 )
 from .rules_service import extract_set_account, find_matching_rule
+from .projection_service import load_projected_transaction_rows
 from .transfer_service import (
     MAX_TRANSFER_MATCH_DAYS,
     TRANSFER_MATCH_STATE_MATCHED,
@@ -32,11 +33,11 @@ from .transfer_service import (
     upsert_transaction_metadata,
 )
 
-from .header_parser import HEADER_RE
 from .journal_block_service import (
     hash_block as _hash_block,
     locate_block_by_id as _locate_block_by_id,
 )
+from .journal_syntax import META_RE, TXN_START_RE
 
 def _block_has_match_id_tag(lines: list[str]) -> bool:
     for line in lines:
@@ -46,15 +47,6 @@ def _block_has_match_id_tag(lines: list[str]) -> bool:
         ):
             return True
     return False
-
-
-def _iter_transaction_ranges(lines: list[str]) -> list[tuple[int, int]]:
-    starts = [i for i, line in enumerate(lines) if TXN_START_RE.match(line)]
-    ranges: list[tuple[int, int]] = []
-    for idx, start in enumerate(starts):
-        end = starts[idx + 1] if idx + 1 < len(starts) else len(lines)
-        ranges.append((start, end))
-    return ranges
 
 
 def _rebase_record(lines: list[str], record: dict) -> tuple[dict | None, str | None]:
@@ -86,53 +78,6 @@ def _rebase_record(lines: list[str], record: dict) -> tuple[dict | None, str | N
     if start < 0 or end > len(lines) or _hash_block(lines, start, end) != record.get("blockHash"):
         return None, "This transaction changed since it was scanned (stale data — try refreshing)"
     return record, None
-
-
-def _parse_postings(lines: list[str], start: int, end: int) -> list[dict]:
-    postings = []
-    for i in range(start + 1, end):
-        line = lines[i]
-        if line.lstrip().startswith(";"):
-            continue
-
-        m = ACCOUNT_LINE_RE.match(line)
-        if m:
-            postings.append(
-                {
-                    "lineNo": i + 1,
-                    "indent": m.group(1),
-                    "account": m.group(2).strip(),
-                    "sep": m.group(3),
-                    "amount": m.group(4).strip(),
-                    "line": line,
-                }
-            )
-            continue
-
-        m = ACCOUNT_ONLY_RE.match(line)
-        if not m:
-            continue
-
-        postings.append(
-            {
-                "lineNo": i + 1,
-                "indent": m.group(1),
-                "account": m.group(2).strip(),
-                "sep": "",
-                "amount": "",
-                "line": line,
-            }
-        )
-    return postings
-
-
-def _parse_metadata(lines: list[str], start: int, end: int) -> dict[str, str]:
-    metadata: dict[str, str] = {}
-    for i in range(start + 1, end):
-        mm = META_RE.match(lines[i])
-        if mm:
-            metadata[mm.group(1).strip().lower()] = mm.group(2).strip()
-    return metadata
 
 
 def _group_key(payee: str, import_account_id: str | None) -> str:
@@ -214,22 +159,21 @@ def _build_transaction_records(
     journal_path: Path,
     import_accounts: dict[str, dict],
     tracked_accounts: dict[str, dict],
+    config: AppConfig | None = None,
 ) -> tuple[list[dict], list[dict]]:
-    lines = journal_path.read_text(encoding="utf-8").splitlines()
+    if config is None:
+        config = AppConfig(journal_path.parent, journal_path.parent / "config.toml", {}, {
+            "csv_dir": ".", "journal_dir": ".", "init_dir": ".",
+            "opening_bal_dir": ".", "imports_dir": ".",
+        }, {}, {})
     grouped: dict[str, dict] = defaultdict(lambda: {"txns": [], "_matchSignatures": []})
     transaction_records: list[dict] = []
 
-    for start, end in _iter_transaction_ranges(lines):
-        match = HEADER_RE.match(lines[start])
-        if match:
-            current_date = match.group("date")
-            current_payee = match.group("payee").strip() or "(no payee)"
-        else:
-            current_date = ""
-            current_payee = "(no payee)"
-
-        metadata = _parse_metadata(lines, start, end)
-        raw_postings = _parse_postings(lines, start, end)
+    for transaction in load_projected_transaction_rows(config, journal_path):
+        current_date = transaction["date"]
+        current_payee = transaction["payee"]
+        metadata = transaction["metadata"]
+        raw_postings = transaction["postings"]
         postings = infer_blank_posting_amounts(
             [
                 {
@@ -243,16 +187,18 @@ def _build_transaction_records(
         counterparty = next((posting["account"] for posting in postings if "Unknown" not in posting["account"]), "")
         context = _tracked_account_context(metadata, postings, import_accounts, tracked_accounts, counterparty)
         transfer = parse_transfer_metadata(metadata, tracked_accounts)
-        base_txn_id = _transaction_base_id(journal_path, start + 1, metadata)
+        start_line = transaction["transactionStartLine"]
+        end_line = transaction["transactionEndLine"]
+        base_txn_id = _transaction_base_id(journal_path, start_line, metadata)
         record = {
             "txnId": base_txn_id,
             "lfTxnId": str(metadata.get("lf_txn_id", "")).strip() or None,
-            "blockHash": _hash_block(lines, start, end),
+            "blockHash": transaction["blockHash"],
             "payeeDisplay": current_payee,
             "date": current_date,
             "postedOn": _parse_posted_on(current_date),
-            "transactionStartLine": start + 1,
-            "transactionEndLine": end,
+            "transactionStartLine": start_line,
+            "transactionEndLine": end_line,
             "unknownPostingCount": len(unknown_postings),
             "postings": postings,
             "metadata": metadata,
@@ -289,8 +235,8 @@ def _build_transaction_records(
                 "blockHash": record["blockHash"],
                 "date": current_date,
                 "lineNo": posting["lineNo"],
-                "transactionStartLine": start + 1,
-                "transactionEndLine": end,
+                "transactionStartLine": start_line,
+                "transactionEndLine": end_line,
                 "currentAccount": posting["account"],
                 "amount": posting["amount"],
                 "counterpartyAccount": counterparty,
@@ -384,14 +330,18 @@ def scan_unknowns(
     import_accounts: dict[str, dict] | None = None,
     tracked_accounts: dict[str, dict] | None = None,
     merchants: list[Merchant] | None = None,
+    config: AppConfig | None = None,
 ) -> dict:
     transaction_records, groups = _build_transaction_records(
         journal_path,
         import_accounts or {},
         tracked_accounts or {},
+        config,
     )
     _populate_transfer_suggestions(transaction_records)
-    populate_match_candidates(groups, journal_path, import_accounts or {}, tracked_accounts or {})
+    populate_match_candidates(
+        groups, journal_path, import_accounts or {}, tracked_accounts or {}, config=config
+    )
 
     for group in groups:
         for txn in group["txns"]:
