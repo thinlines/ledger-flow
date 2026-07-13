@@ -55,7 +55,7 @@ def test_rule_match_returns_category_with_full_confidence(tmp_path: Path) -> Non
         "account Expenses:Food:Groceries\n    ; type: Expense\n",
         encoding="utf-8",
     )
-    rules_file = ensure_rules_store(config.init_dir, accounts_dat)
+    rules_file = ensure_rules_store(config.init_dir)
     upsert_payee_rule(rules_file, "Whole Foods", "Expenses:Food:Groceries")
 
     result = suggest_category("Whole Foods", config)
@@ -86,7 +86,7 @@ def test_merchant_default_account_suggested_when_no_rule_matches(tmp_path: Path)
     config = _make_config(tmp_path)
     accounts_dat = config.init_dir / "10-accounts.dat"
     accounts_dat.write_text("", encoding="utf-8")
-    ensure_rules_store(config.init_dir, accounts_dat)
+    ensure_rules_store(config.init_dir)
     _declare_merchants(config)
 
     result = suggest_category("Walmart", config)
@@ -100,7 +100,7 @@ def test_rule_beats_merchant_default_account(tmp_path: Path) -> None:
     config = _make_config(tmp_path)
     accounts_dat = config.init_dir / "10-accounts.dat"
     accounts_dat.write_text("", encoding="utf-8")
-    rules_file = ensure_rules_store(config.init_dir, accounts_dat)
+    rules_file = ensure_rules_store(config.init_dir)
     upsert_payee_rule(rules_file, "Walmart", "Expenses:Household")
     _declare_merchants(config)
 
@@ -118,7 +118,7 @@ def test_journal_frequency_returns_most_common_category(tmp_path: Path) -> None:
     config = _make_config(tmp_path)
     accounts_dat = config.init_dir / "10-accounts.dat"
     accounts_dat.write_text("", encoding="utf-8")
-    ensure_rules_store(config.init_dir, accounts_dat)
+    ensure_rules_store(config.init_dir)
 
     _write_journal(
         config.journal_dir,
@@ -154,7 +154,7 @@ def test_journal_frequency_is_served_from_projection(
     config = _make_config(tmp_path)
     accounts_dat = config.init_dir / "10-accounts.dat"
     accounts_dat.write_text("", encoding="utf-8")
-    ensure_rules_store(config.init_dir, accounts_dat)
+    ensure_rules_store(config.init_dir)
     _write_journal(
         config.journal_dir,
         """
@@ -211,7 +211,7 @@ def test_similar_payees_aggregate_frequencies(tmp_path: Path) -> None:
     config = _make_config(tmp_path)
     accounts_dat = config.init_dir / "10-accounts.dat"
     accounts_dat.write_text("", encoding="utf-8")
-    ensure_rules_store(config.init_dir, accounts_dat)
+    ensure_rules_store(config.init_dir)
 
     _write_journal(
         config.journal_dir,
@@ -280,7 +280,7 @@ def test_no_matching_history_returns_empty(tmp_path: Path) -> None:
     config = _make_config(tmp_path)
     accounts_dat = config.init_dir / "10-accounts.dat"
     accounts_dat.write_text("", encoding="utf-8")
-    ensure_rules_store(config.init_dir, accounts_dat)
+    ensure_rules_store(config.init_dir)
 
     _write_journal(
         config.journal_dir,

@@ -147,9 +147,7 @@ def _category_posting(txn: dict) -> str:
 def test_import_categorizes_rule_then_merchant_default_then_unknown(tmp_path):
     config, csv_path = _import_workspace(tmp_path)
     csv_path.write_text(CATEGORIZE_CSV, encoding="utf-8")
-    rules_path = ensure_rules_store(
-        config.init_dir, config.init_dir / "10-accounts.dat"
-    )
+    rules_path = ensure_rules_store(config.init_dir)
     create_rule(
         rules_path,
         [{"field": "payee", "operator": "contains", "value": "CORNER CAFE"}],
@@ -171,9 +169,7 @@ def test_import_categorizes_rule_then_merchant_default_then_unknown(tmp_path):
 
 def test_rule_wins_over_merchant_default_account(tmp_path):
     config, csv_path = _import_workspace(tmp_path)
-    rules_path = ensure_rules_store(
-        config.init_dir, config.init_dir / "10-accounts.dat"
-    )
+    rules_path = ensure_rules_store(config.init_dir)
     create_rule(
         rules_path,
         [{"field": "payee", "operator": "exact", "value": "Walmart"}],

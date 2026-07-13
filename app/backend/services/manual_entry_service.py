@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from .journal_query_service import ACCOUNT_LINE_RE, ACCOUNT_ONLY_RE, LF_TXN_ID_META_RE, META_RE, TXN_START_RE
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
@@ -31,12 +32,6 @@ TIER_SCORES = {1: 1.0, 2: 0.85, 3: 0.70, 4: 0.55, 5: 0.35}
 
 # Tier → matchQuality label.
 TIER_QUALITY = {1: "strong", 2: "strong", 3: "likely", 4: "possible", 5: "possible"}
-
-META_RE = re.compile(r"^\s*;\s*([^:]+):\s*(.*)$")
-LF_TXN_ID_META_RE = re.compile(r"^\s*;\s*lf_txn_id:\s*(\S+)\s*$")
-TXN_START_RE = re.compile(r"^\d{4}[-/]\d{2}[-/]\d{2}")
-ACCOUNT_LINE_RE = re.compile(r"^(\s+)([^\s].*?)(\s{2,}|\t+)(.*)$")
-ACCOUNT_ONLY_RE = re.compile(r"^(\s+)([^\s].*?)\s*$")
 
 SYSTEM_METADATA_KEYS = frozenset({
     "import_account_id", "institution_template", "lf_source_identity",

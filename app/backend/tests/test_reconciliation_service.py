@@ -11,7 +11,8 @@ import pytest
 
 from services import event_log_service
 from services.config_service import AppConfig
-from services.event_log_service import EVENTS_FILENAME, emit_event, read_events
+from services.event_log_service import EVENTS_FILENAME, emit_event
+from conftest import read_operation_events
 from services.import_service import apply_reconciliation_fence
 from services.reconciliation_service import (
     AssertionFailure,
@@ -586,5 +587,5 @@ class TestEventIdLinkage:
         assert returned == eid
 
         assert not (tmp_path / EVENTS_FILENAME).exists()
-        events = read_events(tmp_path)
+        events = read_operation_events(tmp_path)
         assert events[0]["id"] == eid

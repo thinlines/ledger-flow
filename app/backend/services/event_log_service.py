@@ -8,7 +8,6 @@ event-shaped helper API for drift detection and legacy callers without writing
 from __future__ import annotations
 
 import hashlib
-import json
 import logging
 import sqlite3
 from datetime import datetime, timezone
@@ -55,130 +54,27 @@ def rel_path(file_path: Path, workspace_root: Path) -> str:
         return str(file_path)
 
 
-# ---------------------------------------------------------------------------
-# Backward JSONL scan for last-known hash
-# ---------------------------------------------------------------------------
-
-
-def read_events(workspace_path: Path) -> list[dict]:
-    """Return the parsed event log as a list of dicts (oldest → newest).
-
-    Returns an empty list when the file is missing.  Corrupt JSONL lines are
-    logged and skipped — they never block readers.
-    """
-    events_file = workspace_path / EVENTS_FILENAME
-    if not events_file.is_file():
-        db_path = workspace_path / ".workflow" / "state.db"
-        if not db_path.is_file():
-            return []
-        try:
-            with sqlite3.connect(db_path) as conn:
-                operation_rows = conn.execute(
-                    """
-                    SELECT id, type, actor_type, summary, created_at,
-                           compensates_operation_id, payload_json
-                    FROM operations
-                    ORDER BY created_at ASC, id ASC
-                    """
-                ).fetchall()
-                file_rows = conn.execute(
-                    """
-                    SELECT operation_id, path, hash_before, hash_after
-                    FROM operation_files
-                    ORDER BY rowid ASC
-                    """
-                ).fetchall()
-        except sqlite3.Error:
-            return []
-        files_by_operation: dict[str, list[dict]] = {}
-        for operation_id, path, hash_before, hash_after in file_rows:
-            files_by_operation.setdefault(operation_id, []).append(
-                {
-                    "path": path,
-                    "hash_before": hash_before,
-                    "hash_after": hash_after,
-                }
-            )
-        return [
-            {
-                "id": operation_id,
-                "ts": created_at,
-                "actor": actor,
-                "type": operation_type,
-                "summary": summary,
-                "payload": json.loads(payload_json or "{}"),
-                "journal_refs": files_by_operation.get(operation_id, []),
-                "compensates": compensates,
-            }
-            for (
-                operation_id,
-                operation_type,
-                actor,
-                summary,
-                created_at,
-                compensates,
-                payload_json,
-            ) in operation_rows
-        ]
-    lines = events_file.read_text(encoding="utf-8").splitlines()
-    events: list[dict] = []
-    for line in lines:
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            events.append(json.loads(line))
-        except json.JSONDecodeError:
-            logger.warning("Corrupt JSONL line — skipping")
-    return events
-
-
-def get_last_known_hash(events_file: Path, journal_rel_path: str) -> str | None:
-    """Scan *events_file* backward for the most recent ``hash_after`` for *journal_rel_path*.
-
-    Returns ``None`` if no event references this path (file predates the log).
-    """
-    if not events_file.is_file():
-        db_path = events_file.parent / ".workflow" / "state.db"
-        if not db_path.is_file():
-            return None
-        try:
-            with sqlite3.connect(db_path) as conn:
-                row = conn.execute(
-                    """
-                    SELECT operation_files.hash_after
-                    FROM operation_files
-                    JOIN operations ON operations.id = operation_files.operation_id
-                    WHERE operation_files.path = ?
-                    ORDER BY operations.created_at DESC, operations.id DESC
-                    LIMIT 1
-                    """,
-                    (journal_rel_path,),
-                ).fetchone()
-        except sqlite3.Error:
-            return None
-        return str(row[0]) if row else None
-
-    try:
-        lines = events_file.read_text(encoding="utf-8").splitlines()
-    except OSError:
-        logger.warning("Could not read event log %s", events_file)
+def get_last_known_hash(workspace_path: Path, journal_rel_path: str) -> str | None:
+    """Return the latest operation-backed hash for a journal path."""
+    db_path = workspace_path / ".workflow" / "state.db"
+    if not db_path.is_file():
         return None
-
-    for line in reversed(lines):
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            event = json.loads(line)
-        except json.JSONDecodeError:
-            logger.warning("Corrupt JSONL line in %s — skipping", events_file)
-            continue
-        for ref in event.get("journal_refs", []):
-            if ref.get("path") == journal_rel_path:
-                return ref.get("hash_after")
-
-    return None
+    try:
+        with sqlite3.connect(db_path) as conn:
+            row = conn.execute(
+                """
+                SELECT operation_files.hash_after
+                FROM operation_files
+                JOIN operations ON operations.id = operation_files.operation_id
+                WHERE operation_files.path = ?
+                ORDER BY operations.created_at DESC, operations.id DESC
+                LIMIT 1
+                """,
+                (journal_rel_path,),
+            ).fetchone()
+    except sqlite3.Error:
+        return None
+    return str(row[0]) if row else None
 
 
 # ---------------------------------------------------------------------------
@@ -195,12 +91,11 @@ def check_drift(workspace_path: Path, journal_path: Path) -> str:
     """
     current_hash = hash_file(journal_path)
     abs_key = str(journal_path.resolve())
-    events_file = workspace_path / EVENTS_FILENAME
     journal_rel = rel_path(journal_path, workspace_path)
 
     expected_hash = _hash_cache.get(abs_key)
     if expected_hash is None:
-        expected_hash = get_last_known_hash(events_file, journal_rel)
+        expected_hash = get_last_known_hash(workspace_path, journal_rel)
 
     if expected_hash is not None and current_hash != expected_hash:
         try:
@@ -229,9 +124,8 @@ def check_startup_drift(workspace_path: Path) -> None:
 
     Populates ``_hash_cache`` for all discovered journals.
     """
-    events_file = workspace_path / EVENTS_FILENAME
     db_path = workspace_path / ".workflow" / "state.db"
-    if not events_file.is_file() and not db_path.is_file():
+    if not db_path.is_file():
         # No baseline — populate cache only, skip drift checks.
         journal_dir = workspace_path / "journals"
         if journal_dir.is_dir():
@@ -249,7 +143,7 @@ def check_startup_drift(workspace_path: Path) -> None:
         current_hash = hash_file(jf)
         abs_key = str(jf.resolve())
         journal_rel = rel_path(jf, workspace_path)
-        expected_hash = get_last_known_hash(events_file, journal_rel)
+        expected_hash = get_last_known_hash(workspace_path, journal_rel)
 
         if expected_hash is not None and current_hash != expected_hash:
             try:
@@ -324,10 +218,6 @@ def emit_event(
         created_at=timestamp,
         applied_at=timestamp,
     )
-    events_file = workspace_path / EVENTS_FILENAME
-    if events_file.is_file():
-        events_file.unlink()
-
     # Update hash cache from journal_refs.
     for ref in journal_refs:
         ref_path = ref.get("path")

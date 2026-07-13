@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import pytest
@@ -16,9 +15,9 @@ from services.event_log_service import (
     emit_event,
     get_last_known_hash,
     hash_file,
-    read_events,
     rel_path,
 )
+from conftest import read_operation_events
 from services.operations_service import record_operation
 
 
@@ -30,8 +29,8 @@ def _clear_hash_cache():
     event_log_service._hash_cache.clear()
 
 
-def _read_events(workspace: Path) -> list[dict]:
-    return read_events(workspace)
+def _read_operation_events(workspace: Path) -> list[dict]:
+    return read_operation_events(workspace)
 
 
 def _make_config(workspace: Path) -> AppConfig:
@@ -107,14 +106,14 @@ class TestEmitEvent:
             journal_refs=[],
         )
         assert not events_file.exists()
-        events = _read_events(tmp_path)
+        events = _read_operation_events(tmp_path)
         assert len(events) == 1
         assert events[0]["type"] == "test.v1"
 
     def test_records_multiple_operations_in_event_order(self, tmp_path: Path) -> None:
         emit_event(tmp_path, event_type="e1.v1", summary="one", payload={}, journal_refs=[])
         emit_event(tmp_path, event_type="e2.v1", summary="two", payload={}, journal_refs=[])
-        events = _read_events(tmp_path)
+        events = _read_operation_events(tmp_path)
         assert len(events) == 2
         assert events[0]["type"] == "e1.v1"
         assert events[1]["type"] == "e2.v1"
@@ -129,7 +128,7 @@ class TestEmitEvent:
             actor="user",
             compensates=None,
         )
-        events = _read_events(tmp_path)
+        events = _read_operation_events(tmp_path)
         assert len(events) == 1
         e = events[0]
         assert e["id"] == event_id
@@ -152,11 +151,11 @@ class TestEmitEvent:
         emit_event(tmp_path, event_type="t.v1", summary="s", payload={}, journal_refs=[])
         assert not (tmp_path / EVENTS_FILENAME).exists()
 
-    def test_deletes_existing_events_file_after_operation_write(self, tmp_path: Path) -> None:
+    def test_leaves_retired_events_file_untouched(self, tmp_path: Path) -> None:
         events_file = tmp_path / EVENTS_FILENAME
         events_file.write_text('{"id":"legacy"}\n', encoding="utf-8")
         emit_event(tmp_path, event_type="t.v1", summary="s", payload={}, journal_refs=[])
-        assert not events_file.exists()
+        assert events_file.exists()
 
     def test_updates_hash_cache(self, tmp_path: Path) -> None:
         journal = tmp_path / "journals" / "2026.journal"
@@ -206,7 +205,7 @@ class TestGetLastKnownHash:
             payload={},
             journal_refs=[{"path": "journals/2026.journal", "hash_before": "sha256:b", "hash_after": "sha256:c"}],
         )
-        assert get_last_known_hash(tmp_path / EVENTS_FILENAME, "journals/2026.journal") == "sha256:c"
+        assert get_last_known_hash(tmp_path, "journals/2026.journal") == "sha256:c"
 
     def test_returns_most_recent_operation_file_hash_when_events_file_missing(self, tmp_path: Path) -> None:
         config = _make_config(tmp_path)
@@ -239,38 +238,7 @@ class TestGetLastKnownHash:
             created_at="2026-07-05T11:00:00+00:00",
         )
 
-        assert get_last_known_hash(tmp_path / EVENTS_FILENAME, "journals/2026.journal") == "sha256:c"
-
-    def test_handles_corrupt_jsonl_line_gracefully(self, tmp_path: Path) -> None:
-        events_file = tmp_path / EVENTS_FILENAME
-        # Write a valid event, then a corrupt line, then another valid event
-        events_file.write_text(
-            json.dumps(
-                {
-                    "id": "legacy-1",
-                    "ts": "2026-07-05T00:00:00+00:00",
-                    "actor": "user",
-                    "type": "e1.v1",
-                    "summary": "s",
-                    "payload": {},
-                    "journal_refs": [
-                        {
-                            "path": "journals/2026.journal",
-                            "hash_before": "sha256:a",
-                            "hash_after": "sha256:b",
-                        }
-                    ],
-                    "compensates": None,
-                },
-                separators=(",", ":"),
-            )
-            + "\n",
-            encoding="utf-8",
-        )
-        with open(events_file, "a") as f:
-            f.write("NOT VALID JSON\n")
-        # Should skip the corrupt line and still find the valid event
-        assert get_last_known_hash(events_file, "journals/2026.journal") == "sha256:b"
+        assert get_last_known_hash(tmp_path, "journals/2026.journal") == "sha256:c"
 
 
 # ---------------------------------------------------------------------------
@@ -291,7 +259,7 @@ class TestCheckDrift:
         journal.parent.mkdir(parents=True)
         journal.write_text("content", encoding="utf-8")
         check_drift(tmp_path, journal)
-        events = _read_events(tmp_path)
+        events = _read_operation_events(tmp_path)
         assert len(events) == 0
 
     def test_no_drift_event_when_hash_matches(self, tmp_path: Path) -> None:
@@ -302,7 +270,7 @@ class TestCheckDrift:
         # Seed the cache with the correct hash
         event_log_service._hash_cache[str(journal.resolve())] = h
         check_drift(tmp_path, journal)
-        events = _read_events(tmp_path)
+        events = _read_operation_events(tmp_path)
         assert len(events) == 0
 
     def test_emits_drift_event_when_hash_mismatches(self, tmp_path: Path) -> None:
@@ -312,7 +280,7 @@ class TestCheckDrift:
         # Seed cache with a stale hash
         event_log_service._hash_cache[str(journal.resolve())] = "sha256:stale"
         check_drift(tmp_path, journal)
-        events = _read_events(tmp_path)
+        events = _read_operation_events(tmp_path)
         assert len(events) == 1
         assert events[0]["type"] == "journal.external_edit_detected.v1"
         assert events[0]["payload"]["trigger"] == "pre_mutation"
@@ -345,7 +313,7 @@ class TestCheckDrift:
 
         # No drift — file unchanged
         check_drift(tmp_path, journal)
-        events = _read_events(tmp_path)
+        events = _read_operation_events(tmp_path)
         assert not any(e["type"] == "journal.external_edit_detected.v1" for e in events)
 
     def test_drift_detected_via_event_log_fallback(self, tmp_path: Path) -> None:
@@ -365,7 +333,7 @@ class TestCheckDrift:
         event_log_service._hash_cache.clear()
 
         check_drift(tmp_path, journal)
-        events = _read_events(tmp_path)
+        events = _read_operation_events(tmp_path)
         drift_events = [e for e in events if e["type"] == "journal.external_edit_detected.v1"]
         assert len(drift_events) == 1
 
@@ -391,7 +359,7 @@ class TestCheckStartupDrift:
         journals.mkdir()
         (journals / "2026.journal").write_text("data", encoding="utf-8")
         check_startup_drift(tmp_path)
-        events = _read_events(tmp_path)
+        events = _read_operation_events(tmp_path)
         assert len(events) == 0
 
     def test_skips_when_no_journals_dir(self, tmp_path: Path) -> None:
@@ -416,7 +384,7 @@ class TestCheckStartupDrift:
 
         check_startup_drift(tmp_path)
 
-        events = _read_events(tmp_path)
+        events = _read_operation_events(tmp_path)
         drift_events = [e for e in events if e["type"] == "journal.external_edit_detected.v1"]
         assert len(drift_events) == 1
         assert drift_events[0]["payload"]["trigger"] == "startup"
@@ -439,7 +407,7 @@ class TestCheckStartupDrift:
 
         check_startup_drift(tmp_path)
 
-        events = _read_events(tmp_path)
+        events = _read_operation_events(tmp_path)
         drift_events = [e for e in events if e["type"] == "journal.external_edit_detected.v1"]
         assert len(drift_events) == 0
 

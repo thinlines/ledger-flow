@@ -35,7 +35,7 @@ def _make_config(workspace: Path) -> AppConfig:
     )
 
 
-def test_ensure_rules_store_ignores_and_removes_stale_ndjson(tmp_path: Path) -> None:
+def test_ensure_rules_store_ignores_retired_ndjson(tmp_path: Path) -> None:
     config = _make_config(tmp_path / "workspace")
     db_path = ensure_database(config)
     rules_file = config.init_dir / "20-match-rules.ndjson"
@@ -49,10 +49,10 @@ def test_ensure_rules_store_ignores_and_removes_stale_ndjson(tmp_path: Path) -> 
         encoding="utf-8",
     )
 
-    store = ensure_rules_store(config.init_dir, config.init_dir / "10-accounts.dat")
+    store = ensure_rules_store(config.init_dir)
     rules = load_rules(store)
 
-    assert not rules_file.exists()
+    assert rules_file.exists()
     assert rules == []
 
     with connect(db_path) as conn:
@@ -63,7 +63,7 @@ def test_ensure_rules_store_ignores_and_removes_stale_ndjson(tmp_path: Path) -> 
 
 def test_rule_mutations_are_recorded_as_operations(tmp_path: Path) -> None:
     config = _make_config(tmp_path / "workspace")
-    store = ensure_rules_store(config.init_dir, config.init_dir / "10-accounts.dat")
+    store = ensure_rules_store(config.init_dir)
 
     created = create_rule(
         store,
@@ -88,7 +88,7 @@ def test_rule_mutations_are_recorded_as_operations(tmp_path: Path) -> None:
     assert f'"rule_id":"{created["id"]}"' in rows[2][2]
 
 
-def test_ensure_rules_store_migrates_legacy_payee_rules(tmp_path: Path) -> None:
+def test_ensure_rules_store_does_not_migrate_legacy_payee_rules(tmp_path: Path) -> None:
     rules_dir = tmp_path / "rules"
     rules_dir.mkdir(parents=True, exist_ok=True)
     accounts = rules_dir / "10-accounts.dat"
@@ -101,13 +101,9 @@ account Expenses:Food
         + "\n",
         encoding="utf-8",
     )
-    path = ensure_rules_store(rules_dir, accounts)
+    path = ensure_rules_store(rules_dir)
     rules = load_rules(path)
-    assert len(rules) == 1
-    assert rules[0]["name"] == "Coffee Shop"
-    assert rules[0]["conditions"][0]["value"] == "Coffee Shop"
-    assert rules[0]["conditions"][0]["operator"] == "exact"
-    assert rules[0]["actions"] == [{"type": "set_account", "account": "Expenses:Food"}]
+    assert rules == []
 
 
 def test_upsert_and_reorder_rules(tmp_path: Path) -> None:
@@ -115,7 +111,7 @@ def test_upsert_and_reorder_rules(tmp_path: Path) -> None:
     rules_dir.mkdir(parents=True, exist_ok=True)
     accounts = rules_dir / "10-accounts.dat"
     accounts.write_text("", encoding="utf-8")
-    path = ensure_rules_store(rules_dir, accounts)
+    path = ensure_rules_store(rules_dir)
     rule1, changed1 = upsert_payee_rule(path, "Coffee Shop", "Expenses:Coffee")
     rule2, changed2 = upsert_payee_rule(path, "Book Store", "Expenses:Books")
     assert changed1 is True
@@ -131,7 +127,7 @@ def test_rule_supports_contains_operator(tmp_path: Path) -> None:
     rules_dir.mkdir(parents=True, exist_ok=True)
     accounts = rules_dir / "10-accounts.dat"
     accounts.write_text("", encoding="utf-8")
-    path = ensure_rules_store(rules_dir, accounts)
+    path = ensure_rules_store(rules_dir)
     rule = create_rule(
         path,
         conditions=[{"field": "payee", "operator": "contains", "value": "coffee"}],
@@ -150,7 +146,7 @@ def test_rule_supports_or_joiner(tmp_path: Path) -> None:
     rules_dir.mkdir(parents=True, exist_ok=True)
     accounts = rules_dir / "10-accounts.dat"
     accounts.write_text("", encoding="utf-8")
-    path = ensure_rules_store(rules_dir, accounts)
+    path = ensure_rules_store(rules_dir)
 
     rule = create_rule(
         path,
@@ -172,7 +168,7 @@ def test_rule_or_groups_match_with_and_conditions_inside_each_group(tmp_path: Pa
     rules_dir.mkdir(parents=True, exist_ok=True)
     accounts = rules_dir / "10-accounts.dat"
     accounts.write_text("", encoding="utf-8")
-    path = ensure_rules_store(rules_dir, accounts)
+    path = ensure_rules_store(rules_dir)
 
     rule = create_rule(
         path,
@@ -198,7 +194,7 @@ def test_rule_supports_date_conditions(tmp_path: Path) -> None:
     rules_dir.mkdir(parents=True, exist_ok=True)
     accounts = rules_dir / "10-accounts.dat"
     accounts.write_text("", encoding="utf-8")
-    path = ensure_rules_store(rules_dir, accounts)
+    path = ensure_rules_store(rules_dir)
 
     rule = create_rule(
         path,
@@ -235,7 +231,7 @@ def test_rule_supports_amount_conditions_with_exact_nano_boundaries(tmp_path: Pa
     rules_dir.mkdir(parents=True, exist_ok=True)
     accounts = rules_dir / "10-accounts.dat"
     accounts.write_text("", encoding="utf-8")
-    path = ensure_rules_store(rules_dir, accounts)
+    path = ensure_rules_store(rules_dir)
 
     rule = create_rule(
         path,
@@ -258,7 +254,7 @@ def test_rule_supports_amount_between_against_any_posting_amount(tmp_path: Path)
     rules_dir.mkdir(parents=True, exist_ok=True)
     accounts = rules_dir / "10-accounts.dat"
     accounts.write_text("", encoding="utf-8")
-    path = ensure_rules_store(rules_dir, accounts)
+    path = ensure_rules_store(rules_dir)
 
     rule = create_rule(
         path,
@@ -279,7 +275,7 @@ def test_rule_supports_account_conditions_against_posting_accounts(tmp_path: Pat
     rules_dir.mkdir(parents=True, exist_ok=True)
     accounts = rules_dir / "10-accounts.dat"
     accounts.write_text("", encoding="utf-8")
-    path = ensure_rules_store(rules_dir, accounts)
+    path = ensure_rules_store(rules_dir)
 
     rule = create_rule(
         path,
@@ -307,7 +303,7 @@ def test_rule_supports_merchant_conditions(tmp_path: Path) -> None:
     rules_dir.mkdir(parents=True, exist_ok=True)
     accounts = rules_dir / "10-accounts.dat"
     accounts.write_text("", encoding="utf-8")
-    path = ensure_rules_store(rules_dir, accounts)
+    path = ensure_rules_store(rules_dir)
 
     rule = create_rule(
         path,
@@ -326,7 +322,7 @@ def test_rule_supports_new_fields_in_dnf_groups(tmp_path: Path) -> None:
     rules_dir.mkdir(parents=True, exist_ok=True)
     accounts = rules_dir / "10-accounts.dat"
     accounts.write_text("", encoding="utf-8")
-    path = ensure_rules_store(rules_dir, accounts)
+    path = ensure_rules_store(rules_dir)
 
     rule = create_rule(
         path,
@@ -358,7 +354,7 @@ def test_rule_supports_multiple_action_types(tmp_path: Path) -> None:
     rules_dir.mkdir(parents=True, exist_ok=True)
     accounts = rules_dir / "10-accounts.dat"
     accounts.write_text("", encoding="utf-8")
-    path = ensure_rules_store(rules_dir, accounts)
+    path = ensure_rules_store(rules_dir)
 
     created = create_rule(
         path,
@@ -386,7 +382,7 @@ def test_rule_name_can_be_saved_and_updated(tmp_path: Path) -> None:
     rules_dir.mkdir(parents=True, exist_ok=True)
     accounts = rules_dir / "10-accounts.dat"
     accounts.write_text("", encoding="utf-8")
-    path = ensure_rules_store(rules_dir, accounts)
+    path = ensure_rules_store(rules_dir)
 
     created = create_rule(
         path,
@@ -409,7 +405,7 @@ def test_rule_name_can_be_saved_and_updated(tmp_path: Path) -> None:
 def test_rule_name_defaults_from_conditions_when_missing(tmp_path: Path) -> None:
     rules_dir = tmp_path / "rules"
     rules_dir.mkdir(parents=True, exist_ok=True)
-    path = ensure_rules_store(rules_dir, rules_dir / "10-accounts.dat")
+    path = ensure_rules_store(rules_dir)
     save_rules(
         path,
         [

@@ -45,7 +45,7 @@ def _clear_hash_cache():
     event_log_service._hash_cache.clear()
 
 
-def _read_events(workspace: Path) -> list[dict]:
+def _read_operation_events(workspace: Path) -> list[dict]:
     config = _make_config(workspace)
     operation_events = [
         {
@@ -761,7 +761,7 @@ class TestUndoUnmatched:
         result = undo_event(_make_config(workspace), event_id)
         assert result.outcome == UndoOutcome.SUCCESS
 
-        events = _read_events(workspace)
+        events = _read_operation_events(workspace)
         comp = [e for e in events if e.get("compensates") == event_id]
         assert len(comp) == 1
         assert comp[0]["type"] == "transaction.unmatched.v1.compensated.v1"

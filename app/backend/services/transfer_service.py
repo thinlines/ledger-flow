@@ -2,9 +2,11 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal
 from pathlib import Path
-import re
+from .journal_query_service import ACCOUNT_LINE_RE, ACCOUNT_ONLY_RE, META_RE
+
+from .currency_parser import parse_optional_amount
 
 
 TRANSFER_ROOT_ACCOUNT = "Assets:Transfers"
@@ -27,11 +29,6 @@ ACTIVE_TRANSFER_MATCH_STATES = {
     TRANSFER_MATCH_STATE_PENDING,
     TRANSFER_MATCH_STATE_MATCHED,
 }
-ACCOUNT_LINE_RE = re.compile(r"^(\s+)([^\s].*?)(\s{2,}|\t+)(.*)$")
-ACCOUNT_ONLY_RE = re.compile(r"^(\s+)([^\s].*?)\s*$")
-META_RE = re.compile(r"^\s*;\s*([^:]+):\s*(.*)$")
-
-
 @dataclass(frozen=True)
 class ParsedTransferMetadata:
     transfer_id: str | None
@@ -228,19 +225,8 @@ def build_import_match_transfer_metadata_updates(
 
 
 def parse_amount(raw: str) -> Decimal | None:
-    compact = re.sub(r"\s+", "", raw)
-    if not compact:
-        return None
-
-    digits = "".join(ch for ch in compact if ch.isdigit() or ch in {".", ","})
-    if not digits:
-        return None
-
-    sign = -1 if "-" in compact else 1
-    try:
-        return Decimal(digits.replace(",", "")) * sign
-    except InvalidOperation:
-        return None
+    """Compatibility wrapper for lenient journal amount parsing."""
+    return parse_optional_amount(raw)
 
 
 def infer_blank_posting_amounts(postings: list[dict]) -> list[dict]:

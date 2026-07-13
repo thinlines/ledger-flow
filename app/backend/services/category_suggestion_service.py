@@ -62,8 +62,7 @@ def suggest_category(payee: str, config: AppConfig) -> dict:
     # ------------------------------------------------------------------
     # Pass 1 — Deterministic rule match
     # ------------------------------------------------------------------
-    accounts_dat = config.init_dir / "10-accounts.dat"
-    rules_file = ensure_rules_store(config.init_dir, accounts_dat)
+    rules_file = ensure_rules_store(config.init_dir)
     rules = load_rules(rules_file)
     matched_rule = find_matching_rule({"payee": payee}, rules)
     if matched_rule is not None:

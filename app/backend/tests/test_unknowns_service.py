@@ -2,7 +2,7 @@ from pathlib import Path
 
 from services.account_declaration_service import create_account
 from services.merchant_service import Merchant
-from services.unknowns_service import add_payee_rule, apply_unknown_mappings, scan_unknowns
+from services.unknowns_service import apply_unknown_mappings, scan_unknowns
 from services.transfer_service import transfer_pair_account
 
 
@@ -869,44 +869,6 @@ account {transfer_account}
     assert content.count("; transfer_match_state: matched") == 2
     assert "; transfer_id: transfer-1" in content
     assert "; transfer_state:" not in content
-
-
-def test_add_payee_rule_adds_mapping(tmp_path: Path) -> None:
-    accounts = tmp_path / "10-accounts.dat"
-    accounts.write_text(
-        """
-account Expenses:Eating Out
-    ; type: Expense
-""".strip()
-        + "\n",
-        encoding="utf-8",
-    )
-    added, warning = add_payee_rule(accounts, "Coffee Shop", "Expenses:Eating Out")
-    assert added is True
-    assert warning is None
-    assert "payee Coffee Shop" in accounts.read_text(encoding="utf-8")
-
-
-def test_add_payee_rule_updates_existing_mapping(tmp_path: Path) -> None:
-    accounts = tmp_path / "10-accounts.dat"
-    accounts.write_text(
-        """
-account Expenses:Eating Out
-    ; type: Expense
-    payee Coffee Shop
-
-account Expenses:Coffee
-    ; type: Expense
-""".strip()
-        + "\n",
-        encoding="utf-8",
-    )
-    added, warning = add_payee_rule(accounts, "Coffee Shop", "Expenses:Coffee")
-    assert added is True
-    assert warning is None
-    content = accounts.read_text(encoding="utf-8")
-    assert "payee Coffee Shop" in content
-    assert "account Expenses:Eating Out\n    ; type: Expense\n    payee Coffee Shop" not in content
 
 
 def test_create_account_appends_account_block(tmp_path: Path) -> None:

@@ -16,9 +16,9 @@ from services.event_log_service import (
     check_drift,
     emit_event,
     hash_file,
-    read_events,
     rel_path,
 )
+from conftest import read_operation_events
 from services.manual_entry_service import create_manual_transaction
 
 
@@ -29,8 +29,8 @@ def _clear_hash_cache():
     event_log_service._hash_cache.clear()
 
 
-def _read_events(workspace: Path) -> list[dict]:
-    return read_events(workspace)
+def _read_operation_events(workspace: Path) -> list[dict]:
+    return read_operation_events(workspace)
 
 
 def _setup_workspace(tmp_path: Path) -> Path:
@@ -94,7 +94,7 @@ class TestManualEntryCreatedEvent:
             }],
         )
 
-        events = _read_events(workspace)
+        events = _read_operation_events(workspace)
         assert len(events) == 1
         e = events[0]
         assert e["type"] == "manual_entry.created.v1"
@@ -147,7 +147,7 @@ class TestDriftDetectionIntegration:
         # Drift check before next mutation
         check_drift(workspace, journal_path)
 
-        events = _read_events(workspace)
+        events = _read_operation_events(workspace)
         drift_events = [e for e in events if e["type"] == "journal.external_edit_detected.v1"]
         assert len(drift_events) == 1
         assert drift_events[0]["payload"]["trigger"] == "pre_mutation"
@@ -194,7 +194,7 @@ class TestDriftDetectionIntegration:
             }],
         )
 
-        events = _read_events(workspace)
+        events = _read_operation_events(workspace)
         types = [e["type"] for e in events]
         drift_idx = types.index("journal.external_edit_detected.v1")
         mutation_idx = types.index("manual_entry.created.v1")
@@ -220,7 +220,7 @@ class TestDriftDetectionIntegration:
 
         check_drift(workspace, journal_path)
 
-        events = _read_events(workspace)
+        events = _read_operation_events(workspace)
         drift_events = [e for e in events if e["type"] == "journal.external_edit_detected.v1"]
         assert len(drift_events) == 0
 
@@ -239,7 +239,7 @@ class TestEmissionFailureResilience:
 
         emit_event(workspace, event_type="t.v1", summary="s", payload={}, journal_refs=[])
 
-        events = _read_events(workspace)
+        events = _read_operation_events(workspace)
         assert [event["type"] for event in events] == ["t.v1"]
 
 
@@ -300,7 +300,7 @@ class TestHashChain:
                 journal_refs=[],
             )
         assert not (workspace / EVENTS_FILENAME).exists()
-        for event in _read_events(workspace):
+        for event in _read_operation_events(workspace):
             assert "id" in event
             assert "ts" in event
             assert "type" in event

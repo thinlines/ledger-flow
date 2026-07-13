@@ -8,7 +8,7 @@ import os
 from pathlib import Path
 import re
 import sqlite3
-from uuid import uuid4, uuid7
+from uuid import uuid4
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -97,7 +97,6 @@ from services.reconciliation_duplicate_service import (
     resolve_duplicate_candidate,
 )
 from services.reconciliation_service import (
-    AssertionFailure,
     latest_reconciliation_date,
     latest_reconciliation_dates_by_tracked_id,
     parse_closing_balance,
@@ -124,12 +123,10 @@ from services.account_declaration_service import (
     create_account,
     delete_block_reason,
     delete_declaration,
-    load_known_accounts,
     reopen_account,
     set_subtype,
 )
 from services.merchant_service import list_undeclared_payees, load_merchants, upsert_merchant
-from services.projection_service import refresh_projection
 from services.reference_data_service import (
     account_subtypes,
     list_account_names,
@@ -139,7 +136,6 @@ from services.reference_data_service import (
 )
 from services.unknowns_service import (
     apply_unknown_mappings,
-    list_known_accounts,
     scan_unknowns,
 )
 from services.workspace_service import (
@@ -1980,21 +1976,19 @@ def accounts() -> dict:
 @app.get("/api/rules")
 def rules_list() -> dict:
     config = _require_workspace_config()
-    accounts_dat = config.init_dir / "10-accounts.dat"
-    path = ensure_rules_store(config.init_dir, accounts_dat)
+    path = ensure_rules_store(config.init_dir)
     return {"rules": load_rules(path)}
 
 
 @app.post("/api/rules")
 def rules_create(req: RuleCreateRequest) -> dict:
     config = _require_workspace_config()
-    accounts_dat = config.init_dir / "10-accounts.dat"
-    known_accounts = set(list_known_accounts(accounts_dat))
+    known_accounts = set(list_account_names(config))
     requested_actions = [a.model_dump() for a in req.actions]
     requested_account = extract_set_account({"actions": requested_actions})
     if requested_account is not None and requested_account not in known_accounts:
         raise HTTPException(status_code=400, detail=f"Unknown account: {requested_account}")
-    path = ensure_rules_store(config.init_dir, accounts_dat)
+    path = ensure_rules_store(config.init_dir)
     try:
         rule = create_rule(
             path,
@@ -2033,8 +2027,7 @@ def merchants_create(req: MerchantCreateRequest) -> dict:
     config = _require_workspace_config()
     default_account = (req.defaultAccount or "").strip()
     if default_account:
-        accounts_dat = config.init_dir / "10-accounts.dat"
-        known_accounts = set(list_known_accounts(accounts_dat))
+        known_accounts = set(list_account_names(config))
         if default_account not in known_accounts:
             raise HTTPException(status_code=400, detail=f"Unknown account: {default_account}")
     try:
@@ -2305,8 +2298,7 @@ def unknown_scan(req: UnknownScanRequest) -> dict:
     if not journal_path.exists():
         raise HTTPException(status_code=404, detail="journal not found")
 
-    accounts_dat = config.init_dir / "10-accounts.dat"
-    rule_path = ensure_rules_store(config.init_dir, accounts_dat)
+    rule_path = ensure_rules_store(config.init_dir)
     data = scan_unknowns(
         journal_path,
         load_rules(rule_path),
@@ -2375,6 +2367,21 @@ def unknown_apply(req: StageApplyRequest) -> dict:
     if not selections:
         raise HTTPException(status_code=400, detail="no mappings staged")
 
+    known_accounts = set(list_account_names(config))
+    invalid_accounts = sorted(
+        {
+            str(selection.get("categoryAccount") or "").strip()
+            for selection in selections.values()
+            if selection.get("selectionType") == "category"
+            and str(selection.get("categoryAccount") or "").strip() not in known_accounts
+        }
+    )
+    if invalid_accounts:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown account(s): {', '.join(invalid_accounts)}",
+        )
+
     journal_path = Path(stage["journalPath"])
     accounts_dat = config.init_dir / "10-accounts.dat"
     archived_manual = journal_path.parent / "archived-manual.journal"
@@ -2436,11 +2443,10 @@ def unknown_apply(req: StageApplyRequest) -> dict:
 @app.post("/api/rules/payee")
 def create_payee_rule(req: PayeeRuleRequest) -> dict:
     config = _require_workspace_config()
-    accounts_dat = config.init_dir / "10-accounts.dat"
-    known_accounts = set(list_known_accounts(accounts_dat))
+    known_accounts = set(list_account_names(config))
     if req.account not in known_accounts:
         raise HTTPException(status_code=400, detail=f"Unknown account: {req.account}")
-    path = ensure_rules_store(config.init_dir, accounts_dat)
+    path = ensure_rules_store(config.init_dir)
     try:
         rule, changed = upsert_payee_rule(path, req.payee, req.account)
     except ValueError as e:
@@ -2451,8 +2457,7 @@ def create_payee_rule(req: PayeeRuleRequest) -> dict:
 @app.post("/api/rules/reorder")
 def rules_reorder(req: RuleReorderRequest) -> dict:
     config = _require_workspace_config()
-    accounts_dat = config.init_dir / "10-accounts.dat"
-    path = ensure_rules_store(config.init_dir, accounts_dat)
+    path = ensure_rules_store(config.init_dir)
     try:
         rules = reorder_rules(path, req.orderedIds)
     except ValueError as e:
@@ -2463,13 +2468,12 @@ def rules_reorder(req: RuleReorderRequest) -> dict:
 @app.post("/api/rules/{rule_id}")
 def rules_update(rule_id: str, req: RuleUpdateRequest) -> dict:
     config = _require_workspace_config()
-    accounts_dat = config.init_dir / "10-accounts.dat"
-    known_accounts = set(list_known_accounts(accounts_dat))
+    known_accounts = set(list_account_names(config))
     requested_actions = [a.model_dump() for a in req.actions] if req.actions is not None else None
     requested_account = extract_set_account({"actions": requested_actions}) if requested_actions is not None else None
     if requested_account is not None and requested_account not in known_accounts:
         raise HTTPException(status_code=400, detail=f"Unknown account: {requested_account}")
-    path = ensure_rules_store(config.init_dir, accounts_dat)
+    path = ensure_rules_store(config.init_dir)
     try:
         rule = update_rule(
             path,
@@ -2491,8 +2495,7 @@ def rules_history_scan(rule_id: str, req: RuleHistoryScanRequest) -> dict:
     if not journal_path.exists():
         raise HTTPException(status_code=404, detail="journal not found")
 
-    accounts_dat = config.init_dir / "10-accounts.dat"
-    path = ensure_rules_store(config.init_dir, accounts_dat)
+    path = ensure_rules_store(config.init_dir)
     rule = _rule_or_404(path, rule_id)
     try:
         data = scan_rule_reapply(journal_path, rule, config.import_accounts)
@@ -2532,6 +2535,22 @@ def rules_history_apply(req: RuleHistoryApplyRequest) -> dict:
     selected_candidate_ids = [candidate_id for candidate_id in req.selectedCandidateIds if candidate_id]
     if not selected_candidate_ids:
         raise HTTPException(status_code=400, detail="no historical matches selected")
+
+    known_accounts = set(list_account_names(config))
+    selected_ids = set(selected_candidate_ids)
+    invalid_accounts = sorted(
+        {
+            str(candidate.get("targetAccount") or "").strip()
+            for candidate in stage.get("candidates") or []
+            if candidate.get("id") in selected_ids
+            and str(candidate.get("targetAccount") or "").strip() not in known_accounts
+        }
+    )
+    if invalid_accounts:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown account(s): {', '.join(invalid_accounts)}",
+        )
 
     journal_path = Path(stage["journalPath"])
     accounts_dat = config.init_dir / "10-accounts.dat"
@@ -2576,8 +2595,7 @@ def rules_history_apply(req: RuleHistoryApplyRequest) -> dict:
 @app.delete("/api/rules/{rule_id}")
 def rules_delete(rule_id: str) -> dict:
     config = _require_workspace_config()
-    accounts_dat = config.init_dir / "10-accounts.dat"
-    path = ensure_rules_store(config.init_dir, accounts_dat)
+    path = ensure_rules_store(config.init_dir)
     deleted = delete_rule(path, rule_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="rule not found")

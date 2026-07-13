@@ -81,7 +81,7 @@ def journal_path(workspace: Path) -> Path:
 # ---------------------------------------------------------------------------
 
 
-def _read_events(workspace: Path) -> list[dict]:
+def _read_operation_events(workspace: Path) -> list[dict]:
     events_file = workspace / EVENTS_FILENAME
     if not events_file.is_file():
         config = AppConfig(
@@ -118,7 +118,7 @@ def _read_events(workspace: Path) -> list[dict]:
 
 
 def _emitted(workspace: Path, event_type: str) -> list[dict]:
-    return [e for e in _read_events(workspace) if e.get("type") == event_type]
+    return [e for e in _read_operation_events(workspace) if e.get("type") == event_type]
 
 
 # ---------------------------------------------------------------------------

@@ -1,21 +1,14 @@
 from __future__ import annotations
 
-import re
+from .journal_query_service import ACCOUNT_LINE_RE, ACCOUNT_ONLY_RE, META_RE, TXN_START_RE
 from pathlib import Path
 
 from .config_service import infer_account_kind
 from .journal_block_service import hash_block, locate_block_by_id
 from .rules_service import extract_set_account, find_matching_rule
-from .unknowns_service import list_known_accounts
 
 
 from .header_parser import HEADER_RE
-
-ACCOUNT_LINE_RE = re.compile(r"^(\s+)([^\s].*?)(\s{2,}|\t+)(.*)$")
-ACCOUNT_ONLY_RE = re.compile(r"^(\s+)([^\s].*?)\s*$")
-META_RE = re.compile(r"^\s*;\s*([^:]+):\s*(.*)$")
-TXN_START_RE = re.compile(r"^\d{4}[-/]\d{2}[-/]\d{2}")
-
 
 def _iter_transaction_ranges(lines: list[str]) -> list[tuple[int, int]]:
     starts = [i for i, line in enumerate(lines) if TXN_START_RE.match(line)]
@@ -195,22 +188,11 @@ def apply_rule_reapply(
     if not selected_candidate_ids:
         raise ValueError("No historical matches were selected.")
 
-    known_accounts = set(list_known_accounts(accounts_dat))
     selected_ids = set(selected_candidate_ids)
     selected_candidates = [candidate for candidate in candidates if candidate["id"] in selected_ids]
     missing_ids = sorted(selected_ids - {candidate["id"] for candidate in selected_candidates})
     if missing_ids:
         raise ValueError("Some selected historical matches are no longer available.")
-
-    invalid_accounts = sorted(
-        {
-            str(candidate.get("targetAccount", "")).strip()
-            for candidate in selected_candidates
-            if str(candidate.get("targetAccount", "")).strip() not in known_accounts
-        }
-    )
-    if invalid_accounts:
-        raise ValueError(f"Unknown account(s): {', '.join(invalid_accounts)}")
 
     warnings: list[dict] = []
     lines = journal_path.read_text(encoding="utf-8").splitlines()

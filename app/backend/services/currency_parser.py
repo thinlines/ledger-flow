@@ -27,3 +27,23 @@ def parse_amount(raw: str) -> Decimal:
         return Decimal(cleaned)
     except InvalidOperation as exc:
         raise ValueError(f"Invalid amount: {raw!r}") from exc
+
+
+def parse_optional_amount(raw: str) -> Decimal | None:
+    """Lenient journal-facing variant of :func:`parse_amount`.
+
+    Journal scans treat an absent or non-currency amount as unparseable rather
+    than a request error, while still sharing the canonical numeric parser.
+    """
+    try:
+        return parse_amount(raw)
+    except ValueError:
+        # Ledger postings may carry a commodity before or after the number
+        # (for example ``USD -12.00``). Keep that journal-specific leniency
+        # as a thin layer over the canonical parser.
+        for token in (raw or "").split():
+            try:
+                return parse_amount(token)
+            except ValueError:
+                continue
+        return None

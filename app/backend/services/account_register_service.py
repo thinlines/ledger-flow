@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-from .commodity_service import CommodityMismatchError
 from .config_service import AppConfig
 from .journal_query_service import (
     amount_to_number,

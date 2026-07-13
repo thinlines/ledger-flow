@@ -33,7 +33,7 @@ import sqlite3
 from contextlib import closing
 from pathlib import Path
 
-from .config_service import AppConfig
+from .config_service import AppConfig, infer_account_kind
 from .projection_db import connect, database_path
 from .projection_service import refresh_projection
 
@@ -50,21 +50,6 @@ def load_known_accounts(accounts_dat: Path) -> set[str]:
         if line.startswith("account "):
             known.add(line[len("account "):].strip())
     return known
-
-
-def _infer_account_type(account: str) -> str:
-    prefix = account.split(":", 1)[0].strip().lower()
-    if prefix == "assets":
-        return "Asset"
-    if prefix in {"liabilities", "liability"}:
-        return "Liability"
-    if prefix in {"expenses", "expense"}:
-        return "Expense"
-    if prefix in {"income", "revenue"}:
-        return "Revenue"
-    if prefix == "equity":
-        return "Equity"
-    return "Other"
 
 
 def create_account(
@@ -84,7 +69,7 @@ def create_account(
     if account_clean in known:
         return False, None
 
-    account_type_clean = (account_type or "").strip() or _infer_account_type(account_clean)
+    account_type_clean = (account_type or "").strip() or infer_account_kind(account_clean).title()
     description_clean = re.sub(r"\s*[\r\n]+\s*", " ", description or "").strip()
     if accounts_dat.exists():
         lines = accounts_dat.read_text(encoding="utf-8").splitlines()
@@ -207,12 +192,13 @@ def _write_metadata(
             # newline-terminated exactly as far as it was before.
             lines[-1] = lines[-1][: len(lines[-1]) - len(_line_ending(lines[-1]))]
     elif existing is not None:
-        lines[existing] = f"    ; {rendered}{_line_ending(lines[existing]) or '\n'}"
+        ending = _line_ending(lines[existing]) or "\n"
+        lines[existing] = f"    ; {rendered}{ending}"
     else:
         header_ending = _line_ending(lines[header])
         if not header_ending:
             lines[header] = f"{lines[header]}\n"
-        lines.insert(header + 1, f"    ; {rendered}{header_ending or '\n'}")
+        lines.insert(header + 1, f"    ; {rendered}{header_ending or chr(10)}")
 
     path.write_text("".join(lines), encoding="utf-8")
     refresh_projection(config)

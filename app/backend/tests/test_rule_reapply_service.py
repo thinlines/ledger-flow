@@ -61,7 +61,7 @@ account Assets:Savings
         + "\n",
         encoding="utf-8",
     )
-    path = ensure_rules_store(rules_dir, accounts)
+    path = ensure_rules_store(rules_dir)
     create_rule(
         path,
         conditions=[

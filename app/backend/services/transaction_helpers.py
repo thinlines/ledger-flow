@@ -9,8 +9,6 @@ from functools import lru_cache
 from .commodity_service import CommodityMismatchError, commodity_label
 from .config_service import AppConfig, infer_account_kind
 from .journal_query_service import (
-    amount_to_number,
-    is_generated_opening_balance_transaction,
     pretty_account_name,
 )
 from .transfer_service import (

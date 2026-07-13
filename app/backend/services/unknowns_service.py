@@ -1,13 +1,12 @@
 from __future__ import annotations
 
-import re
+from .journal_query_service import ACCOUNT_LINE_RE, ACCOUNT_ONLY_RE, META_RE, TXN_START_RE
 from collections import defaultdict
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
 from uuid import uuid4
 
-from .account_declaration_service import load_known_accounts
 from .archive_service import archive_manual_entry, rollback_archive
 from .config_service import infer_account_kind
 from .merchant_service import Merchant
@@ -27,7 +26,6 @@ from .transfer_service import (
     clear_transfer_metadata_updates,
     ensure_transfer_account,
     infer_blank_posting_amounts,
-    is_transfer_account,
     parse_transfer_metadata,
     parse_amount,
     rewrite_posting_account,
@@ -39,43 +37,6 @@ from .journal_block_service import (
     hash_block as _hash_block,
     locate_block_by_id as _locate_block_by_id,
 )
-
-ACCOUNT_LINE_RE = re.compile(r"^(\s+)([^\s].*?)(\s{2,}|\t+)(.*)$")
-ACCOUNT_ONLY_RE = re.compile(r"^(\s+)([^\s].*?)\s*$")
-META_RE = re.compile(r"^\s*;\s*([^:]+):\s*(.*)$")
-TXN_START_RE = re.compile(r"^\d{4}[-/]\d{2}[-/]\d{2}")
-def list_known_accounts(accounts_dat: Path) -> list[str]:
-    return sorted(_load_known_accounts(accounts_dat))
-
-
-def list_category_accounts(accounts_dat: Path) -> list[str]:
-    return sorted(
-        account
-        for account in _load_known_accounts(accounts_dat)
-        if infer_account_kind(account) in {"expense", "income"} and not is_transfer_account(account)
-    )
-
-
-# Declaration parsing/writing lives with the lifecycle service (issue #19);
-# the alias keeps this module's call sites unchanged.
-_load_known_accounts = load_known_accounts
-
-
-def _load_payee_rules(accounts_dat: Path) -> dict[str, str]:
-    current_account = None
-    mapping = {}
-    if not accounts_dat.exists():
-        return mapping
-    for raw in accounts_dat.read_text(encoding="utf-8").splitlines():
-        line = raw.rstrip()
-        if line.startswith("account "):
-            current_account = line[len("account "):].strip()
-            continue
-        if current_account and line.strip().startswith("payee "):
-            payee = line.strip()[len("payee "):].strip()
-            mapping[payee.lower()] = current_account
-    return mapping
-
 
 def _block_has_match_id_tag(lines: list[str]) -> bool:
     for line in lines:
@@ -593,12 +554,6 @@ def apply_unknown_mappings(
     scanned_groups: list[dict],
     tracked_accounts: dict[str, dict],
 ) -> tuple[int, list[dict]]:
-    category_selections = _stage_category_selections(selections)
-    known_accounts = _load_known_accounts(accounts_dat)
-    invalid = sorted({acct for acct in category_selections.values() if acct and acct not in known_accounts})
-    if invalid:
-        raise ValueError(f"Unknown account(s): {', '.join(invalid)}")
-
     warnings: list[dict] = []
     original_lines = journal_path.read_text(encoding="utf-8").splitlines()
     operations_by_start: dict[int, dict] = {}
@@ -1037,53 +992,3 @@ def apply_unknown_mappings(
         raise
 
     return applied_count, warnings
-
-
-def _remove_payee_rule_lines(lines: list[str], payee_key: str) -> list[str]:
-    kept: list[str] = []
-    for line in lines:
-        stripped = line.strip()
-        if stripped.startswith("payee "):
-            existing_payee = stripped[len("payee "):].strip().lower()
-            if existing_payee == payee_key:
-                continue
-        kept.append(line)
-    return kept
-
-
-def add_payee_rule(accounts_dat: Path, payee: str, account: str) -> tuple[bool, str | None]:
-    known_accounts = _load_known_accounts(accounts_dat)
-    if account not in known_accounts:
-        raise ValueError(f"Unknown account: {account}")
-
-    payee_clean = payee.strip()
-    if not payee_clean:
-        raise ValueError("Payee is required")
-
-    rules_lines = accounts_dat.read_text(encoding="utf-8").splitlines()
-    existing = _load_payee_rules(accounts_dat)
-    key = payee_clean.lower()
-
-    existing_account = existing.get(key)
-    if existing_account == account:
-        return False, None
-
-    # Support rule edits by replacing existing payee mapping with the new target.
-    if existing_account is not None:
-        rules_lines = _remove_payee_rule_lines(rules_lines, key)
-
-    insert_at = None
-    for i, line in enumerate(rules_lines):
-        if line.startswith("account ") and line[len("account "):].strip() == account:
-            insert_at = i + 1
-            while insert_at < len(rules_lines) and not rules_lines[insert_at].startswith("account "):
-                insert_at += 1
-            break
-
-    if insert_at is None:
-        return False, f"Target account block not found: {account}"
-
-    rule_line = f"\tpayee {payee_clean}"
-    rules_lines.insert(insert_at, rule_line)
-    accounts_dat.write_text("\n".join(rules_lines) + "\n", encoding="utf-8")
-    return True, None

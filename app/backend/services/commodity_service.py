@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal
 import re
+
+from .currency_parser import parse_amount as parse_currency_amount
+from .journal_syntax import ACCOUNT_LINE_RE
 
 
 BASE_CURRENCY_SYMBOLS = {
@@ -12,7 +15,6 @@ BASE_CURRENCY_SYMBOLS = {
     "JPY": "¥",
     "CNY": "¥",
 }
-POSTING_RE = re.compile(r"^(\s+)([^\s].*?)(\s{2,}|\t+)(.*)$")
 AMOUNT_RE = re.compile(
     r"^\s*"
     r"(?:(?P<prefix>[^\d\s=,+-][^\d\s=,+-]*)\s*)?"
@@ -52,8 +54,8 @@ def parse_amount(raw: str) -> ParsedAmount | None:
     number_text = match.group("number")
     commodity = (match.group("prefix") or match.group("suffix") or "").strip() or None
     try:
-        value = Decimal(number_text.replace(",", ""))
-    except InvalidOperation:
+        value = parse_currency_amount(number_text)
+    except ValueError:
         return None
 
     return ParsedAmount(value=value, commodity=commodity, number_text=number_text)
@@ -82,7 +84,7 @@ def canonicalize_base_currency_amount(raw: str, base_currency: str) -> str:
 
 
 def canonicalize_base_currency_posting(line: str, base_currency: str) -> str:
-    match = POSTING_RE.match(line)
+    match = ACCOUNT_LINE_RE.match(line)
     if not match:
         return line
 

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import hashlib
-import re
+from .journal_query_service import ACCOUNT_LINE_RE, ACCOUNT_ONLY_RE, META_RE
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -13,9 +13,6 @@ from .projection_db import connect, database_path, ensure_database
 from .commodity_service import canonicalize_base_currency_posting
 
 
-ACCOUNT_LINE_RE = re.compile(r"^(\s+)([^\s].*?)(\s{2,}|\t+)(.*)$")
-ACCOUNT_ONLY_RE = re.compile(r"^(\s+)([^\s].*?)\s*$")
-META_RE = re.compile(r"^\s*;\s*([^:]+):\s*(.*)$")
 IMPORT_ACCOUNT_PLACEHOLDER = "__IMPORT_ACCOUNT__"
 
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from .journal_query_service import META_RE, TXN_START_RE
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -21,10 +22,6 @@ from .transfer_service import (
 
 APPLIED_STATUS = "applied"
 UNDONE_STATUS = "undone"
-TXN_START_RE = re.compile(r"^\d{4}[-/]\d{2}[-/]\d{2}")
-META_RE = re.compile(r"^\s*;\s*([^:]+):\s*(.*)$")
-
-
 @dataclass(frozen=True)
 class JournalTransaction:
     start: int
@@ -53,9 +50,6 @@ def _read_entries(config: AppConfig) -> list[dict]:
             payload.setdefault("id", operation.get("id"))
             entries.append(payload)
 
-    legacy_path = config.imports_dir / "import-log.ndjson"
-    if legacy_path.exists():
-        legacy_path.unlink()
     return [undone_by_id.get(str(entry.get("id")), entry) for entry in entries]
 
 

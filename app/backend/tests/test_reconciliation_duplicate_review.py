@@ -10,7 +10,7 @@ from models import (
     ReconciliationDuplicateReviewRequest,
 )
 from services.config_service import AppConfig
-from services.event_log_service import read_events
+from conftest import read_operation_events
 from services.import_identity_service import ImportIdentityStore
 from services.import_service import _build_existing_map, _classify_transaction
 from services.undo_service import UndoOutcome, undo_event
@@ -238,7 +238,7 @@ class TestDuplicateResolution:
 
         updated = journal.read_text(encoding="utf-8")
         archive = (config.journal_dir / "archived-manual.journal").read_text(encoding="utf-8")
-        events = read_events(config.root_dir)
+        events = read_operation_events(config.root_dir)
         assert result["removedSelectionKeys"] == [manual["selectionKey"]]
         assert result["addedCheckedSelectionKeys"] == [imported["selectionKey"]]
         assert result["eventId"]
@@ -292,7 +292,7 @@ class TestDuplicateResolution:
         )
 
         updated = journal.read_text(encoding="utf-8")
-        events = read_events(config.root_dir)
+        events = read_operation_events(config.root_dir)
         assert result["removedSelectionKeys"] == [manual["selectionKey"]]
         assert result["eventId"]
         assert "Manual rent copy" not in updated
@@ -340,7 +340,7 @@ class TestDuplicateResolution:
         updated = journal.read_text(encoding="utf-8")
         existing_map = _build_existing_map(config, "checking", journal)
         durable_map = ImportIdentityStore(config).get_active_identity_map("checking")
-        events = read_events(config.root_dir)
+        events = read_operation_events(config.root_dir)
 
         assert result["removedSelectionKeys"] == [merged["selectionKey"]]
         assert result["eventId"]

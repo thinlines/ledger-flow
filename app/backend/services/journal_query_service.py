@@ -1,19 +1,33 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from datetime import date
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal
 import glob
 from pathlib import Path
 import re
 
 from .commodity_service import CommodityMismatchError, commodity_label, parse_amount
-from .header_parser import HEADER_RE, TransactionStatus, parse_header
+from .header_parser import TransactionStatus, parse_header
+from .journal_syntax import (
+    ACCOUNT_LINE_RE,
+    ACCOUNT_ONLY_RE,
+    LF_TXN_ID_META_RE,
+    META_RE,
+    POSTING_RE,
+    TXN_START_RE,
+)
+
+__all__ = [
+    "ACCOUNT_LINE_RE",
+    "ACCOUNT_ONLY_RE",
+    "LF_TXN_ID_META_RE",
+    "META_RE",
+    "POSTING_RE",
+    "TXN_START_RE",
+]
 
 
-TXN_START_RE = re.compile(r"^\d{4}[-/]\d{2}[-/]\d{2}")
-POSTING_RE = re.compile(r"^\s+([^\s].*?)(?:(?:\s{2,}|\t+)(.+))?$")
-META_RE = re.compile(r"^\s*;\s*([^:]+):\s*(.*)$")
 INCLUDE_RE = re.compile(r"^\s*include\s+(.+?)\s*$")
 
 

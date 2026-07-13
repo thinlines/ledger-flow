@@ -5,8 +5,7 @@ from dataclasses import dataclass
 from datetime import date, timedelta
 from decimal import Decimal
 
-from .commodity_service import CommodityMismatchError, commodity_label
-from .config_service import AppConfig, infer_account_kind
+from .config_service import AppConfig
 from .header_parser import TransactionStatus
 from .journal_query_service import (
     amount_to_number,
@@ -23,8 +22,6 @@ from .transaction_helpers import (
     grouped_settled_pending_transfer_orders,
     opening_balance_detail_line,
     pending_transfer_event_for_peer_account,
-    source_tracked_account_details,
-    tracked_account_display,
     transaction_summary,
 )
 from .search_parser import SearchTerm, parse_search
@@ -40,9 +37,6 @@ from .activity_service import (
     _resolve_current_range as resolve_current_range,
     _resolve_prior_range as resolve_prior_range,
     _build_summary as build_summary,
-    _rows_in_range as rows_in_range,
-    _rolling_window_months as rolling_window_months,
-    _matches_category as matches_category,
 )
 
 

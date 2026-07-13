@@ -118,41 +118,6 @@ def _normalize_rule_name(name: str | None, conditions: list[dict], position: int
     return "Untitled rule"
 
 
-def _parse_legacy_payee_rules(accounts_dat: Path) -> list[dict]:
-    if not accounts_dat.exists():
-        return []
-
-    mapping: dict[str, tuple[str, str]] = {}
-    current_account: str | None = None
-    for raw in accounts_dat.read_text(encoding="utf-8").splitlines():
-        line = raw.rstrip()
-        if line.startswith("account "):
-            current_account = line[len("account "):].strip()
-            continue
-        if current_account and line.strip().startswith("payee "):
-            payee = line.strip()[len("payee "):].strip()
-            if payee:
-                mapping[payee.lower()] = (payee, current_account)
-
-    out: list[dict] = []
-    now = _now_iso()
-    for idx, (_, (payee, account)) in enumerate(sorted(mapping.items()), start=1):
-        out.append(
-            {
-                "id": uuid4().hex[:12],
-                "type": "match",
-                "name": payee,
-                "conditions": [{"field": "payee", "operator": "exact", "value": payee}],
-                "account": account,
-                "enabled": True,
-                "position": idx,
-                "createdAt": now,
-                "updatedAt": now,
-            }
-        )
-    return out
-
-
 def _normalize_date_value(value: str) -> str | None:
     cleaned = value.strip()
     if not cleaned:
@@ -520,16 +485,9 @@ def load_rules(path: Path) -> list[dict]:
     return _load_rules_from_db(path)
 
 
-def ensure_rules_store(rules_dir: Path, accounts_dat: Path) -> Path:
+def ensure_rules_store(rules_dir: Path) -> Path:
     rules_dir.mkdir(parents=True, exist_ok=True)
-    db_path = _db_path_for(rules_dir)
-    with connect(db_path) as conn:
-        seeded = conn.execute("SELECT 1 FROM rules LIMIT 1").fetchone() is not None
-    if not seeded:
-        _replace_rules_in_db(rules_dir, _parse_legacy_payee_rules(accounts_dat))
-    legacy_path = rules_dir / "20-match-rules.ndjson"
-    if legacy_path.exists():
-        legacy_path.unlink()
+    _db_path_for(rules_dir)
     return rules_dir
 
 

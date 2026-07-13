@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import re
+from .journal_query_service import ACCOUNT_LINE_RE, ACCOUNT_ONLY_RE, META_RE
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
@@ -23,11 +24,6 @@ from .reconciliation_context_service import (
     ReconciliationContextRow,
     build_reconciliation_context,
 )
-
-ACCOUNT_LINE_RE = re.compile(r"^(\s+)([^\s].*?)(\s{2,}|\t+)(.*)$")
-ACCOUNT_ONLY_RE = re.compile(r"^(\s+)([^\s].*?)\s*$")
-META_RE = re.compile(r"^\s*;\s*([^:]+):\s*(.*)$")
-TXN_START_RE = re.compile(r"^\d{4}[-/]\d{2}[-/]\d{2}")
 
 from .payee_similarity import payee_similarity as _payee_similarity
 

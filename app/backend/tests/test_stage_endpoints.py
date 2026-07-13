@@ -244,6 +244,8 @@ def _seed_unknown_journal(config: AppConfig) -> Path:
     journal = config.journal_dir / "2026.journal"
     journal.write_text(
         """
+include ../rules/10-accounts.dat
+
 2026/03/01 Coffee Shop
     ; import_account_id: wf_checking
     Expenses:Unknown  $5.00
@@ -329,7 +331,13 @@ def test_rule_history_scan_apply_and_cleanup(tmp_path: Path, monkeypatch) -> Non
         "scan_rule_reapply",
         lambda *a, **k: {
             "targetAccount": "Expenses:Food:Coffee",
-            "candidates": [{"id": "cand-1", "payee": "Coffee Shop"}],
+            "candidates": [
+                {
+                    "id": "cand-1",
+                    "payee": "Coffee Shop",
+                    "targetAccount": "Expenses:Food:Coffee",
+                }
+            ],
             "warnings": [],
             "summary": {"candidateCount": 1},
         },

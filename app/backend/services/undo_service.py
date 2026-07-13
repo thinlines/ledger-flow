@@ -28,7 +28,12 @@ from services.config_service import AppConfig
 from services.event_log_service import hash_file
 from services.header_parser import TransactionStatus, set_header_status
 from services.journal_block_service import locate_block_by_id
-from services.journal_query_service import TXN_START_RE
+from services.journal_query_service import (
+    ACCOUNT_LINE_RE,
+    ACCOUNT_ONLY_RE,
+    LF_TXN_ID_META_RE,
+    TXN_START_RE,
+)
 from services.projection_service import (
     ProjectedTransactionRef,
     find_projected_transaction_match,
@@ -38,7 +43,7 @@ from services.projection_service import (
     render_file,
 )
 from services.operations_service import list_operations, operation_is_compensated
-from services.transfer_service import ACCOUNT_LINE_RE, ACCOUNT_ONLY_RE, rewrite_posting_account
+from services.transfer_service import rewrite_posting_account
 
 logger = logging.getLogger(__name__)
 
@@ -78,9 +83,6 @@ HandlerFn = Callable[[AppConfig, dict], str]
 
 
 # Matches the migration/minting line shape: ``    ; lf_txn_id: txn_...``.
-_LF_TXN_ID_META_RE = re.compile(r"^\s*;\s*lf_txn_id:\s*(\S+)\s*$")
-
-
 def _payload_txn_id(payload: dict) -> str:
     txn_id = str(payload.get("txn_id") or "").strip()
     if not txn_id:
@@ -109,7 +111,7 @@ def _block_range(lines: list[str], ref: ProjectedTransactionRef) -> tuple[int, i
 
 def _block_txn_id(block_text: str) -> str | None:
     for line in block_text.splitlines():
-        match = _LF_TXN_ID_META_RE.match(line)
+        match = LF_TXN_ID_META_RE.match(line)
         if match:
             return match.group(1)
     return None
@@ -160,7 +162,6 @@ def undo_event(config: AppConfig, event_id: str) -> UndoResult:
 
     Returns an :class:`UndoResult` describing the outcome.
     """
-    workspace_path = config.root_dir
     events = _read_history(config)
 
     # 1. Locate the forward event.

@@ -1,20 +1,17 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal
 from pathlib import Path
-import re
+from .journal_query_service import LF_TXN_ID_META_RE, META_RE, POSTING_RE, TXN_START_RE
 
 from .config_service import AppConfig, infer_account_kind
+from .currency_parser import parse_optional_amount
 
 
 from .header_parser import HEADER_RE
 from .journal_block_service import lf_txn_id_line, mint_lf_txn_id
 
-TXN_START_RE = re.compile(r"^\d{4}[-/]\d{2}[-/]\d{2}")
-LF_TXN_ID_META_RE = re.compile(r"^\s*;\s*lf_txn_id:\s*(\S+)\s*$")
-POSTING_RE = re.compile(r"^\s+([^\s].*?)(?:(?:\s{2,}|\t+)(.+))?$")
-META_RE = re.compile(r"^\s*;\s*([^:]+):\s*(.*)$")
 OPENING_BALANCES_EQUITY = "Equity:Opening-Balances"
 OPENING_BALANCES_INDEX = "_opening_balances.journal"
 
@@ -30,19 +27,7 @@ class OpeningBalanceEntry:
 
 
 def _parse_amount(raw: str) -> Decimal | None:
-    compact = re.sub(r"\s+", "", raw)
-    if not compact:
-        return None
-
-    digits = "".join(ch for ch in compact if ch.isdigit() or ch in {".", ","})
-    if not digits:
-        return None
-
-    sign = -1 if "-" in compact else 1
-    try:
-        return Decimal(digits.replace(",", "")) * sign
-    except InvalidOperation:
-        return None
+    return parse_optional_amount(raw)
 
 
 def _split_transactions(journal_text: str) -> list[list[str]]:

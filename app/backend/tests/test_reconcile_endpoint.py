@@ -15,7 +15,8 @@ import main
 from models import DeleteTransactionRequest, ReconcileRequest
 from services import event_log_service
 from services.config_service import AppConfig
-from services.event_log_service import EVENTS_FILENAME, read_events
+from services.event_log_service import EVENTS_FILENAME
+from conftest import read_operation_events
 from services.reconciliation_service import latest_reconciliation_date
 
 
@@ -228,7 +229,7 @@ class TestReconcileSuccess:
         assert "Assets:Checking:Wells Fargo  $0 = $2,500.00" in text
 
         # account.reconciled.v1 event exists with matching id.
-        events = read_events(config.root_dir)
+        events = read_operation_events(config.root_dir)
         recon_events = [e for e in events if e["type"] == "account.reconciled.v1"]
         assert len(recon_events) == 1
         assert recon_events[0]["id"] == result["eventId"]
@@ -342,7 +343,7 @@ class TestReconcileFailure:
         assert journal.read_bytes() == before_bytes
 
         # No account.reconciled.v1 event emitted.
-        events = read_events(config.root_dir)
+        events = read_operation_events(config.root_dir)
         recon_events = [e for e in events if e["type"] == "account.reconciled.v1"]
         assert recon_events == []
 

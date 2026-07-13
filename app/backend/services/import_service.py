@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import re
+from .journal_query_service import ACCOUNT_LINE_RE, META_RE, TXN_START_RE
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
@@ -29,9 +30,6 @@ INBOX_FILE_RE = re.compile(
     r"^(?P<year>\d{4})__(?P<import_account_id>[a-z0-9_]+)__(?P<label>.+)\.csv$"
 )
 
-TXN_START_RE = re.compile(r"^\d{4}[-/]\d{2}[-/]\d{2}")
-POSTING_RE = re.compile(r"^(\s+)([^\s].*?)(\s{2,}|\t+)(.*)$")
-META_RE = re.compile(r"^\s*;\s*([^:]+):\s*(.*)$")
 SOURCE_IDENTITY_KEY_RE = re.compile(r"^lf_source_identity(?:_(?P<suffix>\d+))?$")
 SOURCE_PAYLOAD_KEY_RE = re.compile(r"^source_payload_hash(?:_(?P<suffix>\d+))?$")
 IMPORTER_VERSION = "mvp2"
@@ -416,7 +414,7 @@ def _parse_transaction(
         if mm:
             metadata[mm.group(1).strip().lower()] = mm.group(2).strip()
             continue
-        pm = POSTING_RE.match(line)
+        pm = ACCOUNT_LINE_RE.match(line)
         if pm:
             postings.append({"account": pm.group(2).strip(), "amount": pm.group(4).strip()})
 
@@ -458,7 +456,7 @@ def _parse_transaction(
         category_account, _source = resolution
         rewritten_lines = list(lines)
         for index, line in enumerate(rewritten_lines):
-            pm = POSTING_RE.match(line)
+            pm = ACCOUNT_LINE_RE.match(line)
             if pm is None or pm.group(2).strip() != UNKNOWN_ACCOUNT:
                 continue
             rewritten_lines[index], _ = rewrite_posting_account(line, category_account)
@@ -725,7 +723,7 @@ def preview_import(
     existing_map = _build_existing_map(config, import_account_id, target_journal)
     base_currency = str(config.workspace.get("base_currency", "USD"))
     merchants = load_merchants(config)
-    rules = load_rules(ensure_rules_store(config.init_dir, config.init_dir / "10-accounts.dat"))
+    rules = load_rules(ensure_rules_store(config.init_dir))
     for lines in _split_transactions(converted_journal):
         txn = _parse_transaction(
             lines,

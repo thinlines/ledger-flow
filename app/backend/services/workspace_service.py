@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import re
+from .journal_query_service import ACCOUNT_LINE_RE, ACCOUNT_ONLY_RE, META_RE, TXN_START_RE
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -21,10 +22,6 @@ from .opening_balance_service import (
     write_opening_balance,
 )
 
-TXN_START_RE = re.compile(r"^\d{4}[-/]\d{2}[-/]\d{2}")
-ACCOUNT_LINE_RE = re.compile(r"^(\s+)([^\s].*?)(\s{2,}|\t+)(.*)$")
-ACCOUNT_ONLY_RE = re.compile(r"^(\s+)([^\s].*?)\s*$")
-META_RE = re.compile(r"^\s*;\s*([^:]+):\s*(.*)$")
 JOURNAL_INCLUDE_LINES = (
     "include ../rules/10-accounts.dat",
     "include ../rules/11-payees.dat",
@@ -317,20 +314,6 @@ class WorkspaceManager:
             suffix += 1
         used.add(candidate)
         return candidate
-
-    def _infer_account_type(self, account: str) -> str:
-        prefix = account.split(":", 1)[0].strip().lower()
-        if prefix == "assets":
-            return "Asset"
-        if prefix in {"liabilities", "liability"}:
-            return "Liability"
-        if prefix in {"expenses", "expense"}:
-            return "Expense"
-        if prefix in {"income", "revenue"}:
-            return "Income"
-        if prefix in {"equity", "capital"}:
-            return "Equity"
-        return "Asset"
 
     def _has_imported_activity(self, config: AppConfig) -> bool:
         for journal_path in sorted(config.journal_dir.glob("*.journal")):
@@ -713,7 +696,8 @@ class WorkspaceManager:
             ledger_account = str(account.get("ledger_account", "")).strip()
             if not ledger_account or ledger_account in known_accounts:
                 continue
-            append_account(ledger_account, self._infer_account_type(ledger_account))
+            kind = infer_account_kind(ledger_account)
+            append_account(ledger_account, "Asset" if kind == "other" else kind.title())
 
         if "Expenses:Unknown" not in known_accounts:
             append_account("Expenses:Unknown", "Expense")

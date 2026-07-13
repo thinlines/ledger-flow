@@ -3,12 +3,8 @@
 from __future__ import annotations
 
 import hashlib
-import re
+from .journal_query_service import LF_TXN_ID_META_RE, TXN_START_RE
 from uuid import uuid7
-
-from services.journal_query_service import TXN_START_RE
-
-LF_TXN_ID_META_RE = re.compile(r"^\s*;\s*lf_txn_id:\s*(\S+)\s*$")
 
 
 def hash_block(lines: list[str], start: int, end: int) -> str:

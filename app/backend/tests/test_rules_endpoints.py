@@ -7,7 +7,14 @@ import pytest
 from fastapi import HTTPException
 
 import main
-from models import RuleAction, RuleCondition, RuleCreateRequest, RuleReorderRequest, RuleUpdateRequest
+from models import (
+    AccountCloseRequest,
+    RuleAction,
+    RuleCondition,
+    RuleCreateRequest,
+    RuleReorderRequest,
+    RuleUpdateRequest,
+)
 from services.config_service import AppConfig
 from services.projection_db import database_path
 
@@ -38,6 +45,9 @@ def config(tmp_path: Path, monkeypatch) -> AppConfig:
     (config.init_dir / "10-accounts.dat").write_text(
         "account Expenses:Coffee\naccount Expenses:Books\n",
         encoding="utf-8",
+    )
+    (config.journal_dir / "2026.journal").write_text(
+        "include ../rules/10-accounts.dat\n", encoding="utf-8"
     )
     monkeypatch.setattr(main, "_require_workspace_config", lambda: config)
     return config
@@ -106,4 +116,20 @@ def test_rules_editor_rejects_unknown_action_account(config: AppConfig) -> None:
         )
 
     assert excinfo.value.status_code == 400
+
+
+def test_rules_editor_rejects_closed_action_account(config: AppConfig) -> None:
+    main.accounts_close(AccountCloseRequest(account="Expenses:Coffee", closedOn="2026-07-01"))
+
+    with pytest.raises(HTTPException) as excinfo:
+        main.rules_create(
+            RuleCreateRequest(
+                name="Coffee",
+                conditions=[_condition("coffee")],
+                actions=[_set_account("Expenses:Coffee")],
+            )
+        )
+
+    assert excinfo.value.status_code == 400
+    assert excinfo.value.detail == "Unknown account: Expenses:Coffee"
     assert "Unknown account" in str(excinfo.value.detail)
