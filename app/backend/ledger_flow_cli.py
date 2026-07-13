@@ -230,7 +230,14 @@ def main(argv: list[str] | None = None) -> int:
         print(str(exc), file=sys.stderr)
         return 1
     except urllib.error.HTTPError as exc:
-        print(f"API request failed: HTTP {exc.code}", file=sys.stderr)
+        message = f"API request failed: HTTP {exc.code}"
+        try:
+            detail = json.loads(exc.read().decode("utf-8")).get("detail")
+            if isinstance(detail, str) and detail:
+                message = detail
+        except (UnicodeDecodeError, json.JSONDecodeError, AttributeError):
+            pass
+        print(message, file=sys.stderr)
         return 1
     except urllib.error.URLError as exc:
         print(f"API request failed: {exc.reason}", file=sys.stderr)

@@ -14,6 +14,7 @@ import pytest
 
 from ledger_flow_cli import main
 from conftest import read_operation_events
+from models import ManualTransactionRequest
 
 
 def test_packaging_includes_server_top_level_modules() -> None:
@@ -341,6 +342,53 @@ def test_transactions_create_defaults_api_url_date_and_quiet_output(monkeypatch,
     ]
 
 
+def test_transactions_create_payload_matches_api_schema(monkeypatch) -> None:
+    validated_requests: list[ManualTransactionRequest] = []
+
+    class FakeResponse:
+        def __enter__(self):
+            return BytesIO(b'{"created":true}')
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    def fake_urlopen(request, timeout):
+        payload = json.loads(request.data.decode("utf-8"))
+        validated_requests.append(ManualTransactionRequest(**payload))
+        return FakeResponse()
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    status = main([
+        "transactions",
+        "create",
+        "--account",
+        "Assets:Checking",
+        "--to",
+        "Expenses:Eating Out",
+        "--payee",
+        "Burger King",
+        "--amount",
+        "20.00",
+        "--date",
+        "2026-07-02",
+        "--note",
+        "late lunch",
+    ])
+
+    assert status == 0
+    assert validated_requests == [
+        ManualTransactionRequest(
+            sourceAccount="Assets:Checking",
+            destinationAccount="Expenses:Eating Out",
+            payee="Burger King",
+            amount="20.00",
+            date="2026-07-02",
+            notes="late lunch",
+        )
+    ]
+
+
 def test_transactions_create_rejects_invalid_input_before_api_call(monkeypatch, capsys) -> None:
     calls = 0
 
@@ -429,7 +477,7 @@ def test_transactions_create_accepts_relative_date_aliases(monkeypatch) -> None:
     assert dates == ["2026-07-05", "2026-07-04"]
 
 
-def test_transactions_create_api_failure_prints_concise_error(monkeypatch, capsys) -> None:
+def test_transactions_create_api_failure_prints_detail(monkeypatch, capsys) -> None:
     def fake_urlopen(request, timeout):
         raise HTTPError(
             url=request.full_url,
@@ -457,7 +505,39 @@ def test_transactions_create_api_failure_prints_concise_error(monkeypatch, capsy
     captured = capsys.readouterr()
     assert status == 1
     assert captured.out == ""
-    assert captured.err == "API request failed: HTTP 400\n"
+    assert captured.err == "no matching source account\n"
+
+
+@pytest.mark.parametrize("body", [b"", b"not json"])
+def test_transactions_create_api_failure_falls_back_to_status(
+    body, monkeypatch, capsys
+) -> None:
+    def fake_urlopen(request, timeout):
+        raise HTTPError(
+            url=request.full_url,
+            code=503,
+            msg="Service Unavailable",
+            hdrs={},
+            fp=BytesIO(body),
+        )
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    status = main([
+        "transactions",
+        "create",
+        "--account",
+        "Assets:Checking",
+        "--payee",
+        "Burger King",
+        "--amount",
+        "20.00",
+    ])
+
+    captured = capsys.readouterr()
+    assert status == 1
+    assert captured.out == ""
+    assert captured.err == "API request failed: HTTP 503\n"
 
 
 def test_server_starts_api_for_workspace(tmp_path: Path, monkeypatch, capsys) -> None:
