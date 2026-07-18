@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
+import subprocess
 import sys
 import tomllib
 import types
@@ -13,7 +15,6 @@ import ledger_flow_cli
 import pytest
 
 from ledger_flow_cli import main
-from conftest import read_operation_events
 from models import ManualTransactionRequest
 
 
@@ -25,6 +26,48 @@ def test_packaging_includes_server_top_level_modules() -> None:
     assert {"ledger_flow_cli", "main", "models"}.issubset(
         set(pyproject["tool"]["setuptools"]["py-modules"])
     )
+
+
+def test_transactions_create_is_available_without_backend_modules(tmp_path: Path) -> None:
+    isolated_cli = tmp_path / "ledger_flow_cli.py"
+    shutil.copy(Path(ledger_flow_cli.__file__), isolated_cli)
+
+    help_result = subprocess.run(
+        [sys.executable, "-S", str(isolated_cli), "transactions", "create", "--help"],
+        capture_output=True,
+        text=True,
+        check=False,
+        cwd=tmp_path,
+    )
+    invalid_result = subprocess.run(
+        [
+            sys.executable,
+            "-S",
+            str(isolated_cli),
+            "transactions",
+            "create",
+            "--account=Assets:Checking",
+            "--payee=Burger King",
+            "--amount=0",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+        cwd=tmp_path,
+    )
+
+    assert help_result.returncode == 0
+    assert "ledger-flow transactions create" in help_result.stdout
+    assert invalid_result.returncode == 1
+    assert invalid_result.stderr == "Amount must be a positive decimal.\n"
+
+
+def test_direct_writer_add_command_is_not_available(capsys) -> None:
+    with pytest.raises(SystemExit) as exc_info:
+        main(["add", "--help"])
+
+    assert exc_info.value.code == 2
+    assert "invalid choice: 'add'" in capsys.readouterr().err
 
 
 def _workspace(tmp_path: Path) -> Path:
@@ -64,104 +107,6 @@ ledger_account = "Assets:Credit Card"
         encoding="utf-8",
     )
     return workspace
-
-
-def test_add_creates_manual_entry_in_year_journal(tmp_path: Path, capsys) -> None:
-    workspace = _workspace(tmp_path)
-
-    status = main([
-        "--config",
-        str(workspace / "settings" / "workspace.toml"),
-        "add",
-        "--payee",
-        "Burger King",
-        "--amount",
-        "20.00",
-        "--date",
-        "2026-07-02",
-        "--to",
-        "Expenses:Eating Out",
-        "--from",
-        "Assets:Credit Card",
-    ])
-
-    assert status == 0
-    output = json.loads(capsys.readouterr().out)
-    assert output["created"] is True
-    assert output["eventId"]
-
-    journal = (workspace / "journals" / "2026.journal").read_text(encoding="utf-8")
-    assert "2026-07-02 Burger King" in journal
-    assert "    ; :manual:" in journal
-    assert "    Expenses:Eating Out  $20.00" in journal
-    assert "    Assets:Credit Card" in journal
-
-    events = read_operation_events(workspace)
-    assert events[-1]["type"] == "manual_entry.created.v1"
-    assert events[-1]["payload"]["source_account"] == "Assets:Credit Card"
-
-
-def test_add_rejects_unknown_destination_when_accounts_file_is_missing(
-    tmp_path: Path, capsys
-) -> None:
-    workspace = _workspace(tmp_path)
-    (workspace / "rules" / "10-accounts.dat").unlink()
-
-    status = main([
-        "--config",
-        str(workspace / "settings" / "workspace.toml"),
-        "add",
-        "--payee",
-        "Mystery Shop",
-        "--amount",
-        "20.00",
-        "--date",
-        "2026-07-02",
-        "--to",
-        "Expenses:Unknown Destination",
-        "--from",
-        "Assets:Credit Card",
-    ])
-
-    assert status == 1
-    assert "Invalid destination account 'Expenses:Unknown Destination'" in capsys.readouterr().err
-    assert not (workspace / "journals" / "2026.journal").exists()
-
-
-def test_add_dry_run_prints_preview_without_writing(tmp_path: Path, capsys) -> None:
-    workspace = _workspace(tmp_path)
-
-    status = main([
-        "--config",
-        str(workspace / "settings" / "workspace.toml"),
-        "add",
-        "--payee",
-        "Burger King",
-        "--amount",
-        "20.00",
-        "--date",
-        "2026-07-02",
-        "--to",
-        "Expenses:Eating Out",
-        "--from",
-        "Assets:Credit Card",
-        "--dry-run",
-    ])
-
-    assert status == 0
-    output = json.loads(capsys.readouterr().out)
-    assert output["created"] is False
-    assert output["dryRun"] is True
-    assert output["journalPath"].endswith("journals/2026.journal")
-    assert output["block"][0] == "2026-07-02 Burger King"
-    assert output["block"][1].startswith("    ; lf_txn_id: txn_")
-    assert output["block"][2:] == [
-        "    ; :manual:",
-        "    Expenses:Eating Out  $20.00",
-        "    Assets:Credit Card",
-    ]
-    assert not (workspace / "journals" / "2026.journal").exists()
-    assert not (workspace / "events.jsonl").exists()
 
 
 def test_transactions_create_posts_api_payload_and_prints_json(monkeypatch, capsys) -> None:
