@@ -436,6 +436,33 @@ def test_transactions_create_rejects_invalid_input_before_api_call(monkeypatch, 
     assert calls == 0
 
 
+@pytest.mark.parametrize("amount", ["NaN", "Infinity", "-Infinity", "not-a-number"])
+def test_transactions_create_rejects_invalid_amount_before_api_call(
+    amount, monkeypatch, capsys
+) -> None:
+    def fake_urlopen(request, timeout):
+        raise AssertionError("request should not be sent")
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    status = main([
+        "transactions",
+        "create",
+        "--account",
+        "Assets:Checking",
+        "--to",
+        "Expenses:Eating Out",
+        "--payee",
+        "Burger King",
+        f"--amount={amount}",
+    ])
+    captured = capsys.readouterr()
+
+    assert status == 1
+    assert "Amount must be a positive decimal." in captured.err
+    assert "Traceback" not in captured.err
+
+
 def test_transactions_create_accepts_relative_date_aliases(monkeypatch) -> None:
     dates: list[str] = []
 

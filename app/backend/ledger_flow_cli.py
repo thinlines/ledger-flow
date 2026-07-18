@@ -131,7 +131,7 @@ def _validate_positive_amount(raw: str) -> str:
         amount = Decimal(raw)
     except InvalidOperation as exc:
         raise ValueError("Amount must be a positive decimal.") from exc
-    if amount <= 0:
+    if not amount.is_finite() or amount <= 0:
         raise ValueError("Amount must be a positive decimal.")
     return raw
 
