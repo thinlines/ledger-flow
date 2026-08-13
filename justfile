@@ -6,6 +6,11 @@ app-backend:
 app-frontend:
     cd app/frontend && pnpm dev --host "${LEDGER_FLOW_FRONTEND_HOST:-127.0.0.1}"
 
+# Build the frontend into the backend package's static assets directory.
+[group("App commands")]
+build:
+    cd app/frontend && pnpm build
+
 # Start frontend + backend servers for a named worktree slot (aristotle | hypatia | spinoza).
 # Each slot gets fixed ports so they don't collide with the main dev server.
 [group("App commands")]
