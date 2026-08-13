@@ -6,7 +6,7 @@ committed.
 
 ## Directions Under Consideration
 
-- **Explore analytics** — A durable analytical surface with cross-filtering and, when justified, server-side aggregation for longer histories and finer time ranges.
+- **Dashboard analytics** — Interactive analysis within the Dashboard, with cross-filtering and, when justified, server-side aggregation for longer histories and finer time ranges.
 - **Generic duplicate correction** — A transactions-level way to merge duplicates safely while preserving import identity and undo.
 - **Agent and automation provenance** — Carry an explicit actor identity from automated clients into the operation history.
 - **Reconciliation evidence and history** — Make past reconciliations easier to inspect and optionally associate with statement evidence.
