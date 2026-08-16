@@ -9,8 +9,20 @@
 	import CheatSheet from '$lib/components/CheatSheet.svelte';
 	import { commandPaletteOpen, registerCommands } from '$lib/command-registry';
 	import { cheatSheetOpen, onVerb } from '$lib/keyboard/runtime';
+	import { rememberSurfaceUrl, surfaceForPathname, surfaceHrefs } from '$lib/surface-state';
 
-	const nav = [{ href: '/transactions', label: 'Transactions', chord: 'g t' }];
+	const nav = [{ surface: 'transactions' as const, label: 'Transactions', chord: 'g t' }];
+
+	// Every visited surface URL is remembered so navigation restores the
+	// surface exactly as the user left it (filters included).
+	$: rememberSurfaceUrl($page.url.pathname + $page.url.search);
+
+	// Going to the surface you are already on is a no-op — navigation must
+	// never destroy in-surface state like filters.
+	function goToTransactions() {
+		if (surfaceForPathname($page.url.pathname) === 'transactions') return;
+		void goto($surfaceHrefs.transactions);
+	}
 
 	onMount(() => {
 		registerCommands([
@@ -19,8 +31,7 @@
 				label: 'Go to Transactions',
 				shortcut: 'G T',
 				category: 'navigation',
-				action: () => goto('/transactions'),
-				href: '/transactions',
+				action: goToTransactions,
 				keywords: ['register', 'ledger', 'activity']
 			},
 			{
@@ -34,7 +45,7 @@
 		]);
 
 		const offNav = onVerb('nav.transactions', () => {
-			void goto('/transactions');
+			goToTransactions();
 			return true;
 		});
 		const offHelp = onVerb('help.toggle', () => {
@@ -78,17 +89,17 @@
 	<aside
 		class="sticky top-0 flex h-screen w-52 shrink-0 flex-col border-r border-hairline max-lg:hidden"
 	>
-		<a href="/transactions" class="px-5 pt-6 pb-5 no-underline">
+		<a href={$surfaceHrefs.transactions} class="px-5 pt-6 pb-5 no-underline">
 			<span class="font-display text-[0.9375rem] font-semibold tracking-tight text-ink">
 				Ledger Flow
 			</span>
 		</a>
 
 		<nav class="grid gap-0.5 px-3" aria-label="Primary">
-			{#each nav as item (item.href)}
-				{@const active = $page.url.pathname.startsWith(item.href)}
+			{#each nav as item (item.surface)}
+				{@const active = surfaceForPathname($page.url.pathname) === item.surface}
 				<a
-					href={item.href}
+					href={$surfaceHrefs[item.surface]}
 					aria-current={active ? 'page' : undefined}
 					class="flex items-center justify-between rounded-md px-2 py-1.5 text-sm no-underline
 						{active ? 'bg-brand-wash font-medium text-brand-deep' : 'text-ink-mute hover:bg-wash hover:text-ink'}"
@@ -127,7 +138,7 @@
 		<header
 			class="sticky top-0 z-20 hidden items-center justify-between border-b border-hairline bg-paper px-4 py-3 max-lg:flex"
 		>
-			<a href="/transactions" class="font-display text-sm font-semibold text-ink no-underline">
+			<a href={$surfaceHrefs.transactions} class="font-display text-sm font-semibold text-ink no-underline">
 				Ledger Flow
 			</a>
 			<button
