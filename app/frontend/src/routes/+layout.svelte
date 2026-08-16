@@ -1,122 +1,56 @@
 <script lang="ts">
 	import '../app.css';
-	import { page } from '$app/stores';
-	import { Dialog as DialogPrimitive } from 'bits-ui';
-	import MenuIcon from '@lucide/svelte/icons/menu';
-	import XIcon from '@lucide/svelte/icons/x';
-	import HistoryIcon from '@lucide/svelte/icons/history';
-	import UndoToast from '$lib/components/UndoToast.svelte';
-	import RecentActivitySheet from '$lib/components/RecentActivitySheet.svelte';
-	import KeyboardListener from '$lib/components/KeyboardListener.svelte';
-	import CommandPalette from '$lib/components/CommandPalette.svelte';
-	import TransactionEntryModal from '$lib/components/TransactionEntryModal.svelte';
 	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
-	import { registerCommands } from '$lib/command-registry';
-	import { openEntryModal } from '$lib/stores/entry-modal';
+	import { page } from '$app/stores';
+	import UndoToast from '$lib/components/UndoToast.svelte';
+	import KeyboardListener from '$lib/components/KeyboardListener.svelte';
+	import CommandPalette from '$lib/components/CommandPalette.svelte';
+	import CheatSheet from '$lib/components/CheatSheet.svelte';
+	import { commandPaletteOpen, registerCommands } from '$lib/command-registry';
+	import { cheatSheetOpen, onVerb } from '$lib/keyboard/runtime';
 
-	const navSections = [
-		{
-			title: 'Daily Use',
-			items: [
-				{ href: '/', label: 'Overview', note: 'Balances, trends, next steps' },
-				{ href: '/accounts', label: 'Accounts', note: 'Tracked accounts and opening balances' },
-				{ href: '/transactions', label: 'Transactions', note: 'Per-account register and running balances' }
-			]
-		},
-		{
-			title: 'Workflows',
-			items: [
-				{ href: '/import', label: 'Import', note: 'Bring in new statement activity' },
-				{ href: '/unknowns', label: 'Review', note: 'Resolve uncategorized transactions' }
-			]
-		},
-		{
-			title: 'Automation',
-			items: [{ href: '/rules', label: 'Rules', note: 'Automate how new transactions get categorized' }]
-		},
-		{
-			title: 'Workspace',
-			items: [{ href: '/setup', label: 'Setup', note: 'Workspace bootstrap and recovery' }]
-		}
-	];
-
-	let drawerOpen = false;
-	let recentActivityOpen = false;
-	let lastPathname = '';
-
-	function isActive(pathname: string, href: string): boolean {
-		if (href === '/') return pathname === '/';
-
-		return pathname.startsWith(href);
-	}
-
-	// Auto-close the drawer whenever the route changes so navigation feels
-	// immediate and the new page is visible right away.
-	$: if ($page.url.pathname !== lastPathname) {
-		lastPathname = $page.url.pathname;
-		if (drawerOpen) drawerOpen = false;
-	}
+	const nav = [{ href: '/transactions', label: 'Transactions', chord: 'g t' }];
 
 	onMount(() => {
 		registerCommands([
 			{
-				id: 'action.add-transaction',
-				label: 'Add Transaction',
-				shortcut: 'Alt+N',
-				category: 'actions',
-				action: () => openEntryModal(),
-				keywords: ['new', 'create', 'entry', 'manual']
-			},
-			{
-				id: 'nav.overview',
-				label: 'Go to Overview',
-				category: 'navigation',
-				action: () => goto('/'),
-				href: '/',
-				keywords: ['home', 'dashboard']
-			},
-			{
-				id: 'nav.accounts',
-				label: 'Go to Accounts',
-				category: 'navigation',
-				action: () => goto('/accounts'),
-				href: '/accounts',
-				keywords: ['balances']
-			},
-			{
 				id: 'nav.transactions',
 				label: 'Go to Transactions',
+				shortcut: 'G T',
 				category: 'navigation',
 				action: () => goto('/transactions'),
 				href: '/transactions',
-				keywords: ['register', 'ledger']
+				keywords: ['register', 'ledger', 'activity']
 			},
 			{
-				id: 'nav.import',
-				label: 'Go to Import',
-				category: 'navigation',
-				action: () => goto('/import'),
-				href: '/import',
-				keywords: ['csv', 'statement', 'upload']
-			},
-			{
-				id: 'nav.review',
-				label: 'Go to Review',
-				category: 'navigation',
-				action: () => goto('/unknowns'),
-				href: '/unknowns',
-				keywords: ['unknowns', 'categorize']
-			},
-			{
-				id: 'nav.rules',
-				label: 'Go to Rules',
-				category: 'navigation',
-				action: () => goto('/rules'),
-				href: '/rules',
-				keywords: ['automation', 'categorization']
+				id: 'help.shortcuts',
+				label: 'Keyboard shortcuts',
+				shortcut: '?',
+				category: 'actions',
+				action: () => cheatSheetOpen.set(true),
+				keywords: ['help', 'keys', 'keymap']
 			}
 		]);
+
+		const offNav = onVerb('nav.transactions', () => {
+			void goto('/transactions');
+			return true;
+		});
+		const offHelp = onVerb('help.toggle', () => {
+			cheatSheetOpen.update((v) => !v);
+			return true;
+		});
+		const offPalette = onVerb('palette.toggle', () => {
+			commandPaletteOpen.update((v) => !v);
+			return true;
+		});
+
+		return () => {
+			offNav();
+			offHelp();
+			offPalette();
+		};
 	});
 </script>
 
@@ -135,220 +69,81 @@
 	/>
 
 	<link
-		href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Grotesk:wght@500;700&display=swap"
+		href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Space+Grotesk:wght@500;600&display=swap"
 		rel="stylesheet"
 	/>
 </svelte:head>
 
-<!-- Mobile top bar: visible only below the shell breakpoint. -->
-<header class="mobile-topbar hidden max-shell:flex sticky top-0 z-20 items-center justify-between gap-3 border-b border-card-edge bg-white px-4 py-3">
-	<a href="/" class="flex items-center gap-2.5 no-underline text-brand-strong">
-		<span class="brand-mark grid h-8 w-8 place-items-center rounded-lg font-display font-bold text-white">
-			LF
-		</span>
-		<span class="font-display text-base font-bold leading-tight">Ledger Flow</span>
-	</a>
+<div class="mx-auto flex min-h-screen max-w-300">
+	<aside
+		class="sticky top-0 flex h-screen w-52 shrink-0 flex-col border-r border-hairline max-lg:hidden"
+	>
+		<a href="/transactions" class="px-5 pt-6 pb-5 no-underline">
+			<span class="font-display text-[0.9375rem] font-semibold tracking-tight text-ink">
+				Ledger Flow
+			</span>
+		</a>
 
-	<div class="flex items-center gap-2">
-		<button
-			type="button"
-			class="inline-flex h-10 w-10 items-center justify-center rounded-lg border border-card-edge bg-white/70 text-brand-strong hover:bg-white/95"
-			aria-label="Recent activity"
-			aria-haspopup="dialog"
-			aria-expanded={recentActivityOpen}
-			on:click={() => (recentActivityOpen = true)}
-		>
-			<HistoryIcon class="size-5" />
-		</button>
-
-		<button
-			type="button"
-			class="inline-flex h-10 w-10 items-center justify-center rounded-lg border border-card-edge bg-white/70 text-brand-strong hover:bg-white/95"
-			aria-label="Open navigation"
-			aria-haspopup="dialog"
-			aria-expanded={drawerOpen}
-			on:click={() => (drawerOpen = true)}
-		>
-			<MenuIcon class="size-5" />
-		</button>
-	</div>
-</header>
-
-<div
-	class="mx-auto grid max-w-[1440px] items-start gap-4 px-4 pb-8 pt-5 grid-cols-[minmax(250px,290px)_minmax(0,1fr)] max-shell:grid-cols-1 max-shell:pt-4"
->
-	<aside class="sticky top-4 grid gap-4 max-shell:hidden">
-		<div
-			class="brand-card rounded-card border border-card-edge bg-white p-4 shadow-shell"
-		>
-			<div class="flex items-center gap-3">
-				<span
-					class="brand-mark grid h-10 w-10 place-items-center rounded-xl font-display font-bold text-white"
+		<nav class="grid gap-0.5 px-3" aria-label="Primary">
+			{#each nav as item (item.href)}
+				{@const active = $page.url.pathname.startsWith(item.href)}
+				<a
+					href={item.href}
+					aria-current={active ? 'page' : undefined}
+					class="flex items-center justify-between rounded-md px-2 py-1.5 text-sm no-underline
+						{active ? 'bg-brand-wash font-medium text-brand-deep' : 'text-ink-mute hover:bg-wash hover:text-ink'}"
 				>
-					LF
-				</span>
-
-				<div class="grow">
-					<h1 class="m-0 font-display text-lg leading-tight">Ledger Flow</h1>
-					<p class="mt-1 mb-0 text-sm text-muted-foreground">Finance workspace</p>
-				</div>
-
-				<button
-					type="button"
-					class="inline-flex size-9 shrink-0 items-center justify-center rounded-lg border border-card-edge bg-white/80 text-muted-foreground hover:bg-white/95 hover:text-brand-strong"
-					aria-label="Recent activity"
-					aria-haspopup="dialog"
-					aria-expanded={recentActivityOpen}
-					on:click={() => (recentActivityOpen = true)}
-				>
-					<HistoryIcon class="size-4" />
-				</button>
-			</div>
-
-			<p class="mt-4 mb-0 text-sm leading-snug text-muted-foreground">
-				Your money, accounts, and spending &mdash; all in one place.
-			</p>
-		</div>
-
-		<nav class="grid gap-4" aria-label="Primary">
-			{#each navSections as section}
-				<section
-					class="grid gap-3 rounded-card border border-card-edge bg-white p-4 shadow-shell"
-				>
-					<p class="m-0 text-xs font-bold uppercase tracking-wider text-muted-foreground">
-						{section.title}
-					</p>
-
-					<div class="grid gap-2">
-						{#each section.items as item}
-							<a
-								href={item.href}
-								class:active={isActive($page.url.pathname, item.href)}
-								class="nav-link grid gap-0.5 rounded-2xl border border-card-edge bg-white/60 px-3.5 py-3 font-bold text-brand-strong no-underline hover:bg-white/90"
-							>
-								<span>{item.label}</span>
-								<span class="text-sm font-normal leading-snug opacity-85">{item.note}</span>
-							</a>
-						{/each}
-					</div>
-				</section>
+					<span>{item.label}</span>
+					<span class="text-[0.6875rem] tracking-wide opacity-60">{item.chord}</span>
+				</a>
 			{/each}
 		</nav>
+
+		<p class="m-0 px-5 pt-4 text-xs leading-relaxed text-ink-mute">
+			Import, review and reconcile are being rebuilt and will return here.
+		</p>
+
+		<div class="mt-auto grid gap-1.5 border-t border-hairline px-5 py-4">
+			<button
+				type="button"
+				class="flex cursor-pointer items-center justify-between border-0 bg-transparent p-0 text-left text-xs text-ink-mute hover:text-ink"
+				on:click={() => cheatSheetOpen.set(true)}
+			>
+				<span>Shortcuts</span>
+				<span class="kbd">?</span>
+			</button>
+			<button
+				type="button"
+				class="flex cursor-pointer items-center justify-between border-0 bg-transparent p-0 text-left text-xs text-ink-mute hover:text-ink"
+				on:click={() => commandPaletteOpen.set(true)}
+			>
+				<span>Commands</span>
+				<span class="flex gap-1"><span class="kbd">Ctrl</span><span class="kbd">K</span></span>
+			</button>
+		</div>
 	</aside>
 
-	<main class="grid grid-cols-1 min-w-0 gap-4"><slot /></main>
+	<div class="min-w-0 flex-1">
+		<header
+			class="sticky top-0 z-20 hidden items-center justify-between border-b border-hairline bg-paper px-4 py-3 max-lg:flex"
+		>
+			<a href="/transactions" class="font-display text-sm font-semibold text-ink no-underline">
+				Ledger Flow
+			</a>
+			<button
+				type="button"
+				class="cursor-pointer rounded-md border border-hairline bg-panel px-2.5 py-1 text-xs text-ink-mute"
+				on:click={() => commandPaletteOpen.set(true)}
+			>
+				Ctrl K
+			</button>
+		</header>
+
+		<main class="min-w-0"><slot /></main>
+	</div>
 </div>
 
-<!-- Mobile nav drawer (slide-in from the left). bits-ui handles backdrop
-     click and Escape; `drawerOpen` resets on route change. -->
-<DialogPrimitive.Root bind:open={drawerOpen}>
-	<DialogPrimitive.Portal>
-		<DialogPrimitive.Overlay class="mobile-drawer-overlay fixed inset-0 z-30 bg-black/35" />
-
-		<DialogPrimitive.Content
-			class="mobile-drawer fixed inset-y-0 left-0 z-40 flex w-[min(20rem,85vw)] flex-col gap-4 overflow-y-auto border-r border-card-edge bg-white p-4 shadow-card"
-			aria-label="Main navigation"
-		>
-			<DialogPrimitive.Title class="sr-only">Navigation menu</DialogPrimitive.Title>
-
-			<div class="flex items-center justify-between gap-3">
-				<div class="flex items-center gap-2.5">
-					<span class="brand-mark grid h-9 w-9 place-items-center rounded-lg font-display font-bold text-white">
-						LF
-					</span>
-					<span class="font-display text-base font-bold leading-tight">Ledger Flow</span>
-				</div>
-				<button
-					type="button"
-					class="inline-flex h-9 w-9 items-center justify-center rounded-lg text-muted-foreground hover:bg-accent hover:text-foreground"
-					aria-label="Close navigation"
-					on:click={() => (drawerOpen = false)}
-				>
-					<XIcon class="size-4" />
-				</button>
-			</div>
-
-			<nav class="grid gap-4" aria-label="Primary">
-				{#each navSections as section}
-					<section class="grid gap-2.5">
-						<p class="m-0 text-xs font-bold uppercase tracking-wider text-muted-foreground">
-							{section.title}
-						</p>
-
-						<div class="grid gap-1.5">
-							{#each section.items as item}
-								<a
-									href={item.href}
-									class:active={isActive($page.url.pathname, item.href)}
-									class="nav-link grid gap-0.5 rounded-xl border border-card-edge bg-white/60 px-3 py-2.5 font-bold text-brand-strong no-underline hover:bg-white/90"
-									on:click={() => (drawerOpen = false)}
-								>
-									<span>{item.label}</span>
-									<span class="text-sm font-normal leading-snug opacity-85">{item.note}</span>
-								</a>
-							{/each}
-						</div>
-					</section>
-				{/each}
-			</nav>
-		</DialogPrimitive.Content>
-	</DialogPrimitive.Portal>
-</DialogPrimitive.Root>
-
-<RecentActivitySheet bind:open={recentActivityOpen} />
-
 <UndoToast />
-
 <KeyboardListener />
 <CommandPalette />
-<TransactionEntryModal />
-
-<style>
-	.brand-card {
-		background:
-			linear-gradient(150deg, rgba(255, 255, 255, 0.88), rgba(243, 249, 255, 0.82)),
-			radial-gradient(circle at top right, rgba(42, 163, 122, 0.18), transparent 40%);
-	}
-
-	.brand-mark {
-		background: linear-gradient(140deg, #0f5f88, #2aa37a);
-		box-shadow: 0 10px 24px rgba(15, 95, 136, 0.22);
-	}
-
-	.nav-link:hover {
-		border-color: rgba(15, 95, 136, 0.18);
-	}
-
-	.nav-link.active {
-		color: #fff;
-		background: linear-gradient(130deg, #0f5f88, #0c7b59);
-		box-shadow: 0 10px 22px rgba(15, 95, 136, 0.22);
-	}
-
-	/* Slide-in for the drawer; fade for the overlay. Both are disabled
-	   under prefers-reduced-motion per the spec. */
-	@keyframes drawer-slide-in {
-		from { transform: translateX(-100%); }
-		to { transform: translateX(0); }
-	}
-
-	@keyframes drawer-fade-in {
-		from { opacity: 0; }
-		to { opacity: 1; }
-	}
-
-	:global(.mobile-drawer) {
-		animation: drawer-slide-in 0.22s ease-out;
-	}
-
-	:global(.mobile-drawer-overlay) {
-		animation: drawer-fade-in 0.22s ease-out;
-	}
-
-	@media (prefers-reduced-motion: reduce) {
-		:global(.mobile-drawer),
-		:global(.mobile-drawer-overlay) {
-			animation: none;
-		}
-	}
-</style>
+<CheatSheet />

@@ -1,10 +1,8 @@
 <script lang="ts">
-	import {
-		commandRegistry,
-		commandPaletteOpen,
-		parseShortcut,
-		matchesShortcut
-	} from '$lib/command-registry';
+	import { INITIAL_KEYMAP_STATE, resolveKey, type KeymapState } from '$lib/keyboard/keymap';
+	import { dispatchVerb } from '$lib/keyboard/runtime';
+
+	let state: KeymapState = INITIAL_KEYMAP_STATE;
 
 	function isEditableTarget(el: EventTarget | null): boolean {
 		if (!el || !(el instanceof HTMLElement)) return false;
@@ -15,30 +13,20 @@
 	}
 
 	function handleKeydown(event: KeyboardEvent) {
-		const key = event.key.toLowerCase();
-		const mod = event.ctrlKey || event.metaKey;
-
-		// Ctrl+K — always toggles the palette, even from inputs.
-		if (mod && key === 'k' && !event.shiftKey && !event.altKey) {
-			event.preventDefault();
-			commandPaletteOpen.update((v) => !v);
-			return;
-		}
-
-		// Match registered shortcuts. preventDefault early for all mod-key
-		// combos to beat the browser's native handling (e.g. Ctrl+N = new window).
-		for (const cmd of $commandRegistry.values()) {
-			if (!cmd.shortcut) continue;
-			const parsed = parseShortcut(cmd.shortcut);
-			if (matchesShortcut(event, parsed)) {
-				event.preventDefault();
-				// Still respect the editable guard for non-palette shortcuts,
-				// but only after preventing the browser default.
-				if (isEditableTarget(event.target)) return;
-				cmd.action();
-				return;
-			}
-		}
+		const resolved = resolveKey(
+			{
+				key: event.key,
+				ctrl: event.ctrlKey,
+				meta: event.metaKey,
+				alt: event.altKey,
+				shift: event.shiftKey,
+				editable: isEditableTarget(event.target)
+			},
+			state
+		);
+		state = resolved.state;
+		if (resolved.preventDefault) event.preventDefault();
+		if (resolved.verb) dispatchVerb(resolved.verb);
 	}
 </script>
 

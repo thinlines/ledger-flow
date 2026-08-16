@@ -4,12 +4,12 @@
   $: toast = $undoToast;
 
   const btnClass =
-    'cursor-pointer rounded-lg border border-card-edge bg-white/90 px-3.5 py-1.5 text-sm font-bold text-brand-strong transition-colors hover:bg-white/95 disabled:cursor-not-allowed disabled:opacity-60 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-strong';
+    'cursor-pointer rounded-md border border-hairline-strong bg-panel px-3 py-1 text-sm font-medium text-ink transition-colors hover:bg-wash disabled:cursor-not-allowed disabled:opacity-60';
 </script>
 
 {#if toast}
   <div
-    class="undo-toast fixed bottom-6 right-6 z-50 flex w-90 max-w-[calc(100vw-2rem)] items-center justify-between gap-3 rounded-xl border border-card-edge bg-white px-4 py-3.5"
+    class="undo-toast fixed bottom-6 right-6 z-50 flex w-90 max-w-[calc(100vw-2rem)] items-center justify-between gap-3 rounded-lg border border-hairline bg-panel px-4 py-3"
     class:undo-toast-error={toast.status === 'error'}
     class:undo-toast-restored={toast.status === 'restored'}
     role="status"

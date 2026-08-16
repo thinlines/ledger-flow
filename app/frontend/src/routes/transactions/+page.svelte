@@ -1,557 +1,499 @@
 <script lang="ts">
-  import { goto } from '$app/navigation';
-  import { page } from '$app/stores';
-  import { onDestroy, onMount } from 'svelte';
-  import { apiGet } from '$lib/api';
-  import AddTransactionForm from '$lib/components/transactions/AddTransactionForm.svelte';
-  import TransactionDayGroup from '$lib/components/transactions/TransactionDayGroup.svelte';
-  import TransactionRow from '$lib/components/transactions/TransactionRow.svelte';
-  import TransactionDetailSheet from '$lib/components/transactions/TransactionDetailSheet.svelte';
-  import TransactionInsights from '$lib/components/transactions/TransactionInsights.svelte';
-  import AccountStatusStrip from '$lib/components/transactions/AccountStatusStrip.svelte';
-  import TransactionsFilterBar from '$lib/components/transactions/TransactionsFilterBar.svelte';
-  import TransactionsFilterDialog from '$lib/components/transactions/TransactionsFilterDialog.svelte';
-  import type {
-    TrackedAccount, TransactionRow as TxRow, TransactionsResponse,
-    TransactionFilters
-  } from '$lib/transactions/types';
-  import { formatCurrency, shortDate, type AccountKind } from '$lib/format';
-  import { groupByDate, CLEARING_TOOLTIPS } from '$lib/transactions/helpers';
-  import { filtersFromUrl, filtersToUrl, filtersToApiParams, EMPTY_FILTERS } from '$lib/transactions/transactionFilters';
-  import { loadTransactions } from '$lib/transactions/loadTransactions';
-  import {
-    deleteTransaction, resetCategory, recategorize, reassignAccount,
-    unmatchTransaction, toggleClearing
-  } from '$lib/transactions/transactionActions';
+	import { goto } from '$app/navigation';
+	import { page } from '$app/stores';
+	import { onDestroy, onMount, tick } from 'svelte';
+	import CheckIcon from '@lucide/svelte/icons/check';
+	import { apiGet } from '$lib/api';
+	import FilterBar from '$lib/components/register/FilterBar.svelte';
+	import RegisterRow from '$lib/components/register/RegisterRow.svelte';
+	import DetailPanel from '$lib/components/register/DetailPanel.svelte';
+	import type {
+		TrackedAccount,
+		TransactionRow as TxRow,
+		TransactionsResponse,
+		TransactionFilters
+	} from '$lib/transactions/types';
+	import { formatCurrency, countLabel, shortDate, type AccountKind } from '$lib/format';
+	import { groupByDate, type TransactionDayGroupData } from '$lib/transactions/helpers';
+	import {
+		filtersFromUrl,
+		filtersToUrl,
+		filtersToApiParams,
+		EMPTY_FILTERS
+	} from '$lib/transactions/transactionFilters';
+	import { loadTransactions } from '$lib/transactions/loadTransactions';
+	import {
+		deleteTransaction,
+		resetCategory,
+		recategorize,
+		reassignAccount,
+		unmatchTransaction,
+		toggleClearing
+	} from '$lib/transactions/transactionActions';
+	import { onVerb } from '$lib/keyboard/runtime';
+	import { nextId, prevId, reconcileFocus } from '$lib/keyboard/register-nav';
 
-  type AppState = { initialized: boolean; workspaceName: string | null };
+	type AppState = { initialized: boolean; workspaceName: string | null };
 
-  let initialized = false;
-  let workspaceName = '';
-  let trackedAccounts: TrackedAccount[] = [];
-  let allAccounts: string[] = [];
-  let result: TransactionsResponse | null = null;
-  let baseCurrency = 'USD';
-  let error = '';
-  let loading = true;
-  let dataLoading = false;
-  let requestSeq = 0;
-  let abortController: AbortController | null = null;
-  let selectedRow: TxRow | null = null;
-  let lastSelectedRowId: string | null = null;
-  let confirmDeleteRow: TxRow | null = null;
-  let confirmUnmatchRow: TxRow | null = null;
-  let actionError = '';
-  let actionBusy = false;
+	let initialized = false;
+	let workspaceName = '';
+	let trackedAccounts: TrackedAccount[] = [];
+	let categoryAccounts: string[] = [];
+	let result: TransactionsResponse | null = null;
+	let baseCurrency = 'USD';
+	let error = '';
+	let loading = true;
+	let dataLoading = false;
+	let requestSeq = 0;
+	let abortController: AbortController | null = null;
+	let filterBar: FilterBar | null = null;
 
-  // Clear stale action error whenever the selected row changes (open/close/swap).
-  $: if ((selectedRow?.id ?? null) !== lastSelectedRowId) {
-    lastSelectedRowId = selectedRow?.id ?? null;
-    actionError = '';
-  }
-  let showAddForm = false;
-  let addSuccess = '';
-  let filterDialogOpen = false;
-  let filterBarWrap: HTMLElement | null = null;
-  let filterBarObserver: ResizeObserver | null = null;
+	// Selection state: `focusedId` is the roving keyboard focus, `selectedRow`
+	// the row whose detail panel is open. j/k moves focus; when the panel is
+	// open it follows the focus.
+	let focusedId: string | null = null;
+	let selectedRow: TxRow | null = null;
+	let lastSelectedRowId: string | null = null;
+	let actionError = '';
+	let actionBusy = false;
 
-  // History rows feed the trend chart. Two datasets so the chart can render
-  // a Power-BI cross-filter highlight when a search narrows the visible list:
-  //   historyRows         — every active filter EXCEPT period/month/search
-  //                         (the outer faded bars; preserves chart context)
-  //   historyRowsHighlight — every active filter EXCEPT period/month
-  //                         (search applied; the inner solid overlay)
-  // Both intentionally drop period/month so the 12-month shape is stable
-  // when the user focuses a single month.
-  let historyRows: TxRow[] = [];
-  let historyRowsHighlight: TxRow[] = [];
-  let historyKey = '';
+	$: if ((selectedRow?.id ?? null) !== lastSelectedRowId) {
+		lastSelectedRowId = selectedRow?.id ?? null;
+		actionError = '';
+	}
 
-  function buildHistoryParams(f: TransactionFilters, includeSearch: boolean): string {
-    const params = new URLSearchParams();
-    if (f.accounts.length > 0) params.set('accounts', f.accounts.join(','));
-    if (f.category) params.set('categories', f.category);
-    if (f.status) params.set('status', f.status);
-    if (includeSearch && f.search) params.set('search', f.search);
-    return params.toString();
-  }
+	// ── Filters: the URL is the single source of truth ─────────────────────
+	// URL → state via these reactive declarations; state → URL via
+	// `changeFilters` (a plain goto). The one-shot reconciliation migrates
+	// legacy param formats and applies the default period exactly once per
+	// mount, so a user's explicit "All time" is never overridden later.
+	let hasReconciledUrl = false;
+	let lastFiltersKey: string | null = null;
 
-  async function loadHistory(f: TransactionFilters) {
-    // Cache key over everything that *changes* the history datasets. Period
-    // and month are deliberately omitted — that's the whole point.
-    const key = `${f.accounts.join(',')}|${f.category ?? ''}|${f.status ?? ''}|${f.search ?? ''}`;
-    if (historyKey === key) return;
-    historyKey = key;
-    try {
-      const baseParams = buildHistoryParams(f, false);
-      const fetches: Promise<TransactionsResponse>[] = [
-        fetch(`/api/transactions${baseParams ? `?${baseParams}` : ''}`).then((r) => r.json())
-      ];
-      if (f.search) {
-        const hlParams = buildHistoryParams(f, true);
-        fetches.push(fetch(`/api/transactions${hlParams ? `?${hlParams}` : ''}`).then((r) => r.json()));
-      }
-      const results = await Promise.all(fetches);
-      if (historyKey !== key) return;
-      historyRows = results[0].rows;
-      historyRowsHighlight = f.search && results[1] ? results[1].rows : results[0].rows;
-    } catch {
-      if (historyKey === key) {
-        historyRows = [];
-        historyRowsHighlight = [];
-      }
-    }
-  }
+	function pruneAccountsToTracked(
+		f: TransactionFilters,
+		accounts: TrackedAccount[]
+	): TransactionFilters {
+		if (f.accounts.length === 0 || accounts.length === 0) return f;
+		const ids = new Set(accounts.map((a) => a.id));
+		const filtered = f.accounts.filter((id) => ids.has(id));
+		if (filtered.length === f.accounts.length) return f;
+		return { ...f, accounts: filtered };
+	}
 
-  // ── Filter derivation: URL is the single source of truth ───────────────
-  // The page parses `$page.url` reactively so any URL change — anchor click,
-  // browser back/forward, programmatic goto, deep link, in-component
-  // callback — re-derives `filters` and triggers a reload. State→URL flows
-  // through `changeFilters` (which just calls goto). URL→state flows through
-  // these reactive declarations.
+	function isFiltersEmpty(f: TransactionFilters): boolean {
+		return (
+			f.accounts.length === 0 && !f.category && !f.month && !f.period && !f.search && !f.status
+		);
+	}
 
-  // One-shot URL reconciliation. The migration redirect (old `?accountId=X`
-  // and `?view=activity` formats) and the default-period rule (empty URL →
-  // `period=this-month` so sidebar entry lands on a meaningful slice) both
-  // rewrite the URL exactly once per page mount. After the first reactive
-  // run, `hasReconciledUrl` is set true and both rules are skipped — that
-  // way the user's later "All time" preset (which produces an empty URL)
-  // isn't re-overridden by the default. Cross-route navigation remounts
-  // this page and resets the flag, so deep entries default again.
-  let hasReconciledUrl = false;
-  // Stable dedupe key for reload triggers. `filtersToApiParams` already
-  // produces a deterministic URL-safe string from a filter set.
-  let lastFiltersKey: string | null = null;
+	$: parsedFromUrl = filtersFromUrl($page.url);
+	$: filters = pruneAccountsToTracked(parsedFromUrl.filters, trackedAccounts);
 
-  function pruneAccountsToTracked(f: TransactionFilters, accounts: TrackedAccount[]): TransactionFilters {
-    if (f.accounts.length === 0 || accounts.length === 0) return f;
-    const ids = new Set(accounts.map((a) => a.id));
-    const filtered = f.accounts.filter((id) => ids.has(id));
-    if (filtered.length === f.accounts.length) return f;
-    return { ...f, accounts: filtered };
-  }
+	$: if (initialized && !hasReconciledUrl) {
+		hasReconciledUrl = true;
+		let next = filters;
+		let needsRedirect = parsedFromUrl.migrated;
+		if (isFiltersEmpty(filters)) {
+			next = { ...filters, period: 'this-month' };
+			needsRedirect = true;
+		}
+		if (needsRedirect) {
+			const willChangeContent = filtersToApiParams(next) !== filtersToApiParams(filters);
+			if (willChangeContent) {
+				lastFiltersKey = filtersToApiParams(filters);
+			}
+			void goto(`/transactions${filtersToUrl(next)}`, {
+				replaceState: true,
+				noScroll: true,
+				keepFocus: true
+			});
+		}
+	}
 
-  function isFiltersEmpty(f: TransactionFilters): boolean {
-    return (
-      f.accounts.length === 0 && !f.category && !f.month &&
-      !f.period && !f.search && !f.status
-    );
-  }
+	$: filtersKey = filtersToApiParams(filters);
+	$: if (initialized && hasReconciledUrl && filtersKey !== lastFiltersKey) {
+		lastFiltersKey = filtersKey;
+		selectedRow = null;
+		void loadData();
+	}
 
-  $: parsedFromUrl = filtersFromUrl($page.url);
-  $: filters = pruneAccountsToTracked(parsedFromUrl.filters, trackedAccounts);
+	// ── Derived register data ───────────────────────────────────────────────
+	$: isSingleAccount = filters.accounts.length === 1;
+	$: selectedAccount = isSingleAccount
+		? (trackedAccounts.find((a) => a.id === filters.accounts[0]) ?? null)
+		: null;
+	$: accountKindById = buildAccountKindMap(trackedAccounts);
+	$: scopedAccountKind = isSingleAccount
+		? (accountKindById.get(filters.accounts[0]) ?? null)
+		: null;
+	$: rows = result?.rows ?? [];
+	$: dayGroups = groupByDate(rows);
+	$: focusableIds = rows.filter((r) => !r.isAssertion).map((r) => r.id);
+	$: postedRows = rows.filter((r) => r.transferState !== 'pending');
+	$: pendingRows = rows.filter((r) => r.transferState === 'pending');
+	$: pendingTotal = pendingRows.reduce((s, r) => s + r.amount, 0);
+	$: netTotal = postedRows.reduce((s, r) => s + r.amount, 0);
+	$: meta = result?.accountMeta ?? null;
+	$: showBalanceRail = isSingleAccount;
+	$: periodLabel = describeScope(filters);
 
-  // First reactive flush after `initialized` flips true: rewrite the URL to
-  // the canonical form (resolve old param names, apply default period for
-  // empty URLs). When the goto will actually change filter content, set
-  // `lastFiltersKey` to the *pre-redirect* key so the reload trigger below
-  // skips this flush — the imminent URL update will be the trigger for the
-  // first real fetch. When the redirect is content-preserving (pure
-  // migration: e.g. `?accountId=X` → `?accounts=X`), leave `lastFiltersKey`
-  // alone so the reload trigger fires on this flush — the post-goto flush
-  // will see no key change and won't fire.
-  $: if (initialized && !hasReconciledUrl) {
-    hasReconciledUrl = true;
-    let next = filters;
-    let needsRedirect = parsedFromUrl.migrated;
-    if (isFiltersEmpty(filters)) {
-      next = { ...filters, period: 'this-month' };
-      needsRedirect = true;
-    }
-    if (needsRedirect) {
-      const willChangeContent = filtersToApiParams(next) !== filtersToApiParams(filters);
-      if (willChangeContent) {
-        lastFiltersKey = filtersToApiParams(filters);
-      }
-      void goto(`/transactions${filtersToUrl(next)}`, {
-        replaceState: true, noScroll: true, keepFocus: true
-      });
-    }
-  }
+	function buildAccountKindMap(accounts: TrackedAccount[]): Map<string, AccountKind> {
+		const map = new Map<string, AccountKind>();
+		for (const account of accounts) {
+			if (account.kind === 'asset' || account.kind === 'liability') {
+				map.set(account.id, account.kind);
+			}
+		}
+		return map;
+	}
 
-  // Reactive reload. Fires whenever the URL-derived filters change. The
-  // existing AbortController inside loadData ensures any in-flight fetch
-  // superseded by a newer filter change is aborted before its result lands.
-  $: filtersKey = filtersToApiParams(filters);
-  $: if (initialized && hasReconciledUrl && filtersKey !== lastFiltersKey) {
-    lastFiltersKey = filtersKey;
-    selectedRow = null;
-    void loadData();
-    void loadHistory(filters);
-  }
+	function rowAccountKind(row: TxRow): AccountKind | null {
+		return accountKindById.get(row.account.id) ?? null;
+	}
 
-  $: isSingleAccount = filters.accounts.length === 1;
-  $: selectedAccount = isSingleAccount ? trackedAccounts.find((a) => a.id === filters.accounts[0]) ?? null : null;
-  $: accountKindById = buildAccountKindMap(trackedAccounts);
-  // Single-account view drives the filtered-account kind; cross-account views
-  // render unsigned/neutral because mixed accounts have no coherent "good"
-  // direction.
-  $: filteredAccountKind = isSingleAccount ? (accountKindById.get(filters.accounts[0]) ?? null) : null;
-  $: rows = result?.rows ?? [];
-  $: postedRows = rows.filter((r: TxRow) => r.transferState !== 'pending');
-  $: pendingRows = isSingleAccount ? rows.filter((r: TxRow) => r.transferState === 'pending') : [];
-  $: dayGroups = groupByDate(postedRows);
-  $: pendingCount = pendingRows.length;
-  $: pendingTotal = pendingRows.reduce((s: number, r: TxRow) => s + r.amount, 0);
-  $: filteredTotal = postedRows.reduce((s: number, r: TxRow) => s + r.amount, 0);
-  $: meta = result?.accountMeta ?? null;
-  $: curBal = meta?.currentBalance ?? null;
-  $: balPending = curBal !== null ? curBal + pendingTotal : null;
-  $: showRunBal = isSingleAccount;
+	function describeScope(f: TransactionFilters): string {
+		if (f.month) {
+			return new Intl.DateTimeFormat(undefined, { month: 'long', year: 'numeric' }).format(
+				new Date(`${f.month}-01T00:00:00`)
+			);
+		}
+		switch (f.period) {
+			case 'this-month':
+				return 'this month';
+			case 'last-30':
+				return 'last 30 days';
+			case 'last-3-months':
+				return 'last 3 months';
+			default:
+				return 'all time';
+		}
+	}
 
-  function buildAccountKindMap(accounts: TrackedAccount[]): Map<string, AccountKind> {
-    const map = new Map<string, AccountKind>();
-    for (const account of accounts) {
-      if (account.kind === 'asset' || account.kind === 'liability') {
-        map.set(account.id, account.kind);
-      }
-    }
-    return map;
-  }
+	function dayLines(group: TransactionDayGroupData): { top: string; bottom: string } {
+		if (group.header === 'Today' || group.header === 'Yesterday') {
+			return { top: group.header, bottom: shortDayDate(group.date) };
+		}
+		const [datePart, weekday] = group.header.split(' · ');
+		return { top: datePart ?? group.header, bottom: weekday ?? '' };
+	}
 
-  function rowAccountKind(row: TxRow): AccountKind | null {
-    return accountKindById.get(row.account.id) ?? null;
-  }
+	function shortDayDate(dateStr: string): string {
+		return new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' }).format(
+			new Date(`${dateStr}T00:00:00`)
+		);
+	}
 
-  // (legacy hero/trust helpers removed — superseded by the unified dossier
-  // and AccountStatusStrip components.)
+	// ── Data loading ─────────────────────────────────────────────────────────
+	async function loadData() {
+		if (abortController) abortController.abort();
+		abortController = new AbortController();
+		const seq = ++requestSeq;
+		dataLoading = true;
+		error = '';
+		try {
+			const res = await loadTransactions(filters, { signal: abortController.signal });
+			if (seq !== requestSeq) return;
+			const previousIds = focusableIds;
+			result = res;
+			baseCurrency = res.baseCurrency;
+			const newIds = res.rows.filter((r) => !r.isAssertion).map((r) => r.id);
+			focusedId = reconcileFocus(previousIds, newIds, focusedId);
+			if (selectedRow) {
+				selectedRow = res.rows.find((r) => r.id === selectedRow?.id) ?? null;
+			}
+		} catch (e) {
+			if (seq !== requestSeq) return;
+			if (e instanceof DOMException && e.name === 'AbortError') return;
+			error = String(e);
+		} finally {
+			if (seq === requestSeq) dataLoading = false;
+		}
+	}
 
-  async function loadData() {
-    if (abortController) abortController.abort();
-    abortController = new AbortController();
-    const seq = ++requestSeq;
-    dataLoading = true; error = '';
-    try {
-      const res = await loadTransactions(filters, { signal: abortController.signal });
-      if (seq !== requestSeq) return;
-      result = res; baseCurrency = res.baseCurrency;
-    } catch (e) {
-      if (seq !== requestSeq) return;
-      if (e instanceof DOMException && e.name === 'AbortError') return;
-      error = String(e);
-    } finally { if (seq === requestSeq) dataLoading = false; }
-  }
+	function changeFilters(next: TransactionFilters) {
+		void goto(`/transactions${filtersToUrl(next)}`, {
+			replaceState: true,
+			noScroll: true,
+			keepFocus: true
+		});
+	}
 
-  // Filter changes from in-page UI (filter bar, dialog, chart click) flow
-  // through here. State assignment and reload are handled by the reactive
-  // subscription on `$page.url`/`filters`/`filtersKey` above — this function
-  // just navigates the URL.
-  function changeFilters(next: TransactionFilters) {
-    void goto(`/transactions${filtersToUrl(next)}`, {
-      replaceState: true, noScroll: true, keepFocus: true
-    });
-  }
+	async function load() {
+		const state = await apiGet<AppState>('/api/app/state');
+		workspaceName = state.workspaceName ?? '';
+		if (!state.initialized) {
+			initialized = false;
+			return;
+		}
+		const [ad, al] = await Promise.all([
+			apiGet<{ trackedAccounts: TrackedAccount[] }>('/api/tracked-accounts'),
+			apiGet<{ accounts: string[] }>('/api/accounts').catch(() => ({ accounts: [] as string[] }))
+		]);
+		trackedAccounts = ad.trackedAccounts;
+		categoryAccounts = al.accounts;
+		initialized = true;
+	}
 
-  // Loads the world the page needs before user interaction begins. Sets
-  // `initialized` LAST so reactive subscriptions never fire against a
-  // half-loaded `trackedAccounts` (which would prune valid account ids
-  // from the URL during the brief window before /api/tracked-accounts
-  // resolves).
-  async function load() {
-    const state = await apiGet<AppState>('/api/app/state');
-    workspaceName = state.workspaceName ?? '';
-    if (!state.initialized) {
-      initialized = false;
-      return;
-    }
-    const [ad, al] = await Promise.all([
-      apiGet<{ trackedAccounts: TrackedAccount[] }>('/api/tracked-accounts'),
-      apiGet<{ accounts: string[] }>('/api/accounts').catch(() => ({ accounts: [] as string[] }))
-    ]);
-    trackedAccounts = ad.trackedAccounts;
-    allAccounts = al.accounts;
-    initialized = true;
-    // The reactive subscriptions above pick it up from here: parse URL,
-    // run the one-shot reconciliation if needed, fire the first loadData
-    // and loadHistory once the canonical URL is in place.
-  }
+	// ── Keyboard verbs ───────────────────────────────────────────────────────
+	function moveFocus(direction: 'next' | 'prev'): boolean {
+		if (focusableIds.length === 0) return false;
+		focusedId =
+			direction === 'next' ? nextId(focusableIds, focusedId) : prevId(focusableIds, focusedId);
+		if (selectedRow && focusedId) {
+			selectedRow = rows.find((r) => r.id === focusedId) ?? selectedRow;
+		}
+		void tick().then(() => {
+			const el = document.querySelector<HTMLElement>(`[data-row-id="${focusedId}"]`);
+			el?.focus();
+		});
+		return true;
+	}
 
-  onMount(async () => {
-    loading = true; error = '';
-    try { await load(); } catch (e) { error = String(e); } finally { loading = false; }
-    if (filterBarWrap && typeof ResizeObserver !== 'undefined') {
-      filterBarObserver = new ResizeObserver((entries) => {
-        for (const entry of entries) {
-          const h = entry.contentRect.height;
-          document.documentElement.style.setProperty('--filter-bar-height', `${h}px`);
-        }
-      });
-      filterBarObserver.observe(filterBarWrap);
-    }
-  });
+	function openFocused(row?: TxRow) {
+		const target = row ?? rows.find((r) => r.id === focusedId) ?? null;
+		if (!target || target.isAssertion) return false;
+		selectedRow = target;
+		focusedId = target.id;
+		return true;
+	}
 
-  onDestroy(() => {
-    if (abortController) abortController.abort();
-    if (filterBarObserver) {
-      filterBarObserver.disconnect();
-      filterBarObserver = null;
-    }
-    if (typeof document !== 'undefined') document.documentElement.style.removeProperty('--filter-bar-height');
-  });
+	let verbCleanups: Array<() => void> = [];
 
-  async function doDelete(row: TxRow) {
-    actionBusy = true; actionError = '';
-    const r = await deleteTransaction(row, loadData);
-    if (r.success) { confirmDeleteRow = null; selectedRow = null; } else actionError = r.error ?? '';
-    actionBusy = false;
-  }
-  async function doResetCat(row: TxRow) {
-    actionBusy = true; actionError = '';
-    const r = await resetCategory(row, loadData);
-    if (r.success) selectedRow = null; else actionError = r.error ?? '';
-    actionBusy = false;
-  }
-  async function doRecat(row: TxRow, cat: string) {
-    actionBusy = true; actionError = '';
-    const r = await recategorize(row, cat, loadData);
-    if (r.success) selectedRow = null; else actionError = r.error ?? '';
-    actionBusy = false;
-  }
-  async function doUnmatch(row: TxRow) {
-    actionBusy = true; actionError = '';
-    const r = await unmatchTransaction(row, loadData);
-    if (r.success) { confirmUnmatchRow = null; selectedRow = null; } else actionError = r.error ?? '';
-    actionBusy = false;
-  }
+	onMount(async () => {
+		loading = true;
+		error = '';
+		try {
+			await load();
+		} catch (e) {
+			error = String(e);
+		} finally {
+			loading = false;
+		}
 
-  async function handleToggleClearing(row: TxRow, event: MouseEvent) {
-    event.preventDefault(); event.stopPropagation();
-    await toggleClearing(row);
-    result = result ? { ...result } : result;
-  }
+		verbCleanups = [
+			onVerb('focus.next', () => moveFocus('next')),
+			onVerb('focus.prev', () => moveFocus('prev')),
+			onVerb('row.open', () => openFocused()),
+			onVerb('search.focus', () => {
+				filterBar?.focusSearch();
+				return true;
+			}),
+			onVerb('dismiss', () => {
+				if (selectedRow) {
+					selectedRow = null;
+					return true;
+				}
+				if (focusedId) {
+					focusedId = null;
+					return true;
+				}
+				return false;
+			})
+		];
+	});
 
-  async function handleAddSuccess(r: { payee: string; date: string; eventId: string | null }) {
-    addSuccess = `Added: ${r.payee} on ${r.date}`;
-    showAddForm = false;
-    if (r.eventId) {
-      const { showUndoToast } = await import('$lib/undo-toast');
-      showUndoToast(r.eventId, `Added ${r.payee}`, loadData);
-    }
-    await loadData();
-  }
+	onDestroy(() => {
+		if (abortController) abortController.abort();
+		for (const cleanup of verbCleanups) cleanup();
+	});
 
-  async function doReassignAccount(row: TxRow, ledgerName: string) {
-    actionBusy = true; actionError = '';
-    const r = await reassignAccount(row, ledgerName, loadData);
-    if (r.success) selectedRow = null; else actionError = r.error ?? '';
-    actionBusy = false;
-  }
+	// ── Actions (delegating to the tested transactionActions layer) ─────────
+	async function runAction(fn: () => Promise<{ success: boolean; error?: string }>, close = true) {
+		actionBusy = true;
+		actionError = '';
+		const r = await fn();
+		if (r.success) {
+			if (close) selectedRow = null;
+		} else {
+			actionError = r.error ?? 'That didn’t work. Try again.';
+		}
+		actionBusy = false;
+	}
 
-  function handleSheetDelete(row: TxRow) { selectedRow = null; confirmDeleteRow = row; }
-  function handleSheetResetCat(row: TxRow) { void doResetCat(row); }
-  function handleSheetRecat(row: TxRow, cat: string) { void doRecat(row, cat); }
-  function handleSheetReassign(row: TxRow, ledgerName: string) { void doReassignAccount(row, ledgerName); }
-  function handleSheetUnmatch(row: TxRow) { selectedRow = null; confirmUnmatchRow = row; }
-  function handleFilterApply(next: TransactionFilters) { filterDialogOpen = false; changeFilters(next); }
-  function clearAll() { changeFilters({ ...EMPTY_FILTERS }); }
+	async function handleToggleClearing(row: TxRow) {
+		await toggleClearing(row);
+		result = result ? { ...result } : result;
+		if (selectedRow?.id === row.id) selectedRow = row;
+	}
 </script>
 
-{#if error && !loading}
-  <section class="view-card"><p class="error-text">{error}</p></section>
-{/if}
-
 {#if loading}
-  <section class="view-card transactions-hero">
-    <p class="eyebrow">Transactions</p>
-    <h2 class="page-title">Loading transactions</h2>
-    <p class="subtitle">Pulling together the latest activity.</p>
-  </section>
+	<section class="px-6 py-10 max-lg:px-4">
+		<p class="m-0 text-sm text-ink-mute">Loading your transactions…</p>
+	</section>
+{:else if error && !initialized}
+	<section class="px-6 py-10 max-lg:px-4">
+		<h1 class="font-display m-0 text-xl text-ink">Something went wrong</h1>
+		<p class="mt-2 mb-0 max-w-prose text-sm text-ink-mute">{error}</p>
+	</section>
 {:else if !initialized}
-  <section class="view-card transactions-hero">
-    <p class="eyebrow">Transactions</p>
-    <h2 class="page-title">Create a workspace first</h2>
-    <p class="subtitle">Transaction registers live inside a workspace. Finish setup before reviewing account activity.</p>
-    <div class="mt-3 flex flex-wrap gap-3"><a class="btn btn-primary" href="/setup">Open setup</a></div>
-  </section>
+	<section class="px-6 py-10 max-lg:px-4">
+		<h1 class="font-display m-0 text-xl text-ink">No workspace yet</h1>
+		<p class="mt-2 mb-0 max-w-prose text-sm leading-relaxed text-ink-mute">
+			Transactions live inside a workspace. The setup flow is being rebuilt — until it returns,
+			create the workspace with the command-line tools, then reload this page.
+		</p>
+	</section>
 {:else if trackedAccounts.length === 0}
-  <section class="view-card transactions-hero">
-    <p class="eyebrow">Transactions</p>
-    <h2 class="page-title">{workspaceName || 'Workspace'} does not have any accounts yet</h2>
-    <p class="subtitle">Add at least one tracked account before reviewing transactions.</p>
-    <div class="mt-3 flex flex-wrap gap-3">
-      <a class="btn btn-primary" href="/accounts/configure?mode=manual">Add first account</a>
-      <a class="text-link" href="/accounts">Open accounts</a>
-    </div>
-  </section>
+	<section class="px-6 py-10 max-lg:px-4">
+		<h1 class="font-display m-0 text-xl text-ink">
+			{workspaceName || 'This workspace'} has no accounts yet
+	</h1>
+		<p class="mt-2 mb-0 max-w-prose text-sm leading-relaxed text-ink-mute">
+			Add a tracked account to start recording activity. Account management is being rebuilt —
+			until it returns, add accounts with the command-line tools, then reload this page.
+		</p>
+	</section>
 {:else}
-  <div class="filter-bar-sticky sticky top-0 z-10" bind:this={filterBarWrap}>
-    <TransactionsFilterBar {filters} {trackedAccounts} onChange={changeFilters} onOpenFilterDialog={() => (filterDialogOpen = true)} />
-  </div>
+	<header class="px-6 pt-8 pb-5 max-lg:px-4">
+		{#if isSingleAccount && selectedAccount}
+			<p class="m-0 text-[0.8125rem] text-ink-mute">{selectedAccount.displayName}</p>
+			<p class="font-display amount m-0 mt-1 text-[1.75rem] leading-none font-semibold text-ink">
+				{meta?.currentBalance == null
+					? '—'
+					: formatCurrency(meta.currentBalance, baseCurrency)}
+			</p>
+			<p class="m-0 mt-2 text-[0.8125rem] text-ink-mute">
+				Current balance
+				· {countLabel(result?.totalCount ?? 0, 'transaction')} {periodLabel}
+				{#if pendingRows.length > 0}
+					· {countLabel(pendingRows.length, 'pending transfer')} ({formatCurrency(
+						pendingTotal,
+						baseCurrency,
+						{ signMode: 'always' }
+					)})
+				{/if}
+				{#if meta?.latestActivityDate}
+					· latest {shortDate(meta.latestActivityDate)}
+				{/if}
+			</p>
+		{:else}
+			<h1 class="font-display m-0 text-xl leading-tight font-semibold text-ink">Transactions</h1>
+			<p class="m-0 mt-2 text-[0.8125rem] text-ink-mute">
+				{countLabel(result?.totalCount ?? 0, 'transaction')}
+				{periodLabel} across all accounts
+				· net <span class="amount">{formatCurrency(Math.abs(netTotal), baseCurrency)}</span>
+				{netTotal > 0 ? 'in' : 'out'}
+			</p>
+		{/if}
+	</header>
 
-  <TransactionInsights
-    {filters}
-    {historyRows}
-    {historyRowsHighlight}
-    currentRows={postedRows}
-    {trackedAccounts}
-    {accountKindById}
-    {baseCurrency}
-    onMonthFocus={(month) => changeFilters({ ...filters, month, period: month ? null : filters.period })}
-  />
+	<div class="sticky top-0 z-10">
+		<FilterBar bind:this={filterBar} {filters} {trackedAccounts} onChange={changeFilters} />
+	</div>
 
-  {#if isSingleAccount && selectedAccount && meta}
-    <AccountStatusStrip
-      account={selectedAccount}
-      {meta}
-      {baseCurrency}
-      {pendingCount}
-      {pendingTotal}
-      onAddTransaction={() => { addSuccess = ''; showAddForm = true; }}
-    />
-  {/if}
+	<!-- Reserved-height refresh indicator: no layout shift when it appears. -->
+	<div class="h-0.5" aria-hidden="true">
+		{#if dataLoading && result}
+			<div class="h-full w-full animate-pulse bg-brand"></div>
+		{/if}
+	</div>
 
-  {#if addSuccess}
-    <section class="view-card result-card grid gap-2">
-      <p class="eyebrow">Transaction Added</p>
-      <h3 class="m-0 font-display text-xl">Manual entry created</h3>
-      <p class="m-0 text-muted-foreground text-sm">{addSuccess}</p>
-    </section>
-  {/if}
+	{#if result !== null && error}
+		<div class="mx-6 mt-3 rounded-md border border-bad/30 bg-bad/5 px-3 py-2 max-lg:mx-4" role="alert">
+			<p class="m-0 text-sm text-bad">Couldn’t refresh transactions. {error}</p>
+		</div>
+	{/if}
 
-  {#if showAddForm && isSingleAccount}
-    <AddTransactionForm selectedAccountId={filters.accounts[0]} {allAccounts} onCancel={() => (showAddForm = false)} onSuccess={handleAddSuccess} onAccountsChanged={(a) => (allAccounts = a)} />
-  {/if}
+	{#if result === null && dataLoading}
+		<p class="px-6 py-8 text-sm text-ink-mute max-lg:px-4">Fetching transactions…</p>
+	{:else if result === null && error}
+		<section class="px-6 py-8 max-lg:px-4">
+			<h2 class="m-0 text-sm font-semibold text-ink">Couldn’t load transactions</h2>
+			<p class="mt-1 mb-0 text-sm text-ink-mute">{error}</p>
+		</section>
+	{:else if result !== null && rows.length === 0}
+		<section class="px-6 py-8 max-lg:px-4">
+			<h2 class="m-0 text-sm font-semibold text-ink">Nothing here for these filters</h2>
+			<p class="mt-1 mb-0 text-sm text-ink-mute">
+				Try a wider time range, or clear the filters to see everything.
+			</p>
+			<button
+				type="button"
+				class="mt-3 cursor-pointer rounded-md border border-hairline-strong bg-panel px-3 py-1.5 text-sm text-ink hover:bg-wash"
+				on:click={() => changeFilters({ ...EMPTY_FILTERS })}
+			>
+				Clear all filters
+			</button>
+		</section>
+	{:else if result !== null}
+		<div class="pb-16" role="listbox" aria-label="Transactions" tabindex="-1">
+			{#each dayGroups as group (group.date)}
+				{@const lines = dayLines(group)}
+				<section class="grid grid-cols-[5.5rem_minmax(0,1fr)] max-md:grid-cols-1">
+					<div class="pt-2.5 pr-3 pl-4 text-right max-md:border-b max-md:border-hairline max-md:px-4 max-md:py-1.5 max-md:text-left">
+						<p class="font-display m-0 text-[0.8125rem] leading-tight font-semibold whitespace-nowrap text-ink max-md:inline">
+							{lines.top}
+						</p>
+						<p class="m-0 text-[0.6875rem] leading-tight text-ink-mute max-md:ml-1.5 max-md:inline">
+							{lines.bottom}
+						</p>
+					</div>
+					<ol class="m-0 list-none border-l border-hairline p-0 max-md:border-l-0">
+						{#each group.rows as row (row.id)}
+							<li class="[contain-intrinsic-size:auto_2.375rem] [content-visibility:auto]">
+								{#if row.isAssertion}
+									<div
+										class="grid items-center gap-x-3 border-b border-hairline px-3 py-1.5 text-xs text-ink-mute max-md:grid-cols-[1rem_minmax(0,1fr)]
+										{showBalanceRail ? 'grid-cols-[1rem_minmax(0,1fr)_8.5rem]' : 'grid-cols-[1rem_minmax(0,1fr)]'}"
+									>
+										<CheckIcon class="size-3 justify-self-center text-brand" />
+										<span>Balance verified</span>
+										{#if showBalanceRail}
+											<span
+												class="amount self-stretch content-center border-l border-hairline pl-3 text-right max-md:hidden"
+											>
+												{row.runningBalance == null
+													? ''
+													: formatCurrency(row.runningBalance, baseCurrency)}
+											</span>
+										{/if}
+									</div>
+								{:else}
+									<RegisterRow
+										{row}
+										{baseCurrency}
+										accountKind={isSingleAccount ? scopedAccountKind : rowAccountKind(row)}
+										focused={focusedId === row.id}
+										showBalance={showBalanceRail}
+										showAccount={!isSingleAccount}
+										onOpen={(r) => openFocused(r)}
+										onToggleClearing={isSingleAccount ? (r) => void handleToggleClearing(r) : null}
+									/>
+								{/if}
+							</li>
+						{/each}
+					</ol>
+				</section>
+			{/each}
 
-  {#if isSingleAccount && pendingCount > 0}
-    <section class="view-card pending-card">
-      <div class="flex items-start justify-between gap-4 mb-4 max-shell:flex-col">
-        <div><p class="eyebrow">Pending</p><h3 class="m-0 font-display text-xl">Pending transfers</h3></div>
-        <p class="m-0 text-muted-foreground text-sm">These affect <strong>Balance with pending</strong> above.</p>
-      </div>
-      <div class="grid gap-3">
-        {#each pendingRows as row}
-          <details class="pending-row">
-            <summary class="pending-summary">
-              <button class="clearing-indicator clearing-{row.status ?? 'unmarked'}" title={CLEARING_TOOLTIPS[row.status ?? 'unmarked']} on:click|stopPropagation={(e) => handleToggleClearing(row, e)} type="button"></button>
-              <div class="text-sm">{shortDate(row.date)}</div>
-              <div class="min-w-0">
-                <p class="font-bold">{row.payee}</p>
-                <div class="flex flex-wrap gap-2 mt-1 text-muted-foreground text-sm">
-                  <span>{row.categories[0]?.label ?? 'Transfer'}</span>
-                  <span class="pill pending-pill">Pending</span>
-                </div>
-              </div>
-              <div class="text-right"><p class:positive={filteredAccountKind && row.amount > 0 && !row.isTransfer} class="font-bold">{row.isTransfer ? formatCurrency(Math.abs(row.amount), baseCurrency, { signMode: 'negative-only' }) : formatCurrency(row.amount, baseCurrency, { signMode: filteredAccountKind ? 'good-change-plus' : 'negative-only', accountKind: filteredAccountKind ?? undefined })}</p></div>
-            </summary>
-            <div class="px-4 pb-4 grid gap-3">
-              <p class="text-muted-foreground text-sm pending-details-note">Waiting for the imported transaction to land.</p>
-            </div>
-          </details>
-        {/each}
-      </div>
-    </section>
-  {/if}
-
-  <section class="view-card relative">
-    {#if result !== null && dataLoading}
-      <div class="reload-progress" aria-hidden="true"></div>
-    {/if}
-    <div class="flex items-start justify-between gap-4 mb-4">
-      <div><p class="eyebrow">Transactions</p><h3 class="m-0 font-display text-xl">{result?.totalCount ?? 0} {(result?.totalCount ?? 0) === 1 ? 'transaction' : 'transactions'}</h3></div>
-    </div>
-    {#if result !== null && error}
-      <div class="mb-3 px-3.5 py-2.5 rounded-xl bg-bad/10 border border-bad/20" role="alert">
-        <p class="error-text m-0"><strong>Couldn't refresh transactions.</strong> {error}</p>
-      </div>
-    {/if}
-    {#if result === null && dataLoading}
-      <div class="empty-panel"><h4 class="m-0">Loading transactions</h4><p class="m-0 mt-1 text-muted-foreground">Fetching transaction data.</p></div>
-    {:else if result === null && error}
-      <div class="empty-panel"><h4 class="m-0">Error loading transactions</h4><p class="m-0 mt-1 text-muted-foreground">{error}</p></div>
-    {:else if result !== null && !dataLoading && !error && postedRows.length === 0}
-      <div class="empty-panel">
-        <h4 class="m-0">No transactions match these filters</h4>
-        <p class="m-0 mt-1 text-muted-foreground">Try a different time range or clear filters to see more.</p>
-        <div class="mt-3"><button class="btn" type="button" on:click={clearAll}>Clear all filters</button></div>
-      </div>
-    {:else if result !== null}
-      <div class="grid">
-        {#each dayGroups as group, gi}
-          <TransactionDayGroup header={group.header} isFirst={gi === 0} dailySum={group.dailySum} {baseCurrency} accountKind={filteredAccountKind}>
-            {#each group.rows as row}
-              <TransactionRow {row} {baseCurrency} accountKind={rowAccountKind(row)} showRunningBalance={showRunBal} showCategory={!filters.category} showAccountLabel={!isSingleAccount} {isSingleAccount} onToggleClearing={isSingleAccount ? handleToggleClearing : null} onRowClick={row.isAssertion ? null : () => (selectedRow = row)} />
-            {/each}
-          </TransactionDayGroup>
-        {/each}
-      </div>
-      {#if postedRows.length > 0}
-        <div class="sticky bottom-0 flex items-center justify-between border-t border-card-edge bg-white px-4 py-2 text-sm text-muted-foreground">
-          <span>{postedRows.length} {postedRows.length === 1 ? 'transaction' : 'transactions'}</span>
-          <span class:text-green-600={filteredAccountKind && filteredTotal > 0} class="font-medium">
-            {filteredAccountKind
-              ? formatCurrency(filteredTotal, baseCurrency, { signMode: 'good-change-plus', accountKind: filteredAccountKind })
-              : formatCurrency(Math.abs(filteredTotal), baseCurrency, { signMode: 'negative-only' })}
-          </span>
-        </div>
-      {/if}
-    {/if}
-  </section>
+			<p class="m-0 px-6 pt-4 text-xs text-ink-mute max-lg:px-4">
+				<span class="kbd">j</span> <span class="kbd">k</span> to move ·
+				<span class="kbd">Enter</span> to open ·
+				<span class="kbd">?</span> for all shortcuts
+			</p>
+		</div>
+	{/if}
 {/if}
 
-<TransactionDetailSheet row={selectedRow} {baseCurrency} accounts={allAccounts} {trackedAccounts} accountKind={selectedRow ? rowAccountKind(selectedRow) : null} {actionError} onDelete={handleSheetDelete} onResetCategory={handleSheetResetCat} onRecategorize={handleSheetRecat} onReassignAccount={handleSheetReassign} onUnmatch={handleSheetUnmatch} onClose={() => (selectedRow = null)} reload={loadData} />
-<TransactionsFilterDialog bind:open={filterDialogOpen} {filters} {trackedAccounts} {allAccounts} onApply={handleFilterApply} onClose={() => (filterDialogOpen = false)} />
-
-{#if confirmDeleteRow}
-  <div class="confirm-backdrop" on:click={() => { confirmDeleteRow = null; actionError = ''; }} role="presentation">
-    <div class="confirm-modal" on:click|stopPropagation on:keydown={(e) => { if (e.key === 'Escape') { confirmDeleteRow = null; actionError = ''; } }} role="dialog" tabindex="-1" aria-labelledby="confirm-delete-title">
-      <h3 id="confirm-delete-title" class="m-0">Remove transaction</h3>
-      <p>Remove <strong>{confirmDeleteRow.payee}</strong> on {confirmDeleteRow.date}?</p>
-      <p class="muted text-sm">This removes the transaction from your records.</p>
-      {#if actionError}<p class="action-error">{actionError}</p>{/if}
-      <div class="flex flex-wrap gap-3">
-        <button class="btn" type="button" on:click={() => { confirmDeleteRow = null; actionError = ''; }}>Cancel</button>
-        <button class="btn btn-danger" type="button" disabled={actionBusy} on:click={() => confirmDeleteRow && void doDelete(confirmDeleteRow)}>{actionBusy ? 'Removing...' : 'Remove'}</button>
-      </div>
-    </div>
-  </div>
+{#if selectedRow}
+	<DetailPanel
+		row={selectedRow}
+		{baseCurrency}
+		accountKind={isSingleAccount ? scopedAccountKind : rowAccountKind(selectedRow)}
+		{categoryAccounts}
+		{trackedAccounts}
+		busy={actionBusy}
+		error={actionError}
+		onClose={() => (selectedRow = null)}
+		onToggleClearing={(r) => void handleToggleClearing(r)}
+		onRecategorize={(r, cat) =>
+			void runAction(() =>
+				cat ? recategorize(r, cat, loadData) : resetCategory(r, loadData)
+			)}
+		onReassignAccount={(r, ledger) => void runAction(() => reassignAccount(r, ledger, loadData))}
+		onUnmatch={(r) => void runAction(() => unmatchTransaction(r, loadData))}
+		onDelete={(r) => void runAction(() => deleteTransaction(r, loadData))}
+	/>
 {/if}
-{#if confirmUnmatchRow}
-  <div class="confirm-backdrop" on:click={() => { confirmUnmatchRow = null; actionError = ''; }} role="presentation">
-    <div class="confirm-modal" on:click|stopPropagation on:keydown={(e) => { if (e.key === 'Escape') { confirmUnmatchRow = null; actionError = ''; } }} role="dialog" tabindex="-1" aria-labelledby="confirm-unmatch-title">
-      <h3 id="confirm-unmatch-title" class="m-0">Undo match</h3>
-      <p>Undo the match for <strong>{confirmUnmatchRow.payee}</strong> on {confirmUnmatchRow.date}?</p>
-      <p class="muted text-sm">This restores the original manual entry.</p>
-      {#if actionError}<p class="action-error">{actionError}</p>{/if}
-      <div class="flex flex-wrap gap-3">
-        <button class="btn" type="button" on:click={() => { confirmUnmatchRow = null; actionError = ''; }}>Cancel</button>
-        <button class="btn btn-danger" type="button" disabled={actionBusy} on:click={() => confirmUnmatchRow && void doUnmatch(confirmUnmatchRow)}>{actionBusy ? 'Undoing...' : 'Undo match'}</button>
-      </div>
-    </div>
-  </div>
-{/if}
-
-<style>
-  .transactions-hero {
-    display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(18rem, 0.9fr);
-    gap: 1.2rem; align-items: start;
-    background: radial-gradient(circle at top left, rgba(214, 235, 220, 0.86), transparent 34%), linear-gradient(155deg, #fbfdf8 0%, #f6fbff 60%, #eef6f3 100%);
-  }
-  .hero-side { display: grid; gap: 0.85rem; padding: 1rem; border-radius: 1rem; background: rgba(255,255,255,0.72); border: 1px solid rgba(10,61,89,0.08); }
-  .summary-balance-card { background: linear-gradient(160deg, rgba(250,252,255,0.95), rgba(243,248,252,0.9)), rgba(255,255,255,0.86); }
-  .summary-balance-pending { border-color: rgba(15,95,136,0.18); background: radial-gradient(circle at top right, rgba(214,235,220,0.78), transparent 42%), linear-gradient(155deg, rgba(250,253,248,0.98), rgba(241,247,255,0.96)); }
-  .result-card { background: radial-gradient(circle at top right, rgba(214,235,220,0.62), transparent 44%), linear-gradient(155deg, rgba(248,252,246,0.98), rgba(242,248,255,0.96)); }
-  .pending-card { background: radial-gradient(circle at top right, rgba(214,235,220,0.68), transparent 36%), linear-gradient(155deg, rgba(252,252,247,0.98), rgba(247,250,255,0.96)); }
-  .positive { color: var(--ok); }
-  .negative { color: var(--bad); }
-  .pending-row { border: 1px solid rgba(10,61,89,0.08); border-radius: 1rem; background: rgba(255,255,255,0.62); overflow: hidden; }
-  .pending-summary { display: grid; grid-template-columns: 1.5rem minmax(6rem,0.6fr) minmax(0,2fr) minmax(6rem,0.6fr); gap: 1rem; align-items: center; padding: 0.95rem 1rem; cursor: pointer; list-style: none; }
-  .pending-summary::-webkit-details-marker { display: none; }
-  .pending-pill { color: var(--warn); border-color: #f3cf96; background: #fff7ea; }
-  .pending-details-note { color: #7d5200; }
-  .pending-secondary-action { background: rgba(255,255,255,0.85); }
-  .clearing-indicator { width: 0.7rem; height: 0.7rem; padding: 0; border: none; border-radius: 50%; cursor: pointer; align-self: center; flex-shrink: 0; transition: background 0.15s, box-shadow 0.15s; }
-  .clearing-cleared { background: var(--ok, #0d7f58); }
-  .clearing-pending { background: transparent; box-shadow: inset 0 0 0 2px var(--warn, #ad6a00); }
-  .clearing-unmarked { background: rgba(10,61,89,0.12); }
-  .empty-panel { border: 1px dashed rgba(10,61,89,0.18); border-radius: 1rem; padding: 1rem; background: rgba(255,255,255,0.52); }
-  .filter-bar-sticky :global(.filter-bar) { box-shadow: 0 6px 18px -12px rgba(10, 61, 89, 0.35); }
-  .reload-progress { position: absolute; top: 0; left: var(--radius-card); right: var(--radius-card); height: 2px; background: linear-gradient(90deg, transparent 0%, rgba(15,95,136,0.55) 40%, rgba(15,95,136,0.75) 50%, rgba(15,95,136,0.55) 60%, transparent 100%); background-size: 200% 100%; animation: reload-shimmer 1.2s linear infinite; pointer-events: none; z-index: 2; }
-  @keyframes reload-shimmer { 0% { background-position: 100% 0; } 100% { background-position: -100% 0; } }
-  .confirm-backdrop { position: fixed; inset: 0; background: rgba(10,20,30,0.35); z-index: 30; }
-  .confirm-modal { width: min(480px, calc(100vw - 2rem)); max-height: calc(100vh - 2rem); background: #fff; border: 1px solid var(--line); border-radius: 14px; box-shadow: var(--shadow); padding: 1.25rem; position: fixed; top: 50%; left: 50%; transform: translate(-50%,-50%); overflow: auto; z-index: 31; display: grid; gap: 0.75rem; }
-  .action-error { color: var(--error, #c53030); font-size: 0.88rem; }
-  .btn-danger { background: var(--error, #c53030); color: #fff; border-color: var(--error, #c53030); }
-  .btn-danger:hover { opacity: 0.9; }
-  .btn-danger:disabled { opacity: 0.6; cursor: not-allowed; }
-  @media (max-width: 980px) { .transactions-hero { grid-template-columns: 1fr; } }
-</style>

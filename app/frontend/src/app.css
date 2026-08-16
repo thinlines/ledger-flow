@@ -1,88 +1,54 @@
 @import 'tailwindcss';
 @import 'tw-animate-css';
 @plugin '@tailwindcss/forms';
-@plugin '@tailwindcss/typography';
 
 @custom-variant dark (&:is(.dark *));
 
+/*
+ * Ledger Flow visual system — ADR-0004 (minimal, flat) on ADR-0001 (solid).
+ *
+ * Flat solid surfaces, hairline borders, negative space. One accent: the
+ * teal→green brand hue. Color otherwise carries meaning only (status, data).
+ * Space Grotesk is display-only; Inter everywhere else; amounts always in
+ * tabular figures. Values live on :root so a `.dark` block can re-point them
+ * later without touching components.
+ */
+
 :root {
-  --radius: 0.625rem;
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.129 0.042 264.695);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.129 0.042 264.695);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.129 0.042 264.695);
-  --primary: oklch(0.208 0.042 265.755);
-  --primary-foreground: oklch(0.984 0.003 247.858);
-  --secondary: oklch(0.968 0.007 247.896);
-  --secondary-foreground: oklch(0.208 0.042 265.755);
-  --muted: oklch(0.968 0.007 247.896);
-  --muted-foreground: oklch(0.554 0.046 257.417);
-  --accent: oklch(0.968 0.007 247.896);
-  --accent-foreground: oklch(0.208 0.042 265.755);
-  --destructive: oklch(0.577 0.245 27.325);
-  --border: oklch(0.929 0.013 255.508);
-  --input: oklch(0.929 0.013 255.508);
-  --ring: oklch(0.704 0.04 256.788);
-  --chart-1: oklch(0.646 0.222 41.116);
-  --chart-2: oklch(0.6 0.118 184.704);
-  --chart-3: oklch(0.398 0.07 227.392);
-  --chart-4: oklch(0.828 0.189 84.429);
-  --chart-5: oklch(0.769 0.188 70.08);
-  --sidebar: oklch(0.984 0.003 247.858);
-  --sidebar-foreground: oklch(0.129 0.042 264.695);
-  --sidebar-primary: oklch(0.208 0.042 265.755);
-  --sidebar-primary-foreground: oklch(0.984 0.003 247.858);
-  --sidebar-accent: oklch(0.968 0.007 247.896);
-  --sidebar-accent-foreground: oklch(0.208 0.042 265.755);
-  --sidebar-border: oklch(0.929 0.013 255.508);
-  --sidebar-ring: oklch(0.704 0.04 256.788);
+  --radius: 0.5rem;
 
-  /* Compatibility tokens used by existing pages */
-  --bg: #f4f4ea;
-  --bg-accent: #edf6ef;
-  --line: #d7ddd5;
-  --brand: #0f5f88;
-  --brand-strong: #0a3d59;
-  --ok: #0d7f58;
-  --warn: #ad6a00;
-  --bad: #b73a3a;
-  --shadow: 0 16px 34px rgba(16, 33, 51, 0.08);
-}
+  /* Named palette */
+  --paper: oklch(0.985 0.002 145); /* app canvas — barely-green near-white */
+  --panel: oklch(1 0 0); /* raised surfaces */
+  --ink: oklch(0.24 0.01 165); /* primary text */
+  --ink-mute: oklch(0.52 0.014 165); /* secondary text */
+  --hairline: oklch(0.925 0.005 150); /* borders */
+  --hairline-strong: oklch(0.87 0.008 150);
+  --wash: oklch(0.965 0.006 155); /* quiet hover / selected fill */
+  --accent: oklch(0.52 0.1 168); /* the one brand accent (teal→green hue) */
+  --accent-deep: oklch(0.42 0.09 168); /* accent as text on light */
+  --accent-wash: oklch(0.955 0.022 165); /* accent-tinted selection fill */
+  --bad: oklch(0.5 0.16 29);
+  --warn: oklch(0.55 0.12 75);
 
-.dark {
-  --background: oklch(0.129 0.042 264.695);
-  --foreground: oklch(0.984 0.003 247.858);
-  --card: oklch(0.208 0.042 265.755);
-  --card-foreground: oklch(0.984 0.003 247.858);
-  --popover: oklch(0.208 0.042 265.755);
-  --popover-foreground: oklch(0.984 0.003 247.858);
-  --primary: oklch(0.929 0.013 255.508);
-  --primary-foreground: oklch(0.208 0.042 265.755);
-  --secondary: oklch(0.279 0.041 260.031);
-  --secondary-foreground: oklch(0.984 0.003 247.858);
-  --muted: oklch(0.279 0.041 260.031);
-  --muted-foreground: oklch(0.704 0.04 256.788);
-  --accent: oklch(0.279 0.041 260.031);
-  --accent-foreground: oklch(0.984 0.003 247.858);
-  --destructive: oklch(0.704 0.191 22.216);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.551 0.027 264.364);
-  --chart-1: oklch(0.488 0.243 264.376);
-  --chart-2: oklch(0.696 0.17 162.48);
-  --chart-3: oklch(0.769 0.188 70.08);
-  --chart-4: oklch(0.627 0.265 303.9);
-  --chart-5: oklch(0.645 0.246 16.439);
-  --sidebar: oklch(0.208 0.042 265.755);
-  --sidebar-foreground: oklch(0.984 0.003 247.858);
-  --sidebar-primary: oklch(0.488 0.243 264.376);
-  --sidebar-primary-foreground: oklch(0.984 0.003 247.858);
-  --sidebar-accent: oklch(0.279 0.041 260.031);
-  --sidebar-accent-foreground: oklch(0.984 0.003 247.858);
-  --sidebar-border: oklch(1 0 0 / 10%);
-  --sidebar-ring: oklch(0.551 0.027 264.364);
+  /* shadcn-compatible tokens (ui/ primitives read these) */
+  --background: var(--paper);
+  --foreground: var(--ink);
+  --card: var(--panel);
+  --card-foreground: var(--ink);
+  --popover: var(--panel);
+  --popover-foreground: var(--ink);
+  --primary: var(--accent);
+  --primary-foreground: oklch(0.99 0 0);
+  --secondary: var(--wash);
+  --secondary-foreground: var(--ink);
+  --muted: var(--wash);
+  --muted-foreground: var(--ink-mute);
+  --accent-token: var(--wash);
+  --destructive: var(--bad);
+  --border: var(--hairline);
+  --input: var(--hairline-strong);
+  --ring: var(--accent);
 }
 
 @theme inline {
@@ -90,6 +56,7 @@
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
   --radius-xl: calc(var(--radius) + 4px);
+
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-card: var(--card);
@@ -102,47 +69,29 @@
   --color-secondary-foreground: var(--secondary-foreground);
   --color-muted: var(--muted);
   --color-muted-foreground: var(--muted-foreground);
-  --color-accent: var(--accent);
-  --color-accent-foreground: var(--accent-foreground);
-  --color-destructive: var(--destructive);
+  --color-accent: var(--accent-token);
+  --color-accent-foreground: var(--foreground);
+  --color-destructive: var(--bad);
   --color-border: var(--border);
   --color-input: var(--input);
   --color-ring: var(--ring);
-  --color-chart-1: var(--chart-1);
-  --color-chart-2: var(--chart-2);
-  --color-chart-3: var(--chart-3);
-  --color-chart-4: var(--chart-4);
-  --color-chart-5: var(--chart-5);
-  --color-sidebar: var(--sidebar);
-  --color-sidebar-foreground: var(--sidebar-foreground);
-  --color-sidebar-primary: var(--sidebar-primary);
-  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
-  --color-sidebar-accent: var(--sidebar-accent);
-  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
-  --color-sidebar-border: var(--sidebar-border);
-  --color-sidebar-ring: var(--sidebar-ring);
 
-  --color-brand: var(--brand);
-  --color-brand-strong: var(--brand-strong);
-  --color-ok: var(--ok);
-  --color-warn: var(--warn);
+  /* Ledger Flow names — prefer these in app components */
+  --color-paper: var(--paper);
+  --color-panel: var(--panel);
+  --color-ink: var(--ink);
+  --color-ink-mute: var(--ink-mute);
+  --color-hairline: var(--hairline);
+  --color-hairline-strong: var(--hairline-strong);
+  --color-wash: var(--wash);
+  --color-brand: var(--accent);
+  --color-brand-deep: var(--accent-deep);
+  --color-brand-wash: var(--accent-wash);
   --color-bad: var(--bad);
-  --color-canvas: var(--bg);
-  --color-canvas-accent: var(--bg-accent);
-  --color-line: var(--line);
-  --color-card-edge: rgba(10, 61, 89, 0.08);
+  --color-warn: var(--warn);
 
-  --font-sans: 'Inter', sans-serif;
-  --font-display: 'Space Grotesk', sans-serif;
-
-  --shadow-card: var(--shadow);
-  --shadow-shell: 0 12px 24px rgba(17, 35, 52, 0.06);
-
-  --radius-card: 1.15rem;
-
-  --breakpoint-tablet: 720px;
-  --breakpoint-shell: 980px;
-  --breakpoint-desktop: 1100px;
+  --font-sans: 'Inter', ui-sans-serif, system-ui, sans-serif;
+  --font-display: 'Space Grotesk', var(--font-sans);
 }
 
 @layer base {
@@ -150,7 +99,7 @@
   *::before,
   *::after {
     box-sizing: border-box;
-    @apply border-border outline-ring/50;
+    @apply border-hairline;
   }
 
   html,
@@ -164,170 +113,61 @@
   }
 
   body {
-    @apply bg-background text-foreground;
+    @apply bg-paper font-sans text-[0.875rem] leading-normal text-ink antialiased;
   }
-}
 
-body {
-  @apply font-sans;
-  background:
-    radial-gradient(circle at 10% 10%, rgba(214, 235, 220, 0.95) 0%, transparent 32%),
-    radial-gradient(circle at 92% 4%, rgba(210, 230, 248, 0.9) 0%, transparent 28%),
-    linear-gradient(165deg, var(--color-canvas) 0%, var(--color-canvas-accent) 100%);
-  min-height: 100vh;
+  :focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+  }
+
+  ::selection {
+    background: var(--accent-wash);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
 }
 
 @layer components {
-  .view-card {
-    @apply rounded-card border border-card-edge bg-white/80 p-4 shadow-card;
+  /* Tabular figures for every amount — the register is a column of numbers
+     that must line up to be scannable. */
+  .amount {
+    font-variant-numeric: tabular-nums;
   }
 
-  .hero {
-    background: linear-gradient(145deg, #fffef8, #f3f9ff);
-  }
-
-  .eyebrow {
-    @apply font-bold uppercase text-muted-foreground;
-    font-size: 0.78rem;
-    letter-spacing: 0.08em;
-    margin-bottom: 0.35rem;
-  }
-
-  .page-title {
-    @apply font-display m-0;
-    font-size: 1.7rem;
-  }
-
-  .subtitle {
-    @apply text-muted-foreground;
-    margin: 0.45rem 0 0;
-  }
-
-  .grid-2 {
-    @apply grid gap-4;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .grid-3 {
-    @apply grid gap-4;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
-
-  .btn {
-    @apply cursor-pointer rounded-full font-bold text-brand-strong;
-    padding: 0.65rem 0.95rem;
-    border: 1px solid rgba(10, 61, 89, 0.1);
-    background: #f7fbff;
-  }
-
-  .btn:hover {
-    background: #eef6ff;
-  }
-
-  .btn-primary {
-    color: #fff;
-    background: linear-gradient(130deg, #0f5f88, #0c7b59);
-    border-color: rgba(12, 123, 89, 0.6);
-    box-shadow: 0 14px 28px rgba(12, 123, 89, 0.18);
-  }
-
-  .btn-primary:hover {
-    filter: brightness(1.05);
-  }
-
-  .btn:disabled {
-    @apply cursor-not-allowed opacity-50;
-  }
-
-  .field {
-    @apply grid;
-    gap: 0.35rem;
-  }
-
-  .field label {
-    @apply font-semibold text-muted-foreground;
-    font-size: 0.86rem;
-  }
-
-  .pill {
-    @apply inline-flex items-center rounded-full border font-bold;
-    gap: 0.35rem;
-    padding: 0.2rem 0.5rem;
-    font-size: 0.78rem;
-  }
-
-  .pill.ok {
-    color: var(--ok);
-    border-color: #9ad6be;
-    background: #edf9f4;
-  }
-
-  .pill.warn {
-    color: var(--warn);
-    border-color: #f3cf96;
-    background: #fff7ea;
-  }
-
-  .pill.bad {
-    color: var(--bad);
-    border-color: #f3b4b4;
-    background: #fff1f1;
-  }
-
-  .muted {
-    @apply text-muted-foreground;
-  }
-
-  .error-text {
-    color: var(--bad);
-  }
-
-  .text-link {
-    @apply font-bold text-brand-strong no-underline;
-  }
-
-  .text-link:hover {
-    @apply underline;
+  /* Keyboard hint chip, used inline next to actions and in the cheat sheet. */
+  .kbd {
+    @apply inline-flex h-5 min-w-5 items-center justify-center rounded-sm border border-hairline-strong bg-panel px-1 font-sans text-[0.6875rem] font-medium text-ink-mute;
+    box-shadow: 0 1px 0 var(--hairline-strong);
   }
 }
 
+/* Flat, quiet form controls (overrides @tailwindcss/forms). */
 input:not([type='checkbox']):not([type='radio']),
 select,
 textarea {
-  width: 100%;
-  border: 1px solid #c8d6e5;
-  border-radius: 10px;
-  padding: 0.58rem 0.65rem;
-  font: inherit;
-  background: #fff;
+  @apply w-full rounded-md border border-hairline-strong bg-panel px-2.5 py-1.5 text-sm text-ink;
 }
 
 input:not([type='checkbox']):not([type='radio']):focus,
 select:focus,
 textarea:focus {
-  outline: 2px solid rgba(15, 95, 136, 0.24);
-  border-color: var(--brand);
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+  border-color: var(--accent);
+  --tw-ring-color: transparent;
 }
 
 input[type='checkbox'],
 input[type='radio'] {
-  width: 1rem;
-  height: 1rem;
-  margin: 0;
-  padding: 0;
-  flex: 0 0 auto;
-  accent-color: var(--brand);
-}
-
-@media (max-width: 900px) {
-  .grid-3,
-  .grid-2 {
-    grid-template-columns: 1fr;
-  }
-}
-
-/* Sheet slide-in (portaled, so must be global) */
-@keyframes sheet-slide-in {
-  from { transform: translateX(100%); }
-  to { transform: translateX(0); }
+  @apply m-0 size-4 flex-none p-0;
+  accent-color: var(--accent);
 }
