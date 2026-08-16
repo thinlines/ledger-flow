@@ -620,11 +620,12 @@ Operations fully replace `events.jsonl` and `imports/import-log.ndjson`:
   describes only the operation's own lifecycle. This ports the current
   `*.compensated.v1` model and lets import undo and semantic undo share one
   spine.
-- **Drift detection simplifies.** The last-known-hash chain scan of
-  `events.jsonl` is replaced by comparing the on-disk hash with
-  `journal_files.content_hash`; external edits are recorded in
-  `journal_diagnostics`, and undo is refused when an operation's
-  `operation_files.hash_after` no longer matches the current file.
+- **Drift detection is retired.** External edits are not detected or
+  logged — the journal files are the source of truth and re-projection
+  absorbs them (any file whose on-disk hash differs from
+  `journal_files.content_hash` is re-projected). Undo is still refused
+  when an operation's `operation_files.hash_after` no longer matches the
+  current file.
 - **The activity feed reads `operations`** ordered by `created_at`.
 - **Operation ids are pre-minted** before the write so journal metadata and
   the operation share one id. The `reconciliation_event_id` journal key is

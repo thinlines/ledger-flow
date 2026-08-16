@@ -73,16 +73,19 @@ _Avoid_: Roadmap feature, project phase
 A bounded operation that changes one or more journal-class files
 (`*.journal`, with `10-accounts.dat` and `archived-manual.journal` allowed
 as co-candidates), identified by a UUIDv7 event ID, with optional
-post-write verification and automatic rollback. Every entry in
-`workspace/events.jsonl` corresponds to one journal mutation — forward or
-compensating.
+post-write verification and automatic rollback. Every journal mutation —
+forward or compensating — is recorded as one durable operation in
+`.workflow/state.db`.
 
 Journal mutations flow through `services/journal_writer.py`'s
-`mutate(...)` context manager. The writer owns the seven-step ritual that
+`mutate(...)` context manager. The writer owns the ritual that
 enforces DECISIONS §3 (workspace canonical), §4 (idempotent +
-non-rewriting), §12 (event-sourced undo + external-edit detection), §15
+non-rewriting), §12 (operation-backed undo), §15
 (reconciliation_event_id linkage), §17 (import fence), and the
-reconciliation verify-and-rollback policy.
+reconciliation verify-and-rollback policy. External edits are not
+detected or logged: the journal files are the source of truth, and the
+projection absorbs them on refresh. The only write guards are the
+per-block staleness check (HTTP 409) and undo's drift refusal.
 
 Out of scope (these writes are *not* journal mutations and do not flow
 through the writer): rules JSON (`workspace/rules/*.json`), workspace
