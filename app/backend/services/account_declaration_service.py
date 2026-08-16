@@ -109,7 +109,7 @@ def _default_declarations_file(config: AppConfig) -> Path:
 
 def _declaring_file(config: AppConfig, account: str) -> Path | None:
     """Path of the directive file declaring ``account``, from the projection."""
-    with closing(connect(database_path(config))) as conn:
+    with closing(connect(database_path(config.root_dir))) as conn:
         row = conn.execute(
             """
             SELECT journal_files.path
@@ -254,7 +254,7 @@ def delete_declaration(config: AppConfig, account: str) -> None:
     if path is None:
         raise AccountNotDeclared(account)
 
-    with closing(connect(database_path(config))) as conn:
+    with closing(connect(database_path(config.root_dir))) as conn:
         posting_count = subtree_posting_count(conn, account)
     reason = delete_block_reason(config, account, posting_count)
     if reason is not None:

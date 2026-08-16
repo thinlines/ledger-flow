@@ -76,7 +76,7 @@ def test_create_merchant_records_operation_and_projects(config: AppConfig) -> No
     assert costco["defaultAccount"] == "Expenses:Groceries"
     assert costco["aliases"] == ["COSTCO WHSE"]
 
-    with sqlite3.connect(database_path(config)) as conn:
+    with sqlite3.connect(database_path(config.root_dir)) as conn:
         operation_types = [
             row[0]
             for row in conn.execute("SELECT type FROM operations ORDER BY rowid").fetchall()

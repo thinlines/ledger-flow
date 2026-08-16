@@ -22,7 +22,7 @@ from .transfer_service import is_transfer_account
 
 def _open(config: AppConfig) -> sqlite3.Connection:
     refresh_projection(config)
-    return connect(database_path(config))
+    return connect(database_path(config.root_dir))
 
 
 def list_account_names(config: AppConfig) -> list[str]:

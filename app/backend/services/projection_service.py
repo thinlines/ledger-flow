@@ -734,7 +734,7 @@ def refresh_projection(config: AppConfig) -> dict[str, list[str]]:
     their rows, changed/new files are (re-)projected, rows for files that no
     longer exist are removed. All inside one SQLite transaction.
     """
-    ensure_database(config)
+    ensure_database(config.root_dir)
     discovered = _discover_files(config)
     parsed_at = datetime.now(UTC).isoformat()
 
@@ -742,7 +742,7 @@ def refresh_projection(config: AppConfig) -> dict[str, list[str]]:
     removed: list[str] = []
     unchanged: list[str] = []
 
-    with connect(database_path(config)) as conn:
+    with connect(database_path(config.root_dir)) as conn:
         existing = {
             path: (file_id, content_hash)
             for file_id, path, content_hash in conn.execute(
@@ -815,8 +815,8 @@ def _rebuild_transaction_matches(conn: sqlite3.Connection) -> None:
 
 def rebuild_projection(config: AppConfig) -> dict[str, list[str]]:
     """Recovery path: wipe every projection table and re-project from disk."""
-    ensure_database(config)
-    with connect(database_path(config)) as conn:
+    ensure_database(config.root_dir)
+    with connect(database_path(config.root_dir)) as conn:
         for table in reversed(PROJECTION_TABLES):
             conn.execute(f"DELETE FROM {table}")
     return refresh_projection(config)
@@ -833,7 +833,7 @@ def load_transactions_projected(config: AppConfig) -> list[ParsedTransaction]:
     refresh_projection(config)
     root = config.root_dir.resolve()
 
-    with connect(database_path(config)) as conn:
+    with connect(database_path(config.root_dir)) as conn:
         files: dict[str, str] = {
             path: file_id
             for file_id, path in conn.execute(
@@ -913,7 +913,7 @@ def load_projected_transaction_rows(config: AppConfig, journal_path: Path) -> li
     """
     refresh_projection(config)
     rel_path = _rel_path(config, journal_path)
-    with connect(database_path(config)) as conn:
+    with connect(database_path(config.root_dir)) as conn:
         transaction_rows = conn.execute(
             """
             SELECT transactions.id, transactions.date, transactions.payee,
@@ -1015,7 +1015,7 @@ def projected_manual_entries(
         rel = journal_path.resolve().relative_to(config.root_dir.resolve()).as_posix()
     except ValueError:
         return []
-    with connect(database_path(config)) as conn:
+    with connect(database_path(config.root_dir)) as conn:
         rows = conn.execute(
             """
             SELECT transactions.id, transactions.date, transactions.status,
@@ -1052,7 +1052,7 @@ def find_projected_transaction_match(
     config: AppConfig, match_id: str
 ) -> ProjectedTransactionMatch | None:
     refresh_projection(config)
-    with connect(database_path(config)) as conn:
+    with connect(database_path(config.root_dir)) as conn:
         row = conn.execute(
             """
             SELECT id, imported_transaction_id, archived_manual_transaction_id
@@ -1065,7 +1065,7 @@ def find_projected_transaction_match(
 
 def projected_transaction_block(config: AppConfig, txn_id: str) -> str | None:
     """Return one transaction's canonical raw block through the projection."""
-    with connect(database_path(config)) as conn:
+    with connect(database_path(config.root_dir)) as conn:
         row = conn.execute(
             """
             SELECT journal_items.raw_text
@@ -1090,7 +1090,7 @@ _TXN_REF_SQL = """
 def find_projected_transaction(
     config: AppConfig, txn_id: str
 ) -> ProjectedTransactionRef | None:
-    with connect(database_path(config)) as conn:
+    with connect(database_path(config.root_dir)) as conn:
         row = conn.execute(
             f"{_TXN_REF_SQL} WHERE transactions.id = ?", (txn_id,)
         ).fetchone()
@@ -1103,7 +1103,7 @@ def find_projected_transaction_at(
     """Re-fetch a transaction after its file was re-projected. ``txn_order``
     is stable across in-place block edits, so this recovers the row even when
     the block carried no ``lf_txn_id`` and its hash-derived id changed."""
-    with connect(database_path(config)) as conn:
+    with connect(database_path(config.root_dir)) as conn:
         row = conn.execute(
             f"{_TXN_REF_SQL} WHERE transactions.journal_file_id = ? AND transactions.txn_order = ?",
             (journal_file_id, txn_order),
@@ -1113,7 +1113,7 @@ def find_projected_transaction_at(
 
 def render_file(config: AppConfig, rel_path: str) -> str:
     """Render a projected file from its items — byte-identical for untouched files."""
-    with connect(database_path(config)) as conn:
+    with connect(database_path(config.root_dir)) as conn:
         rows = conn.execute(
             """
             SELECT journal_items.raw_text

@@ -2,8 +2,8 @@
 
 Every journal-class write in Ledger Flow flows through ``journal_writer.mutate``.
 The writer owns the ritual that previously lived inline in every route and
-undo handler: hash, backup, mutate, verify, re-project, hash, emit-event,
-rollback-on-failure.
+undo handler: hash, backup, mutate, verify, re-project, hash,
+record-operation, rollback-on-failure.
 
 Callers describe **what** they want to change as a path set plus event metadata;
 the writer enforces **how** the change is safely applied.
@@ -42,8 +42,7 @@ from typing import Callable, Iterator
 from uuid import uuid7
 
 from .config_service import AppConfig
-from .event_log_service import hash_file, rel_path
-from .operations_service import record_operation
+from .operations_service import hash_file, record_operation, rel_path
 from .projection_service import refresh_projection
 
 
@@ -183,7 +182,7 @@ def mutate(
             ``VerifyFailure`` → reject (rollback + ``WriterRejected``).
             ``raise RuntimeError`` → unavailable (rollback +
             ``WriterUnavailable``).
-        actor: forwarded to ``emit_event``. Defaults to ``"user"``.
+        actor: recorded as the operation's ``actor_type``. Defaults to ``"user"``.
 
     Yields:
         A ``JournalMutation`` with a freshly minted ``event_id`` and writable
@@ -257,7 +256,7 @@ def mutate(
             )
 
     record_operation(
-        config,
+        config.root_dir,
         operation_id=event_id,
         operation_type=event_type,
         summary=mutation.summary,

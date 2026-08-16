@@ -1,11 +1,43 @@
+from datetime import datetime, timezone
 from pathlib import Path
 import json
 import sqlite3
 import sys
+from uuid import uuid7
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+
+
+def record_event(
+    workspace: Path,
+    *,
+    event_type: str,
+    summary: str,
+    payload: dict,
+    journal_refs: list[dict],
+    actor: str = "user",
+    compensates: str | None = None,
+    event_id: str | None = None,
+) -> str:
+    """Seed one event-shaped operation for a test workspace."""
+    from services.operations_service import record_operation
+
+    op_id = event_id or str(uuid7())
+    timestamp = datetime.now(timezone.utc).isoformat()
+    return record_operation(
+        workspace,
+        operation_id=op_id,
+        operation_type=event_type,
+        summary=summary,
+        payload=payload,
+        files=journal_refs,
+        actor_type=actor,
+        compensates_operation_id=compensates,
+        created_at=timestamp,
+        applied_at=timestamp,
+    )
 
 
 def read_operation_events(workspace: Path) -> list[dict]:

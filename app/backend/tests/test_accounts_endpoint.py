@@ -91,7 +91,7 @@ def test_create_account_from_parent_and_leaf(config):
     assert "account Expenses:Dining:Tea" in dat_text
 
     # Re-projection happened inside the request: the account is declared.
-    with sqlite3.connect(database_path(config)) as conn:
+    with sqlite3.connect(database_path(config.root_dir)) as conn:
         declared = conn.execute(
             "SELECT declared FROM accounts WHERE name = 'Expenses:Dining:Tea'"
         ).fetchone()

@@ -36,7 +36,7 @@ def load_merchants(config: AppConfig) -> list[Merchant]:
     Undeclared used payees are excluded: they are the "create merchant from
     this payee?" suggestion surface, not merchants."""
     refresh_projection(config)
-    with closing(connect(database_path(config))) as conn:
+    with closing(connect(database_path(config.root_dir))) as conn:
         payee_rows = conn.execute(
             """
             SELECT id, name, default_account FROM payees
@@ -65,7 +65,7 @@ def list_undeclared_payees(config: AppConfig) -> list[str]:
     """Used-but-undeclared payees — the "create merchant from this payee?"
     suggestion surface (spec: allowed by design, not an error)."""
     refresh_projection(config)
-    with closing(connect(database_path(config))) as conn:
+    with closing(connect(database_path(config.root_dir))) as conn:
         rows = conn.execute(
             """
             SELECT name FROM payees
@@ -121,7 +121,7 @@ def _sha256_file(path: Path) -> str:
 def _declaring_file(config: AppConfig, name: str) -> Path | None:
     """Path of the directive file declaring payee ``name``, from the
     projection (mirrors account_declaration_service)."""
-    with closing(connect(database_path(config))) as conn:
+    with closing(connect(database_path(config.root_dir))) as conn:
         row = conn.execute(
             """
             SELECT journal_files.path
@@ -233,7 +233,7 @@ def upsert_merchant(
     )
     summary = f"{'Created' if created else 'Updated'} merchant: {name_clean}"
     operation_id = record_operation(
-        config,
+        config.root_dir,
         operation_type=operation_type,
         summary=summary,
         payload={

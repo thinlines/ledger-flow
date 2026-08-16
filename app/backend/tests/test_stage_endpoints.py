@@ -68,7 +68,7 @@ def _make_config(workspace: Path) -> AppConfig:
 
 
 def _stage_row(config: AppConfig, stage_id: str) -> tuple | None:
-    with sqlite3.connect(database_path(config)) as conn:
+    with sqlite3.connect(database_path(config.root_dir)) as conn:
         return conn.execute(
             """
             SELECT kind, status, summary_json, payload_json,

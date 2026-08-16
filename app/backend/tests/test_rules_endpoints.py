@@ -92,7 +92,7 @@ def test_rules_editor_api_uses_database_backed_rules(config: AppConfig) -> None:
     assert [rule["id"] for rule in listed] == [coffee["id"]]
     assert not (config.init_dir / "20-match-rules.ndjson").exists()
 
-    with sqlite3.connect(database_path(config)) as conn:
+    with sqlite3.connect(database_path(config.root_dir)) as conn:
         operation_types = [
             row[0]
             for row in conn.execute("SELECT type FROM operations ORDER BY rowid").fetchall()

@@ -1,11 +1,9 @@
-import json
 from pathlib import Path
 
 import pytest
 
 import services.import_service as import_service
 from services.config_service import AppConfig
-from services.event_log_service import EVENTS_FILENAME
 from services.import_identity_service import ImportIdentityStore
 from services.import_history_service import record_applied_import, undo_import
 from services.import_service import (
@@ -485,25 +483,17 @@ def test_apply_import_skipped_count_folds_identity_collisions(tmp_path: Path) ->
 
 
 def _read_operation_events(workspace_root: Path) -> list[dict]:
-    events_file = workspace_root / EVENTS_FILENAME
-    if not events_file.exists():
-        config = _make_config(workspace_root)
-        return [
-            {
-                "id": op["id"],
-                "type": op["type"],
-                "summary": op["summary"],
-                "payload": op["payload"],
-                "journal_refs": op["files"],
-                "actor": op["actor"],
-                "compensates": op["compensates"],
-            }
-            for op in reversed(list_operations(config))
-        ]
     return [
-        json.loads(line)
-        for line in events_file.read_text(encoding="utf-8").splitlines()
-        if line.strip()
+        {
+            "id": op["id"],
+            "type": op["type"],
+            "summary": op["summary"],
+            "payload": op["payload"],
+            "journal_refs": op["files"],
+            "actor": op["actor"],
+            "compensates": op["compensates"],
+        }
+        for op in reversed(list_operations(workspace_root))
     ]
 
 
@@ -531,7 +521,6 @@ def test_apply_import_emits_identity_collision_diagnostic_event(tmp_path: Path) 
 
     apply_import(config, stage)
 
-    assert not (config.root_dir / EVENTS_FILENAME).exists()
     events = _read_operation_events(config.root_dir)
     collision_events = [e for e in events if e["type"] == "import.identity_collision.v1"]
     assert len(collision_events) == 2, "One event per identity-collision row"

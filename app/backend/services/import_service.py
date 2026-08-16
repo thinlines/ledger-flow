@@ -11,7 +11,7 @@ from pathlib import Path
 from .commodity_service import canonicalize_base_currency_posting
 from .config_service import AppConfig
 from .csv_normalizer import normalize_csv_to_intermediate
-from .event_log_service import rel_path
+from .operations_service import rel_path
 from .import_identity_service import ImportIdentityStore, source_payload_hash_for_lines
 from .import_profile_service import import_source_summary, resolve_import_source
 from .journal_block_service import lf_txn_id_line, mint_lf_txn_id
@@ -917,7 +917,7 @@ def _emit_identity_collision_events(
             continue
         try:
             record_operation(
-                config,
+                config.root_dir,
                 operation_type="import.identity_collision.v1",
                 summary=(
                     f"Identity collision skipped: {txn.get('payee') or 'unknown payee'} "

@@ -6,7 +6,6 @@ import sqlite3
 from pathlib import Path
 
 from .projection_db import database_path
-from .config_service import AppConfig
 
 OPERATION_DUMP_PATH = "operation-history.dump.sql"
 
@@ -38,8 +37,7 @@ def export_operation_dump(workspace_path: Path) -> Path | None:
     database is absent, leave any existing dump alone so a snapshot taken after
     database loss does not erase the tracked recovery artifact.
     """
-    config = _config_for_workspace(workspace_path)
-    db_path = database_path(config)
+    db_path = database_path(workspace_path)
     if not db_path.exists():
         return None
 
@@ -132,21 +130,3 @@ def _table_count(conn: sqlite3.Connection, table: str) -> int:
 def _ident(value: str) -> str:
     escaped = value.replace('"', '""')
     return f'"{escaped}"'
-
-
-def _config_for_workspace(workspace_path: Path) -> AppConfig:
-    return AppConfig(
-        root_dir=workspace_path,
-        config_toml=workspace_path / "settings" / "workspace.toml",
-        workspace={},
-        dirs={
-            "csv_dir": "inbox",
-            "journal_dir": "journals",
-            "init_dir": "rules",
-            "opening_bal_dir": "opening",
-            "imports_dir": "imports",
-        },
-        institution_templates={},
-        import_accounts={},
-        tracked_accounts={},
-    )

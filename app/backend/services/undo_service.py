@@ -25,7 +25,7 @@ from typing import Callable
 from services import journal_writer
 from services.archive_service import archive_manual_entry
 from services.config_service import AppConfig
-from services.event_log_service import hash_file
+from services.operations_service import hash_file
 from services.header_parser import TransactionStatus, set_header_status
 from services.journal_block_service import locate_block_by_id
 from services.journal_query_service import (
@@ -138,7 +138,7 @@ def _is_compensated(events: list[dict], event_id: str) -> str | None:
 
 
 def _read_history(config: AppConfig) -> list[dict]:
-    return list(reversed(list_operations(config)))
+    return list(reversed(list_operations(config.root_dir)))
 
 
 def _has_file_drift(config: AppConfig, event: dict) -> bool:
@@ -170,7 +170,7 @@ def undo_event(config: AppConfig, event_id: str) -> UndoResult:
         return UndoResult(UndoOutcome.NOT_FOUND, "Event not found", None, event_id)
 
     # 2. Idempotency check.
-    existing = operation_is_compensated(config, event_id) or _is_compensated(events, event_id)
+    existing = operation_is_compensated(config.root_dir, event_id) or _is_compensated(events, event_id)
     if existing is not None:
         return UndoResult(
             UndoOutcome.ALREADY_COMPENSATED,
@@ -713,7 +713,7 @@ def _undo_import_applied(config: AppConfig, event: dict) -> str:
     except (FileNotFoundError, OSError, ValueError) as exc:
         raise UndoFailedError(str(exc)) from exc
 
-    compensating_id = operation_is_compensated(config, forward_event_id)
+    compensating_id = operation_is_compensated(config.root_dir, forward_event_id)
     if compensating_id is None:
         raise UndoFailedError("Import undo did not record a compensating operation")
     return compensating_id

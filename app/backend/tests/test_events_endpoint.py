@@ -43,14 +43,14 @@ def test_returns_events_newest_first_with_undoable_flag(tmp_path: Path, monkeypa
 
     # Two forward events: one undoable, one not.
     deletable_id = record_operation(
-        config,
+        config.root_dir,
         operation_type="transaction.deleted.v1",
         summary="Removed Coffee Shop",
         payload={"journal_path": "journals/2026.journal", "header_line": "x", "deleted_block": "y"},
         files=[],
     )
     import_id = record_operation(
-        config,
+        config.root_dir,
         operation_type="import.applied.v1",  # No handler — should report undoable=False.
         summary="Imported statement",
         payload={},
@@ -77,14 +77,14 @@ def test_compensated_flag_resolves_via_compensates_link(tmp_path: Path, monkeypa
     monkeypatch.setattr(main, "_require_workspace_config", lambda: config)
 
     forward_id = record_operation(
-        config,
+        config.root_dir,
         operation_type="transaction.deleted.v1",
         summary="Removed Coffee Shop",
         payload={},
         files=[],
     )
     comp_id = record_operation(
-        config,
+        config.root_dir,
         operation_type="transaction.deleted.v1.compensated.v1",
         summary="Undid: Removed Coffee Shop",
         payload={},
@@ -109,7 +109,7 @@ def test_returns_at_most_twenty_events_newest_first(tmp_path: Path, monkeypatch)
     ids: list[str] = []
     for i in range(25):
         ids.append(record_operation(
-            config,
+            config.root_dir,
             operation_type="transaction.deleted.v1",
             summary=f"event {i}",
             payload={},

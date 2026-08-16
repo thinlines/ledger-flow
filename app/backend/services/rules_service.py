@@ -42,27 +42,8 @@ def _rules_dir(path: Path) -> Path:
     return path if path.is_dir() else path.parent
 
 
-def _config_from_rules_dir(rules_dir: Path) -> AppConfig:
-    root = rules_dir.parent
-    return AppConfig(
-        root_dir=root,
-        config_toml=root / "settings" / "workspace.toml",
-        workspace={"name": "Workspace", "start_year": 2026},
-        dirs={
-            "csv_dir": "inbox",
-            "journal_dir": "journals",
-            "init_dir": rules_dir.name,
-            "opening_bal_dir": "opening",
-            "imports_dir": "imports",
-        },
-        institution_templates={},
-        import_accounts={},
-        tracked_accounts={},
-    )
-
-
 def _db_path_for(path: Path) -> Path:
-    return ensure_database(_config_from_rules_dir(_rules_dir(path)))
+    return ensure_database(_rules_dir(path).parent)
 
 
 def _now_iso() -> str:
@@ -457,9 +438,8 @@ def _load_rules_from_db(path: Path) -> list[dict]:
 
 
 def _record_rule_operation(path: Path, operation_type: str, summary: str, payload: dict) -> None:
-    config = _config_from_rules_dir(_rules_dir(path))
     record_operation(
-        config,
+        _rules_dir(path).parent,
         operation_type=operation_type,
         summary=summary,
         payload=payload,

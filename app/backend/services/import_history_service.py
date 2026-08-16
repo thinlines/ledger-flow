@@ -9,8 +9,7 @@ from uuid import uuid4
 
 from .config_service import AppConfig
 from .import_identity_service import ImportIdentityStore
-from .event_log_service import hash_file, rel_path
-from .operations_service import list_operations, record_operation
+from .operations_service import hash_file, list_operations, record_operation, rel_path
 from .projection_service import load_projected_transaction_rows
 from .transfer_service import (
     ACTIVE_TRANSFER_MATCH_STATES,
@@ -36,7 +35,7 @@ class JournalTransaction:
 def _read_entries(config: AppConfig) -> list[dict]:
     entries: list[dict] = []
     undone_by_id: dict[str, dict] = {}
-    for operation in list_operations(config):
+    for operation in list_operations(config.root_dir):
         if operation.get("type") == "import.undone.v1":
             target = str(operation.get("compensates") or "")
             undo_payload = dict(operation.get("payload") or {})
@@ -409,7 +408,7 @@ def record_applied_import(config: AppConfig, stage: dict) -> dict:
     operation_already_pending = bool(stage.get("operationId"))
     if not operation_already_pending:
         record_operation(
-            config,
+            config.root_dir,
             operation_type="import.applied.v1",
             summary=f"Imported {entry['summary'].get('newCount', 0)} transactions from {entry['csvFileName']}",
             payload=entry,
@@ -510,7 +509,7 @@ def undo_import(config: AppConfig, history_id: str, *, operation_id: str | None 
 
     if operation_id is None:
         record_operation(
-            config,
+            config.root_dir,
             operation_type="import.undone.v1",
             summary=f"Undid import: {entry.get('csvFileName', 'statement.csv')}",
             payload={"kind": "import_undo", "entry": entry},

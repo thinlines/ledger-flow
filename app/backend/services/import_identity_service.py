@@ -21,8 +21,8 @@ class ImportIdentityStore:
     config: AppConfig
 
     def _db_path(self) -> Path:
-        ensure_database(self.config)
-        return database_path(self.config)
+        ensure_database(self.config.root_dir)
+        return database_path(self.config.root_dir)
 
     def get_active_identity_map(self, import_account_id: str) -> dict[str, str | None]:
         with connect(self._db_path()) as conn:

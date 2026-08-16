@@ -10,7 +10,6 @@ from pathlib import Path
 import pytest
 
 from services.config_service import AppConfig
-from services.event_log_service import EVENTS_FILENAME, emit_event
 from conftest import read_operation_events
 from services.import_service import apply_reconciliation_fence
 from services.reconciliation_service import (
@@ -559,25 +558,26 @@ class TestReconciliationStatus:
 
 
 # ---------------------------------------------------------------------------
-# Integration: writer + emit_event share the same id
+# Integration: writer + record_operation share the same id
 # ---------------------------------------------------------------------------
 
 
 class TestEventIdLinkage:
-    def test_emit_event_accepts_caller_supplied_id(self, tmp_path: Path) -> None:
-        from services.event_log_service import emit_event as ee
+    def test_record_operation_accepts_caller_supplied_id(self, tmp_path: Path) -> None:
+        """The writer mints ``mut.event_id`` up front and records the operation
+        under that id — reconciliation embeds it in journal metadata first."""
+        from services.operations_service import record_operation
 
         eid = "01HGECUSTOMID00000000000000"
-        returned = ee(
+        returned = record_operation(
             tmp_path,
-            event_type="account.reconciled.v1",
+            operation_type="account.reconciled.v1",
             summary="Test",
             payload={"x": 1},
-            journal_refs=[],
-            event_id=eid,
+            files=[],
+            operation_id=eid,
         )
         assert returned == eid
 
-        assert not (tmp_path / EVENTS_FILENAME).exists()
         events = read_operation_events(tmp_path)
         assert events[0]["id"] == eid

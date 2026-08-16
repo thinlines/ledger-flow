@@ -14,6 +14,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from services.config_service import AppConfig
+from services.operations_service import list_operations
 from services.merchant_service import (
     Merchant,
     list_undeclared_payees,
@@ -21,7 +22,6 @@ from services.merchant_service import (
     match_merchant,
     upsert_merchant,
 )
-from services.operations_service import list_operations
 
 
 def make_config(workspace: Path) -> AppConfig:
@@ -131,7 +131,7 @@ def test_upsert_merchant_declares_new_payee_and_records_operation(tmp_path):
     assert costco.default_account == "Expenses:Groceries"
     assert list(costco.aliases) == ["COSTCO WHSE"]
 
-    operations = list_operations(config)
+    operations = list_operations(config.root_dir)
     created = [op for op in operations if op["type"] == "reference.merchant.created.v1"]
     assert len(created) == 1
     assert created[0]["payload"]["name"] == "Costco"
@@ -156,7 +156,7 @@ def test_upsert_merchant_extends_existing_declaration_in_place(tmp_path):
     walmart = next(m for m in load_merchants(config) if m.name == "Walmart")
     assert list(walmart.aliases) == ["WAL-?MART", "WALMART\\.COM"]
 
-    operations = list_operations(config)
+    operations = list_operations(config.root_dir)
     assert any(op["type"] == "reference.merchant.updated.v1" for op in operations)
 
 

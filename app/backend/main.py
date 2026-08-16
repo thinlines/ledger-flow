@@ -50,7 +50,7 @@ from models import (
     WorkspaceSelectRequest,
 )
 from services.category_suggestion_service import suggest_category
-from services.event_log_service import rel_path
+from services.operations_service import rel_path
 from services.git_snapshot_service import hours_since_last_snapshot, snapshot_commit
 from services.header_parser import TransactionStatus, parse_header, set_header_status, HEADER_RE as _HEADER_RE
 from services import journal_writer
@@ -328,6 +328,9 @@ async def lifespan(_app: FastAPI):
     config = None
     try:
         config = workspace_manager.load_active_config()
+    except Exception:
+        _log.warning("Startup workspace config load failed — skipping startup hooks", exc_info=True)
+    try:
         if config is not None:
             StageStore(config).cleanup_old(days=7)
     except Exception:
@@ -1298,7 +1301,7 @@ _RECENT_EVENTS_LIMIT = 20
 def events_recent() -> dict:
     """Return the most recent forward + compensating events, newest-first."""
     config = _require_workspace_config()
-    window = list_operations(config, limit=_RECENT_EVENTS_LIMIT)
+    window = list_operations(config.root_dir, limit=_RECENT_EVENTS_LIMIT)
 
     compensated_by: dict[str, str] = {}
     for op in window:

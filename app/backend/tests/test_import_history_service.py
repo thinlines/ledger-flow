@@ -222,7 +222,7 @@ def test_record_applied_import_uses_operations_instead_of_import_log(tmp_path: P
     )
 
     assert not (config.imports_dir / "import-log.ndjson").exists()
-    operations = list_operations(config)
+    operations = list_operations(config.root_dir)
     assert operations[0]["id"] == recorded["id"]
     assert operations[0]["type"] == "import.applied.v1"
     assert list_import_history(config)[0]["id"] == recorded["id"]

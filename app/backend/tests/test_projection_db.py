@@ -66,7 +66,7 @@ def _table_names(db_path: Path) -> set[str]:
 def test_ensure_database_creates_workspace_scoped_db(tmp_path):
     config = _make_config(tmp_path)
 
-    db_path = ensure_database(config)
+    db_path = ensure_database(config.root_dir)
 
     assert db_path == tmp_path / ".workflow" / "state.db"
     assert db_path.exists()
@@ -77,20 +77,20 @@ def test_ensure_database_creates_workspace_scoped_db(tmp_path):
 
 def test_projection_tables_constant_matches_created_tables(tmp_path):
     config = _make_config(tmp_path)
-    ensure_database(config)
+    ensure_database(config.root_dir)
     assert set(PROJECTION_TABLES) == PROJECTION_TABLE_NAMES
 
 
 def test_ensure_database_is_idempotent_and_records_versions_once(tmp_path):
     config = _make_config(tmp_path)
 
-    db_path = ensure_database(config)
+    db_path = ensure_database(config.root_dir)
     with sqlite3.connect(db_path) as conn:
         first = conn.execute(
             "SELECT version, name FROM schema_migrations ORDER BY version"
         ).fetchall()
 
-    ensure_database(config)
+    ensure_database(config.root_dir)
     with sqlite3.connect(db_path) as conn:
         second = conn.execute(
             "SELECT version, name FROM schema_migrations ORDER BY version"
@@ -104,7 +104,7 @@ def test_ensure_database_is_idempotent_and_records_versions_once(tmp_path):
 
 def test_projection_tables_are_wipe_and_rebuild_safe(tmp_path):
     config = _make_config(tmp_path)
-    db_path = ensure_database(config)
+    db_path = ensure_database(config.root_dir)
 
     with connect(db_path) as conn:
         conn.execute(
@@ -124,7 +124,7 @@ def test_projection_tables_are_wipe_and_rebuild_safe(tmp_path):
         for table in PROJECTION_TABLES:
             conn.execute(f"DELETE FROM {table}")
 
-    ensure_database(config)
+    ensure_database(config.root_dir)
     with sqlite3.connect(db_path) as conn:
         count = conn.execute("SELECT COUNT(*) FROM journal_files").fetchone()[0]
     assert count == 0
@@ -132,7 +132,7 @@ def test_projection_tables_are_wipe_and_rebuild_safe(tmp_path):
 
 def test_rules_tables_survive_projection_wipe(tmp_path):
     config = _make_config(tmp_path)
-    db_path = ensure_database(config)
+    db_path = ensure_database(config.root_dir)
 
     with connect(db_path) as conn:
         conn.execute(
@@ -151,7 +151,7 @@ def test_rules_tables_survive_projection_wipe(tmp_path):
 
 def test_reference_tables_enforce_entity_uniqueness(tmp_path):
     config = _make_config(tmp_path)
-    db_path = ensure_database(config)
+    db_path = ensure_database(config.root_dir)
 
     with connect(db_path) as conn:
         conn.execute(
@@ -169,7 +169,7 @@ def test_reference_tables_enforce_entity_uniqueness(tmp_path):
 
 def test_payee_aliases_cascade_with_their_payee(tmp_path):
     config = _make_config(tmp_path)
-    db_path = ensure_database(config)
+    db_path = ensure_database(config.root_dir)
 
     with connect(db_path) as conn:
         conn.execute("INSERT INTO payees (id, name) VALUES ('p1', 'Walmart')")
@@ -186,7 +186,7 @@ def test_payee_aliases_cascade_with_their_payee(tmp_path):
 
 def test_stages_and_operations_tables_created(tmp_path):
     config = _make_config(tmp_path)
-    db_path = ensure_database(config)
+    db_path = ensure_database(config.root_dir)
 
     tables = _table_names(db_path)
     assert "stages" in tables
@@ -212,7 +212,7 @@ def test_stages_and_operations_tables_created(tmp_path):
 
 def test_import_identity_tables_created(tmp_path):
     config = _make_config(tmp_path)
-    db_path = ensure_database(config)
+    db_path = ensure_database(config.root_dir)
 
     tables = _table_names(db_path)
     assert "import_sources" in tables
@@ -266,7 +266,7 @@ def test_import_identity_tables_created(tmp_path):
 
 def test_import_identities_survive_projection_wipe(tmp_path):
     config = _make_config(tmp_path)
-    db_path = ensure_database(config)
+    db_path = ensure_database(config.root_dir)
 
     with connect(db_path) as conn:
         conn.execute(
@@ -284,7 +284,7 @@ def test_import_identities_survive_projection_wipe(tmp_path):
         for table in PROJECTION_TABLES:
             conn.execute(f"DELETE FROM {table}")
 
-    ensure_database(config)
+    ensure_database(config.root_dir)
     with sqlite3.connect(db_path) as conn:
         count = conn.execute("SELECT COUNT(*) FROM import_identities").fetchone()[0]
     assert count == 1
@@ -292,7 +292,7 @@ def test_import_identities_survive_projection_wipe(tmp_path):
 
 def test_stages_survive_projection_wipe(tmp_path):
     config = _make_config(tmp_path)
-    db_path = ensure_database(config)
+    db_path = ensure_database(config.root_dir)
 
     with connect(db_path) as conn:
         conn.execute(
@@ -305,7 +305,7 @@ def test_stages_survive_projection_wipe(tmp_path):
         for table in PROJECTION_TABLES:
             conn.execute(f"DELETE FROM {table}")
 
-    ensure_database(config)
+    ensure_database(config.root_dir)
     with sqlite3.connect(db_path) as conn:
         count = conn.execute("SELECT COUNT(*) FROM stages").fetchone()[0]
     assert count == 1
@@ -313,7 +313,7 @@ def test_stages_survive_projection_wipe(tmp_path):
 
 def test_stages_applied_operation_id_foreign_key(tmp_path):
     config = _make_config(tmp_path)
-    db_path = ensure_database(config)
+    db_path = ensure_database(config.root_dir)
 
     with connect(db_path) as conn:
         # NULL linkage is the pre-#22 steady state.
@@ -337,7 +337,7 @@ def test_stages_applied_operation_id_foreign_key(tmp_path):
 
 def test_stages_status_check_rejects_unknown_values(tmp_path):
     config = _make_config(tmp_path)
-    db_path = ensure_database(config)
+    db_path = ensure_database(config.root_dir)
 
     with connect(db_path) as conn:
         try:
@@ -354,7 +354,7 @@ def test_stages_status_check_rejects_unknown_values(tmp_path):
 
 def test_foreign_keys_enforced_on_connect(tmp_path):
     config = _make_config(tmp_path)
-    db_path = ensure_database(config)
+    db_path = ensure_database(config.root_dir)
 
     with connect(db_path) as conn:
         try:

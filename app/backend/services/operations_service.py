@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import hashlib
 import json
+import logging
 from datetime import UTC, datetime
+from pathlib import Path
 from uuid import uuid4
 
-from .config_service import AppConfig
 from .projection_db import connect, ensure_database
+
+logger = logging.getLogger(__name__)
 
 
 def _json_dumps(value: dict) -> str:
@@ -16,8 +20,30 @@ def _now() -> str:
     return datetime.now(UTC).isoformat()
 
 
+def hash_file(path: Path) -> str:
+    """Return ``sha256:<hexdigest>`` for *path*, or ``sha256:none`` if missing.
+
+    This is the canonical format for ``operation_files`` hashes — undo's
+    drift check compares stored hashes against this function's output.
+    """
+    try:
+        data = path.read_bytes()
+    except (FileNotFoundError, OSError):
+        return "sha256:none"
+    return "sha256:" + hashlib.sha256(data).hexdigest()
+
+
+def rel_path(file_path: Path, workspace_root: Path) -> str:
+    """Return *file_path* relative to *workspace_root*, or absolute as fallback."""
+    try:
+        return str(file_path.resolve().relative_to(workspace_root.resolve()))
+    except ValueError:
+        logger.warning("Path %s is outside workspace %s", file_path, workspace_root)
+        return str(file_path)
+
+
 def record_operation(
-    config: AppConfig,
+    root_dir: Path,
     *,
     operation_type: str,
     summary: str,
@@ -35,7 +61,7 @@ def record_operation(
     """Persist a durable operation and its affected files/entities."""
     op_id = operation_id or uuid4().hex
     timestamp = created_at or _now()
-    db_path = ensure_database(config)
+    db_path = ensure_database(root_dir)
     with connect(db_path) as conn:
         if compensates_operation_id is not None:
             exists = conn.execute(
@@ -116,8 +142,8 @@ def record_operation(
     return op_id
 
 
-def list_operations(config: AppConfig, *, limit: int | None = None) -> list[dict]:
-    db_path = ensure_database(config)
+def list_operations(root_dir: Path, *, limit: int | None = None) -> list[dict]:
+    db_path = ensure_database(root_dir)
     sql = """
         SELECT id, type, actor_type, status, summary, created_at, applied_at,
                undo_mode, compensates_operation_id, payload_json
@@ -183,15 +209,15 @@ def list_operations(config: AppConfig, *, limit: int | None = None) -> list[dict
     return operations
 
 
-def get_operation(config: AppConfig, operation_id: str) -> dict | None:
+def get_operation(root_dir: Path, operation_id: str) -> dict | None:
     return next(
-        (operation for operation in list_operations(config) if operation["id"] == operation_id),
+        (operation for operation in list_operations(root_dir) if operation["id"] == operation_id),
         None,
     )
 
 
-def operation_is_compensated(config: AppConfig, operation_id: str) -> str | None:
-    db_path = ensure_database(config)
+def operation_is_compensated(root_dir: Path, operation_id: str) -> str | None:
+    db_path = ensure_database(root_dir)
     with connect(db_path) as conn:
         row = conn.execute(
             """
@@ -203,8 +229,3 @@ def operation_is_compensated(config: AppConfig, operation_id: str) -> str | None
             (operation_id,),
         ).fetchone()
     return str(row[0]) if row else None
-
-
-def list_legacy_event_operations(config: AppConfig) -> list[dict]:
-    """Compatibility adapter for legacy JSONL consumers."""
-    return list(reversed(list_operations(config)))

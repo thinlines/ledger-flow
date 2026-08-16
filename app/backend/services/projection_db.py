@@ -15,8 +15,6 @@ import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
 
-from .config_service import AppConfig
-
 # Projection-class tables: safe to wipe and rebuild from plaintext journals.
 PROJECTION_TABLES: tuple[str, ...] = (
     "journal_files",
@@ -249,9 +247,7 @@ CREATE TABLE IF NOT EXISTS commodities (
 
 # Operation-class and workflow-state tables. Neither is wiped on projection
 # rebuild: operations are durable history; stages are resumable in-flight
-# workflow state. `operations` ships as DDL only — the stages FK needs the
-# parent table to exist (SQLite refuses child-table DML otherwise); #22 wires
-# the operations spine. `operation_files` / `operation_entities` arrive with it.
+# workflow state.
 _MIGRATION_0003 = """
 CREATE TABLE IF NOT EXISTS operations (
     id TEXT PRIMARY KEY,
@@ -420,8 +416,8 @@ MIGRATIONS: tuple[tuple[int, str, str], ...] = (
 )
 
 
-def database_path(config: AppConfig) -> Path:
-    return config.root_dir / ".workflow" / "state.db"
+def database_path(root_dir: Path) -> Path:
+    return root_dir / ".workflow" / "state.db"
 
 
 def connect(db_path: Path) -> sqlite3.Connection:
@@ -433,9 +429,9 @@ def connect(db_path: Path) -> sqlite3.Connection:
     return conn
 
 
-def ensure_database(config: AppConfig) -> Path:
+def ensure_database(root_dir: Path) -> Path:
     """Create the workspace database and apply pending migrations. Idempotent."""
-    db_path = database_path(config)
+    db_path = database_path(root_dir)
     with connect(db_path) as conn:
         conn.execute(
             """

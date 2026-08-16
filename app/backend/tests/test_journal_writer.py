@@ -12,16 +12,15 @@ known string to a path.
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
 
+from conftest import read_operation_events
 from services import journal_writer
 from services.config_service import AppConfig
-from services.event_log_service import EVENTS_FILENAME, hash_file
-from services.operations_service import list_operations
+from services.operations_service import hash_file, list_operations
 from services.journal_writer import (
     JournalMutation,
     VerifyFailure,
@@ -75,39 +74,7 @@ def journal_path(workspace: Path) -> Path:
 
 
 def _read_operation_events(workspace: Path) -> list[dict]:
-    events_file = workspace / EVENTS_FILENAME
-    if not events_file.is_file():
-        config = AppConfig(
-            root_dir=workspace,
-            config_toml=workspace / "settings" / "workspace.toml",
-            workspace={"name": "Test"},
-            dirs={
-                "csv_dir": "csv",
-                "journal_dir": "journals",
-                "init_dir": "init",
-                "opening_bal_dir": "opening",
-                "imports_dir": "imports",
-            },
-            institution_templates={},
-            import_accounts={},
-        )
-        return [
-            {
-                "id": op["id"],
-                "type": op["type"],
-                "actor": op["actor"],
-                "summary": op["summary"],
-                "payload": op["payload"],
-                "journal_refs": op["files"],
-                "compensates": op["compensates"],
-            }
-            for op in reversed(list_operations(config))
-        ]
-    return [
-        json.loads(line)
-        for line in events_file.read_text(encoding="utf-8").splitlines()
-        if line.strip()
-    ]
+    return read_operation_events(workspace)
 
 
 def _emitted(workspace: Path, event_type: str) -> list[dict]:
@@ -220,7 +187,7 @@ class TestBackup:
 
 
 class TestSuccessfulExit:
-    def test_records_operation_instead_of_events_jsonl(
+    def test_records_operation_on_exit(
         self, config: AppConfig, journal_path: Path
     ) -> None:
         with mutate(
@@ -233,8 +200,7 @@ class TestSuccessfulExit:
             mut.summary = "It happened"
             mut.payload = {"reason": "test"}
 
-        assert not (config.root_dir / EVENTS_FILENAME).exists()
-        operations = list_operations(config)
+        operations = list_operations(config.root_dir)
         assert len(operations) == 1
         assert operations[0]["id"] == mut.event_id
         assert operations[0]["type"] == "thing.happened.v1"

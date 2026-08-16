@@ -38,7 +38,7 @@ class StageStore:
         return uuid.uuid4().hex
 
     def _connect(self) -> Connection:
-        return connect(ensure_database(self.config))
+        return connect(ensure_database(self.config.root_dir))
 
     def create(self, payload: dict) -> str:
         stage_id = self.new_stage_id()

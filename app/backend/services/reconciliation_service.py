@@ -448,7 +448,7 @@ def _latest_dates_by_ledger_account(config: AppConfig) -> dict[str, date]:
     """Return ``{ledger_account: most_recent_reconciled_date}`` across all journals."""
     refresh_projection(config)
     latest: dict[str, date] = {}
-    with connect(database_path(config)) as conn:
+    with connect(database_path(config.root_dir)) as conn:
         rows = conn.execute(
             """
             SELECT postings.account, MAX(transactions.date)

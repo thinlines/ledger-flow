@@ -115,7 +115,7 @@ def _dat(config: AppConfig, name: str = "10-accounts.dat") -> str:
 
 
 def _account_row(config: AppConfig, name: str) -> sqlite3.Row | None:
-    with sqlite3.connect(database_path(config)) as conn:
+    with sqlite3.connect(database_path(config.root_dir)) as conn:
         conn.row_factory = sqlite3.Row
         return conn.execute(
             "SELECT * FROM accounts WHERE name = ?", (name,)
@@ -215,7 +215,7 @@ def test_closed_account_keeps_history_and_counts(config):
     counts = posting_counts_by_account(config)
     assert counts["Expenses:Groceries"] == 1
 
-    with sqlite3.connect(database_path(config)) as conn:
+    with sqlite3.connect(database_path(config.root_dir)) as conn:
         postings = conn.execute(
             "SELECT COUNT(*) FROM postings WHERE account = 'Expenses:Groceries'"
         ).fetchone()[0]

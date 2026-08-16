@@ -222,7 +222,7 @@ def test_unified_transactions_reads_through_projection(tmp_path):
 
     build_unified_transactions(config, _filters())
 
-    db_path = database_path(config)
+    db_path = database_path(config.root_dir)
     assert db_path.exists()
     import sqlite3
 

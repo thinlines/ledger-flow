@@ -138,7 +138,7 @@ class TestSnapshotCommit:
         ensure_workspace_repo(workspace)
 
         record_operation(
-            config,
+            config.root_dir,
             operation_type="manual_entry.created.v1",
             summary="Created Lunch",
             payload={"txn_id": "txn-2"},
@@ -171,7 +171,7 @@ class TestSnapshotCommit:
         config = _make_config(workspace)
         ensure_workspace_repo(workspace)
         record_operation(
-            config,
+            config.root_dir,
             operation_type="manual_entry.created.v1",
             summary="Created Lunch",
             payload={},
@@ -183,7 +183,7 @@ class TestSnapshotCommit:
         dump_path = workspace / "operation-history.dump.sql"
         before = dump_path.read_text(encoding="utf-8")
 
-        db_path = ensure_database(config)
+        db_path = ensure_database(config.root_dir)
         with connect(db_path) as conn:
             conn.execute(
                 """
@@ -227,7 +227,7 @@ class TestSnapshotCommit:
         config = _make_config(workspace)
         ensure_workspace_repo(workspace)
         record_operation(
-            config,
+            config.root_dir,
             operation_type="manual_entry.created.v1",
             summary="Created Lunch",
             payload={"txn_id": "txn-2"},
@@ -237,7 +237,7 @@ class TestSnapshotCommit:
         )
         assert snapshot_commit(workspace, trigger="shutdown") is True
 
-        db_path = database_path(config)
+        db_path = database_path(config.root_dir)
         for path in [
             db_path,
             db_path.with_name(f"{db_path.name}-wal"),

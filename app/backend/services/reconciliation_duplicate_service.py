@@ -14,7 +14,7 @@ from fastapi import HTTPException
 from . import journal_writer
 from .archive_service import archive_manual_entry
 from .config_service import AppConfig
-from .event_log_service import rel_path
+from .operations_service import rel_path
 from .import_identity_service import ImportIdentityStore
 from .journal_block_service import hash_block, locate_block_by_hash, locate_block_by_id
 from .projection_service import find_projected_transaction

@@ -79,7 +79,7 @@ def _load_dashboard_transactions_from_projection(
     """
     refresh_projection(config)
 
-    with connect(database_path(config)) as conn:
+    with connect(database_path(config.root_dir)) as conn:
         txn_rows = conn.execute(
             """
             SELECT transactions.id, transactions.date, transactions.payee,

@@ -168,7 +168,7 @@ def _golden_workspace(tmp_path: Path) -> AppConfig:
 
 
 def _connect(config: AppConfig) -> sqlite3.Connection:
-    conn = sqlite3.connect(database_path(config))
+    conn = sqlite3.connect(database_path(config.root_dir))
     conn.row_factory = sqlite3.Row
     return conn
 

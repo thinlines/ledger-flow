@@ -9,14 +9,13 @@ transaction fail the handler's semantic precondition instead.
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import pytest
 
+from conftest import record_event
 from services.config_service import AppConfig
-from services.event_log_service import EVENTS_FILENAME, emit_event, hash_file, rel_path
-from services.operations_service import list_operations, record_operation
+from services.operations_service import hash_file, list_operations, record_operation, rel_path
 from services.undo_service import UndoOutcome, undo_event
 
 
@@ -38,8 +37,7 @@ def _make_config(workspace: Path) -> AppConfig:
 
 
 def _read_operation_events(workspace: Path) -> list[dict]:
-    config = _make_config(workspace)
-    operation_events = [
+    return [
         {
             "id": op["id"],
             "type": op["type"],
@@ -48,19 +46,7 @@ def _read_operation_events(workspace: Path) -> list[dict]:
             "journal_refs": op["files"],
             "compensates": op["compensates"],
         }
-        for op in reversed(list_operations(config))
-    ]
-    events_file = workspace / EVENTS_FILENAME
-    if not events_file.exists():
-        return operation_events
-    legacy_events = [
-        json.loads(line)
-        for line in events_file.read_text().splitlines()
-        if line.strip()
-    ]
-    legacy_ids = {str(event.get("id")) for event in legacy_events}
-    return legacy_events + [
-        event for event in operation_events if str(event.get("id")) not in legacy_ids
+        for op in reversed(list_operations(workspace))
     ]
 
 
@@ -104,7 +90,7 @@ class TestUndoDispatcher:
         workspace = _setup_workspace(tmp_path)
         _write_journal(workspace, "2026.journal", "")
         event_id = record_operation(
-            _make_config(workspace),
+            workspace,
             operation_type="some.unknown.type.v1",
             summary="test",
             payload={},
@@ -125,7 +111,7 @@ class TestUndoDispatcher:
         journal.write_text("", encoding="utf-8")
         after = hash_file(journal)
         event_id = record_operation(
-            config,
+            config.root_dir,
             operation_type="transaction.deleted.v1",
             summary="Deleted: Test",
             payload={
@@ -162,7 +148,7 @@ class TestUndoDispatcher:
         journal.write_text("", encoding="utf-8")
 
         hash_after = hash_file(journal)
-        event_id = emit_event(
+        event_id = record_event(
             workspace,
             event_type="transaction.deleted.v1",
             summary="Deleted: Test",
@@ -208,7 +194,7 @@ class TestUndoDeleted:
         journal.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
 
         hash_after = hash_file(journal)
-        return emit_event(
+        return record_event(
             workspace,
             event_type="transaction.deleted.v1",
             summary="Deleted: Whole Foods",
@@ -282,7 +268,7 @@ class TestUndoDeleted:
         journal = _write_journal(workspace, "2026.journal", content)
 
         hash_after = hash_file(journal)
-        event_id = emit_event(
+        event_id = record_event(
             workspace,
             event_type="transaction.deleted.v1",
             summary="Deleted: Whole Foods",
@@ -316,7 +302,7 @@ RECAT_POST_FORWARD = (
 class TestUndoRecategorized:
     def _emit_recat_event(self, workspace: Path, journal: Path) -> str:
         hash_after = hash_file(journal)
-        return emit_event(
+        return record_event(
             workspace,
             event_type="transaction.recategorized.v1",
             summary="Reset category: Whole Foods",
@@ -376,7 +362,7 @@ class TestUndoRecategorized:
         workspace = _setup_workspace(tmp_path)
         journal = _write_journal(workspace, "2026.journal", RECAT_POST_FORWARD)
         hash_after = hash_file(journal)
-        event_id = emit_event(
+        event_id = record_event(
             workspace,
             event_type="transaction.recategorized.v1",
             summary="Reset category: Whole Foods",
@@ -402,7 +388,7 @@ class TestUndoRecategorized:
 class TestUndoStatusToggled:
     def _emit_toggle_event(self, workspace: Path, journal: Path) -> str:
         hash_after = hash_file(journal)
-        return emit_event(
+        return record_event(
             workspace,
             event_type="transaction.status_toggled.v1",
             summary="Toggled to pending",
@@ -474,7 +460,7 @@ class TestUndoManualEntryCreated:
         )
 
         hash_after = hash_file(journal)
-        event_id = emit_event(
+        event_id = record_event(
             workspace,
             event_type="manual_entry.created.v1",
             summary="Created manual entry: Whole Foods 50.00 USD",
@@ -511,7 +497,7 @@ class TestUndoManualEntryCreated:
             destination_account="Expenses:Groceries",
         )
         hash_after = hash_file(journal)
-        event_id = emit_event(
+        event_id = record_event(
             workspace,
             event_type="manual_entry.created.v1",
             summary="Created manual entry",
@@ -555,7 +541,7 @@ class TestUndoNotesUpdated:
             payload["txn_id"] = txn_id
         if include_previous:
             payload["previous_notes"] = previous_notes
-        return emit_event(
+        return record_event(
             workspace,
             event_type="transaction.notes_updated.v1",
             summary=f"Notes updated: {header_line}",
@@ -690,7 +676,7 @@ class TestUndoUnmatched:
 
         hash_after_main = hash_file(journal)
 
-        event_id = emit_event(
+        event_id = record_event(
             workspace,
             event_type="transaction.unmatched.v1",
             summary="Unmatched: Whole Foods",

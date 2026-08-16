@@ -37,7 +37,7 @@ def _make_config(workspace: Path) -> AppConfig:
 
 def test_ensure_rules_store_ignores_retired_ndjson(tmp_path: Path) -> None:
     config = _make_config(tmp_path / "workspace")
-    db_path = ensure_database(config)
+    db_path = ensure_database(config.root_dir)
     rules_file = config.init_dir / "20-match-rules.ndjson"
     rules_file.write_text(
         "\n".join(
@@ -74,7 +74,7 @@ def test_rule_mutations_are_recorded_as_operations(tmp_path: Path) -> None:
     update_rule(store, created["id"], enabled=False)
     delete_rule(store, created["id"])
 
-    with connect(ensure_database(config)) as conn:
+    with connect(ensure_database(config.root_dir)) as conn:
         rows = conn.execute(
             "SELECT type, summary, payload_json FROM operations ORDER BY rowid"
         ).fetchall()

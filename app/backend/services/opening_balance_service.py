@@ -34,7 +34,7 @@ def _parse_amount(raw: str) -> Decimal | None:
 def load_opening_balance_entries(config: AppConfig) -> list[OpeningBalanceEntry]:
     refresh_projection(config)
     entries: list[OpeningBalanceEntry] = []
-    with connect(database_path(config)) as conn:
+    with connect(database_path(config.root_dir)) as conn:
         rows = conn.execute(
             """
             SELECT transactions.id, transactions.date, postings.posting_order,

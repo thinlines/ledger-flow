@@ -14,7 +14,6 @@ from fastapi import HTTPException
 import main
 from models import DeleteTransactionRequest, ReconcileRequest
 from services.config_service import AppConfig
-from services.event_log_service import EVENTS_FILENAME
 from conftest import read_operation_events
 from services.reconciliation_service import latest_reconciliation_date
 

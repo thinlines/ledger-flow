@@ -16,7 +16,8 @@ from pathlib import Path
 
 import pytest
 
-from services import event_log_service, journal_writer
+from conftest import read_operation_events
+from services import journal_writer
 from services.config_service import AppConfig
 from services.journal_writer import VerifyFailure, WriterRejected, mutate
 from services.projection_db import database_path
@@ -62,7 +63,7 @@ def config(tmp_path: Path) -> AppConfig:
 
 
 def _txn_row(config: AppConfig, txn_id: str) -> sqlite3.Row:
-    conn = sqlite3.connect(database_path(config))
+    conn = sqlite3.connect(database_path(config.root_dir))
     conn.row_factory = sqlite3.Row
     with conn:
         row = conn.execute(
@@ -169,7 +170,6 @@ def test_projection_failure_rolls_back_file_write(config: AppConfig, monkeypatch
     row = _txn_row(config, "txn_grocery")
     assert row["status"] == "unmarked"
 
-    # No event was emitted for the failed mutation.
-    events_file = config.root_dir / event_log_service.EVENTS_FILENAME
-    if events_file.is_file():
-        assert "test.mutated.v1" not in events_file.read_text(encoding="utf-8")
+    # No operation was recorded for the failed mutation.
+    events = read_operation_events(config.root_dir)
+    assert not any(e["type"] == "test.mutated.v1" for e in events)

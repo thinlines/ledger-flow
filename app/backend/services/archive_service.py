@@ -74,8 +74,10 @@ def rollback_archive(archive_path: Path, size_before: int | None) -> None:
     """Restore the archive file to its pre-apply state.
 
     If no archive existed before (``size_before is None``), remove the file.
-    Otherwise truncate back to the captured byte length. This is the rollback
-    path for archive writes — the main journal has its own ``.bak`` file.
+    Otherwise truncate back to the captured byte length. Callers run inside
+    ``journal_writer.mutate``, which also restores the archive from its own
+    ``.bak`` on rollback — this keeps the file coherent for that restore when
+    the failure happens mid-append.
     """
     if size_before is None:
         if archive_path.exists():

@@ -123,7 +123,7 @@ def _workspace(tmp_path: Path, monkeypatch, journal: str = JOURNAL) -> AppConfig
 
 
 def _txn_row(config: AppConfig, txn_id: str) -> sqlite3.Row | None:
-    conn = sqlite3.connect(database_path(config))
+    conn = sqlite3.connect(database_path(config.root_dir))
     conn.row_factory = sqlite3.Row
     with conn:
         row = conn.execute(

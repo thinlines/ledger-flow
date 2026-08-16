@@ -39,7 +39,7 @@ def _make_config(workspace: Path) -> AppConfig:
 
 
 def _stage_row(config: AppConfig, stage_id: str) -> tuple:
-    with sqlite3.connect(database_path(config)) as conn:
+    with sqlite3.connect(database_path(config.root_dir)) as conn:
         return conn.execute(
             """
             SELECT kind, status, summary_json, payload_json,
@@ -157,7 +157,7 @@ def test_cleanup_old_deletes_only_stale_rows(tmp_path):
     old_id = store.create({"kind": "unknowns", "status": "ready"})
     fresh_id = store.create({"kind": "unknowns", "status": "ready"})
 
-    with sqlite3.connect(database_path(config)) as conn:
+    with sqlite3.connect(database_path(config.root_dir)) as conn:
         conn.execute(
             "UPDATE stages SET updated_at = '2026-01-01T00:00:00+00:00' WHERE id = ?",
             (old_id,),
