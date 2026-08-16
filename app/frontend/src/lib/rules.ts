@@ -1,4 +1,4 @@
-import type { RuleAction, RuleCondition } from '$lib/components/rule-editor-types';
+import type { RuleAction, RuleCondition } from '$lib/rule-types';
 
 export type EditableRule = {
   name?: string | null;
