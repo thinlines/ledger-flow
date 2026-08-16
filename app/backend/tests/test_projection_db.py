@@ -204,7 +204,6 @@ def test_stages_and_operations_tables_created(tmp_path):
         "created_at",
         "updated_at",
         "base_revision",
-        "base_file_hashes_json",
         "summary_json",
         "payload_json",
         "applied_operation_id",

@@ -693,7 +693,6 @@ CREATE TABLE stages (
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     base_revision TEXT,
-    base_file_hashes_json TEXT NOT NULL DEFAULT '{}',
     summary_json TEXT NOT NULL DEFAULT '{}',
     payload_json TEXT NOT NULL,
     applied_operation_id TEXT REFERENCES operations(id) ON DELETE SET NULL

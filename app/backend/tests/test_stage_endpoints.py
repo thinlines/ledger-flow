@@ -71,7 +71,7 @@ def _stage_row(config: AppConfig, stage_id: str) -> tuple | None:
     with sqlite3.connect(database_path(config)) as conn:
         return conn.execute(
             """
-            SELECT kind, status, summary_json, base_file_hashes_json, payload_json,
+            SELECT kind, status, summary_json, payload_json,
                    applied_operation_id
             FROM stages WHERE id = ?
             """,
@@ -144,15 +144,12 @@ def test_import_preview_creates_stage_row(tmp_path: Path, monkeypatch) -> None:
     assert payload["stageId"]
     row = _stage_row(config, payload["stageId"])
     assert row is not None
-    kind, status, summary_json, hashes_json, payload_json, applied_op = row
+    kind, status, summary_json, payload_json, applied_op = row
     assert kind == "import"
     assert status == "ready"
     assert json.loads(summary_json) == payload["summary"]
     assert json.loads(payload_json) == payload
     assert applied_op is None
-    hashes = json.loads(hashes_json)
-    assert set(hashes) == {payload["targetJournalPath"]}
-    assert hashes[payload["targetJournalPath"]].startswith("sha256:")
 
     # Resume: the stage endpoint returns the same payload.
     assert main.get_stage(payload["stageId"]) == payload
@@ -175,7 +172,7 @@ def test_import_apply_marks_stage_applied_and_is_idempotent(tmp_path: Path, monk
 
     row = _stage_row(config, stage_id)
     assert row is not None
-    _, status, _, _, payload_json, _ = row
+    _, status, _, payload_json, _ = row
     assert status == "applied"
     assert json.loads(payload_json)["result"]["historyId"] == applied["result"]["historyId"]
 
@@ -261,9 +258,8 @@ def test_unknowns_autosave_resume_apply_and_discard(tmp_path: Path, monkeypatch)
     stage_id = scanned["stageId"]
     row = _stage_row(config, stage_id)
     assert row is not None
-    kind, status, _, hashes_json, _, _ = row
+    kind, status, _, _, _ = row
     assert (kind, status) == ("unknowns", "ready")
-    assert set(json.loads(hashes_json)) == {str(journal.resolve())}
 
     txn = scanned["groups"][0]["txns"][0]
     updated = main.unknown_stage_mappings(
@@ -339,10 +335,9 @@ def test_rule_history_scan_apply_and_cleanup(tmp_path: Path, monkeypatch) -> Non
     stage_id = scanned["stageId"]
     row = _stage_row(config, stage_id)
     assert row is not None
-    kind, status, summary_json, hashes_json, _, _ = row
+    kind, status, summary_json, _, _ = row
     assert (kind, status) == ("rule_history", "ready")
     assert json.loads(summary_json) == {"candidateCount": 1}
-    assert set(json.loads(hashes_json)) == {str(journal.resolve())}
 
     monkeypatch.setattr(main, "apply_rule_reapply", lambda **k: (1, []))
     applied = main.rules_history_apply(

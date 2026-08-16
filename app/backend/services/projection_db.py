@@ -404,6 +404,10 @@ CREATE TABLE IF NOT EXISTS transaction_matches (
 );
 """
 
+_MIGRATION_0008 = """
+ALTER TABLE stages DROP COLUMN base_file_hashes_json;
+"""
+
 MIGRATIONS: tuple[tuple[int, str, str], ...] = (
     (1, "journal_projection_tables", _MIGRATION_0001),
     (2, "reference_data_tables", _MIGRATION_0002),
@@ -412,6 +416,7 @@ MIGRATIONS: tuple[tuple[int, str, str], ...] = (
     (5, "operation_files_and_entities_tables", _MIGRATION_0005),
     (6, "rules_tables", _MIGRATION_0006),
     (7, "transaction_matches", _MIGRATION_0007),
+    (8, "drop_stage_base_file_hashes", _MIGRATION_0008),
 )
 
 

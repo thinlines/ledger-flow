@@ -392,9 +392,7 @@ def _import_stage_payload(config, csv_path: str, year: str, import_account_id: s
         "importAccountId": import_account_id,
         **data,
     }
-    stage_id = StageStore(config).create(
-        payload, base_files=[Path(payload["targetJournalPath"])]
-    )
+    stage_id = StageStore(config).create(payload)
     payload["stageId"] = stage_id
     return payload
 
@@ -2318,7 +2316,7 @@ def unknown_scan(req: UnknownScanRequest) -> dict:
         return payload
 
     payload = _build_unknown_stage_payload(journal_path, data["groups"])
-    stage_id = stages.create(payload, base_files=[journal_path.resolve()])
+    stage_id = stages.create(payload)
     payload["stageId"] = stage_id
     return payload
 
@@ -2513,7 +2511,7 @@ def rules_history_scan(rule_id: str, req: RuleHistoryScanRequest) -> dict:
         "warnings": data["warnings"],
         "summary": data["summary"],
     }
-    stage_id = StageStore(config).create(payload, base_files=[journal_path.resolve()])
+    stage_id = StageStore(config).create(payload)
     payload["stageId"] = stage_id
     return payload
 
