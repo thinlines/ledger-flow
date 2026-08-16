@@ -7,14 +7,13 @@ convert`` — matches statement text against ``payee_aliases`` patterns in
 """
 from __future__ import annotations
 
-import hashlib
 import re
 from contextlib import closing
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from .config_service import AppConfig
-from .operations_service import record_operation
+from .operations_service import hash_file, record_operation
 from .projection_db import connect, database_path
 from .projection_service import refresh_projection
 from .rules_service import extract_set_account, find_matching_rule
@@ -114,10 +113,6 @@ def match_merchant(statement_text: str, merchants: list[Merchant]) -> Merchant |
     return None
 
 
-def _sha256_file(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest() if path.exists() else ""
-
-
 def _declaring_file(config: AppConfig, name: str) -> Path | None:
     """Path of the directive file declaring payee ``name``, from the
     projection (mirrors account_declaration_service)."""
@@ -179,7 +174,7 @@ def upsert_merchant(
     created = path is None
     if path is None:
         path = config.init_dir / PAYEES_FILE_NAME
-    hash_before = _sha256_file(path)
+    hash_before = hash_file(path)
 
     lines = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
     changed = False
@@ -245,7 +240,7 @@ def upsert_merchant(
             {
                 "path": str(path.relative_to(config.root_dir)),
                 "hash_before": hash_before,
-                "hash_after": _sha256_file(path),
+                "hash_after": hash_file(path),
             }
         ],
         entities=[{"entity_type": "payee", "entity_id": name_clean, "role": "target"}],

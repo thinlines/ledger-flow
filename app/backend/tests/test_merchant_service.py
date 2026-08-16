@@ -14,7 +14,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from services.config_service import AppConfig
-from services.operations_service import list_operations
+from services.operations_service import hash_file, list_operations
 from services.merchant_service import (
     Merchant,
     list_undeclared_payees,
@@ -158,6 +158,35 @@ def test_upsert_merchant_extends_existing_declaration_in_place(tmp_path):
 
     operations = list_operations(config.root_dir)
     assert any(op["type"] == "reference.merchant.updated.v1" for op in operations)
+
+
+def test_upsert_merchant_records_shared_hash_format(tmp_path):
+    """operation_files hashes must use hash_file's ``sha256:<hex>`` format —
+    undo's drift check compares against hash_file output, so any other format
+    can never match."""
+    config = merchant_workspace(tmp_path)
+
+    upsert_merchant(config, name="Costco", alias="COSTCO WHSE")
+
+    payees_dat = tmp_path / "rules" / "11-payees.dat"
+    (op,) = [
+        o for o in list_operations(config.root_dir) if o["type"] == "reference.merchant.created.v1"
+    ]
+    (ref,) = op["files"]
+    assert ref["hash_after"] == hash_file(payees_dat)
+    assert ref["hash_before"].startswith("sha256:")
+
+
+def test_upsert_merchant_hash_before_is_none_sentinel_for_new_file(tmp_path):
+    config = make_config(tmp_path)
+
+    upsert_merchant(config, name="Costco", alias="COSTCO WHSE")
+
+    (op,) = [
+        o for o in list_operations(config.root_dir) if o["type"] == "reference.merchant.created.v1"
+    ]
+    (ref,) = op["files"]
+    assert ref["hash_before"] == "sha256:none"
 
 
 def test_undeclared_used_payees_are_the_suggestion_surface(tmp_path):
