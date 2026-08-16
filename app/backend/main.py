@@ -50,7 +50,7 @@ from models import (
     WorkspaceSelectRequest,
 )
 from services.category_suggestion_service import suggest_category
-from services.event_log_service import check_startup_drift, rel_path
+from services.event_log_service import rel_path
 from services.git_snapshot_service import hours_since_last_snapshot, snapshot_commit
 from services.header_parser import TransactionStatus, parse_header, set_header_status, HEADER_RE as _HEADER_RE
 from services import journal_writer
@@ -330,9 +330,8 @@ async def lifespan(_app: FastAPI):
         config = workspace_manager.load_active_config()
         if config is not None:
             StageStore(config).cleanup_old(days=7)
-            check_startup_drift(config.root_dir)
     except Exception:
-        _log.warning("Startup drift check failed — skipping", exc_info=True)
+        _log.warning("Startup stage cleanup failed — skipping", exc_info=True)
     try:
         if config is None:
             config = workspace_manager.load_active_config()

@@ -2,8 +2,8 @@
 
 Every journal-class write in Ledger Flow flows through ``journal_writer.mutate``.
 The writer owns the ritual that previously lived inline in every route and
-undo handler: drift detect, hash, backup, mutate, verify, re-project, hash,
-emit-event, rollback-on-failure.
+undo handler: hash, backup, mutate, verify, re-project, hash, emit-event,
+rollback-on-failure.
 
 Callers describe **what** they want to change as a path set plus event metadata;
 the writer enforces **how** the change is safely applied.
@@ -42,7 +42,7 @@ from typing import Callable, Iterator
 from uuid import uuid7
 
 from .config_service import AppConfig
-from .event_log_service import check_drift, hash_file, rel_path
+from .event_log_service import hash_file, rel_path
 from .operations_service import record_operation
 from .projection_service import refresh_projection
 
@@ -211,7 +211,7 @@ def mutate(
 
     for path in paths:
         if pre_existed[path]:
-            hashes_before[path] = check_drift(workspace, path)
+            hashes_before[path] = hash_file(path)
             backups[path] = _backup(path, tag)
         else:
             hashes_before[path] = "sha256:none"

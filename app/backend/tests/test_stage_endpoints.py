@@ -23,16 +23,8 @@ from models import (
     UnknownSelection,
     UnknownStageRequest,
 )
-from services import event_log_service
 from services.config_service import AppConfig
 from services.projection_db import database_path
-
-
-@pytest.fixture(autouse=True)
-def _clear_hash_cache():
-    event_log_service._hash_cache.clear()
-    yield
-    event_log_service._hash_cache.clear()
 
 
 def _make_config(workspace: Path) -> AppConfig:

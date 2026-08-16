@@ -17,16 +17,8 @@ from fastapi import HTTPException
 
 import main
 from models import ManualTransactionRequest
-from services import event_log_service
 from services.config_service import AppConfig
 from services.projection_service import refresh_projection
-
-
-@pytest.fixture(autouse=True)
-def _clear_hash_cache():
-    event_log_service._hash_cache.clear()
-    yield
-    event_log_service._hash_cache.clear()
 
 
 JOURNAL = """\

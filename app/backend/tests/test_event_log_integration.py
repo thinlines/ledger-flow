@@ -8,25 +8,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-
-from services import event_log_service
 from services.event_log_service import (
     EVENTS_FILENAME,
-    check_drift,
     emit_event,
     hash_file,
     rel_path,
 )
 from conftest import read_operation_events
 from services.manual_entry_service import create_manual_transaction
-
-
-@pytest.fixture(autouse=True)
-def _clear_hash_cache():
-    event_log_service._hash_cache.clear()
-    yield
-    event_log_service._hash_cache.clear()
 
 
 def _read_operation_events(workspace: Path) -> list[dict]:
@@ -56,7 +45,7 @@ class TestManualEntryCreatedEvent:
         workspace = _setup_workspace(tmp_path)
         journal_path = workspace / "journals" / "2026.journal"
 
-        hash_before = check_drift(workspace, journal_path)
+        hash_before = hash_file(journal_path)
 
         tracked_account_cfg = {
             "display_name": "Checking",
@@ -112,117 +101,7 @@ class TestManualEntryCreatedEvent:
         workspace = _setup_workspace(tmp_path)
         journal_path = workspace / "journals" / "2026.journal"
         # Journal doesn't exist yet
-        hash_before = check_drift(workspace, journal_path)
-        assert hash_before == "sha256:none"
-
-
-# ---------------------------------------------------------------------------
-# Drift detection integration
-# ---------------------------------------------------------------------------
-
-
-class TestDriftDetectionIntegration:
-    def test_external_edit_detected_before_mutation(self, tmp_path: Path) -> None:
-        workspace = _setup_workspace(tmp_path)
-        journal_path = workspace / "journals" / "2026.journal"
-        journal_path.write_text("original content\n", encoding="utf-8")
-
-        # Emit an event to establish a baseline hash
-        original_hash = hash_file(journal_path)
-        emit_event(
-            workspace,
-            event_type="e.v1",
-            summary="s",
-            payload={},
-            journal_refs=[{
-                "path": "journals/2026.journal",
-                "hash_before": "sha256:none",
-                "hash_after": original_hash,
-            }],
-        )
-
-        # Simulate external edit
-        journal_path.write_text("externally modified content\n", encoding="utf-8")
-
-        # Drift check before next mutation
-        check_drift(workspace, journal_path)
-
-        events = _read_operation_events(workspace)
-        drift_events = [e for e in events if e["type"] == "journal.external_edit_detected.v1"]
-        assert len(drift_events) == 1
-        assert drift_events[0]["payload"]["trigger"] == "pre_mutation"
-        assert drift_events[0]["payload"]["expected_hash"] == original_hash
-        assert drift_events[0]["actor"] == "system"
-
-    def test_drift_event_appears_before_mutation_event(self, tmp_path: Path) -> None:
-        workspace = _setup_workspace(tmp_path)
-        journal_path = workspace / "journals" / "2026.journal"
-        journal_path.write_text("original\n", encoding="utf-8")
-
-        original_hash = hash_file(journal_path)
-        emit_event(
-            workspace,
-            event_type="setup.v1",
-            summary="s",
-            payload={},
-            journal_refs=[{
-                "path": "journals/2026.journal",
-                "hash_before": "sha256:none",
-                "hash_after": original_hash,
-            }],
-        )
-
-        # External edit
-        journal_path.write_text("modified\n", encoding="utf-8")
-
-        # Run drift check (as route handler would)
-        hash_before = check_drift(workspace, journal_path)
-
-        # Simulate mutation
-        journal_path.write_text("modified\nnew transaction\n", encoding="utf-8")
-        hash_after = hash_file(journal_path)
-
-        emit_event(
-            workspace,
-            event_type="manual_entry.created.v1",
-            summary="test",
-            payload={},
-            journal_refs=[{
-                "path": "journals/2026.journal",
-                "hash_before": hash_before,
-                "hash_after": hash_after,
-            }],
-        )
-
-        events = _read_operation_events(workspace)
-        types = [e["type"] for e in events]
-        drift_idx = types.index("journal.external_edit_detected.v1")
-        mutation_idx = types.index("manual_entry.created.v1")
-        assert drift_idx < mutation_idx
-
-    def test_no_drift_when_file_unchanged(self, tmp_path: Path) -> None:
-        workspace = _setup_workspace(tmp_path)
-        journal_path = workspace / "journals" / "2026.journal"
-        journal_path.write_text("stable\n", encoding="utf-8")
-
-        current_hash = hash_file(journal_path)
-        emit_event(
-            workspace,
-            event_type="setup.v1",
-            summary="s",
-            payload={},
-            journal_refs=[{
-                "path": "journals/2026.journal",
-                "hash_before": "sha256:none",
-                "hash_after": current_hash,
-            }],
-        )
-
-        check_drift(workspace, journal_path)
-
-        events = _read_operation_events(workspace)
-        drift_events = [e for e in events if e["type"] == "journal.external_edit_detected.v1"]
-        assert len(drift_events) == 0
+        assert hash_file(journal_path) == "sha256:none"
 
 
 # ---------------------------------------------------------------------------
@@ -256,7 +135,7 @@ class TestHashChain:
         journal_path.write_text("v1\n", encoding="utf-8")
 
         # First mutation
-        hash_before_1 = check_drift(workspace, journal_path)
+        hash_before_1 = hash_file(journal_path)
         journal_path.write_text("v2\n", encoding="utf-8")
         hash_after_1 = hash_file(journal_path)
         emit_event(
@@ -272,7 +151,7 @@ class TestHashChain:
         )
 
         # Second mutation
-        hash_before_2 = check_drift(workspace, journal_path)
+        hash_before_2 = hash_file(journal_path)
         journal_path.write_text("v3\n", encoding="utf-8")
         hash_after_2 = hash_file(journal_path)
         emit_event(

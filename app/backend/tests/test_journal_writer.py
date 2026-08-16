@@ -2,7 +2,7 @@
 
 The writer is a deep module; these tests exercise observable external behavior
 at the ``mutate(...)`` interface and assert against the filesystem and the
-event log. They do not mock ``check_drift`` / ``hash_file`` / the writer's
+event log. They do not mock ``hash_file`` / the writer's
 internal backup helper, and they do not exercise any domain code or the real
 ``ledger`` CLI.
 
@@ -18,7 +18,7 @@ from pathlib import Path
 
 import pytest
 
-from services import event_log_service, journal_writer
+from services import journal_writer
 from services.config_service import AppConfig
 from services.event_log_service import EVENTS_FILENAME, hash_file
 from services.operations_service import list_operations
@@ -36,13 +36,6 @@ from services.journal_writer import (
 # Fixtures
 # ---------------------------------------------------------------------------
 
-
-@pytest.fixture(autouse=True)
-def _clear_hash_cache():
-    """Reset the event_log_service hash cache between tests."""
-    event_log_service._hash_cache.clear()
-    yield
-    event_log_service._hash_cache.clear()
 
 
 @pytest.fixture

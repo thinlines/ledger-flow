@@ -14,9 +14,8 @@ from pathlib import Path
 
 import pytest
 
-from services import event_log_service
 from services.config_service import AppConfig
-from services.event_log_service import EVENTS_FILENAME, emit_event, hash_file, check_drift, rel_path
+from services.event_log_service import EVENTS_FILENAME, emit_event, hash_file, rel_path
 from services.operations_service import list_operations, record_operation
 from services.undo_service import UndoOutcome, undo_event
 
@@ -36,13 +35,6 @@ def _make_config(workspace: Path) -> AppConfig:
         institution_templates={},
         import_accounts={},
     )
-
-
-@pytest.fixture(autouse=True)
-def _clear_hash_cache():
-    event_log_service._hash_cache.clear()
-    yield
-    event_log_service._hash_cache.clear()
 
 
 def _read_operation_events(workspace: Path) -> list[dict]:
@@ -163,7 +155,7 @@ class TestUndoDispatcher:
             "2026.journal",
             "2026-03-15 * Test\n    ; lf_txn_id: txn_test\n    Assets:Bank:Checking  -$10.00\n    Expenses:Groceries  $10.00\n",
         )
-        hash_before = check_drift(workspace, journal)
+        hash_before = hash_file(journal)
 
         text = journal.read_text(encoding="utf-8")
         lines = text.splitlines()
@@ -200,7 +192,7 @@ class TestUndoDispatcher:
 
 class TestUndoDeleted:
     def _delete_and_emit(self, workspace: Path, journal: Path, header: str, txn_id: str) -> str:
-        hash_before = check_drift(workspace, journal)
+        hash_before = hash_file(journal)
         lines = journal.read_text(encoding="utf-8").splitlines()
         from services.journal_block_service import locate_block_by_id
 
@@ -469,7 +461,7 @@ class TestUndoManualEntryCreated:
         journal = _write_journal(workspace, "2026.journal", "")
 
         from services.manual_entry_service import create_manual_transaction
-        hash_before = check_drift(workspace, journal)
+        hash_before = hash_file(journal)
         created = create_manual_transaction(
             journal_path=journal,
             accounts_dat=workspace / "rules" / "10-accounts.dat",

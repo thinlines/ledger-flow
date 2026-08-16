@@ -23,13 +23,6 @@ from services.projection_db import database_path
 from services.projection_service import refresh_projection
 
 
-@pytest.fixture(autouse=True)
-def _clear_hash_cache():
-    event_log_service._hash_cache.clear()
-    yield
-    event_log_service._hash_cache.clear()
-
-
 JOURNAL = """\
 2026-01-05 Grocery Store
     ; lf_txn_id: txn_grocery

@@ -13,18 +13,10 @@ from fastapi import HTTPException
 
 import main
 from models import DeleteTransactionRequest, ReconcileRequest
-from services import event_log_service
 from services.config_service import AppConfig
 from services.event_log_service import EVENTS_FILENAME
 from conftest import read_operation_events
 from services.reconciliation_service import latest_reconciliation_date
-
-
-@pytest.fixture(autouse=True)
-def _clear_hash_cache():
-    event_log_service._hash_cache.clear()
-    yield
-    event_log_service._hash_cache.clear()
 
 
 def _make_config(workspace: Path) -> AppConfig:
