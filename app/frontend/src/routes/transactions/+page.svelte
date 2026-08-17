@@ -245,7 +245,8 @@
 		}
 		void tick().then(() => {
 			const el = document.querySelector<HTMLElement>(`[data-row-id="${focusedId}"]`);
-			el?.focus();
+			// The row scrolls itself into view; focus() must not also scroll.
+			el?.focus({ preventScroll: true });
 		});
 		return true;
 	}
@@ -256,6 +257,24 @@
 		selectedRow = target;
 		focusedId = target.id;
 		return true;
+	}
+
+	function toggleFocusedClearing(): boolean {
+		const row = rows.find((r) => r.id === focusedId);
+		if (!row || row.isAssertion) return false;
+		void handleToggleClearing(row);
+		return true;
+	}
+
+	// Clearing status is only toggleable in single-account scope (same rule as
+	// the row dot), so the verb registers only there — elsewhere `s` is inert
+	// and the cheat sheet shows it greyed.
+	let offToggleStatus: (() => void) | null = null;
+	$: if (isSingleAccount && !offToggleStatus) {
+		offToggleStatus = onVerb('row.toggleStatus', toggleFocusedClearing);
+	} else if (!isSingleAccount && offToggleStatus) {
+		offToggleStatus();
+		offToggleStatus = null;
 	}
 
 	let verbCleanups: Array<() => void> = [];
@@ -296,6 +315,7 @@
 	onDestroy(() => {
 		if (abortController) abortController.abort();
 		for (const cleanup of verbCleanups) cleanup();
+		offToggleStatus?.();
 	});
 
 	// ── Actions (delegating to the tested transactionActions layer) ─────────
@@ -418,7 +438,7 @@
 			</button>
 		</section>
 	{:else if result !== null}
-		<div class="pb-16" role="listbox" aria-label="Transactions" tabindex="-1">
+		<div class="pb-16">
 			{#each dayGroups as group (group.date)}
 				{@const lines = dayLines(group)}
 				<section class="grid grid-cols-[5.5rem_minmax(0,1fr)] max-md:grid-cols-1">
@@ -471,6 +491,7 @@
 			<p class="m-0 px-6 pt-4 text-xs text-ink-mute max-lg:px-4">
 				<span class="kbd">j</span> <span class="kbd">k</span> to move ·
 				<span class="kbd">Enter</span> to open ·
+				{#if isSingleAccount}<span class="kbd">s</span> to toggle status ·{/if}
 				<span class="kbd">?</span> for all shortcuts
 			</p>
 		</div>

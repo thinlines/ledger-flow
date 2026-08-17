@@ -1,6 +1,8 @@
 <script lang="ts">
+	import { onDestroy } from 'svelte';
 	import type { TrackedAccount, TransactionFilters } from '$lib/transactions/types';
 	import { EMPTY_FILTERS } from '$lib/transactions/transactionFilters';
+	import { onVerb } from '$lib/keyboard/runtime';
 
 	export let filters: TransactionFilters;
 	export let trackedAccounts: TrackedAccount[];
@@ -9,6 +11,26 @@
 	let searchInput: HTMLInputElement | null = null;
 	let searchDraft = '';
 	let searchDebounce: ReturnType<typeof setTimeout> | null = null;
+
+	// While the search input has focus it is the top layer of the dismiss
+	// stack: Escape blurs it (keeping the typed query) and hands j/k back to
+	// the register, instead of reaching whatever surface sits underneath.
+	let offDismiss: (() => void) | null = null;
+
+	function handleSearchFocus() {
+		offDismiss?.();
+		offDismiss = onVerb('dismiss', () => {
+			searchInput?.blur();
+			return true;
+		});
+	}
+
+	function handleSearchBlur() {
+		offDismiss?.();
+		offDismiss = null;
+	}
+
+	onDestroy(() => offDismiss?.());
 
 	// Keep the draft in sync when the URL changes underneath us (back/forward,
 	// deep link), but never while the user is mid-keystroke in the input.
@@ -120,6 +142,8 @@
 			aria-label="Search transactions"
 			value={searchDraft}
 			on:input={(e) => setSearch(e.currentTarget.value)}
+			on:focus={handleSearchFocus}
+			on:blur={handleSearchBlur}
 		/>
 		<span class="kbd pointer-events-none absolute right-2">/</span>
 	</div>

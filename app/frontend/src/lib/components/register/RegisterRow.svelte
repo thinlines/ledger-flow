@@ -34,30 +34,38 @@
 	}
 </script>
 
-<button
-	bind:this={element}
-	type="button"
-	tabindex={focused ? 0 : -1}
-	data-row-id={row.id}
-	class="grid w-full cursor-pointer items-center gap-x-3 border-b border-hairline bg-transparent px-3 py-2 text-left text-sm transition-colors duration-75 max-md:grid-cols-[1rem_minmax(0,1fr)_auto]
+<div
+	class="relative grid w-full items-center gap-x-3 border-b border-hairline px-3 py-2 text-left text-sm transition-colors duration-75 max-md:grid-cols-[1rem_minmax(0,1fr)_auto]
 		{showBalance ? 'grid-cols-[1rem_minmax(0,1fr)_7.5rem_8.5rem]' : 'grid-cols-[1rem_minmax(0,1fr)_7.5rem]'}
 		{focused ? 'bg-brand-wash shadow-[inset_2px_0_0_var(--accent)]' : 'hover:bg-wash'}"
-	on:click={() => onOpen(row)}
 >
+	<!-- Whole-row open target. The absolutely positioned overlay keeps the
+	     grid cells as siblings, so the clearing dot below can be a real button
+	     instead of a control nested inside another control. -->
+	<button
+		bind:this={element}
+		type="button"
+		tabindex={focused ? 0 : -1}
+		data-row-id={row.id}
+		aria-label="Open {row.payee}, {amountText}"
+		class="absolute inset-0 cursor-pointer border-0 bg-transparent p-0"
+		on:click={() => onOpen(row)}
+	></button>
+
 	{#if onToggleClearing}
-		<span
-			role="button"
+		<button
+			type="button"
 			tabindex="-1"
 			title={CLEARING_TOOLTIPS[row.status ?? 'unmarked']}
-			class="size-2 justify-self-center rounded-full
+			aria-label="Change cleared status: {CLEARING_TOOLTIPS[row.status ?? 'unmarked']}"
+			class="relative size-2 cursor-pointer justify-self-center rounded-full border-0 p-0
 				{row.status === 'cleared'
 				? 'bg-brand'
 				: row.status === 'pending'
 					? 'bg-transparent shadow-[inset_0_0_0_1.5px_var(--warn)]'
 					: 'bg-hairline-strong'}"
-			on:click|stopPropagation={() => onToggleClearing?.(row)}
-			on:keydown={() => {}}
-		></span>
+			on:click={() => onToggleClearing?.(row)}
+		></button>
 	{:else}
 		<span
 			class="size-2 justify-self-center rounded-full
@@ -113,4 +121,4 @@
 				: formatCurrency(row.runningBalance, baseCurrency, { signMode: 'negative-only' })}
 		</span>
 	{/if}
-</button>
+</div>
