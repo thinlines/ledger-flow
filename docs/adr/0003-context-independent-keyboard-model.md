@@ -26,8 +26,10 @@ key-reachable everywhere; full roving-focus list navigation is implemented on th
 three data registers (Transactions, Review, Reconcile). Discoverability rides on
 three layers — inline hints next to actions, the `?` cheat-sheet overlay, and the
 Ctrl+K palette as the searchable command index. The keymap is a single global
-table implemented by extending the existing command registry
-(`command-registry.ts`), not per-page keydown handlers.
+table (`keyboard/keymap.ts`) whose verbs are delivered over a layered handler
+stack (`keyboard/runtime.ts`), not per-page keydown handlers; the command
+palette registry derives its shortcut and label strings from that table, so
+the table stays the one source of truth for what keys do.
 
 ## Considered Options
 
