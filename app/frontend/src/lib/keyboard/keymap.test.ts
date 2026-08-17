@@ -3,6 +3,8 @@ import {
   INITIAL_KEYMAP_STATE,
   KEYMAP,
   cheatSheetGroups,
+  chordFor,
+  labelFor,
   resolveKey,
   type KeyInput
 } from './keymap';
@@ -15,6 +17,7 @@ function press(key: string, overrides: Partial<KeyInput> = {}): KeyInput {
     alt: false,
     shift: false,
     editable: false,
+    interactive: false,
     ...overrides
   };
 }
@@ -28,6 +31,10 @@ describe('keymap — single-key verbs', () => {
   it('Enter opens the focused row, Escape dismisses', () => {
     expect(resolveKey(press('Enter'), INITIAL_KEYMAP_STATE).verb).toBe('row.open');
     expect(resolveKey(press('Escape'), INITIAL_KEYMAP_STATE).verb).toBe('dismiss');
+  });
+
+  it('s toggles cleared status on the focused row', () => {
+    expect(resolveKey(press('s'), INITIAL_KEYMAP_STATE).verb).toBe('row.toggleStatus');
   });
 
   it('? toggles the cheat sheet and / focuses search', () => {
@@ -91,6 +98,41 @@ describe('keymap — editable-target guards', () => {
     const result = resolveKey(press('k', { ctrl: true, editable: true }), INITIAL_KEYMAP_STATE);
     expect(result.verb).toBe('palette.toggle');
     expect(result.preventDefault).toBe(true);
+  });
+});
+
+describe('keymap — interactive-target deferral', () => {
+  it('Enter defers to a focused button or link instead of opening the row', () => {
+    const result = resolveKey(press('Enter', { interactive: true }), INITIAL_KEYMAP_STATE);
+    expect(result.verb).toBeNull();
+    expect(result.preventDefault).toBe(false);
+  });
+
+  it('letter verbs still fire while an interactive control has focus', () => {
+    expect(resolveKey(press('j', { interactive: true }), INITIAL_KEYMAP_STATE).verb).toBe(
+      'focus.next'
+    );
+  });
+
+  it('Escape still dismisses while an interactive control has focus', () => {
+    expect(resolveKey(press('Escape', { interactive: true }), INITIAL_KEYMAP_STATE).verb).toBe(
+      'dismiss'
+    );
+  });
+});
+
+describe('keymap — display derivation', () => {
+  it('chordFor and labelFor read straight from the table', () => {
+    expect(chordFor('nav.transactions')).toBe('g t');
+    expect(labelFor('nav.transactions')).toBe('Go to Transactions');
+    expect(chordFor('help.toggle')).toBe('?');
+  });
+
+  it('every verb in the table is resolvable', () => {
+    for (const entry of KEYMAP) {
+      expect(chordFor(entry.verb)).toBe(entry.chord);
+      expect(labelFor(entry.verb)).toBe(entry.label);
+    }
   });
 });
 

@@ -14,6 +14,7 @@ export type KeyVerb =
   | 'focus.next'
   | 'focus.prev'
   | 'row.open'
+  | 'row.toggleStatus'
   | 'dismiss'
   | 'help.toggle'
   | 'search.focus';
@@ -31,6 +32,7 @@ export const KEYMAP: KeymapEntry[] = [
   { chord: 'j', verb: 'focus.next', label: 'Next row', group: 'Register' },
   { chord: 'k', verb: 'focus.prev', label: 'Previous row', group: 'Register' },
   { chord: 'Enter', verb: 'row.open', label: 'Open the focused row', group: 'Register' },
+  { chord: 's', verb: 'row.toggleStatus', label: 'Toggle cleared status', group: 'Register' },
   { chord: '/', verb: 'search.focus', label: 'Search transactions', group: 'Register' },
   { chord: 'Esc', verb: 'dismiss', label: 'Close panel or clear focus', group: 'Everywhere' },
   { chord: '?', verb: 'help.toggle', label: 'Keyboard shortcuts', group: 'Everywhere' },
@@ -49,6 +51,11 @@ export type KeyInput = {
   shift: boolean;
   /** True when the event target is a text input / textarea / contenteditable. */
   editable: boolean;
+  /**
+   * True when the event target is a non-editable interactive control (button,
+   * link, summary). Activation keys defer to the control's native behavior.
+   */
+  interactive: boolean;
 };
 
 export type KeyResolution = {
@@ -71,6 +78,7 @@ function inert(): KeyResolution {
 const SINGLE_KEYS: Record<string, KeyVerb> = {
   j: 'focus.next',
   k: 'focus.prev',
+  s: 'row.toggleStatus',
   Enter: 'row.open',
   '?': 'help.toggle',
   '/': 'search.focus'
@@ -100,6 +108,10 @@ export function resolveKey(input: KeyInput, state: KeymapState): KeyResolution {
   // While typing, letters spell words, Enter submits forms.
   if (input.editable) return inert();
 
+  // On a focused button or link, Enter is that control's activation key —
+  // never hijack it to open the roving-focused row.
+  if (input.interactive && input.key === 'Enter') return inert();
+
   if (state.prefix === 'g') {
     const verb = G_SEQUENCES[input.key];
     return verb ? verbFor(verb) : inert();
@@ -111,6 +123,22 @@ export function resolveKey(input: KeyInput, state: KeymapState): KeyResolution {
 
   const verb = SINGLE_KEYS[input.key];
   return verb ? verbFor(verb) : inert();
+}
+
+function entryFor(verb: KeyVerb): KeymapEntry {
+  const entry = KEYMAP.find((e) => e.verb === verb);
+  if (!entry) throw new Error(`No keymap entry for verb "${verb}"`);
+  return entry;
+}
+
+/** Display chord for a verb — the palette and inline hints render from here. */
+export function chordFor(verb: KeyVerb): string {
+  return entryFor(verb).chord;
+}
+
+/** Display label for a verb, shared with the cheat sheet and palette. */
+export function labelFor(verb: KeyVerb): string {
+  return entryFor(verb).label;
 }
 
 export type CheatSheetGroup = { group: KeymapEntry['group']; entries: KeymapEntry[] };
