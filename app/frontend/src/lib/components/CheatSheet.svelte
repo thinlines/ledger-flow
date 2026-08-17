@@ -1,25 +1,15 @@
 <script lang="ts">
-	import { onDestroy } from 'svelte';
+	import { onMount } from 'svelte';
 	import { Dialog as DialogPrimitive } from 'bits-ui';
 	import { cheatSheetGroups } from '$lib/keyboard/keymap';
-	import { cheatSheetOpen, onVerb } from '$lib/keyboard/runtime';
+	import { availableVerbs, cheatSheetOpen, dismissWhileOpen } from '$lib/keyboard/runtime';
 
 	const groups = cheatSheetGroups();
 
-	// While open, sit on top of the dismiss stack so Escape closes the sheet
-	// and nothing underneath it. Esc handling stays with the keymap — the
+	// While open, the sheet is a layer in the dismiss stack, so Escape closes
+	// it and nothing underneath it. Esc handling stays with the keymap — the
 	// dialog's own escape behavior is turned off below.
-	let offDismiss: (() => void) | null = null;
-	$: if ($cheatSheetOpen && !offDismiss) {
-		offDismiss = onVerb('dismiss', () => {
-			cheatSheetOpen.set(false);
-			return true;
-		});
-	} else if (!$cheatSheetOpen && offDismiss) {
-		offDismiss();
-		offDismiss = null;
-	}
-	onDestroy(() => offDismiss?.());
+	onMount(() => dismissWhileOpen(cheatSheetOpen));
 
 	function chordKeys(chord: string): string[] {
 		return chord.includes('+') ? [chord] : chord.split(' ');
@@ -50,7 +40,11 @@
 						</h3>
 						<ul class="m-0 grid list-none gap-0.5 p-0">
 							{#each group.entries as entry (entry.chord)}
-								<li class="flex items-center justify-between gap-4 py-1">
+								{@const active = $availableVerbs.has(entry.verb)}
+								<!-- Keys with no target here are shown inert, never repurposed (ADR-0003). -->
+								<li
+									class="flex items-center justify-between gap-4 py-1 {active ? '' : 'opacity-40'}"
+								>
 									<span class="text-sm text-ink">{entry.label}</span>
 									<span class="flex shrink-0 gap-1">
 										{#each chordKeys(entry.chord) as key, i (i)}

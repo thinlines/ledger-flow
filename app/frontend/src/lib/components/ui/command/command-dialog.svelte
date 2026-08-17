@@ -12,11 +12,13 @@
 		title = "Command Palette",
 		description = "Search for a command to run",
 		portalProps,
+		escapeKeydownBehavior,
 		children,
 		...restProps
 	}: WithoutChildrenOrChild<DialogPrimitive.RootProps> &
 		WithoutChildrenOrChild<CommandPrimitive.RootProps> & {
 			portalProps?: DialogPrimitive.PortalProps;
+			escapeKeydownBehavior?: DialogPrimitive.ContentProps['escapeKeydownBehavior'];
 			children: Snippet;
 			title?: string;
 			description?: string;
@@ -28,7 +30,7 @@
 		<Dialog.Title>{title}</Dialog.Title>
 		<Dialog.Description>{description}</Dialog.Description>
 	</Dialog.Header>
-	<Dialog.Content class="overflow-hidden p-0" {portalProps}>
+	<Dialog.Content class="overflow-hidden p-0" {portalProps} {escapeKeydownBehavior}>
 		<Command
 			class="**:data-[slot=command-input-wrapper]:h-12 **:data-command-group:px-2 [&_[data-command-group]:not([hidden])_~[data-command-group]]:pt-0 [&_[data-command-input-wrapper]_svg]:h-5 [&_[data-command-input-wrapper]_svg]:w-5 **:data-command-input:h-12 **:data-command-item:px-2 **:data-command-item:py-3 [&_[data-command-item]_svg]:h-5 [&_[data-command-item]_svg]:w-5"
 			{...restProps}

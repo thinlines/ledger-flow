@@ -1,12 +1,19 @@
 <script lang="ts">
+	import { onMount } from 'svelte';
 	import { commandRegistry, commandPaletteOpen } from '$lib/command-registry';
 	import type { Command as CommandType } from '$lib/command-registry';
+	import { dismissWhileOpen } from '$lib/keyboard/runtime';
 	import * as Command from '$lib/components/ui/command/index.js';
 	import ArrowRightIcon from '@lucide/svelte/icons/arrow-right';
 	import ZapIcon from '@lucide/svelte/icons/zap';
 
 	let search = '';
 	let selectedValue = '';
+
+	// The palette is a layer in the dismiss stack like every overlay: Escape
+	// closes it and nothing underneath. The dialog's built-in escape handling
+	// is turned off so the keymap stays the only Escape path.
+	onMount(() => dismissWhileOpen(commandPaletteOpen));
 
 	$: commands = Array.from($commandRegistry.values());
 
@@ -23,6 +30,7 @@
 <Command.Dialog
 	bind:open={$commandPaletteOpen}
 	bind:value={selectedValue}
+	escapeKeydownBehavior="ignore"
 >
 	<Command.Input placeholder="Type a command or search..." bind:value={search} />
 	<Command.List>

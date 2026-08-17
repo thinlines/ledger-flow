@@ -8,10 +8,13 @@
 	import CommandPalette from '$lib/components/CommandPalette.svelte';
 	import CheatSheet from '$lib/components/CheatSheet.svelte';
 	import { commandPaletteOpen, registerCommands } from '$lib/command-registry';
-	import { cheatSheetOpen, onVerb } from '$lib/keyboard/runtime';
+	import { chordFor, labelFor } from '$lib/keyboard/keymap';
+	import { cheatSheetOpen, onVerb, pendingPrefix } from '$lib/keyboard/runtime';
 	import { rememberSurfaceUrl, surfaceForPathname, surfaceHrefs } from '$lib/surface-state';
 
-	const nav = [{ surface: 'transactions' as const, label: 'Transactions', chord: 'g t' }];
+	const nav = [
+		{ surface: 'transactions' as const, label: 'Transactions', chord: chordFor('nav.transactions') }
+	];
 
 	// Every visited surface URL is remembered so navigation restores the
 	// surface exactly as the user left it (filters included).
@@ -24,20 +27,36 @@
 		void goto($surfaceHrefs.transactions);
 	}
 
+	// The overlays are peers, not layers: opening one closes the other so the
+	// user never ends up with stacked surfaces to dismiss one by one.
+	function toggleCheatSheet() {
+		cheatSheetOpen.update((open) => {
+			if (!open) commandPaletteOpen.set(false);
+			return !open;
+		});
+	}
+
+	function toggleCommandPalette() {
+		commandPaletteOpen.update((open) => {
+			if (!open) cheatSheetOpen.set(false);
+			return !open;
+		});
+	}
+
 	onMount(() => {
 		registerCommands([
 			{
 				id: 'nav.transactions',
-				label: 'Go to Transactions',
-				shortcut: 'G T',
+				label: labelFor('nav.transactions'),
+				shortcut: chordFor('nav.transactions'),
 				category: 'navigation',
 				action: goToTransactions,
 				keywords: ['register', 'ledger', 'activity']
 			},
 			{
 				id: 'help.shortcuts',
-				label: 'Keyboard shortcuts',
-				shortcut: '?',
+				label: labelFor('help.toggle'),
+				shortcut: chordFor('help.toggle'),
 				category: 'actions',
 				action: () => cheatSheetOpen.set(true),
 				keywords: ['help', 'keys', 'keymap']
@@ -49,11 +68,11 @@
 			return true;
 		});
 		const offHelp = onVerb('help.toggle', () => {
-			cheatSheetOpen.update((v) => !v);
+			toggleCheatSheet();
 			return true;
 		});
 		const offPalette = onVerb('palette.toggle', () => {
-			commandPaletteOpen.update((v) => !v);
+			toggleCommandPalette();
 			return true;
 		});
 
@@ -158,3 +177,13 @@
 <KeyboardListener />
 <CommandPalette />
 <CheatSheet />
+
+{#if $pendingPrefix}
+	<div
+		class="fixed right-4 bottom-4 z-50 flex items-center gap-1.5 rounded-md border border-hairline bg-panel px-2.5 py-1.5 text-xs text-ink-mute shadow-sm"
+		aria-hidden="true"
+	>
+		<span class="kbd">{$pendingPrefix}</span>
+		<span>then…</span>
+	</div>
+{/if}
