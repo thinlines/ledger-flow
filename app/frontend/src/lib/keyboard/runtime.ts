@@ -51,6 +51,14 @@ export function dispatchVerb(verb: KeyVerb): boolean {
   return false;
 }
 
+/** Reset module-global keyboard state between independently mounted runtimes. */
+export function resetKeyboardRuntime() {
+  stacks.clear();
+  refreshAvailable();
+  cheatSheetOpen.set(false);
+  pendingPrefix.set(null);
+}
+
 /**
  * Make an open/closed surface (dialog, palette, sheet) a proper layer in the
  * dismiss stack: while `open` is true it sits on top, and Escape closes it —

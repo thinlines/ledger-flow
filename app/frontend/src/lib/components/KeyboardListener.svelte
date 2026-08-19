@@ -8,7 +8,7 @@
 		if (!el || !(el instanceof HTMLElement)) return false;
 		const tag = el.tagName;
 		if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return true;
-		if (el.isContentEditable) return true;
+		if (el.isContentEditable || el.getAttribute('contenteditable') === 'true') return true;
 		return false;
 	}
 

@@ -132,6 +132,22 @@ describe('keymap — display derivation', () => {
     for (const entry of KEYMAP) {
       expect(chordFor(entry.verb)).toBe(entry.chord);
       expect(labelFor(entry.verb)).toBe(entry.label);
+
+      const keys = entry.chord === 'Ctrl+K' ? ['k'] : entry.chord.split(' ');
+      let state = INITIAL_KEYMAP_STATE;
+      let resolution;
+      for (const key of keys) {
+        resolution = resolveKey(
+          press(key === 'Esc' ? 'Escape' : key, {
+            ctrl: entry.chord === 'Ctrl+K',
+            meta: false,
+            shift: entry.chord === '?'
+          }),
+          state
+        );
+        state = resolution.state;
+      }
+      expect(resolution?.verb).toBe(entry.verb);
     }
   });
 });
