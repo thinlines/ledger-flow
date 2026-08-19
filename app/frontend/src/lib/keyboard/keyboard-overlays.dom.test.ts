@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen } from '@testing-library/svelte';
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/svelte';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { tick } from 'svelte';
 
@@ -27,6 +27,13 @@ import { KEYMAP } from './keymap';
 
 function keydown(target: Window | Document | Node | Element, key: string, options: KeyboardEventInit = {}) {
   return fireEvent.keyDown(target, { key, bubbles: true, cancelable: true, ...options });
+}
+
+function shortcutRow(dialog: HTMLElement, label: string): HTMLLIElement {
+  const labelElement = within(dialog).getAllByText(label).find((element) => element.closest('li'));
+  const row = labelElement?.closest('li');
+  expect(row).not.toBeNull();
+  return row!;
 }
 
 Element.prototype.scrollIntoView = vi.fn();
@@ -73,14 +80,13 @@ describe('keyboard overlays in the mounted shell', () => {
 
     const dialog = screen.getByRole('dialog', { name: 'Keyboard shortcuts' });
     for (const entry of KEYMAP) {
-      expect(dialog.textContent).toContain(entry.label);
-      for (const key of entry.chord.includes('+') ? [entry.chord] : entry.chord.split(' ')) {
-        expect(dialog.textContent).toContain(key);
-      }
+      const row = shortcutRow(dialog, entry.label);
+      expect(Array.from(row.querySelectorAll('.kbd'), (key) => key.textContent)).toEqual(
+        entry.chord.includes('+') ? [entry.chord] : entry.chord.split(' ')
+      );
     }
 
-    const unavailable = screen.getByText('Next row');
-    expect(unavailable.getAttribute('data-unavailable')).toBe('true');
+    expect(shortcutRow(dialog, 'Next row').classList.contains('opacity-40')).toBe(true);
 
     await keydown(window, '?', { shiftKey: true });
     await settle();

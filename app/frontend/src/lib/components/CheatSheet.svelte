@@ -45,7 +45,7 @@
 								<li
 									class="flex items-center justify-between gap-4 py-1 {active ? '' : 'opacity-40'}"
 								>
-									<span class="text-sm text-ink" data-unavailable={!active}>{entry.label}</span>
+									<span class="text-sm text-ink">{entry.label}</span>
 									<span class="flex shrink-0 gap-1">
 										{#each chordKeys(entry.chord) as key, i (i)}
 											<span class="kbd">{key}</span>
