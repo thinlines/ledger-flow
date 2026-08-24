@@ -8,8 +8,10 @@ export type UnknownSelectionPayload = {
   selectionType: 'category' | 'transfer' | 'match';
   categoryAccount?: string;
   targetTrackedAccountId?: string;
+  matchedTransferCandidateTxnId?: string;
   matchedCandidateId?: string;
   matchedManualTxnId?: string;
+  matchedManualLfTxnId?: string;
   matchedManualLineRange?: [number, number];
 };
 

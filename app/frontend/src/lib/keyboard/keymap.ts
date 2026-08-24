@@ -11,6 +11,7 @@
 export type KeyVerb =
   | 'palette.toggle'
   | 'nav.transactions'
+	| 'nav.import'
   | 'focus.next'
   | 'focus.prev'
   | 'row.open'
@@ -29,6 +30,7 @@ export type KeymapEntry = {
 
 export const KEYMAP: KeymapEntry[] = [
   { chord: 'g t', verb: 'nav.transactions', label: 'Go to Transactions', group: 'Navigate' },
+	{ chord: 'g i', verb: 'nav.import', label: 'Go to Import', group: 'Navigate' },
   { chord: 'j', verb: 'focus.next', label: 'Next row', group: 'Register' },
   { chord: 'k', verb: 'focus.prev', label: 'Previous row', group: 'Register' },
   { chord: 'Enter', verb: 'row.open', label: 'Open the focused row', group: 'Register' },
@@ -86,7 +88,8 @@ const SINGLE_KEYS: Record<string, KeyVerb> = {
 
 /** `g <key>` navigation targets. */
 const G_SEQUENCES: Record<string, KeyVerb> = {
-  t: 'nav.transactions'
+	t: 'nav.transactions',
+	i: 'nav.import'
 };
 
 export function resolveKey(input: KeyInput, state: KeymapState): KeyResolution {

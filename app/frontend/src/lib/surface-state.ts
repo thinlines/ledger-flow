@@ -11,10 +11,11 @@ import { derived, writable } from 'svelte/store';
  * each surface produced.
  */
 
-export type Surface = 'transactions';
+export type Surface = 'transactions' | 'import';
 
 const SURFACE_ROOTS: Record<Surface, string> = {
-  transactions: '/transactions'
+	transactions: '/transactions',
+	import: '/import'
 };
 
 const lastUrls = writable<Partial<Record<Surface, string>>>({});

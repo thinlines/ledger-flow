@@ -433,23 +433,26 @@ def _filtered_unknown_selections(groups: list[dict], selections: dict[str, dict]
     }
 
 
-def _find_resumable_unknown_stage(config, journal_path: Path) -> dict | None:
+def _find_resumable_unknown_stage(config, journal_path: Path, source_file_sha256: str | None = None) -> dict | None:
     return StageStore(config).find_latest(
         lambda payload: (
             payload.get("kind") == "unknowns"
             and payload.get("status") != "applied"
             and _same_resolved_path(payload.get("journalPath"), journal_path)
+            and payload.get("sourceFileSha256") == source_file_sha256
         )
     )
 
 
-def _build_unknown_stage_payload(journal_path: Path, groups: list[dict], selections: dict[str, dict] | None = None) -> dict:
+def _build_unknown_stage_payload(journal_path: Path, groups: list[dict], selections: dict[str, dict] | None = None, source_file_sha256: str | None = None, transactions: list[dict] | None = None) -> dict:
     normalized_selections = _filtered_unknown_selections(groups, selections)
     return {
         "kind": "unknowns",
         "status": "ready",
         "journalPath": str(journal_path.resolve()),
+        "sourceFileSha256": source_file_sha256,
         "groups": groups,
+        "transactions": transactions or [],
         "selections": normalized_selections,
         "summary": _unknown_stage_summary(groups, normalized_selections),
     }
@@ -2306,19 +2309,20 @@ def unknown_scan(req: UnknownScanRequest) -> dict:
         config.tracked_accounts,
         merchants=load_merchants(config),
         config=config,
+        source_file_sha256=req.sourceFileSha256,
     )
     stages = StageStore(config)
-    existing_stage = _find_resumable_unknown_stage(config, journal_path)
+    existing_stage = _find_resumable_unknown_stage(config, journal_path, req.sourceFileSha256)
     if existing_stage is not None:
         payload = {
             **existing_stage,
-            **_build_unknown_stage_payload(journal_path, data["groups"], existing_stage.get("selections")),
+            **_build_unknown_stage_payload(journal_path, data["groups"], existing_stage.get("selections"), req.sourceFileSha256, data.get("transactions")),
             "stageId": existing_stage["stageId"],
         }
         stages.save(existing_stage["stageId"], payload)
         return payload
 
-    payload = _build_unknown_stage_payload(journal_path, data["groups"])
+    payload = _build_unknown_stage_payload(journal_path, data["groups"], source_file_sha256=req.sourceFileSha256, transactions=data.get("transactions"))
     stage_id = stages.create(payload)
     payload["stageId"] = stage_id
     return payload

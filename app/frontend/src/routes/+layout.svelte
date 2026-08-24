@@ -13,7 +13,8 @@
 	import { rememberSurfaceUrl, surfaceForPathname, surfaceHrefs } from '$lib/surface-state';
 
 	const nav = [
-		{ surface: 'transactions' as const, label: 'Transactions', chord: chordFor('nav.transactions') }
+		{ surface: 'transactions' as const, label: 'Transactions', chord: chordFor('nav.transactions') },
+		{ surface: 'import' as const, label: 'Import', chord: chordFor('nav.import') }
 	];
 
 	// Every visited surface URL is remembered so navigation restores the
@@ -25,6 +26,11 @@
 	function goToTransactions() {
 		if (surfaceForPathname($page.url.pathname) === 'transactions') return;
 		void goto($surfaceHrefs.transactions);
+	}
+
+	function goToImport() {
+		if ($page.url.pathname === '/import') return;
+		void goto('/import');
 	}
 
 	// The overlays are peers, not layers: opening one closes the other so the
@@ -54,6 +60,14 @@
 				keywords: ['register', 'ledger', 'activity']
 			},
 			{
+				id: 'nav.import',
+				label: labelFor('nav.import'),
+				shortcut: chordFor('nav.import'),
+				category: 'navigation',
+				action: goToImport,
+				keywords: ['csv', 'statement', 'upload']
+			},
+			{
 				id: 'help.shortcuts',
 				label: labelFor('help.toggle'),
 				shortcut: chordFor('help.toggle'),
@@ -67,6 +81,10 @@
 			goToTransactions();
 			return true;
 		});
+		const offImport = onVerb('nav.import', () => {
+			goToImport();
+			return true;
+		});
 		const offHelp = onVerb('help.toggle', () => {
 			toggleCheatSheet();
 			return true;
@@ -78,6 +96,7 @@
 
 		return () => {
 			offNav();
+			offImport();
 			offHelp();
 			offPalette();
 		};
@@ -128,10 +147,6 @@
 				</a>
 			{/each}
 		</nav>
-
-		<p class="m-0 px-5 pt-4 text-xs leading-relaxed text-ink-mute">
-			Import, review and reconcile are being rebuilt and will return here.
-		</p>
 
 		<div class="mt-auto grid gap-1.5 border-t border-hairline px-5 py-4">
 			<button

@@ -51,6 +51,7 @@ class ManualTransactionRequest(BaseModel):
 
 class UnknownScanRequest(BaseModel):
     journalPath: str
+    sourceFileSha256: str | None = None
 
 
 class UnknownSelection(BaseModel):
@@ -58,6 +59,7 @@ class UnknownSelection(BaseModel):
     selectionType: Literal["category", "transfer", "match"]
     categoryAccount: str | None = None
     targetTrackedAccountId: str | None = None
+    matchedTransferCandidateTxnId: str | None = None
     matchedCandidateId: str | None = None
     matchedManualTxnId: str | None = None
     # Stable identity of the matched manual entry (#17); the line range is

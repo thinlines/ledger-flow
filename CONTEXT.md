@@ -96,11 +96,13 @@ See `plans/journal-writer-prd.md` for the full design rationale.
 
 ## Review
 
-The triage job: categorizing freshly imported transactions that arrived
-without a category ("unknowns"). Part of the weekly import loop. Rule-building
-happens *in context* here — categorizing a transaction and saving it to a rule
-is one continuous flow, not a trip to a separate Rules page. "Review" always
-means this triage sense, never analytical review (see **Explore**).
+The accuracy pass over imported transactions. It is part of the weekly import
+loop and includes every imported transaction, whether it needs categorization,
+matching to another transfer, matching to an existing manual entry, or no
+further action. Rule-building happens *in context* here — categorizing a
+transaction and saving it to a rule is one continuous flow, not a trip to a
+separate Rules page. "Review" always means this operational review, never
+analytical review (see **Explore**).
 
 ## Dashboard
 

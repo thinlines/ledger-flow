@@ -121,6 +121,38 @@ account Expenses:Eating Out
     assert group["sourceLedgerAccount"] == "Assets:Wells Fargo Checking"
 
 
+def test_scan_unknowns_can_scope_review_to_one_import_file(tmp_path: Path) -> None:
+    journal = tmp_path / "sample.journal"
+    journal.write_text(
+        """
+2026/02/01 Coffee Shop
+    ; import_account_id: checking_import
+    ; source_file_sha256: first-file
+    Expenses:Unknown  $5.00
+    Assets:Bank:Checking
+
+2026/02/02 Grocery Store
+    ; import_account_id: checking_import
+    ; source_file_sha256: second-file
+    Expenses:Unknown  $10.00
+    Assets:Bank:Checking
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    result = scan_unknowns(
+        journal,
+        [],
+        _import_accounts(),
+        _tracked_accounts(),
+        source_file_sha256="first-file",
+    )
+
+    assert [group["payeeDisplay"] for group in result["groups"]] == ["Coffee Shop"]
+    assert [row["payee"] for row in result["transactions"]] == ["Coffee Shop"]
+
+
 def test_scan_unknowns_suggests_merchant_default_when_no_rule_matches(tmp_path: Path) -> None:
     journal = tmp_path / "sample.journal"
     journal.write_text(
@@ -488,6 +520,7 @@ def test_scan_unknowns_suggests_unique_transfer_match(tmp_path: Path) -> None:
     assert suggestion is not None
     assert suggestion["targetTrackedAccountId"] == "savings"
     assert suggestion["targetTrackedAccountName"] == "Savings"
+    assert checking_group["txns"][0]["transferSuggestions"] == [suggestion]
 
 
 def test_scan_unknowns_leaves_transfer_unsuggested_when_match_is_ambiguous(tmp_path: Path) -> None:
@@ -517,6 +550,9 @@ def test_scan_unknowns_leaves_transfer_unsuggested_when_match_is_ambiguous(tmp_p
 
     checking_group = next(group for group in result["groups"] if group["groupKey"] == "transfer::checking_import")
     assert checking_group["txns"][0]["transferSuggestion"] is None
+    suggestions = checking_group["txns"][0]["transferSuggestions"]
+    assert len(suggestions) == 2
+    assert {suggestion["candidateDate"] for suggestion in suggestions} == {"2026-02-02", "2026-02-03"}
 
 
 def test_apply_unknown_mappings_creates_pending_asset_transfer(tmp_path: Path) -> None:

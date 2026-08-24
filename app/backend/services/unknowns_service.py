@@ -280,6 +280,9 @@ def _build_transfer_suggestion(current: dict, candidate: dict) -> dict:
         "candidateTransactionStartLine": candidate["transactionStartLine"],
         "candidateTransactionEndLine": candidate["transactionEndLine"],
         "candidateGroupKey": _group_key(candidate["payeeDisplay"], candidate.get("importAccountId")),
+        "candidateDate": candidate.get("date"),
+        "candidatePayee": candidate.get("payeeDisplay"),
+        "candidateAmount": str(candidate.get("sourceAmountNumber")) if candidate.get("sourceAmountNumber") is not None else None,
     }
     if candidate.get("unknownRows"):
         suggestion["candidateUnknownLineNo"] = candidate["unknownRows"][0]["lineNo"]
@@ -318,6 +321,11 @@ def _populate_transfer_suggestions(transaction_records: list[dict]) -> None:
             if _transfer_match(current, candidate):
                 matches.append(_build_transfer_suggestion(current, candidate))
 
+        # Keep every viable counterpart for the review workbench. The first
+        # candidate remains the legacy single suggestion for callers that
+        # only need a confident automatic suggestion.
+        for row in current.get("unknownRows", []):
+            row["transferSuggestions"] = matches
         if len(matches) == 1:
             current["unknownRows"][0]["transferSuggestion"] = matches[0]
         for row in current.get("unknownRows", []):
@@ -331,6 +339,7 @@ def scan_unknowns(
     tracked_accounts: dict[str, dict] | None = None,
     merchants: list[Merchant] | None = None,
     config: AppConfig | None = None,
+    source_file_sha256: str | None = None,
 ) -> dict:
     transaction_records, groups = _build_transaction_records(
         journal_path,
@@ -339,6 +348,22 @@ def scan_unknowns(
         config,
     )
     _populate_transfer_suggestions(transaction_records)
+
+    # Review may be entered immediately after one import. Keep that workflow
+    # scoped to its source file while still allowing suggestions to consider
+    # the whole journal above.
+    if source_file_sha256:
+        selected_ids = {
+            record["txnId"]
+            for record in transaction_records
+            if str(record.get("metadata", {}).get("source_file_sha256") or "") == source_file_sha256
+        }
+        transaction_records = [record for record in transaction_records if record["txnId"] in selected_ids]
+        groups = [
+            {**group, "txns": [txn for txn in group["txns"] if txn.get("transactionId") in selected_ids]}
+            for group in groups
+        ]
+        groups = [group for group in groups if group["txns"]]
     populate_match_candidates(
         groups, journal_path, import_accounts or {}, tracked_accounts or {}, config=config
     )
@@ -394,7 +419,24 @@ def scan_unknowns(
         else:
             group["suggestedSource"] = None
 
-    return {"groups": groups}
+    review_transactions = []
+    for record in transaction_records:
+        unknown_rows = record.get("unknownRows") or []
+        review_transactions.append(
+            {
+                "transactionId": record["txnId"],
+                "date": record["date"],
+                "payee": record["payeeDisplay"],
+                "amount": str(record.get("sourceAmountNumber")) if record.get("sourceAmountNumber") is not None else None,
+                "accountLabel": record.get("sourceAccountLabel"),
+                "importAccountId": record.get("importAccountId"),
+                "unknownTxnIds": [row["txnId"] for row in unknown_rows],
+                "transferState": record.get("transferState"),
+                "needsAttention": bool(unknown_rows),
+            }
+        )
+
+    return {"groups": groups, "transactions": review_transactions}
 
 
 def _stage_category_selections(selections: dict[str, dict]) -> dict[str, str]:
@@ -569,11 +611,18 @@ def apply_unknown_mappings(
             )
             continue
 
-        suggestion = txn.get("transferSuggestion") or {}
-        matched_suggestion = (
-            suggestion
-            if str(suggestion.get("targetTrackedAccountId") or "").strip() == target_tracked_account_id
-            else None
+        transfer_candidates = txn.get("transferSuggestions") or []
+        if not transfer_candidates and txn.get("transferSuggestion"):
+            transfer_candidates = [txn["transferSuggestion"]]
+        selected_candidate_txn_id = str(selection.get("matchedTransferCandidateTxnId") or "").strip()
+        matched_suggestion = next(
+            (
+                suggestion
+                for suggestion in transfer_candidates
+                if str(suggestion.get("targetTrackedAccountId") or "").strip() == target_tracked_account_id
+                and (not selected_candidate_txn_id or str(suggestion.get("candidateTxnId") or "") == selected_candidate_txn_id)
+            ),
+            None,
         )
 
         if not target_requires_import_match:
