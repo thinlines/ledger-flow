@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { filterCategoryOptions } from './category-combobox';
+import { filterCategoryOptions, transferTargetOptions } from './category-combobox';
 
 describe('filterCategoryOptions', () => {
   const accounts = ['Expenses:Dining', 'Expenses:Groceries', 'Income:Salary'];
@@ -10,5 +10,17 @@ describe('filterCategoryOptions', () => {
 
   it('returns the available choices when the query is blank', () => {
     expect(filterCategoryOptions(accounts, '')).toEqual(accounts);
+  });
+});
+
+describe('transferTargetOptions', () => {
+  const accounts = [
+    { id: 'checking', displayName: 'Checking', ledgerAccount: 'Assets:Bank:Checking' },
+    { id: 'vehicle', displayName: 'Subaru', ledgerAccount: 'Assets:Vehicle:Subaru' },
+    { id: 'visa', displayName: 'Visa', ledgerAccount: 'Liabilities:Card:Visa' }
+  ];
+
+  it('offers manual-only accounts while excluding the imported transaction source', () => {
+    expect(transferTargetOptions(accounts, 'checking', 'sub')).toEqual([accounts[1]]);
   });
 });
