@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
+	import { onMount, tick } from 'svelte';
 	import { goto } from '$app/navigation';
 	import ArrowLeft from '@lucide/svelte/icons/arrow-left';
 	import ArrowRight from '@lucide/svelte/icons/arrow-right';
@@ -29,6 +29,26 @@
 	let error = '';
 	let completed = false;
 	const year = String(new Date().getFullYear());
+
+	async function focusSelectedAccount() {
+		await tick();
+		document.getElementById(`import-account-${selectedAccount}`)?.focus();
+	}
+
+	function accountListKeydown(event: KeyboardEvent, index: number) {
+		if (event.key === 'Enter') {
+			event.preventDefault();
+			step = 2;
+			return;
+		}
+		if (event.key !== 'j' && event.key !== 'k') return;
+		event.preventDefault();
+		const nextIndex = event.key === 'j'
+			? Math.min(index + 1, accounts.length - 1)
+			: Math.max(index - 1, 0);
+		selectedAccount = accounts[nextIndex].id;
+		void focusSelectedAccount();
+	}
 
 	async function preview() {
 		if (!file || !selectedAccount) return;
@@ -64,6 +84,7 @@
 			const state = await apiGet<AppState>('/api/app/state');
 			accounts = state.importAccounts;
 			selectedAccount = accounts[0]?.id ?? '';
+			void focusSelectedAccount();
 		} catch (e) { error = e instanceof Error ? e.message : String(e); }
 		finally { loading = false; }
 	});
@@ -82,7 +103,7 @@
 		<div class="mt-8 rounded-lg border border-hairline-strong bg-panel p-7">
 			{#if step === 1}
 				<p class="m-0 text-sm leading-relaxed text-ink-mute">This tells us how to read the file and prevents a statement from landing in the wrong account. You can change it before importing.</p>
-				<div class="mt-7 grid gap-2">{#each accounts as account}<label class="flex cursor-pointer items-center gap-3 rounded-md border px-4 py-4 {selectedAccount === account.id ? 'border-brand bg-brand-wash' : 'border-hairline hover:bg-wash'}"><input type="radio" name="account" value={account.id} bind:group={selectedAccount} /><span><span class="block text-sm font-medium">{account.displayName}</span><span class="block text-xs text-ink-mute">{account.institutionDisplayName}{account.last4 ? ` •••• ${account.last4}` : ''}</span></span></label>{/each}</div>
+				<div class="mt-7 grid gap-2">{#each accounts as account, index}<label class="flex cursor-pointer items-center gap-3 rounded-md border px-4 py-4 {selectedAccount === account.id ? 'border-brand bg-brand-wash' : 'border-hairline hover:bg-wash'}"><input id={`import-account-${account.id}`} type="radio" name="account" value={account.id} bind:group={selectedAccount} on:keydown={(event) => accountListKeydown(event, index)} /><span><span class="block text-sm font-medium">{account.displayName}</span><span class="block text-xs text-ink-mute">{account.institutionDisplayName}{account.last4 ? ` •••• ${account.last4}` : ''}</span></span></label>{/each}</div>
 			{:else if step === 2}
 				<div class="flex items-center gap-3 rounded-md bg-wash px-3 py-2.5 text-sm"><Check class="size-4 text-brand-deep" /><span><strong>{accounts.find((a) => a.id === selectedAccount)?.displayName}</strong><span class="text-ink-mute"> · statement destination</span></span><button type="button" class="ml-auto cursor-pointer border-0 bg-transparent p-0 text-xs font-medium text-brand-deep" on:click={() => (step = 1)}>Change</button></div>
 				<p class="m-0 mt-6 text-sm leading-relaxed text-ink-mute">Export a CSV from your bank. We’ll scan it first; nothing is added to the ledger until you explicitly confirm the import.</p>
