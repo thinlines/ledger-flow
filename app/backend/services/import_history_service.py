@@ -343,14 +343,73 @@ def _undo_state_by_id(config: AppConfig, entries: list[dict]) -> dict[str, tuple
 
 def _decorate_entries(config: AppConfig, entries: list[dict]) -> list[dict]:
     undo_state = _undo_state_by_id(config, entries)
+    current_unknown_counts = _current_unknown_counts_by_id(config, entries)
     decorated: list[dict] = []
     for entry in sorted(entries, key=_sort_key, reverse=True):
         item = dict(entry)
         can_undo, reason = undo_state.get(str(entry["id"]), (False, "This import cannot be undone."))
         item["canUndo"] = can_undo
         item["undoBlockedReason"] = reason
+        item["currentUnknownCount"] = current_unknown_counts.get(str(entry["id"]))
         decorated.append(item)
     return decorated
+
+
+def _current_unknown_counts_by_id(config: AppConfig, entries: list[dict]) -> dict[str, int | None]:
+    counts: dict[str, int | None] = {}
+    entries_by_journal: dict[Path, dict[str, set[str]]] = {}
+    for entry in entries:
+        entry_id = str(entry.get("id") or "")
+        if entry.get("status") == UNDONE_STATUS:
+            counts[entry_id] = 0
+            continue
+        journal_raw = str(entry.get("targetJournalPath") or "").strip()
+        imported_identities = {
+            str(transaction.get("sourceIdentity") or "").strip()
+            for transaction in entry.get("importedTransactions", [])
+            if str(transaction.get("sourceIdentity") or "").strip()
+        }
+        if not journal_raw:
+            counts[entry_id] = None
+            continue
+        if not imported_identities:
+            counts[entry_id] = 0 if int(entry.get("summary", {}).get("newCount") or 0) == 0 else None
+            continue
+        journal_path = Path(journal_raw).resolve(strict=False)
+        entries_by_journal.setdefault(journal_path, {})[entry_id] = imported_identities
+
+    for journal_path, journal_entries in entries_by_journal.items():
+        if not journal_path.exists():
+            for entry_id in journal_entries:
+                counts[entry_id] = None
+            continue
+        by_entry = {entry_id: 0 for entry_id in journal_entries}
+        entries_by_identity: dict[str, set[str]] = {}
+        for entry_id, identities in journal_entries.items():
+            for identity in identities:
+                entries_by_identity.setdefault(identity, set()).add(entry_id)
+        try:
+            for row in load_projected_transaction_rows(config, journal_path):
+                metadata = row.get("metadata", {})
+                primary_identity = str(metadata.get("lf_source_identity") or "").strip()
+                owning_entries = {
+                    entry_id
+                    for entry_id in entries_by_identity.get(primary_identity, set())
+                }
+                if not owning_entries:
+                    continue
+                if any(
+                    "Unknown" in str(posting.get("account") or "")
+                    for posting in row.get("postings", [])
+                ):
+                    for entry_id in owning_entries:
+                        by_entry[entry_id] += 1
+        except (OSError, ValueError):
+            for entry_id in journal_entries:
+                counts[entry_id] = None
+            continue
+        counts.update(by_entry)
+    return counts
 
 
 def list_import_history(config: AppConfig) -> list[dict]:

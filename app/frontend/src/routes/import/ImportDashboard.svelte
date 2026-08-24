@@ -18,6 +18,7 @@
 		sourceFileSha256?: string;
 		canUndo?: boolean;
 		undoBlockedReason?: string | null;
+		currentUnknownCount?: number | null;
 		summary?: { newCount?: number; unknownCount?: number };
 	};
 
@@ -25,9 +26,10 @@
 	let loading = true;
 	let error = '';
 	$: activeHistory = history.filter((item) => item.status !== 'undone');
-	$: categorized = activeHistory.reduce((sum, item) => sum + Math.max(0, (item.summary?.newCount ?? 0) - (item.summary?.unknownCount ?? 0)), 0);
+	$: statusUnavailable = activeHistory.some((item) => item.currentUnknownCount === null || item.currentUnknownCount === undefined);
+	$: categorized = activeHistory.reduce((sum, item) => sum + Math.max(0, (item.summary?.newCount ?? 0) - (item.currentUnknownCount ?? 0)), 0);
 	$: imported = activeHistory.reduce((sum, item) => sum + (item.summary?.newCount ?? 0), 0);
-	$: flaggedAtImport = activeHistory.reduce((sum, item) => sum + (item.summary?.unknownCount ?? 0), 0);
+	$: needsReview = activeHistory.reduce((sum, item) => sum + (item.currentUnknownCount ?? 0), 0);
 
 	async function loadHistory() {
 		try {
@@ -78,8 +80,8 @@
 
 	<div class="mt-9 grid gap-4 sm:grid-cols-3">
 		<div class="border-t-2 border-brand bg-panel px-5 py-5"><span class="amount block text-2xl font-semibold">{imported}</span><span class="mt-1 block text-xs text-ink-mute">Transactions imported</span></div>
-		<div class="border-t-2 border-hairline-strong bg-panel px-5 py-5"><span class="amount block text-2xl font-semibold">{categorized}</span><span class="mt-1 block text-xs text-ink-mute">Categorized automatically</span></div>
-		<div class="border-t-2 {flaggedAtImport ? 'border-warn' : 'border-hairline-strong'} bg-panel px-5 py-5"><span class="amount block text-2xl font-semibold">{flaggedAtImport}</span><span class="mt-1 block text-xs text-ink-mute">Flagged for review at import</span></div>
+		<div class="border-t-2 border-hairline-strong bg-panel px-5 py-5"><span class="amount block text-2xl font-semibold">{statusUnavailable ? '—' : categorized}</span><span class="mt-1 block text-xs text-ink-mute">Currently categorized</span></div>
+		<div class="border-t-2 {needsReview ? 'border-warn' : 'border-hairline-strong'} bg-panel px-5 py-5"><span class="amount block text-2xl font-semibold">{statusUnavailable ? '—' : needsReview}</span><span class="mt-1 block text-xs text-ink-mute">{statusUnavailable ? 'Review status unavailable' : 'Need review now'}</span></div>
 	</div>
 
 	<div class="mt-10 flex items-center justify-between">
@@ -97,16 +99,17 @@
 	{:else if history.length > 0}
 		<div class="mt-3 overflow-hidden rounded-md border border-hairline-strong bg-panel">
 			{#each history as item}
-				{@const unknowns = item.summary?.unknownCount ?? 0}
+				{@const unknowns = item.currentUnknownCount}
 				<div class="grid grid-cols-[minmax(0,1fr)_8rem_9rem] items-center gap-5 border-b border-hairline px-5 py-4 last:border-0 max-sm:grid-cols-1 max-sm:gap-2">
 					<div class="min-w-0"><span class="block truncate text-sm font-medium">{item.importAccountDisplayName ?? item.csvFileName ?? 'Statement import'}</span><span class="mt-1 block truncate text-xs text-ink-mute">{item.importSourceDisplayName ?? 'Imported statement'} · {dateLabel(item.appliedAt)} · {item.summary?.newCount ?? 0} added</span></div>
 					<div>
 						{#if item.status === 'undone'}<span class="text-xs text-ink-mute">Undone</span>
-						{:else if unknowns > 0}<span class="inline-flex items-center gap-1.5 text-xs font-medium text-warn"><CircleAlert class="size-3.5" />{unknowns} flagged</span>
+						{:else if unknowns === null || unknowns === undefined}<span class="text-xs text-ink-mute">Status unavailable</span>
+						{:else if unknowns > 0}<span class="inline-flex items-center gap-1.5 text-xs font-medium text-warn"><CircleAlert class="size-3.5" />{unknowns} to review</span>
 						{:else}<span class="text-xs font-medium text-brand-deep">Complete</span>{/if}
 					</div>
 					<div class="flex items-center justify-end gap-3 max-sm:justify-start">
-						{#if item.status !== 'undone' && item.targetJournalPath}<a class="text-xs font-medium text-brand-deep no-underline hover:underline" href={reviewHref(item)}>Open review</a>{/if}
+						{#if item.status !== 'undone' && (item.summary?.newCount ?? 0) > 0 && item.targetJournalPath}<a class="text-xs font-medium text-brand-deep no-underline hover:underline" href={reviewHref(item)}>Open review</a>{/if}
 						{#if item.status !== 'undone' && item.canUndo}<button type="button" class="inline-flex cursor-pointer items-center gap-1 border-0 bg-transparent p-0 text-xs text-ink-mute hover:text-bad" on:click={() => offerUndo(item)}><RotateCcw class="size-3" /> Undo</button>{/if}
 						{#if item.status !== 'undone' && !item.canUndo}<span class="text-xs text-ink-mute" title={item.undoBlockedReason ?? 'This import cannot be undone'}>Undo unavailable</span>{/if}
 					</div>

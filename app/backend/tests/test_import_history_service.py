@@ -228,6 +228,97 @@ def test_record_applied_import_uses_operations_instead_of_import_log(tmp_path: P
     assert list_import_history(config)[0]["id"] == recorded["id"]
 
 
+def test_import_history_reports_current_unknown_count_from_journal(tmp_path: Path) -> None:
+    config = _make_config(tmp_path / "workspace")
+    journal_path = config.journal_dir / "2026.journal"
+    _write_journal(journal_path, _journal_transaction("current", "txn-current"))
+    csv_path = config.csv_dir / "statement.csv"
+    backup_path = config.imports_dir / "current.import.bak"
+    backup_path.write_text("backup\n", encoding="utf-8")
+    stage = _stage(
+        config,
+        stage_id="current",
+        csv_path=csv_path,
+        backup_path=backup_path,
+        archived_csv_path=None,
+        journal_path=journal_path,
+        source_identity="txn-current",
+    )
+    stage["summary"]["unknownCount"] = 1
+    recorded = record_applied_import(config, stage)
+
+    before = next(item for item in list_import_history(config) if item["id"] == recorded["id"])
+    assert before["summary"]["unknownCount"] == 1
+    assert before["currentUnknownCount"] == 1
+
+    duplicate_stage = _stage(
+        config,
+        stage_id="duplicate",
+        csv_path=csv_path,
+        backup_path=backup_path,
+        archived_csv_path=None,
+        journal_path=journal_path,
+        source_identity="txn-current",
+    )
+    duplicate_stage["sourceFileSha256"] = stage["sourceFileSha256"]
+    duplicate_stage["summary"].update({"newCount": 0, "duplicateCount": 1, "unknownCount": 1})
+    duplicate_stage["preparedTransactions"][0]["matchStatus"] = "duplicate"
+    duplicate = record_applied_import(config, duplicate_stage)
+    duplicate_entry = next(item for item in list_import_history(config) if item["id"] == duplicate["id"])
+    assert duplicate_entry["currentUnknownCount"] == 0
+
+    journal_path.write_text(
+        journal_path.read_text(encoding="utf-8").replace("Expenses:Unknown", "Expenses:Food"),
+        encoding="utf-8",
+    )
+
+    after = next(item for item in list_import_history(config) if item["id"] == recorded["id"])
+    assert after["summary"]["unknownCount"] == 1
+    assert after["currentUnknownCount"] == 0
+
+
+def test_current_unknown_count_belongs_to_primary_import_identity(tmp_path: Path) -> None:
+    config = _make_config(tmp_path / "workspace")
+    journal_path = config.journal_dir / "2026.journal"
+    _write_journal(
+        journal_path,
+        _journal_transaction_with_carried_identity(
+            "merged",
+            primary_identity="txn-primary",
+            primary_payload="payload-primary",
+            carried_identity="txn-carried",
+            carried_payload="payload-carried",
+        ),
+    )
+    backup_path = config.imports_dir / "merged.import.bak"
+    backup_path.write_text("backup\n", encoding="utf-8")
+
+    primary_stage = _stage(
+        config,
+        stage_id="primary",
+        csv_path=config.csv_dir / "primary.csv",
+        backup_path=backup_path,
+        archived_csv_path=None,
+        journal_path=journal_path,
+        source_identity="txn-primary",
+    )
+    carried_stage = _stage(
+        config,
+        stage_id="carried",
+        csv_path=config.csv_dir / "carried.csv",
+        backup_path=backup_path,
+        archived_csv_path=None,
+        journal_path=journal_path,
+        source_identity="txn-carried",
+    )
+    primary = record_applied_import(config, primary_stage)
+    carried = record_applied_import(config, carried_stage)
+
+    history = {item["id"]: item for item in list_import_history(config)}
+    assert history[primary["id"]]["currentUnknownCount"] == 1
+    assert history[carried["id"]]["currentUnknownCount"] == 0
+
+
 def test_undo_import_removes_transactions_restores_source_csv_and_marks_identities_undone(tmp_path: Path) -> None:
     config = _make_config(tmp_path / "workspace")
     journal_path = config.journal_dir / "2026.journal"
