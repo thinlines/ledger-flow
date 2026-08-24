@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { onMount, tick } from 'svelte';
+	import { page } from '$app/stores';
 	import { goto } from '$app/navigation';
 	import ArrowLeft from '@lucide/svelte/icons/arrow-left';
 	import ArrowRight from '@lucide/svelte/icons/arrow-right';
@@ -8,6 +9,7 @@
 	import Upload from '@lucide/svelte/icons/upload';
 	import { apiGet, apiPostForm } from '$lib/api';
 	import { applyImportStage } from '$lib/stage-client';
+	import ImportDashboard from './ImportDashboard.svelte';
 
 	type ImportAccount = { id: string; displayName: string; institutionDisplayName: string; last4?: string | null };
 	type AppState = { initialized: boolean; importAccounts: ImportAccount[] };
@@ -28,7 +30,21 @@
 	let busy = false;
 	let error = '';
 	let completed = false;
+	let mounted = false;
+	let wasNew = false;
+	let accountsLoaded = false;
 	const year = String(new Date().getFullYear());
+	$: isNew = $page.url.searchParams.get('new') === '1';
+	$: if (mounted && isNew && !wasNew) {
+		wasNew = true;
+		step = 1;
+		file = null;
+		stage = null;
+		completed = false;
+		error = '';
+		if (!accountsLoaded) void loadAccounts();
+	}
+	$: if (!isNew) wasNew = false;
 
 	async function focusSelectedAccount() {
 		await tick();
@@ -79,7 +95,9 @@
 		} finally { busy = false; }
 	}
 
-	onMount(async () => {
+	async function loadAccounts() {
+		accountsLoaded = true;
+		loading = true;
 		try {
 			const state = await apiGet<AppState>('/api/app/state');
 			accounts = state.importAccounts;
@@ -87,10 +105,14 @@
 			void focusSelectedAccount();
 		} catch (e) { error = e instanceof Error ? e.message : String(e); }
 		finally { loading = false; }
-	});
+	}
+
+	onMount(() => { mounted = true; });
 </script>
 
-{#if loading}
+{#if !isNew}
+	<ImportDashboard />
+{:else if loading}
 	<p class="px-6 py-10 text-sm text-ink-mute">Loading import accounts…</p>
 {:else if accounts.length === 0}
 	<section class="px-6 py-10 max-lg:px-4"><h1 class="font-display m-0 text-xl font-semibold">No import accounts yet</h1><p class="m-0 mt-2 max-w-prose text-sm leading-relaxed text-ink-mute">Set up an account before importing a statement.</p></section>
@@ -98,7 +120,7 @@
 	<section class="mx-auto max-w-130 px-8 py-14 max-lg:px-5"><div class="border border-hairline-strong bg-panel px-7 py-9 text-center"><span class="mx-auto grid size-12 place-items-center rounded-full bg-brand-wash"><Check class="size-6 text-brand-deep" /></span><p class="m-0 mt-5 text-xs font-medium tracking-widest text-brand-deep uppercase">Import complete</p><h1 class="font-display m-0 mt-2 text-3xl font-semibold tracking-tight">{stage.result?.appendedTxnCount ?? stage.summary.newCount} transactions added.</h1><p class="m-0 mt-3 text-sm leading-relaxed text-ink-mute">{stage.result?.skippedDuplicateCount ?? stage.summary.duplicateCount} duplicates were left alone. Review is optional follow-up work.</p><div class="mt-8 grid gap-3 text-left sm:grid-cols-2"><button type="button" class="cursor-pointer border border-brand bg-brand-wash p-5 text-left" on:click={() => void goto(`/review?${new URLSearchParams({ journal: stage!.targetJournalPath, source: stage!.sourceFileSha256 })}`)}><span class="block text-sm font-semibold">Review items needing attention</span><span class="mt-1 block text-sm text-ink-mute">Categorize or match imported activity.</span></button><button type="button" class="cursor-pointer border border-hairline-strong bg-panel p-5 text-left hover:bg-wash" on:click={() => void goto(stage!.trackedAccountId ? `/transactions?accounts=${encodeURIComponent(stage!.trackedAccountId)}` : '/transactions')}><span class="block text-sm font-semibold">View imported transactions</span><span class="mt-1 block text-sm text-ink-mute">Open this account’s register now.</span></button></div></div></section>
 {:else}
 	<section class="mx-auto max-w-150 px-8 py-12 max-lg:px-5">
-		<header><p class="m-0 text-xs font-medium tracking-widest text-brand-deep uppercase">New import</p><h1 class="font-display m-0 mt-2 text-3xl font-semibold tracking-tight">{step === 1 ? 'Which account is this statement for?' : step === 2 ? 'Add the statement from your bank.' : 'Here’s what will happen.'}</h1></header>
+		<header><button type="button" class="mb-5 inline-flex cursor-pointer items-center gap-1 border-0 bg-transparent p-0 text-xs text-ink-mute hover:text-ink" on:click={() => void goto('/import')}><ArrowLeft class="size-3.5" /> Import history</button><p class="m-0 text-xs font-medium tracking-widest text-brand-deep uppercase">New import</p><h1 class="font-display m-0 mt-2 text-3xl font-semibold tracking-tight">{step === 1 ? 'Which account is this statement for?' : step === 2 ? 'Add the statement from your bank.' : 'Here’s what will happen.'}</h1></header>
 		<div class="mt-7 flex items-center gap-2" aria-label="Import progress">{#each ['Account', 'Statement', 'Review'] as label, index}<div class="flex items-center gap-2 {index < 2 ? 'flex-1' : ''}"><span class="grid size-6 shrink-0 place-items-center rounded-full text-xs font-medium {index + 1 <= step ? 'bg-brand text-panel' : 'border border-hairline-strong text-ink-mute'}">{index + 1 < step ? '✓' : index + 1}</span><span class="text-xs {index + 1 === step ? 'font-medium text-ink' : 'text-ink-mute'}">{label}</span>{#if index < 2}<span class="h-px flex-1 bg-hairline-strong"></span>{/if}</div>{/each}</div>
 		<div class="mt-8 rounded-lg border border-hairline-strong bg-panel p-7">
 			{#if step === 1}

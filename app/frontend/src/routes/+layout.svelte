@@ -29,7 +29,7 @@
 	}
 
 	function goToImport() {
-		if ($page.url.pathname === '/import') return;
+		if ($page.url.pathname === '/import' && !$page.url.search) return;
 		void goto('/import');
 	}
 
