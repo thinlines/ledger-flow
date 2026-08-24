@@ -11,6 +11,7 @@ beforeEach(() => resetSurfaceState());
 
 describe('surface state — remembering where the user left each surface', () => {
   it('falls back to the surface root before any visit', () => {
+    expect(get(surfaceHrefs).dashboard).toBe('/');
     expect(get(surfaceHrefs).transactions).toBe('/transactions');
   });
 
@@ -35,12 +36,12 @@ describe('surface state — remembering where the user left each surface', () =>
 
 describe('surface state — resolving the current surface', () => {
   it('maps a surface pathname (with or without subpaths) to its surface', () => {
+    expect(surfaceForPathname('/')).toBe('dashboard');
     expect(surfaceForPathname('/transactions')).toBe('transactions');
     expect(surfaceForPathname('/transactions/anything')).toBe('transactions');
   });
 
   it('maps unknown pathnames to null', () => {
-    expect(surfaceForPathname('/')).toBeNull();
     expect(surfaceForPathname('/transactions-export')).toBeNull();
   });
 });

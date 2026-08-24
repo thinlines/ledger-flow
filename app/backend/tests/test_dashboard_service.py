@@ -468,6 +468,23 @@ def test_dashboard_transactions_returns_matching_period(tmp_path: Path) -> None:
     assert dates == sorted(dates, reverse=True)
 
 
+def test_dashboard_transactions_include_primary_account_id(tmp_path: Path) -> None:
+    config = _make_config(tmp_path / "workspace")
+    _write_year_journal(config, _FIXTURE_JOURNAL)
+
+    result = query_dashboard_transactions(config, period="2026-03")
+    rows_by_payee = {row["payee"]: row for row in result["transactions"]}
+
+    assert rows_by_payee["Paycheck"]["accountId"] == "checking"
+    assert rows_by_payee["Coffee Shop"]["accountId"] == "checking"
+    assert rows_by_payee["Online Shop"]["accountId"] == "visa"
+    # The payment was imported from checking, so its primary dashboard
+    # perspective is the checking credit rather than the liability debit.
+    assert rows_by_payee["Credit Card Payment"]["accountId"] == "checking"
+    assert rows_by_payee["Credit Card Payment"]["isTransfer"] is True
+    assert rows_by_payee["Paycheck"]["isTransfer"] is False
+
+
 def test_dashboard_transactions_reads_from_projection_without_legacy_journal_parse(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

@@ -13,6 +13,7 @@
 	import { rememberSurfaceUrl, surfaceForPathname, surfaceHrefs } from '$lib/surface-state';
 
 	const nav = [
+		{ surface: 'dashboard' as const, label: 'Dashboard', chord: '' },
 		{ surface: 'transactions' as const, label: 'Transactions', chord: chordFor('nav.transactions') },
 		{ surface: 'import' as const, label: 'Import', chord: chordFor('nav.import') }
 	];
@@ -127,7 +128,7 @@
 	<aside
 		class="sticky top-0 flex h-screen w-52 shrink-0 flex-col border-r border-hairline max-lg:hidden"
 	>
-		<a href={$surfaceHrefs.transactions} class="px-5 pt-6 pb-5 no-underline">
+		<a href={$surfaceHrefs.dashboard} class="px-5 pt-6 pb-5 no-underline">
 			<span class="font-display text-[0.9375rem] font-semibold tracking-tight text-ink">
 				Ledger Flow
 			</span>
@@ -172,7 +173,7 @@
 		<header
 			class="sticky top-0 z-20 hidden items-center justify-between border-b border-hairline bg-paper px-4 py-3 max-lg:flex"
 		>
-			<a href={$surfaceHrefs.transactions} class="font-display text-sm font-semibold text-ink no-underline">
+			<a href={$surfaceHrefs.dashboard} class="font-display text-sm font-semibold text-ink no-underline">
 				Ledger Flow
 			</a>
 			<button

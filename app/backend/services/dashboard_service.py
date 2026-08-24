@@ -540,7 +540,7 @@ def query_dashboard_transactions(
 
         primary = _primary_posting(transaction, config)
         primary_amount = primary.amount if primary and primary.amount is not None else Decimal("0")
-        account_label, _ = _primary_account_display(primary, config)
+        account_label, account_id = _primary_account_display(primary, config)
 
         matching.append({
             "date": transaction.posted_on.isoformat(),
@@ -549,6 +549,8 @@ def query_dashboard_transactions(
             "category": category_account,
             "categoryLabel": category_label,
             "accountLabel": account_label,
+            "accountId": account_id,
+            "isTransfer": category_label == "Transfer",
         })
 
     matching.sort(key=lambda r: r["date"], reverse=True)

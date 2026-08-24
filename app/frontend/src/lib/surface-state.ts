@@ -11,9 +11,10 @@ import { derived, writable } from 'svelte/store';
  * each surface produced.
  */
 
-export type Surface = 'transactions' | 'import';
+export type Surface = 'dashboard' | 'transactions' | 'import';
 
 const SURFACE_ROOTS: Record<Surface, string> = {
+	dashboard: '/',
 	transactions: '/transactions',
 	import: '/import'
 };
