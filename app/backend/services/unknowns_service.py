@@ -686,16 +686,15 @@ def apply_unknown_mappings(
                 )
             else:
                 candidate_group_key = str(matched_suggestion.get("candidateGroupKey") or "")
-                candidate_group = _find_group_by_key(scanned_groups, candidate_group_key) if candidate_group_key else None
-                candidate_txn = next(
-                    (
-                        item
-                        for item in (candidate_group.get("txns", []) if candidate_group else [])
-                        if item["txnId"] == matched_suggestion.get("candidateTxnId")
-                    ),
-                    None,
-                )
-                if candidate_txn is None:
+                candidate_txn = {
+                    "txnId": matched_suggestion.get("candidateTxnId"),
+                    "lfTxnId": matched_suggestion.get("candidateLfTxnId"),
+                    "blockHash": matched_suggestion.get("candidateBlockHash"),
+                    "transactionStartLine": matched_suggestion.get("candidateTransactionStartLine"),
+                    "transactionEndLine": matched_suggestion.get("candidateTransactionEndLine"),
+                    "lineNo": matched_suggestion.get("candidateUnknownLineNo"),
+                }
+                if any(candidate_txn.get(field) is None for field in ("transactionStartLine", "transactionEndLine", "lineNo")):
                     warnings.append(
                         {
                             "txnId": txn_id,
@@ -713,7 +712,7 @@ def apply_unknown_mappings(
                 _queue_operation(
                     operations_by_start,
                     _build_operation(
-                        group_key=group["groupKey"],
+                        group_key=candidate_group_key or group["groupKey"],
                         transaction_start_line=int(candidate_txn["transactionStartLine"]),
                         transaction_end_line=int(candidate_txn["transactionEndLine"]),
                         posting_line_no=int(candidate_txn["lineNo"]),

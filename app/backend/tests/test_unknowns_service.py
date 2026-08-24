@@ -674,6 +674,70 @@ account Assets:Bank:Savings
     assert len(transfer_ids) == 1
 
 
+def test_apply_selected_transfer_from_import_scoped_review_resolves_both_sides(tmp_path: Path) -> None:
+    journal = tmp_path / "sample.journal"
+    accounts = tmp_path / "10-accounts.dat"
+    journal.write_text(
+        """
+2026/02/01 Transfer
+    ; import_account_id: checking_import
+    ; source_file_sha256: current-import
+    ; lf_source_identity: tx-checking
+    Expenses:Unknown  $50.00
+    Assets:Bank:Checking
+
+2026/02/03 Transfer
+    ; import_account_id: savings_import
+    ; source_file_sha256: earlier-import
+    ; lf_source_identity: tx-savings
+    Expenses:Unknown  $-50.00
+    Assets:Bank:Savings
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    accounts.write_text(
+        "account Assets:Bank:Checking\naccount Assets:Bank:Savings\n",
+        encoding="utf-8",
+    )
+
+    scoped_groups = scan_unknowns(
+        journal,
+        [],
+        _import_accounts(),
+        _tracked_accounts(),
+        source_file_sha256="current-import",
+    )["groups"]
+    txn = scoped_groups[0]["txns"][0]
+    candidate = txn["transferSuggestions"][0]
+
+    txn_updates, warnings = apply_unknown_mappings(
+        journal_path=journal,
+        accounts_dat=accounts,
+        selections={
+            txn["txnId"]: {
+                "groupKey": scoped_groups[0]["groupKey"],
+                "selectionType": "transfer",
+                "targetTrackedAccountId": candidate["targetTrackedAccountId"],
+                "matchedTransferCandidateTxnId": candidate["candidateTxnId"],
+            }
+        },
+        scanned_groups=scoped_groups,
+        tracked_accounts=_tracked_accounts(),
+    )
+
+    rescanned = scan_unknowns(
+        journal,
+        [],
+        _import_accounts(),
+        _tracked_accounts(),
+        source_file_sha256="current-import",
+    )
+    assert txn_updates == 2
+    assert warnings == []
+    assert rescanned["groups"] == []
+
+
 def test_apply_unknown_mappings_creates_pending_liability_transfer(tmp_path: Path) -> None:
     journal = tmp_path / "sample.journal"
     accounts = tmp_path / "10-accounts.dat"
