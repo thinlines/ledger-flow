@@ -483,6 +483,7 @@ def _parse_transaction(
     return {
         "date": date,
         "payee": payee,
+		"amount": inst_amount,
         "statementPayee": statement_payee,
         "postings": postings,
         "raw": normalized_body,
@@ -801,7 +802,17 @@ def preview_import(
         # Render-ready fence rows for the conflict-resolution view. Only fence
         # conflicts appear here — identity collisions stay invisible to the UI.
         "conflicts": _build_fence_conflicts(txns, account),
-        "preview": [t["annotatedRaw"].strip() for t in txns[:200]],
+        # Keep preview rows presentation-ready. The journal text is retained
+        # in ``annotatedRaw`` for apply; the UI should not need to parse it.
+        "preview": [
+            {
+                "date": t["date"],
+                "payee": t["payee"],
+                "amount": t["amount"],
+                "matchStatus": t["matchStatus"],
+            }
+            for t in txns[:200]
+        ],
         "targetJournalPath": str(target_journal.resolve()),
         "preparedTransactions": txns,
     }
