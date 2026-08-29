@@ -12,8 +12,10 @@
 	import { cheatSheetOpen, onVerb, pendingPrefix } from '$lib/keyboard/runtime';
 	import { rememberSurfaceUrl, surfaceForPathname, surfaceHrefs } from '$lib/surface-state';
 
+	// Primary navigation entries, including the keyboard chord displayed beside
+	// each link in the shell.
 	const nav = [
-		{ surface: 'dashboard' as const, label: 'Dashboard', chord: '' },
+		{ surface: 'dashboard' as const, label: 'Dashboard', chord: chordFor('nav.dashboard') },
 		{ surface: 'transactions' as const, label: 'Transactions', chord: chordFor('nav.transactions') },
 		{ surface: 'import' as const, label: 'Import', chord: chordFor('nav.import') }
 	];
@@ -22,8 +24,13 @@
 	// surface exactly as the user left it (filters included).
 	$: rememberSurfaceUrl($page.url.pathname + $page.url.search);
 
+	// Each function handles the keyboard navigation.
 	// Going to the surface you are already on is a no-op — navigation must
 	// never destroy in-surface state like filters.
+	function goToDashboard() {
+		if (surfaceForPathname($page.url.pathname) === 'dashboard') return;
+		void goto($surfaceHrefs.dashboard);
+	}
 	function goToTransactions() {
 		if (surfaceForPathname($page.url.pathname) === 'transactions') return;
 		void goto($surfaceHrefs.transactions);
@@ -53,6 +60,13 @@
 	onMount(() => {
 		registerCommands([
 			{
+				id: 'nav.dashboard',
+				label: labelFor('nav.dashboard'),
+				shortcut: chordFor('nav.dashboard'),
+				category: 'navigation',
+				action: goToDashboard,
+				keywords: ['dashboard', 'overview']
+			},			{
 				id: 'nav.transactions',
 				label: labelFor('nav.transactions'),
 				shortcut: chordFor('nav.transactions'),
@@ -78,7 +92,13 @@
 			}
 		]);
 
-		const offNav = onVerb('nav.transactions', () => {
+		// These functions unsubscribe the associate keyboard actions
+		// on component dismount.
+		const offDashboard = onVerb('nav.dashboard', () => {
+			goToDashboard();
+			return true;
+		});
+		const offTransactions = onVerb('nav.transactions', () => {
 			goToTransactions();
 			return true;
 		});
@@ -96,7 +116,8 @@
 		});
 
 		return () => {
-			offNav();
+			offDashboard();
+			offTransactions();
 			offImport();
 			offHelp();
 			offPalette();
