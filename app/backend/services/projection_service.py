@@ -31,7 +31,7 @@ from decimal import Decimal
 from pathlib import Path
 
 from .archive_service import ARCHIVED_MANUAL_JOURNAL_NAME
-from .commodity_service import parse_amount, split_balance_assertion
+from .commodity_parser import parse_amount, split_balance_assertion
 from .config_service import AppConfig
 from .header_parser import parse_header
 from .journal_block_service import hash_block_text

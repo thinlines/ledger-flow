@@ -7,7 +7,7 @@ from .journal_query_service import LF_TXN_ID_META_RE
 
 from .config_service import AppConfig, infer_account_kind
 from .currency_parser import parse_optional_amount
-from .commodity_service import format_currency_amount
+from .journal_writer import format_currency_amount
 
 
 from .journal_block_service import lf_txn_id_line, mint_lf_txn_id

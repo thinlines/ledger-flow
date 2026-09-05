@@ -8,7 +8,7 @@ from pathlib import Path
 
 from .config_service import AppConfig
 from .currency_parser import parse_amount
-from .commodity_service import format_currency_amount
+from .journal_writer import format_currency_amount
 from .header_parser import HEADER_RE
 from .journal_block_service import lf_txn_id_line, mint_lf_txn_id
 from .import_service import (

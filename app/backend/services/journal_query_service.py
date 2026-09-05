@@ -7,7 +7,7 @@ import glob
 from pathlib import Path
 import re
 
-from .commodity_service import CommodityMismatchError, commodity_label, parse_amount
+from .commodity_parser import CommodityMismatchError, commodity_label, parse_amount
 from .header_parser import TransactionStatus, parse_header
 from .journal_syntax import (
     ACCOUNT_LINE_RE,

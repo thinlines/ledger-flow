@@ -1,10 +1,13 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from decimal import Decimal
-import re
-
-from .currency_parser import parse_amount as parse_currency_amount
+from .commodity_parser import (
+    CommodityMismatchError,
+    ParsedAmount,
+    commodity_label,
+    parse_amount,
+    split_balance_assertion,
+)
+from .journal_writer import format_currency_amount
 from .journal_syntax import ACCOUNT_LINE_RE
 
 
@@ -15,70 +18,6 @@ BASE_CURRENCY_SYMBOLS = {
     "JPY": "¥",
     "CNY": "¥",
 }
-AMOUNT_RE = re.compile(
-    r"^\s*"
-    r"(?:(?P<prefix>[^\d\s=,+-][^\d\s=,+-]*)\s*)?"
-    r"(?P<number>[+-]?(?:\d{1,3}(?:,\d{3})*|\d+)(?:\.\d+)?)"
-    r"(?:\s*(?P<suffix>[^\d\s=,+-][^\d\s=,+-]*))?"
-    r"\s*$"
-)
-
-
-class CommodityMismatchError(ValueError):
-    pass
-
-
-@dataclass(frozen=True)
-class ParsedAmount:
-    value: Decimal
-    commodity: str | None
-    number_text: str
-
-
-def format_currency_amount(
-    amount: Decimal,
-    currency: str,
-    *,
-    decimal_places: int | None = 2,
-) -> str:
-    """Render a currency amount in Ledger Flow's canonical journal form.
-
-    App-authored money uses two decimal places by default. Passing ``None``
-    preserves a parsed source amount's precision during import normalization.
-    """
-    commodity = str(currency or "").strip().upper()
-    if not commodity:
-        raise ValueError("Currency is required when formatting a journal amount.")
-    number = format(amount, "f") if decimal_places is None else f"{amount:.{decimal_places}f}"
-    return f"{commodity} {number}"
-
-
-def split_balance_assertion(raw: str) -> tuple[str, str | None]:
-    primary, separator, remainder = raw.partition("=")
-    if not separator:
-        return primary.strip(), None
-    return primary.strip(), remainder.strip() or None
-
-
-def parse_amount(raw: str) -> ParsedAmount | None:
-    primary, _ = split_balance_assertion(raw)
-    if not primary:
-        return None
-
-    match = AMOUNT_RE.match(primary)
-    if not match:
-        return None
-
-    number_text = match.group("number")
-    commodity = (match.group("prefix") or match.group("suffix") or "").strip() or None
-    try:
-        value = parse_currency_amount(number_text)
-    except ValueError:
-        return None
-
-    return ParsedAmount(value=value, commodity=commodity, number_text=number_text)
-
-
 def canonicalize_base_currency_amount(raw: str, base_currency: str) -> str:
     currency = str(base_currency or "").strip().upper()
     if not currency:
@@ -114,7 +53,3 @@ def canonicalize_base_currency_posting(line: str, base_currency: str) -> str:
         f"{match.group(1)}{match.group(2)}{match.group(3)}"
         f"{canonicalize_base_currency_amount(amount_text, base_currency)}"
     )
-
-
-def commodity_label(commodity: str | None) -> str:
-    return commodity or "unmarked amount"

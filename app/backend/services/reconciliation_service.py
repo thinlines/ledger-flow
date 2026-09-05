@@ -26,9 +26,9 @@ from .config_service import AppConfig
 from .currency_parser import parse_amount
 from .journal_block_service import lf_txn_id_line, mint_lf_txn_id
 from .journal_query_service import TXN_START_RE
-from .journal_writer import VerifyFailure
+from .journal_writer import VerifyFailure, format_currency_amount
 from .ledger_runner import CommandError, run_cmd
-from .commodity_service import format_currency_amount, parse_amount as parse_journal_amount
+from .commodity_service import parse_amount as parse_journal_amount
 from .projection_db import connect, database_path
 from .projection_service import refresh_projection
 
