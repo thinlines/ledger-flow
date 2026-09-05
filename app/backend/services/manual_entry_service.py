@@ -8,6 +8,7 @@ from pathlib import Path
 
 from .config_service import AppConfig
 from .currency_parser import parse_amount
+from .commodity_service import format_currency_amount
 from .header_parser import HEADER_RE
 from .journal_block_service import lf_txn_id_line, mint_lf_txn_id
 from .import_service import (
@@ -55,14 +56,6 @@ def _parse_amount_str(raw: str) -> Decimal:
     return parse_amount(raw)
 
 
-def _format_currency_amount(amount: Decimal, currency: str) -> str:
-    sign = "-" if amount < 0 else ""
-    abs_amount = abs(amount)
-    if currency == "USD":
-        return f"{sign}${abs_amount:,.2f}"
-    return f"{sign}{abs_amount:,.2f} {currency}"
-
-
 def has_manual_tag(lines: list[str]) -> bool:
     for line in lines:
         stripped = line.strip()
@@ -97,7 +90,7 @@ def build_manual_transaction_block(
     notes: str | None = None,
 ) -> list[str]:
     date_formatted = txn_date.replace("/", "-")
-    amount_str = _format_currency_amount(amount, currency)
+    amount_str = format_currency_amount(amount, currency)
     block = [
         f"{date_formatted} {payee}",
         lf_txn_id_line(txn_id or mint_lf_txn_id()),

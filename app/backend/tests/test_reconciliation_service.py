@@ -238,7 +238,7 @@ class TestWriterOrdering:
         assert "Statement reconciliation" in text
         assert "    ; lf_operation_id: recon-evt-4" in text
         assert "    ; statement_period: 2026-03-18..2026-04-17" in text
-        assert "Assets:Checking:Wells Fargo  $0 = $2,500.00" in text
+        assert "Assets:Checking:Wells Fargo  USD 0.00 = USD 2500.00" in text
         assert result.header_line.startswith("2026-04-17 * Statement reconciliation")
         # App-created blocks mint a durable identity at write time (#17):
         # the lf_txn_id line sits directly after the header and matches the
@@ -291,10 +291,10 @@ class TestVerifyAndRollback:
         _seed_accounts_dat(config)
         _seed_journal(
             config,
-            _opening_balance_block("Assets:Checking:Wells Fargo", "$100.00")
+            _opening_balance_block("Assets:Checking:Wells Fargo", "USD 100.00")
             + "\n"
             + "2026-03-15 Deposit\n"
-            + "    Assets:Checking:Wells Fargo  $400.00\n"
+            + "    Assets:Checking:Wells Fargo  USD 400.00\n"
             + "    Equity:Opening-Balances\n",
         )
 
@@ -316,7 +316,7 @@ class TestVerifyAndRollback:
         _seed_accounts_dat(config)
         _seed_journal(
             config,
-            _opening_balance_block("Assets:Checking:Wells Fargo", "$100.00"),
+            _opening_balance_block("Assets:Checking:Wells Fargo", "USD 100.00"),
         )
 
         write_assertion_transaction(
@@ -511,6 +511,23 @@ class TestFailureDetectionTranslation:
 
     def test_parse_returns_none_for_non_assertion_error(self) -> None:
         assert _parse_ledger_assertion_failure("Error: unrelated parse failure") is None
+
+    def test_parse_iso_currency_failure(self) -> None:
+        fixture = LEDGER_ASSERTION_FAILURE_FIXTURE.replace("$", "USD ")
+        failure = _parse_ledger_assertion_failure(fixture)
+        assert failure is not None
+        assert failure.actual == "USD 100.00"
+        assert failure.expected == "USD 50.00"
+
+    def test_parse_negative_iso_currency_failure_uses_canonical_sign_position(self) -> None:
+        fixture = (
+            'While parsing file "/tmp/workspace/journals/2026.journal", line 9:\n'
+            "Error: Balance assertion off by USD -150.00 "
+            "(expected to see USD 100.00)\n"
+        )
+        failure = _parse_ledger_assertion_failure(fixture)
+        assert failure is not None
+        assert failure.expected == "USD -50.00"
 
     def test_parse_all_assertion_failures_handles_multiple(self) -> None:
         text = LEDGER_ASSERTION_FAILURE_FIXTURE + LEDGER_ASSERTION_FAILURE_FIXTURE

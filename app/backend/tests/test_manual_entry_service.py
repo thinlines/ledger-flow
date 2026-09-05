@@ -66,7 +66,7 @@ def test_build_manual_transaction_block_has_manual_tag() -> None:
     assert block[1].startswith("    ; lf_txn_id: txn_")
     assert block[2] == "    ; :manual:"
     assert "Expenses:Transportation:Rides" in block[3]
-    assert "$45.95" in block[3]
+    assert "USD 45.95" in block[3]
     assert "Assets:Bank:Checking" in block[4]
 
 
@@ -92,7 +92,7 @@ def test_create_manual_transaction_writes_to_journal(tmp_path: Path) -> None:
     assert "2026-03-28 Coffee Shop" in content
     assert "; :manual:" in content
     assert "Expenses:Food" in content
-    assert "$5.00" in content
+    assert "USD 5.00" in content
     assert "Assets:Bank:Checking" in content
 
 

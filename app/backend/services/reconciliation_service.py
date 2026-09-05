@@ -18,7 +18,7 @@ import logging
 import re
 from dataclasses import dataclass
 from datetime import date
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal
 from pathlib import Path
 from uuid import uuid7
 
@@ -28,7 +28,7 @@ from .journal_block_service import lf_txn_id_line, mint_lf_txn_id
 from .journal_query_service import TXN_START_RE
 from .journal_writer import VerifyFailure
 from .ledger_runner import CommandError, run_cmd
-from .manual_entry_service import _format_currency_amount
+from .commodity_service import format_currency_amount, parse_amount as parse_journal_amount
 from .projection_db import connect, database_path
 from .projection_service import refresh_projection
 
@@ -51,7 +51,7 @@ _LEDGER_ASSERTION_FILE_LINE_RE = re.compile(
     r'While parsing file "(?P<file>[^"]+)", line (?P<line>\d+)'
 )
 _LEDGER_ASSERTION_OFFSET_RE = re.compile(
-    r"Balance assertion off by\s+(?P<off>\S+)\s+\(expected to see\s+(?P<expected>\S.+?)\)",
+    r"Balance assertion off by\s+(?P<off>.+?)\s+\(expected to see\s+(?P<expected>\S.+?)\)",
 )
 
 
@@ -112,19 +112,13 @@ def parse_closing_balance(raw: str) -> Decimal:
 
 
 def _format_assertion_balance(amount: Decimal, currency: str) -> str:
-    """Format a balance for the right-hand side of `<acct>  $0 = $...`."""
-    return _format_currency_amount(amount, currency)
+    """Format a balance for the right-hand side of a balance assertion."""
+    return format_currency_amount(amount, currency)
 
 
 def _format_zero(currency: str) -> str:
-    """Compact zero amount for the assertion posting (`$0` for USD).
-
-    The spec calls this out explicitly: ``<ledger_account>  $0 = $<balance>``.
-    Ledger accepts either ``$0`` or ``$0.00`` — we use the spec form.
-    """
-    if (currency or "").upper() == "USD":
-        return "$0"
-    return f"0 {currency}"
+    """Format assertion zero using the same canonical journal representation."""
+    return format_currency_amount(Decimal("0"), currency)
 
 
 def _build_assertion_block(
@@ -373,25 +367,15 @@ def _parse_ledger_assertion_failure(stderr_text: str) -> AssertionFailure | None
     )
 
 
-def _strip_currency(text: str) -> tuple[str, Decimal | None]:
-    """Return ``(prefix, decimal_value)`` for a currency-formatted text.
+def _parse_currency_value(text: str) -> tuple[str, Decimal | None]:
+    """Return ``(commodity, decimal_value)`` for a currency-formatted text.
 
-    Best-effort: returns ``(text, None)`` when parsing fails.  The prefix
-    captures whatever non-digit/non-sign text leads the value (typically ``$``)
-    so we can re-apply it when reformatting.
+    Best-effort: returns ``(text, None)`` when parsing fails.
     """
-    if not text:
-        return "", None
-    leading = ""
-    rest = text
-    while rest and rest[0] in "$£€¥":
-        leading += rest[0]
-        rest = rest[1:]
-    cleaned = rest.replace(",", "").strip()
-    try:
-        return leading, Decimal(cleaned)
-    except InvalidOperation:
+    parsed = parse_journal_amount(text)
+    if parsed is None:
         return text, None
+    return parsed.commodity or "", parsed.value
 
 
 def _compute_assertion_from_actual_and_offset(actual: str, off: str) -> str | None:
@@ -400,13 +384,15 @@ def _compute_assertion_from_actual_and_offset(actual: str, off: str) -> str | No
     Ledger reports ``off = assertion - actual``, so ``assertion = actual + off``.
     Returns ``None`` when either side cannot be parsed as a decimal.
     """
-    actual_prefix, actual_value = _strip_currency(actual)
-    _, off_value = _strip_currency(off)
+    actual_commodity, actual_value = _parse_currency_value(actual)
+    _, off_value = _parse_currency_value(off)
     if actual_value is None or off_value is None:
         return None
     assertion_value = actual_value + off_value
+    if len(actual_commodity) > 1:
+        return format_currency_amount(assertion_value, actual_commodity)
     sign = "-" if assertion_value < 0 else ""
-    return f"{sign}{actual_prefix}{abs(assertion_value):,.2f}"
+    return f"{sign}{actual_commodity}{abs(assertion_value):,.2f}"
 
 
 def verify_assertion(config: AppConfig) -> AssertionFailure | None:

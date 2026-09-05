@@ -35,6 +35,24 @@ class ParsedAmount:
     number_text: str
 
 
+def format_currency_amount(
+    amount: Decimal,
+    currency: str,
+    *,
+    decimal_places: int | None = 2,
+) -> str:
+    """Render a currency amount in Ledger Flow's canonical journal form.
+
+    App-authored money uses two decimal places by default. Passing ``None``
+    preserves a parsed source amount's precision during import normalization.
+    """
+    commodity = str(currency or "").strip().upper()
+    if not commodity:
+        raise ValueError("Currency is required when formatting a journal amount.")
+    number = format(amount, "f") if decimal_places is None else f"{amount:.{decimal_places}f}"
+    return f"{commodity} {number}"
+
+
 def split_balance_assertion(raw: str) -> tuple[str, str | None]:
     primary, separator, remainder = raw.partition("=")
     if not separator:
@@ -74,7 +92,7 @@ def canonicalize_base_currency_amount(raw: str, base_currency: str) -> str:
             return expr.strip()
         if parsed.commodity not in {currency, symbol}:
             return expr.strip()
-        return f"{currency} {parsed.number_text}"
+        return format_currency_amount(parsed.value, currency, decimal_places=None)
 
     primary, assertion = split_balance_assertion(raw)
     parts = [canonicalize(primary)]

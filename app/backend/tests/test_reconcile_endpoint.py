@@ -191,7 +191,7 @@ class TestReconcileSuccess:
     def test_writes_journal_emits_event_returns_response(self, tmp_path: Path, monkeypatch) -> None:
         config = _make_config(tmp_path / "workspace")
         _seed_accounts_dat(config)
-        _seed_journal(config, _opening_block("Assets:Checking:Wells Fargo", "$2500.00"))
+        _seed_journal(config, _opening_block("Assets:Checking:Wells Fargo", "USD 2500.00"))
         monkeypatch.setattr(main, "_require_workspace_config", lambda: config)
 
         result = main.accounts_reconcile(
@@ -217,7 +217,7 @@ class TestReconcileSuccess:
         assert "2026-04-17 * Statement reconciliation · Wells Fargo Checking · ending 2026-04-17" in text
         assert f"; lf_operation_id: {result['eventId']}" in text
         assert "; statement_period: 2026-03-18..2026-04-17" in text
-        assert "Assets:Checking:Wells Fargo  $0 = $2,500.00" in text
+        assert "Assets:Checking:Wells Fargo  USD 0.00 = USD 2500.00" in text
 
         # account.reconciled.v1 event exists with matching id.
         events = read_operation_events(config.root_dir)
@@ -240,7 +240,7 @@ class TestReconcileConflict:
     def test_same_date_returns_409(self, tmp_path: Path, monkeypatch) -> None:
         config = _make_config(tmp_path / "workspace")
         _seed_accounts_dat(config)
-        _seed_journal(config, _opening_block("Assets:Checking:Wells Fargo", "$2500.00"))
+        _seed_journal(config, _opening_block("Assets:Checking:Wells Fargo", "USD 2500.00"))
         monkeypatch.setattr(main, "_require_workspace_config", lambda: config)
 
         # First reconciliation succeeds.
@@ -270,7 +270,7 @@ class TestReconcileConflict:
     def test_earlier_period_end_returns_409(self, tmp_path: Path, monkeypatch) -> None:
         config = _make_config(tmp_path / "workspace")
         _seed_accounts_dat(config)
-        _seed_journal(config, _opening_block("Assets:Checking:Wells Fargo", "$2500.00"))
+        _seed_journal(config, _opening_block("Assets:Checking:Wells Fargo", "USD 2500.00"))
         monkeypatch.setattr(main, "_require_workspace_config", lambda: config)
 
         main.accounts_reconcile(
@@ -307,7 +307,7 @@ class TestReconcileFailure:
     ) -> None:
         config = _make_config(tmp_path / "workspace")
         _seed_accounts_dat(config)
-        _seed_journal(config, _opening_block("Assets:Checking:Wells Fargo", "$100.00"))
+        _seed_journal(config, _opening_block("Assets:Checking:Wells Fargo", "USD 100.00"))
         monkeypatch.setattr(main, "_require_workspace_config", lambda: config)
 
         journal = config.journal_dir / "2026.journal"
@@ -350,7 +350,7 @@ class TestReconcileDeleteRoundTrip:
     ) -> None:
         config = _make_config(tmp_path / "workspace")
         _seed_accounts_dat(config)
-        _seed_journal(config, _opening_block("Assets:Checking:Wells Fargo", "$2500.00"))
+        _seed_journal(config, _opening_block("Assets:Checking:Wells Fargo", "USD 2500.00"))
         monkeypatch.setattr(main, "_require_workspace_config", lambda: config)
 
         journal = config.journal_dir / "2026.journal"
@@ -402,7 +402,7 @@ class TestApplyImportRefusesFenceConflict:
 
         config = _make_config(tmp_path / "workspace")
         _seed_accounts_dat(config)
-        _seed_journal(config, _opening_block("Assets:Checking:Wells Fargo", "$2500.00"))
+        _seed_journal(config, _opening_block("Assets:Checking:Wells Fargo", "USD 2500.00"))
 
         target = config.journal_dir / "2026.journal"
         before = target.read_text(encoding="utf-8")
@@ -447,7 +447,7 @@ class TestReconciliationStatusOnTrackedAccountUi:
     ) -> None:
         config = _make_config(tmp_path / "workspace")
         _seed_accounts_dat(config)
-        _seed_journal(config, _opening_block("Assets:Checking:Wells Fargo", "$2500.00"))
+        _seed_journal(config, _opening_block("Assets:Checking:Wells Fargo", "USD 2500.00"))
         monkeypatch.setattr(main, "_require_workspace_config", lambda: config)
 
         result = main.tracked_accounts_list()
@@ -463,12 +463,12 @@ class TestReconciliationStatusOnTrackedAccountUi:
         # Reconciliation that will FAIL because the account balance is $100 not $200.
         _seed_journal(
             config,
-            _opening_block("Assets:Checking:Wells Fargo", "$100.00")
+            _opening_block("Assets:Checking:Wells Fargo", "USD 100.00")
             + "\n"
             + "2026-04-17 * Statement reconciliation · Wells Fargo · ending 2026-04-17\n"
             "    ; lf_operation_id: e1\n"
             "    ; statement_period: 2026-03-18..2026-04-17\n"
-            "    Assets:Checking:Wells Fargo  $0 = $200.00\n",
+            "    Assets:Checking:Wells Fargo  USD 0.00 = USD 200.00\n",
         )
         monkeypatch.setattr(main, "_require_workspace_config", lambda: config)
 

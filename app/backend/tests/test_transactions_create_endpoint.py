@@ -252,7 +252,7 @@ def test_explicit_asset_or_liability_destination_creates_normal_manual_transacti
     assert "2026-03-18 Move to savings" in journal_text
     assert "    ; notes: monthly sweep" in journal_text
     assert "    ; :manual:" in journal_text
-    assert f"    {destination_account}  $20.00" in journal_text
+    assert f"    {destination_account}  USD 20.00" in journal_text
     assert "    Assets:Bank:Checking" in journal_text
     assert "transfer_id" not in journal_text
     assert "transfer_match_state" not in journal_text
