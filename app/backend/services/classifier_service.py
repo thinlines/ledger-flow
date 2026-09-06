@@ -8,24 +8,33 @@ from __future__ import annotations
 
 from collections import OrderedDict
 from functools import lru_cache
-import json
 import logging
-from threading import Lock
 from time import monotonic
-import urllib.request
 
 import numpy as np
 from sklearn.linear_model import LogisticRegression
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 
+from . import ollama_service
 from .config_service import AppConfig
+from .journal_query_service import ParsedTransaction, is_uncategorized
+from .priority_lock import PriorityLock
 from .projection_service import load_transactions_projected
 
 _LOG = logging.getLogger(__name__)
-_LOCK = Lock()
-_retry_after: dict[str, float] = {}
 
+# nomic-embed-text is prefix-conditioned: the task prefix belongs to this
+# classifier, not to the provider. Cached vectors are keyed by the unprefixed
+# description, which is safe only while one prefix is in use.
+_EMBED_PREFIX = "classification: description: "
+_VECTOR_CACHE_SIZE = 10000
+# How much warmup embeds before releasing the lock to any waiting review request.
+_WARMUP_BATCH = 32
+_COOLDOWN_SECONDS = 30
+
+_LOCK = PriorityLock()
+_retry_after: dict[str, float] = {}
 
 # Accessed under _LOCK. Keep only frozen vectors, never fitted pickle files.
 _vectors: OrderedDict[str, tuple[float, ...]] = OrderedDict()
@@ -35,38 +44,38 @@ def _embed_many(descriptions: list[str]) -> list[tuple[float, ...]]:
     missing = list(dict.fromkeys(text for text in descriptions if text not in _vectors))
     # Keep this request's vectors even if its history exceeds the shared cache.
     available = {text: _vectors[text] for text in descriptions if text in _vectors}
-    for offset in range(0, len(missing), 32):
-        batch = missing[offset:offset + 32]
-        request = urllib.request.Request(
-            "http://127.0.0.1:11434/api/embed",
-            data=json.dumps({"model": "nomic-embed-text", "input": [
-                f"classification: description: {text}" for text in batch
-            ]}).encode(),
-            headers={"Content-Type": "application/json"},
-        )
-        with urllib.request.urlopen(request, timeout=30) as response:
-            vectors = np.asarray(json.load(response)["embeddings"], dtype=np.float32)
-        if vectors.ndim != 2 or len(vectors) != len(batch) or not vectors.shape[1] or not np.isfinite(vectors).all():
-            raise ValueError("Invalid embedding response")
-        available.update((text, tuple(vector)) for text, vector in zip(batch, vectors))
+    if missing:
+        available.update(zip(missing, ollama_service.embed([_EMBED_PREFIX + text for text in missing])))
     for text, vector in available.items():
         _vectors[text] = vector
         _vectors.move_to_end(text)
-    while len(_vectors) > 10000:
+    while len(_vectors) > _VECTOR_CACHE_SIZE:
         _vectors.popitem(last=False)
     return [available[text] for text in descriptions]
 
 
 def _training_rows(config: AppConfig) -> tuple[tuple[str, str], ...]:
+    return _labeled_rows(load_transactions_projected(config))
+
+
+def _labeled_rows(transactions: list[ParsedTransaction]) -> tuple[tuple[str, str], ...]:
     rows = []
-    for txn in load_transactions_projected(config):
+    for txn in transactions:
         # Partial categorization and splits are ambiguous single-label examples.
-        if any(p.account.casefold().endswith(":unknown") for p in txn.postings):
+        if is_uncategorized(txn):
             continue
         categories = {p.account for p in txn.postings if p.account.startswith(("Expenses:", "Income:"))}
         if txn.payee.strip() and len(categories) == 1:
             rows.append((txn.payee.strip(), next(iter(categories))))
     return tuple(sorted(rows))
+
+
+def _unresolved_payees(transactions: list[ParsedTransaction]) -> list[str]:
+    """Deduplicated payees of transactions Review has yet to categorize."""
+    return list(dict.fromkeys(
+        txn.payee.strip() for txn in transactions
+        if txn.payee.strip() and is_uncategorized(txn)
+    ))
 
 
 @lru_cache(maxsize=4)
@@ -86,7 +95,7 @@ def suggest_review_categories(payee: str, config: AppConfig) -> dict:
     if len({category for _, category in rows}) < 2:
         return empty
     workspace = str(config.root_dir.resolve())
-    with _LOCK:
+    with _LOCK.access():
         if monotonic() < _retry_after.get(workspace, 0):
             return {"suggestions": [], "status": "unavailable"}
         try:
@@ -98,6 +107,39 @@ def suggest_review_categories(payee: str, config: AppConfig) -> dict:
                 for account, probability in ranked
             ], "status": "ready"}
         except (OSError, ValueError, KeyError, TypeError) as exc:
-            _retry_after[workspace] = monotonic() + 30
+            _retry_after[workspace] = monotonic() + _COOLDOWN_SECONDS
             _LOG.warning("Category classifier unavailable: %s", type(exc).__name__)
             return {"suggestions": [], "status": "unavailable"}
+
+
+def _warm_embeddings(payees: list[str]) -> None:
+    """Cache vectors a batch at a time, releasing the lock between batches."""
+    for offset in range(0, len(payees), _WARMUP_BATCH):
+        with _LOCK.access(background=True):
+            _embed_many(payees[offset:offset + _WARMUP_BATCH])
+
+
+def warm_review_classifier(config: AppConfig) -> None:
+    """Prepare current history and unresolved payees without persisting predictions.
+
+    Called by the background worker after import commits. Work is split so that
+    queued interactive requests take priority between batches. A history
+    snapshot keys the fit; subsequent edits/undo use a different key.
+    """
+    workspace = str(config.root_dir.resolve())
+    try:
+        with _LOCK.access(background=True):
+            if monotonic() < _retry_after.get(workspace, 0):
+                return
+        transactions = load_transactions_projected(config)
+        rows = _labeled_rows(transactions)
+        if len({category for _, category in rows}) < 2:
+            return
+        _warm_embeddings(list(dict.fromkeys(payee for payee, _ in rows)))
+        with _LOCK.access(background=True):
+            _fit(workspace, rows)
+        _warm_embeddings(_unresolved_payees(transactions))
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        with _LOCK.access(background=True):
+            _retry_after[workspace] = monotonic() + _COOLDOWN_SECONDS
+        _LOG.warning("Category classifier warmup unavailable: %s", type(exc).__name__)

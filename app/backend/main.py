@@ -1,28 +1,27 @@
 from __future__ import annotations
 
+import logging
+import os
+import re
+import sqlite3
 from contextlib import asynccontextmanager
 from datetime import date
 from importlib import resources
-import logging
-import os
 from pathlib import Path
-import re
-import sqlite3
 from uuid import uuid4
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-
 from models import (
     AccountCloseRequest,
     AccountNameRequest,
     AccountSubtypeRequest,
-    ImportCandidateRemoveRequest,
-    CustomImportAccountUpsertRequest,
     CreateAccountRequest,
+    CustomImportAccountUpsertRequest,
     DeleteTransactionRequest,
+    ImportCandidateRemoveRequest,
     ImportPreviewRequest,
     ImportUndoRequest,
     ManualTransactionRequest,
@@ -33,9 +32,9 @@ from models import (
     ReconcileRequest,
     ReconciliationDuplicateResolutionRequest,
     ReconciliationDuplicateReviewRequest,
+    RuleCreateRequest,
     RuleHistoryApplyRequest,
     RuleHistoryScanRequest,
-    RuleCreateRequest,
     RuleReorderRequest,
     RuleUpdateRequest,
     StageApplyRequest,
@@ -45,78 +44,11 @@ from models import (
     UnknownStageRequest,
     UnmatchTransactionRequest,
     UpdateNotesRequest,
-    WorkspaceImportAccountUpsertRequest,
     WorkspaceBootstrapRequest,
+    WorkspaceImportAccountUpsertRequest,
     WorkspaceSelectRequest,
 )
-from services.category_suggestion_service import suggest_category
-from services.classifier_service import suggest_review_categories
-from services.operations_service import rel_path
-from services.git_snapshot_service import hours_since_last_snapshot, snapshot_commit
-from services.header_parser import TransactionStatus, parse_header, set_header_status, HEADER_RE as _HEADER_RE
 from services import journal_writer
-from services.undo_service import UndoOutcome, is_undoable_type, undo_event
-from services.journal_block_service import hash_block, locate_block_by_id
-from services.journal_query_service import TXN_START_RE
-from services.projection_service import (
-    find_projected_transaction_match,
-    find_projected_transaction,
-    find_projected_transaction_at,
-    projected_transaction_block,
-    render_file,
-    refresh_projection,
-)
-from services.transfer_service import ACCOUNT_LINE_RE, ACCOUNT_ONLY_RE, rewrite_posting_account
-from services.account_register_service import build_account_register
-from services.commodity_service import CommodityMismatchError
-from services.custom_csv_service import inspect_csv_bytes
-from services.activity_service import build_activity_view
-from services.dashboard_service import build_dashboard_overview, query_dashboard_transactions
-from services.direction_service import build_dashboard_direction
-from services.unified_transactions_service import (
-    UnifiedTransactionFilters,
-    build_unified_transactions,
-)
-from services.import_history_service import list_import_history, record_applied_import
-from services.operations_service import list_operations
-from services.import_service import (
-    ImportPreviewBlockedError,
-    apply_import,
-    archive_inbox_csv,
-    preview_import_safely,
-    remove_inbox_csv,
-    scan_candidates,
-)
-from services.manual_entry_service import create_manual_transaction
-from services.import_profile_service import import_source_summary
-from services.institution_registry import canonical_template_id, display_name_for, list_templates
-from services.ledger_runner import CommandError, run_cmd
-from services.opening_balance_service import OPENING_BALANCES_EQUITY, opening_balance_index
-from services.reconciliation_context_service import build_reconciliation_context
-from services.reconciliation_duplicate_service import (
-    build_duplicate_review_payload,
-    resolve_duplicate_candidate,
-)
-from services.reconciliation_service import (
-    latest_reconciliation_date,
-    latest_reconciliation_dates_by_tracked_id,
-    parse_closing_balance,
-    reconciliation_status as compute_reconciliation_status,
-    verify_assertion,
-    write_assertion_transaction,
-)
-from services.rule_reapply_service import apply_rule_reapply, scan_rule_reapply
-from services.stage_store import StageNotFoundError, StageStore
-from services.rules_service import (
-    create_rule,
-    delete_rule,
-    ensure_rules_store,
-    extract_set_account,
-    load_rules,
-    reorder_rules,
-    update_rule,
-    upsert_payee_rule,
-)
 from services.account_declaration_service import (
     AccountNotDeclared,
     DeclarationInUse,
@@ -127,13 +59,102 @@ from services.account_declaration_service import (
     reopen_account,
     set_subtype,
 )
-from services.merchant_service import list_undeclared_payees, load_merchants, upsert_merchant
+from services.account_register_service import build_account_register
+from services.activity_service import build_activity_view
+from services.category_suggestion_service import suggest_category
+from services.classifier_service import suggest_review_categories
+from services.classifier_warmup_service import schedule_review_warmup
+from services.ollama_service import keep_embedding_model_alive
+from services.commodity_service import CommodityMismatchError
+from services.custom_csv_service import inspect_csv_bytes
+from services.dashboard_service import (
+    build_dashboard_overview,
+    query_dashboard_transactions,
+)
+from services.direction_service import build_dashboard_direction
+from services.git_snapshot_service import hours_since_last_snapshot, snapshot_commit
+from services.header_parser import HEADER_RE as _HEADER_RE
+from services.header_parser import TransactionStatus, parse_header, set_header_status
+from services.import_history_service import list_import_history, record_applied_import
+from services.import_profile_service import import_source_summary
+from services.import_service import (
+    ImportPreviewBlockedError,
+    apply_import,
+    archive_inbox_csv,
+    preview_import_safely,
+    remove_inbox_csv,
+    scan_candidates,
+)
+from services.institution_registry import (
+    canonical_template_id,
+    display_name_for,
+    list_templates,
+)
+from services.journal_block_service import hash_block, locate_block_by_id
+from services.journal_query_service import TXN_START_RE
+from services.ledger_runner import CommandError, run_cmd
+from services.manual_entry_service import create_manual_transaction
+from services.merchant_service import (
+    list_undeclared_payees,
+    load_merchants,
+    upsert_merchant,
+)
+from services.opening_balance_service import (
+    OPENING_BALANCES_EQUITY,
+    opening_balance_index,
+)
+from services.operations_service import list_operations, rel_path
+from services.projection_service import (
+    find_projected_transaction,
+    find_projected_transaction_at,
+    find_projected_transaction_match,
+    projected_transaction_block,
+    refresh_projection,
+    render_file,
+)
+from services.reconciliation_context_service import build_reconciliation_context
+from services.reconciliation_duplicate_service import (
+    build_duplicate_review_payload,
+    resolve_duplicate_candidate,
+)
+from services.reconciliation_service import (
+    latest_reconciliation_date,
+    latest_reconciliation_dates_by_tracked_id,
+    parse_closing_balance,
+    verify_assertion,
+    write_assertion_transaction,
+)
+from services.reconciliation_service import (
+    reconciliation_status as compute_reconciliation_status,
+)
 from services.reference_data_service import (
     account_subtypes,
     list_account_names,
     list_category_account_names,
     list_managed_accounts,
     posting_counts_by_account,
+)
+from services.rule_reapply_service import apply_rule_reapply, scan_rule_reapply
+from services.rules_service import (
+    create_rule,
+    delete_rule,
+    ensure_rules_store,
+    extract_set_account,
+    load_rules,
+    reorder_rules,
+    update_rule,
+    upsert_payee_rule,
+)
+from services.stage_store import StageNotFoundError, StageStore
+from services.transfer_service import (
+    ACCOUNT_LINE_RE,
+    ACCOUNT_ONLY_RE,
+    rewrite_posting_account,
+)
+from services.undo_service import UndoOutcome, is_undoable_type, undo_event
+from services.unified_transactions_service import (
+    UnifiedTransactionFilters,
+    build_unified_transactions,
 )
 from services.unknowns_service import (
     apply_unknown_mappings,
@@ -144,7 +165,6 @@ from services.workspace_service import (
     OPENING_BALANCE_OFFSET_ACCOUNT_UNSET,
     WorkspaceManager,
 )
-
 
 ROOT_DIR = Path(os.environ.get("LEDGER_FLOW_ROOT", Path(__file__).resolve().parents[2])).expanduser().resolve()
 workspace_manager = WorkspaceManager(ROOT_DIR)
@@ -345,7 +365,10 @@ async def lifespan(_app: FastAPI):
                 snapshot_commit(config.root_dir, trigger="startup")
     except Exception:
         _log.warning("Startup git snapshot failed — skipping", exc_info=True)
-    yield
+    with keep_embedding_model_alive():
+        if config is not None:
+            schedule_review_warmup(config)
+        yield
     try:
         shutdown_config = workspace_manager.load_active_config()
         if shutdown_config is not None:
@@ -1166,9 +1189,7 @@ def transactions_unmatch(req: UnmatchTransactionRequest) -> dict:
         destination_idx: int | None = None
         for i in range(block_start + 1, block_end):
             stripped = main_lines[i].strip()
-            if stripped == "; :manual:":
-                lines_to_remove.append(i)
-            elif stripped in {
+            if stripped == "; :manual:" or stripped in {
                 f"; lf_match_id: {req.matchId}",
                 f"; match-id: {req.matchId}",
             }:
@@ -2270,6 +2291,7 @@ def import_apply(req: StageApplyRequest) -> dict:
         mut.summary = f"Imported {appended_count} transactions from {source_file}"
         mut.payload = history_entry
 
+    schedule_review_warmup(config)
     return stage
 
 

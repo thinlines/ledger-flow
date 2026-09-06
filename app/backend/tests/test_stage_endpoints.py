@@ -163,6 +163,17 @@ def test_import_apply_marks_stage_applied_and_is_idempotent(tmp_path: Path, monk
     payload = _import_preview(config, monkeypatch)
     stage_id = payload["stageId"]
 
+    warmed = []
+    def schedule(config):
+        # The callback sees finalized stage and operation state, not an import
+        # still inside the journal mutation.
+        with sqlite3.connect(database_path(config.root_dir)) as conn:
+            assert conn.execute(
+                "SELECT COUNT(*) FROM operations WHERE type = 'import.applied.v1'"
+            ).fetchone()[0] == 1
+        assert _stage_row(config, stage_id)[1] == "applied"
+        warmed.append(config.root_dir)
+    monkeypatch.setattr(main, "schedule_review_warmup", schedule)
     applied = main.import_apply(StageApplyRequest(stageId=stage_id))
 
     assert applied["status"] == "applied"
@@ -181,6 +192,7 @@ def test_import_apply_marks_stage_applied_and_is_idempotent(tmp_path: Path, monk
     assert again["result"]["historyId"] == applied["result"]["historyId"]
     journal_text = Path(applied["result"]["journalPath"]).read_text(encoding="utf-8")
     assert journal_text.count("Coffee Shop") == 1
+    assert warmed == [config.root_dir]
     _assert_no_json_stage_files(config)
 
 
@@ -354,3 +366,55 @@ def test_rule_history_scan_apply_and_cleanup(tmp_path: Path, monkeypatch) -> Non
     main.delete_stage(stage_id)
     assert _stage_row(config, stage_id) is None
     _assert_no_json_stage_files(config)
+
+
+def test_failed_import_does_not_schedule_classifier(tmp_path, monkeypatch):
+    config = _make_config(tmp_path / 'workspace')
+    monkeypatch.setattr(main, '_require_workspace_config', lambda: config)
+    payload = _import_preview(config, monkeypatch)
+    warmed = []
+    monkeypatch.setattr(main, 'schedule_review_warmup', warmed.append)
+    def fail(*args):
+        raise main.CommandError('import failed')
+    monkeypatch.setattr(main, 'apply_import', fail)
+    with pytest.raises(HTTPException):
+        main.import_apply(StageApplyRequest(stageId=payload['stageId']))
+    assert warmed == []
+
+
+def test_committed_import_prepares_subsequent_review_without_waiting(tmp_path, monkeypatch):
+    from threading import Event
+    from services import classifier_service as classifier
+    from services.classifier_warmup_service import _WarmupQueue
+    config = _make_config(tmp_path / 'workspace')
+    (config.journal_dir / '2026.journal').write_text(
+        '2026-01-01 Market\n    Expenses:Food  USD 10\n    Assets:Bank\n\n'
+        '2026-01-02 Rent\n    Expenses:Rent  USD 20\n    Assets:Bank\n'
+    )
+    monkeypatch.setattr(main, '_require_workspace_config', lambda: config)
+    payload = _import_preview(config, monkeypatch)
+    started, release = Event(), Event()
+    requests = []
+    def embed(inputs):
+        started.set()
+        assert release.wait(5)
+        requests.extend(inputs)
+        return [(1., 0.) if 'Rent' in text else (0., 1.) for text in inputs]
+    monkeypatch.setattr(classifier.ollama_service, 'embed', embed)
+    queue = _WarmupQueue(classifier.warm_review_classifier)
+    monkeypatch.setattr(main, 'schedule_review_warmup', queue.schedule)
+    result = main.import_apply(StageApplyRequest(stageId=payload['stageId']))
+    worker = queue._worker
+    try:
+        assert result['status'] == 'applied'
+        assert started.wait(2)
+    finally:
+        release.set()
+        worker.join(5)
+    assert not worker.is_alive()
+    assert any('Coffee Shop' in text for text in requests)
+    requests.clear()
+    fits = classifier._fit.cache_info().misses
+    assert main.review_category_suggestions('Coffee Shop')['status'] == 'ready'
+    assert requests == []
+    assert classifier._fit.cache_info().misses == fits
