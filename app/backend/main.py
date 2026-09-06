@@ -50,6 +50,7 @@ from models import (
     WorkspaceSelectRequest,
 )
 from services.category_suggestion_service import suggest_category
+from services.classifier_service import suggest_review_categories
 from services.operations_service import rel_path
 from services.git_snapshot_service import hours_since_last_snapshot, snapshot_commit
 from services.header_parser import TransactionStatus, parse_header, set_header_status, HEADER_RE as _HEADER_RE
@@ -1273,6 +1274,11 @@ def transactions_unmatch(req: UnmatchTransactionRequest) -> dict:
 # ---------------------------------------------------------------------------
 # Category suggestion
 # ---------------------------------------------------------------------------
+
+
+@app.get("/api/categories/review-suggestions")
+def review_category_suggestions(payee: str = "") -> dict:
+    return suggest_review_categories(payee, _require_workspace_config())
 
 
 @app.get("/api/categories/suggest")

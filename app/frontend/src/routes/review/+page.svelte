@@ -1,8 +1,9 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
+	import { onMount, onDestroy } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/stores';
 	import { apiGet, apiPost } from '$lib/api';
+	import { createReviewSuggestions } from '$lib/review-suggestions';
 	import { filterCategoryOptions, transferTargetOptions, type TransferTargetAccount } from '$lib/category-combobox';
 	import { applyUnknownStage, saveUnknownSelections, type UnknownSelectionPayload } from '$lib/stage-client';
 
@@ -32,6 +33,9 @@
 	let loading = true;
 	let busy = false;
 	let error = '';
+	const suggestions = createReviewSuggestions();
+	$: categoryChoices = $suggestions.accounts;
+	$: suggestionStatus = $suggestions.message;
 
 	$: journalPath = $page.url.searchParams.get('journal') ?? '';
 	$: sourceFileSha256 = $page.url.searchParams.get('source') ?? '';
@@ -48,7 +52,11 @@
 		return !query || [candidate.candidatePayee, candidate.candidateDate, candidate.candidateAmount, candidate.targetTrackedAccountName].some((value) => value?.toLowerCase().includes(query));
 	});
 	$: manualCandidates = active?.txn?.matchCandidates?.slice(0, 4) ?? [];
-	$: categoryChoices = [active?.group?.suggestedAccount, ...categories.filter((entry) => entry !== active?.group?.suggestedAccount)].filter((entry): entry is string => Boolean(entry)).slice(0, 3);
+	$: suggestions.focus(
+		active?.txn ? active.payee : null,
+		allItems.slice(allItems.findIndex((item) => item.id === active?.id) + 1)
+			.filter((item) => item.txn && !stage?.selections[item.id]).map((item) => item.payee)
+	);
 	$: filteredCategories = filterCategoryOptions(categories, categoryQuery);
 	$: filteredTransferTargets = transferTargetOptions(trackedAccounts, active?.txn?.sourceTrackedAccountId, transferQuery);
 	$: stagedCategory = active?.txn ? stage?.selections[active.txn.txnId]?.categoryAccount : undefined;
@@ -63,8 +71,10 @@
 	}
 	function flattenAll(imported: ImportedTxn[], unresolved: Item[]): Item[] {
 		const byTransaction = new Map(unresolved.map((item) => [item.txn?.transactionId, item]));
-		return imported.map((row) => byTransaction.get(row.transactionId) ?? { id: row.transactionId, payee: row.payee, date: row.date, amount: row.amount ?? '—', account: row.accountLabel ?? '', state: row.transferState === 'matched' ? 'Matched automatically' : 'Ready', kind: row.transferState === 'matched' ? 'transfer' : 'ready' });
+		return imported.map((row) => byTransaction.has(row.transactionId) ? { ...byTransaction.get(row.transactionId)!, payee: row.payee } : { id: row.transactionId, payee: row.payee, date: row.date, amount: row.amount ?? '—', account: row.accountLabel ?? '', state: row.transferState === 'matched' ? 'Matched automatically' : 'Ready', kind: row.transferState === 'matched' ? 'transfer' : 'ready' });
 	}
+
+	onDestroy(() => suggestions.dispose());
 
 	async function load() {
 		if (!journalPath) { error = 'This review link is missing its journal context.'; loading = false; return; }
@@ -150,7 +160,7 @@
 					<section class="mt-7"><h3 class="m-0 text-sm font-semibold">Does it match one of these?</h3><p class="m-0 mt-1 text-sm text-ink-mute">Suggested from same-amount activity in your other accounts.</p>{#each topTransferCandidates as candidate, index}<button type="button" class="mt-3 w-full cursor-pointer rounded-md border border-brand bg-brand-wash p-4 text-left" on:click={() => chooseTransfer(candidate)}><span class="flex justify-between gap-4"><span><span class="block text-sm font-semibold">{candidate.candidatePayee ?? 'Transfer deposit'}</span><span class="mt-1 block text-xs text-ink-mute">{candidate.candidateDate} · {candidate.targetTrackedAccountName}</span></span><span class="amount text-sm font-semibold">{candidate.candidateAmount}</span></span><span class="mt-2 block text-xs font-medium text-brand-deep"><span class="kbd">{index + 1}</span> Match this transfer</span></button>{/each}<button type="button" class="mt-4 cursor-pointer border-0 bg-transparent p-0 text-sm font-medium text-brand-deep" on:click={openSearch}>Can’t find it? Search other transactions</button>{#if showSearch}<div class="mt-3 rounded-md border border-hairline-strong bg-paper p-3"><label class="text-xs font-medium text-ink-mute" for="match-search">Search likely matches</label><input bind:this={searchInput} bind:value={transferQuery} id="match-search" class="mt-1" placeholder="Payee, amount, date, or account" />{#each searchedTransferCandidates as candidate}<button type="button" class="mt-2 w-full cursor-pointer border-0 bg-transparent p-1 text-left text-sm hover:text-brand-deep" on:click={() => chooseTransfer(candidate)}>{candidate.candidatePayee ?? 'Transfer'} · {candidate.candidateDate} · {candidate.targetTrackedAccountName} <span class="amount float-right">{candidate.candidateAmount}</span></button>{:else}<p class="m-0 mt-2 text-xs text-ink-mute">No likely transfers match that search.</p>{/each}</div>{/if}</section><button type="button" class="mt-7 cursor-pointer rounded-md border border-hairline-strong bg-panel px-4 py-2 text-sm" on:click={() => treatingAsCategory = true}>Not a transfer</button>
 				{:else if (active.kind === 'category' || treatingAsCategory) && active.txn}
 					<!-- svelte-ignore a11y_role_has_required_aria_props -->
-					<section class="mt-7">{#if manualCandidates.length}<h3 class="m-0 text-sm font-semibold">Possible existing manual entry</h3>{#each manualCandidates as candidate}<button type="button" class="mt-3 w-full cursor-pointer rounded-md border border-hairline-strong p-4 text-left hover:bg-wash" on:click={() => chooseManual(candidate)}><span class="flex justify-between gap-4"><span><span class="block text-sm font-semibold">{candidate.payee}</span><span class="mt-1 block text-xs text-ink-mute">{candidate.date} · {candidate.destinationAccount}</span></span><span class="amount text-sm">{candidate.amount}</span></span><span class="mt-2 block text-xs text-ink-mute">{candidate.matchReason}</span></button>{/each}{/if}<h3 class="m-0 mt-6 text-sm font-semibold">Where should this transaction go?</h3><div class="mt-3 grid max-w-xl gap-2">{#each categoryChoices as account, index}<button type="button" class="cursor-pointer rounded-md border px-4 py-3 text-left text-sm {stagedCategory === account ? 'border-brand bg-brand-wash font-medium' : index === 0 ? 'border-brand bg-brand-wash' : 'border-hairline-strong bg-panel hover:bg-wash'}" on:click={() => void choose({ txnId: active.txn!.txnId, selectionType: 'category', categoryAccount: account })}>{account}<span class="float-right text-xs font-normal text-ink-mute"><span class="kbd">{index + 1}</span>{index === 0 ? ' Suggested' : ''}</span></button>{/each}<div class="mt-2"><label class="sr-only" for="category-search">Choose another category</label><input bind:this={categoryInput} bind:value={categoryQuery} id="category-search" class="w-full" role="combobox" aria-expanded="true" aria-controls="category-options" aria-autocomplete="list" placeholder="Choose another category…" />{#if categoryQuery}<div id="category-options" role="listbox" class="mt-1 max-h-40 overflow-y-auto rounded-md border border-hairline bg-panel">{#each filteredCategories.slice(0, 6) as account}<button type="button" role="option" class="block w-full cursor-pointer border-0 bg-transparent px-3 py-2 text-left text-sm hover:bg-wash" on:click={() => void choose({ txnId: active.txn!.txnId, selectionType: 'category', categoryAccount: account })}>{account}</button>{:else}<p class="m-0 px-3 py-2 text-sm text-ink-mute">No categories match.</p>{/each}</div>{/if}<p class="m-0 mt-1 text-xs text-ink-mute"><span class="kbd">4</span> search · <span class="kbd">Enter</span> select top result · <span class="kbd">m</span> mark as transfer</p></div></div></section>
+					<section class="mt-7">{#if manualCandidates.length}<h3 class="m-0 text-sm font-semibold">Possible existing manual entry</h3>{#each manualCandidates as candidate}<button type="button" class="mt-3 w-full cursor-pointer rounded-md border border-hairline-strong p-4 text-left hover:bg-wash" on:click={() => chooseManual(candidate)}><span class="flex justify-between gap-4"><span><span class="block text-sm font-semibold">{candidate.payee}</span><span class="mt-1 block text-xs text-ink-mute">{candidate.date} · {candidate.destinationAccount}</span></span><span class="amount text-sm">{candidate.amount}</span></span><span class="mt-2 block text-xs text-ink-mute">{candidate.matchReason}</span></button>{/each}{/if}<h3 class="m-0 mt-6 text-sm font-semibold">Where should this transaction go?</h3><div class="mt-3 grid max-w-xl gap-2">{#if suggestionStatus}<p class="m-0 text-sm text-ink-mute" role="status">{suggestionStatus}</p>{/if}{#each categoryChoices as account, index}<button type="button" class="cursor-pointer rounded-md border px-4 py-3 text-left text-sm {stagedCategory === account ? 'border-brand bg-brand-wash font-medium' : index === 0 ? 'border-brand bg-brand-wash' : 'border-hairline-strong bg-panel hover:bg-wash'}" on:click={() => void choose({ txnId: active.txn!.txnId, selectionType: 'category', categoryAccount: account })}>{account}<span class="float-right text-xs font-normal text-ink-mute"><span class="kbd">{index + 1}</span>{' Suggested'}</span></button>{/each}<div class="mt-2"><label class="sr-only" for="category-search">Choose another category</label><input bind:this={categoryInput} bind:value={categoryQuery} id="category-search" class="w-full" role="combobox" aria-expanded="true" aria-controls="category-options" aria-autocomplete="list" placeholder="Choose another category…" />{#if categoryQuery}<div id="category-options" role="listbox" class="mt-1 max-h-40 overflow-y-auto rounded-md border border-hairline bg-panel">{#each filteredCategories.slice(0, 6) as account}<button type="button" role="option" class="block w-full cursor-pointer border-0 bg-transparent px-3 py-2 text-left text-sm hover:bg-wash" on:click={() => void choose({ txnId: active.txn!.txnId, selectionType: 'category', categoryAccount: account })}>{account}</button>{:else}<p class="m-0 px-3 py-2 text-sm text-ink-mute">No categories match.</p>{/each}</div>{/if}<p class="m-0 mt-1 text-xs text-ink-mute"><span class="kbd">4</span> search · <span class="kbd">Enter</span> select top result · <span class="kbd">m</span> mark as transfer</p></div></div></section>
 				{:else}<p class="m-0 mt-7 rounded-md bg-wash p-4 text-sm text-ink-mute">This transaction has no follow-up work. It remains visible here so the review is an accurate view of the import.</p>{/if}{/if}</main>
 		</div>{#if error}<p class="m-0 mt-5 rounded-md border border-bad/25 bg-bad/5 px-3 py-2 text-sm text-bad" role="alert">{error}</p>{/if}
 	</section>

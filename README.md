@@ -137,3 +137,29 @@ systemctl --user restart ledger-flow.service
 - [ARCHITECTURE.md](ARCHITECTURE.md)
 - [ROADMAP.md](ROADMAP.md)
 - [DECISIONS.md](DECISIONS.md)
+
+### Review queue category suggestions
+
+The review queue offers up to three categories from a logistic regression
+classifier trained on the workspace's categorized journal history. It uses only
+the payee description, with the same `nomic-embed-text` embeddings and feature
+prefix as `app/backend/prototypes/tx_clf.ipynb`, followed by standard scaling and
+balanced logistic regression. Suggestions require a human selection before apply.
+
+Run Ollama locally on `127.0.0.1:11434` and install the embedding model with
+`ollama pull nomic-embed-text`. Backend dependencies are installed by `uv sync`.
+The first suggestion embeds historical descriptions in batches and fits the
+model; later requests reuse in-memory embeddings and the fit. Review prepares
+the next four payees in the background, with at most two requests in flight,
+and keeps completed suggestions for the review session so navigation does not
+restart them. Closing review cancels outstanding requests. The first cold load
+can still show a loading message; manual category search remains available. Restarting the backend clears
+these caches. Applied categorization changes, recategorization, and undo cause
+the next request to refit from the updated history; staged choices are not yet
+training examples. No transaction text is sent to a cloud service.
+
+Training requires at least two distinct expense/income categories. Unknown,
+partially categorized, split-category, and transfer transactions are excluded.
+If history is insufficient or Ollama is unavailable, the queue explains this and
+keeps manual category search available. The suggestions endpoint is
+`GET /api/categories/review-suggestions?payee=...`.
