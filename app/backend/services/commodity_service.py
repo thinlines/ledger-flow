@@ -7,8 +7,21 @@ from .commodity_parser import (
     parse_amount,
     split_balance_assertion,
 )
-from .journal_writer import format_currency_amount
 from .journal_syntax import ACCOUNT_LINE_RE
+from .journal_writer import format_currency_amount
+
+# Callers treat this module as the commodity facade and import the parser's
+# vocabulary through it; re-exports are part of the interface, not dead weight.
+__all__ = [
+    "BASE_CURRENCY_SYMBOLS",
+    "CommodityMismatchError",
+    "ParsedAmount",
+    "canonicalize_base_currency_amount",
+    "canonicalize_base_currency_posting",
+    "commodity_label",
+    "parse_amount",
+    "split_balance_assertion",
+]
 
 
 BASE_CURRENCY_SYMBOLS = {
