@@ -1,4 +1,7 @@
 {
+	"scripts": {
+		"prototype:semantic-categories": "python app/backend/prototypes/semantic_categories_tui.py"
+	},
 	"devDependencies": {
 		"@sveltejs/adapter-static": "^3.0.10"
 	}
