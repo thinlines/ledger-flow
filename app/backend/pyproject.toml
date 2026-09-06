@@ -18,6 +18,16 @@ ledger-flow = "ledger_flow_cli:main"
 [project.optional-dependencies]
 dev = ["pytest>=8.4.0", "httpx>=0.28.0", "ruff==0.16.5"]
 
+[tool.ruff.lint]
+# Rules are ruff's defaults for the pinned version in [project.optional-
+# dependencies] dev. Selecting whole families instead over-selects by an order
+# of magnitude, so the version pin is what keeps "clean" from drifting.
+ignore = [
+  # Collapsing `with pytest.raises(...)` onto the same line as the code under
+  # test hides which statement is expected to raise.
+  "SIM117",
+]
+
 [tool.setuptools]
 py-modules = ["ledger_flow_cli", "main", "models"]
 include-package-data = true
@@ -32,13 +42,3 @@ ledger_flow_frontend = ["static/**/*"]
 [build-system]
 requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
-
-[tool.ruff.lint]
-# Rules are ruff's defaults for the pinned version in [project.optional-
-# dependencies] dev. Selecting whole families instead over-selects by an order
-# of magnitude, so the version pin is what keeps "clean" from drifting.
-ignore = [
-  # Collapsing `with pytest.raises(...)` onto the same line as the code under
-  # test hides which statement is expected to raise.
-  "SIM117",
-]

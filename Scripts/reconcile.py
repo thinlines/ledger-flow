@@ -29,12 +29,10 @@ import re
 import shlex
 import subprocess
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple
-
 
 # --- ledger helpers -----------------------------------------------------------
 
-def _run_ledger(ledger_bin: str, args: List[str]) -> str:
+def _run_ledger(ledger_bin: str, args: list[str]) -> str:
     proc = subprocess.run(
         [ledger_bin] + args,
         capture_output=True,
@@ -49,7 +47,7 @@ def _run_ledger(ledger_bin: str, args: List[str]) -> str:
 _AMOUNT_RE = re.compile(r"([+-]?\d[\d,]*(?:\.\d+)?)")
 
 
-def _parse_first_number(s: str) -> Optional[float]:
+def _parse_first_number(s: str) -> float | None:
     m = _AMOUNT_RE.search(s)
     if not m:
         return None
@@ -101,7 +99,7 @@ def _register_rows(
     account: str,
     begin_date: str,
     end_date: str,
-) -> List[Tuple[str, int, str, str, str, str]]:
+) -> list[tuple[str, int, str, str, str, str]]:
     """
     Returns rows: (filename, beg_line, date, status, payee, amount_str)
     One row per posting affecting `account` (we'll de-dupe/group later).
@@ -120,7 +118,7 @@ def _register_rows(
             "--no-color",
         ],
     )
-    rows: List[Tuple[str, int, str, str, str, str]] = []
+    rows: list[tuple[str, int, str, str, str, str]] = []
     for line in out.splitlines():
         parts = line.split("\t")
         if len(parts) != 6:
@@ -148,18 +146,18 @@ def _is_header_line(line: str) -> bool:
     return bool(re.match(r"^\d{4}[-/]\d{2}[-/]\d{2}", line))
 
 
-_file_cache: Dict[str, List[str]] = {}
-_backup_made: Dict[str, str] = {}
+_file_cache: dict[str, list[str]] = {}
+_backup_made: dict[str, str] = {}
 
 
-def _read_lines(path: str) -> List[str]:
+def _read_lines(path: str) -> list[str]:
     if path not in _file_cache:
         with open(path, "r", encoding="utf-8") as f:
             _file_cache[path] = f.readlines()
     return _file_cache[path]
 
 
-def _write_lines(path: str, lines: List[str]) -> None:
+def _write_lines(path: str, lines: list[str]) -> None:
     with open(path, "w", encoding="utf-8") as f:
         f.writelines(lines)
     _file_cache[path] = lines
@@ -292,12 +290,12 @@ def _load_txns(
     account: str,
     begin_date: str,
     end_date: str,
-) -> List[Txn]:
+) -> list[Txn]:
     rows = _register_rows(ledger_bin, ledger_file,
                           account, begin_date, end_date)
 
     # Group by (file, header_line) so split transactions show as one entry.
-    grouped: Dict[Tuple[str, int], Dict[str, object]] = {}
+    grouped: dict[tuple[str, int], dict[str, object]] = {}
 
     for fn, beg_line, date, _status_from_report, payee, amt_str in rows:
         header = _find_header_line_no(fn, beg_line)
@@ -315,7 +313,7 @@ def _load_txns(
         else:
             grouped[key]["amount"] = float(grouped[key]["amount"]) + amt
 
-    txns: List[Txn] = []
+    txns: list[Txn] = []
     for (fn, header), d in grouped.items():
         status = _get_header_status(fn, header)
         txns.append(
@@ -352,7 +350,7 @@ def _tui(stdscr, args) -> int:
     stdscr.keypad(True)
 
     show_u, show_p, show_c = True, True, True
-    txns_all: List[Txn] = []
+    txns_all: list[Txn] = []
 
     def visible(tx: Txn) -> bool:
         return ((tx.status == " " and show_u) or (tx.status == "!" and show_p) or (tx.status == "*" and show_c))
@@ -361,7 +359,7 @@ def _tui(stdscr, args) -> int:
     scroll = 0
     msg = ""
 
-    def reload() -> Tuple[List[Txn], float]:
+    def reload() -> tuple[list[Txn], float]:
         nonlocal selected, scroll, msg
         nonlocal txns_all
         # Clear caches so edits are reflected.
@@ -381,7 +379,7 @@ def _tui(stdscr, args) -> int:
             bal = 0.0
         return txns_vis, bal
 
-    def prompt_str(prompt: str, default: Optional[str] = None) -> Optional[str]:
+    def prompt_str(prompt: str, default: str | None = None) -> str | None:
         curses.echo()
         curses.curs_set(1)
         try:
@@ -407,7 +405,7 @@ def _tui(stdscr, args) -> int:
             curses.noecho()
             curses.curs_set(0)
 
-    def prompt_float(prompt: str, default: Optional[float] = None) -> Optional[float]:
+    def prompt_float(prompt: str, default: float | None = None) -> float | None:
         s = prompt_str(
             prompt, default=None if default is None else str(default))
         if s is None:
@@ -435,7 +433,7 @@ def _tui(stdscr, args) -> int:
             return False
         return not default_no
 
-    def run_add_tool(selected_filename: str) -> Optional[str]:
+    def run_add_tool(selected_filename: str) -> str | None:
         if not args.add_tool:
             return "No add tool configured (set --add-tool)"
 
@@ -458,7 +456,7 @@ def _tui(stdscr, args) -> int:
             return f"Add tool exited {rc}"
         return None
 
-    def run_editor(selected_filename: str, line_no: int) -> Optional[str]:
+    def run_editor(selected_filename: str, line_no: int) -> str | None:
         editor = os.environ.get("EDITOR")
         if not editor:
             return "EDITOR not set"
@@ -510,8 +508,7 @@ def _tui(stdscr, args) -> int:
                 return 0
             continue
 
-        if selected < scroll:
-            scroll = selected
+        scroll = min(scroll, selected)
         if selected >= scroll + rows_avail:
             scroll = selected - rows_avail + 1
 

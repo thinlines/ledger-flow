@@ -1,12 +1,10 @@
-#!/usr/bin/python
-
-import sys
-import re
 import csv
+import re
+import sys
 
 payeeptn = re.compile("^payee[ \t]+")
 aliasptn = re.compile("^[ \t]+alias[ \t]+")
-aliases = dict()
+aliases = {}
 
 with open(sys.argv[1]) as f:
     file = f.readlines()
@@ -28,6 +26,6 @@ fieldnames = ["payee", "alias"]
 writer = csv.DictWriter(sys.stdout, fieldnames=fieldnames,
                         quoting=csv.QUOTE_MINIMAL)
 writer.writeheader()
-for payee in sorted([str(key) for key in aliases.keys()]):
+for payee in sorted([str(key) for key in aliases]):
     for alias in aliases[payee]:
         writer.writerow({"payee": payee, "alias": alias})

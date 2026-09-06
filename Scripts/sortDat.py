@@ -1,11 +1,11 @@
 #!/usr/bin/python
 
-import sys
 import re
+import sys
 
 myDict = {}
 
-directive_re = re.compile("^[\w]")
+directive_re = re.compile(r"^[\w]")
 
 
 with open(sys.argv[1]) as f:

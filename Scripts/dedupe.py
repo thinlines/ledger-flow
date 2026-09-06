@@ -13,8 +13,8 @@ import re
 import shlex
 import subprocess
 import tempfile
+from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Dict, Iterable, List, Optional, Tuple
 
 from ledger_utils import (
     clear_cache,
@@ -27,7 +27,6 @@ from ledger_utils import (
     run_ledger,
     write_lines,
 )
-
 
 _META_RE = re.compile(r"^\s*;\s*([^:]+)\s*:\s*(.*)$")
 _HEADER_RE = re.compile(
@@ -76,7 +75,7 @@ def _amount_matches(a: float, b: float, window: float) -> bool:
     return abs(a - b) <= max(0.0, window)
 
 
-def _txn_block_range(lines: List[str], header_line_no: int) -> Tuple[int, int]:
+def _txn_block_range(lines: list[str], header_line_no: int) -> tuple[int, int]:
     start = max(0, min(header_line_no - 1, len(lines)))
     end = start + 1
     while end < len(lines) and not is_header_line(lines[end]):
@@ -84,8 +83,8 @@ def _txn_block_range(lines: List[str], header_line_no: int) -> Tuple[int, int]:
     return start, end
 
 
-def _extract_meta(lines: List[str], start: int, end: int) -> List[Tuple[str, str, str]]:
-    out: List[Tuple[str, str, str]] = []
+def _extract_meta(lines: list[str], start: int, end: int) -> list[tuple[str, str, str]]:
+    out: list[tuple[str, str, str]] = []
     for line in lines[start + 1:end]:
         m = _META_RE.match(line.strip())
         if not m:
@@ -96,15 +95,15 @@ def _extract_meta(lines: List[str], start: int, end: int) -> List[Tuple[str, str
     return out
 
 
-def _get_block(filename: str, header_line_no: int) -> Tuple[List[str], int, int, List[Tuple[str, str, str]]]:
+def _get_block(filename: str, header_line_no: int) -> tuple[list[str], int, int, list[tuple[str, str, str]]]:
     lines = read_lines(filename)
     start, end = _txn_block_range(lines, header_line_no)
     meta = _extract_meta(lines, start, end)
     return lines, start, end, meta
 
 
-def _extract_accounts(lines: List[str], start: int, end: int) -> List[str]:
-    accounts: List[str] = []
+def _extract_accounts(lines: list[str], start: int, end: int) -> list[str]:
+    accounts: list[str] = []
     for line in lines[start + 1:end]:
         raw = line.strip()
         if not raw or raw.startswith(";"):
@@ -128,7 +127,7 @@ def _truncate(s: str, max_len: int) -> str:
     return s[: max_len - 3] + "..."
 
 
-def _normalize_block_lines(text: str) -> List[str]:
+def _normalize_block_lines(text: str) -> list[str]:
     lines = text.splitlines(True)
     if not lines:
         return []
@@ -176,9 +175,9 @@ def _apply_manual_merge(keep: Txn, drop: Txn, merged_text: str, dry_run: bool) -
 
 
 def _insert_meta_lines(
-    lines: List[str],
+    lines: list[str],
     header_idx: int,
-    meta_to_add: List[Tuple[str, str, str]],
+    meta_to_add: list[tuple[str, str, str]],
 ) -> int:
     if not meta_to_add:
         return 0
@@ -195,7 +194,7 @@ def _insert_meta_lines(
     return len(new_lines)
 
 
-def _delete_block(lines: List[str], start: int, end: int) -> None:
+def _delete_block(lines: list[str], start: int, end: int) -> None:
     del lines[start:end]
     if 0 < start < len(lines):
         if lines[start - 1].strip() == "" and lines[start].strip() == "":
@@ -252,11 +251,11 @@ def _merge_txns(keep: Txn, drop: Txn, dry_run: bool) -> str:
     return "merged"
 
 
-def _has_uuid(meta: List[Tuple[str, str, str]]) -> bool:
+def _has_uuid(meta: list[tuple[str, str, str]]) -> bool:
     return any(k == "uuid" for k, _v, _k in meta)
 
 
-def _header_info(lines: List[str], header_idx: int) -> Tuple[str, str]:
+def _header_info(lines: list[str], header_idx: int) -> tuple[str, str]:
     line = lines[header_idx].rstrip("\n")
     m = _HEADER_RE.match(line)
     if not m:
@@ -290,12 +289,12 @@ def _load_txns(
     ledger_bin: str,
     ledger_file: str,
     account: str,
-    begin_date: Optional[str],
-    end_date: Optional[str],
-) -> List[Txn]:
+    begin_date: str | None,
+    end_date: str | None,
+) -> list[Txn]:
     rows = register_rows(ledger_bin, ledger_file, account, begin_date, end_date)
 
-    grouped: Dict[Tuple[str, int], Dict[str, object]] = {}
+    grouped: dict[tuple[str, int], dict[str, object]] = {}
     for fn, beg_line, date, _status, payee, amt_str in rows:
         header = find_header_line_no(fn, beg_line)
         key = (fn, header)
@@ -311,7 +310,7 @@ def _load_txns(
         else:
             grouped[key]["amount"] = float(grouped[key]["amount"]) + amt
 
-    txns: List[Txn] = []
+    txns: list[Txn] = []
     for (fn, header), d in grouped.items():
         txns.append(
             Txn(
@@ -331,9 +330,9 @@ def _candidate_pairs(
     date_window: int,
     match_payee: bool,
     amount_window: float,
-) -> List[Tuple[Txn, Txn]]:
+) -> list[tuple[Txn, Txn]]:
     txns_list = list(txns)
-    pairs: List[Tuple[Txn, Txn]] = []
+    pairs: list[tuple[Txn, Txn]] = []
     for i, a in enumerate(txns_list):
         for b in txns_list[i + 1:]:
             if not _amount_matches(a.amount, b.amount, amount_window):
@@ -390,7 +389,7 @@ def _tui(stdscr, args) -> int:
     scroll = 0
     msg = ""
 
-    def reload() -> List[Tuple[Txn, Txn]]:
+    def reload() -> list[tuple[Txn, Txn]]:
         nonlocal selected, scroll, msg
         clear_cache()
         txns = _load_txns(args.ledger_bin, args.file, args.account, args.begin, args.end)
@@ -442,8 +441,7 @@ def _tui(stdscr, args) -> int:
                 return 0
             continue
 
-        if selected < scroll:
-            scroll = selected
+        scroll = min(scroll, selected)
         if selected >= scroll + rows_avail:
             scroll = selected - rows_avail + 1
 

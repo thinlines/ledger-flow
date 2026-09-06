@@ -1,9 +1,9 @@
-import tempfile
-import subprocess
-import os
-import sys
-import re
 import argparse
+import os
+import re
+import subprocess
+import sys
+import tempfile
 
 
 def edit_unknown_transactions(journal_path, date_fmt):

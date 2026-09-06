@@ -6,17 +6,15 @@ from __future__ import annotations
 import datetime as dt
 import re
 import subprocess
-from typing import Dict, List, Optional, Tuple
-
 
 _AMOUNT_RE = re.compile(r"[+-]?[\d,]+(?:\.\d+)?")
 _HEADER_LINE_RE = re.compile(r"^\d{4}[-/]\d{2}[-/]\d{2}")
 
-_file_cache: Dict[str, List[str]] = {}
-_backup_made: Dict[Tuple[str, str], str] = {}
+_file_cache: dict[str, list[str]] = {}
+_backup_made: dict[tuple[str, str], str] = {}
 
 
-def run_ledger(ledger_bin: str, args: List[str]) -> str:
+def run_ledger(ledger_bin: str, args: list[str]) -> str:
     proc = subprocess.run(
         [ledger_bin] + args,
         capture_output=True,
@@ -39,7 +37,7 @@ def parse_amount(s: str) -> float:
     return float(m.group(0).replace(",", ""))
 
 
-def parse_first_number(s: str) -> Optional[float]:
+def parse_first_number(s: str) -> float | None:
     m = _AMOUNT_RE.search(s)
     if not m:
         return None
@@ -50,14 +48,14 @@ def is_header_line(line: str) -> bool:
     return bool(_HEADER_LINE_RE.match(line))
 
 
-def read_lines(path: str) -> List[str]:
+def read_lines(path: str) -> list[str]:
     if path not in _file_cache:
         with open(path, "r", encoding="utf-8") as f:
             _file_cache[path] = f.readlines()
     return _file_cache[path]
 
 
-def write_lines(path: str, lines: List[str]) -> None:
+def write_lines(path: str, lines: list[str]) -> None:
     with open(path, "w", encoding="utf-8") as f:
         f.writelines(lines)
     _file_cache[path] = lines
@@ -93,9 +91,9 @@ def register_rows(
     ledger_bin: str,
     ledger_file: str,
     account: str,
-    begin_date: Optional[str],
-    end_date: Optional[str],
-) -> List[Tuple[str, int, str, str, str, str]]:
+    begin_date: str | None,
+    end_date: str | None,
+) -> list[tuple[str, int, str, str, str, str]]:
     fmt = "%(filename)\t%(beg_line)\t%(date)\t%(status)\t%(payee)\t%(amount)\n"
     args = [
         "-f", ledger_file,
@@ -108,7 +106,7 @@ def register_rows(
     if end_date:
         args += ["--end", end_date]
     out = run_ledger(ledger_bin, args)
-    rows: List[Tuple[str, int, str, str, str, str]] = []
+    rows: list[tuple[str, int, str, str, str, str]] = []
     for line in out.splitlines():
         parts = line.split("\t")
         if len(parts) != 6:
