@@ -420,7 +420,7 @@ def test_summary_last_30_prior_window(tmp_path: Path) -> None:
     assert summary["periodCount"] == 5
     # Prior window (Jan 9 .. Feb 7) has Jan 10 Paycheck and Jan 15 Groceries — 2 transactions.
     assert summary["priorPeriodCount"] == 2
-    assert summary["priorPeriodTotal"] == round(3000 - 120, 2)
+    assert summary["priorPeriodTotal"] == (3000 - 120)
 
 
 def test_summary_top_transaction_by_absolute_amount(tmp_path: Path) -> None:

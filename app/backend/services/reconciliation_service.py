@@ -230,9 +230,7 @@ def _splice_block(lines: list[str], insert_idx: int, block: list[str]) -> tuple[
 def _write_lines(path: Path, lines: list[str], original_text: str | None) -> None:
     text = "\n".join(lines)
     # Preserve trailing newline if the file already had one or is brand new.
-    if original_text is None:
-        text = text + "\n"
-    elif original_text.endswith("\n") or original_text == "":
+    if original_text is None or original_text.endswith("\n") or original_text == "":
         text = text + "\n"
     path.write_text(text, encoding="utf-8")
 

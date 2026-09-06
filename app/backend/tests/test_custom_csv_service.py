@@ -9,10 +9,10 @@ from services.custom_csv_service import inspect_csv_bytes, normalize_custom_csv_
 
 def test_inspect_csv_bytes_detects_delimiter_and_headers() -> None:
     content = (
-        "Transaction Date;Merchant;Amount;Balance\n"
-        "03/05/2026;Coffee Shop;-7.50;992.50\n"
-        "03/04/2026;Payroll;2000.00;1000.00\n"
-    ).encode("utf-8")
+        b"Transaction Date;Merchant;Amount;Balance\n"
+        b"03/05/2026;Coffee Shop;-7.50;992.50\n"
+        b"03/04/2026;Payroll;2000.00;1000.00\n"
+    )
 
     inspected = inspect_csv_bytes(content)
 

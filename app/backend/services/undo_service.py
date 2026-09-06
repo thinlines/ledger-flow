@@ -20,7 +20,7 @@ import logging
 import re
 from dataclasses import dataclass
 from enum import Enum
-from typing import Callable
+from collections.abc import Callable
 
 from services import journal_writer
 from services.archive_service import archive_manual_entry

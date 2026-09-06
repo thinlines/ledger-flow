@@ -663,9 +663,7 @@ def _build_existing_map(config: AppConfig, import_account_id: str, target_journa
 
     merged = dict(db_map)
     for key, payload_hash in journal_map.items():
-        if payload_hash is not None:
-            merged[key] = payload_hash
-        elif key not in merged:
+        if payload_hash is not None or key not in merged:
             merged[key] = payload_hash
     return merged
 

@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 from pathlib import Path
 import json
 import sqlite3
@@ -25,7 +25,7 @@ def record_event(
     from services.operations_service import record_operation
 
     op_id = event_id or str(uuid7())
-    timestamp = datetime.now(timezone.utc).isoformat()
+    timestamp = datetime.now(UTC).isoformat()
     return record_operation(
         workspace,
         operation_id=op_id,

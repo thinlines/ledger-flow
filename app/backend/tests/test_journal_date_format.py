@@ -60,7 +60,7 @@ def test_run_cmd_sets_ledger_date_format(tmp_path: Path) -> None:
         stdout = ""
         stderr = ""
 
-    def _spy(args, **kwargs):  # noqa: ANN001
+    def _spy(args, **kwargs):
         captured["env"] = kwargs.get("env")
         return _Result()
 
@@ -84,7 +84,7 @@ def test_run_cmd_preserves_inherited_env(monkeypatch: pytest.MonkeyPatch, tmp_pa
         stdout = ""
         stderr = ""
 
-    def _spy(args, **kwargs):  # noqa: ANN001
+    def _spy(args, **kwargs):
         captured["env"] = kwargs.get("env")
         return _Result()
 
@@ -109,7 +109,7 @@ def test_run_cmd_overrides_caller_supplied_format(monkeypatch: pytest.MonkeyPatc
         stdout = ""
         stderr = ""
 
-    def _spy(args, **kwargs):  # noqa: ANN001
+    def _spy(args, **kwargs):
         captured["env"] = kwargs.get("env")
         return _Result()
 

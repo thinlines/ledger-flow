@@ -39,7 +39,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
-from typing import Callable, Iterator
+from collections.abc import Callable, Iterator
 from uuid import uuid7
 
 from .config_service import AppConfig
@@ -171,7 +171,7 @@ def _rollback(
                 shutil.copyfile(str(backups[path]), str(path))
             elif path.is_file():
                 path.unlink()
-        except BaseException as exc:  # noqa: BLE001 — aggregate any per-path failure
+        except BaseException as exc:
             failures.append(RestoreFailure(path=path, error=exc))
     if failures:
         raise WriterError(failures)

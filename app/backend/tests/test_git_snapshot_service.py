@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import subprocess
 from pathlib import Path
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, UTC
 
 import pytest
 
@@ -394,7 +394,7 @@ class TestHoursSinceLastSnapshot:
         ensure_workspace_repo(workspace)
 
         # Amend the commit with a date 48 hours ago
-        old_date = (datetime.now(timezone.utc) - timedelta(hours=48)).isoformat()
+        old_date = (datetime.now(UTC) - timedelta(hours=48)).isoformat()
         monkeypatch.setenv("GIT_COMMITTER_DATE", old_date)
         subprocess.run(
             ["git", "-C", str(workspace), "commit", "--amend", "--no-edit",

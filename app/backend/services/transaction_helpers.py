@@ -4,7 +4,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
-from functools import lru_cache
+from functools import cache
 
 from .commodity_service import CommodityMismatchError, commodity_label
 from .config_service import AppConfig, infer_account_kind
@@ -284,7 +284,7 @@ def _unique_grouped_component_mask(component_mask: int, masks: list[int]) -> int
             row_masks[row_bit.bit_length() - 1].append(mask)
             row_bits ^= row_bit
 
-    @lru_cache(maxsize=None)
+    @cache
     def _solve(available_mask: int) -> tuple[int, tuple[tuple[int, ...], ...]]:
         if available_mask == 0:
             return (0, ((),))

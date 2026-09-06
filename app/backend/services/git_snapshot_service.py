@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import logging
 import subprocess
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 from pathlib import Path
 
 from .operation_dump_service import export_operation_dump
@@ -68,7 +68,7 @@ def snapshot_commit(workspace_path: Path, *, trigger: str) -> bool:
     if result.returncode == 0:
         return False  # nothing staged
 
-    ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    ts = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
     _run_git(workspace_path, ["commit", "-m", f"snapshot: {trigger} at {ts}"])
     return True
 
@@ -84,7 +84,7 @@ def hours_since_last_snapshot(workspace_path: Path) -> float | None:
         return None
 
     last_commit_dt = datetime.fromisoformat(result.stdout.strip())
-    delta = datetime.now(timezone.utc) - last_commit_dt
+    delta = datetime.now(UTC) - last_commit_dt
     return delta.total_seconds() / 3600
 
 

@@ -254,7 +254,7 @@ def _tracked_account_ui(
     opening_by_id: dict,
     opening_by_ledger: dict,
     reconciliation_status_by_id: dict[str, dict] | None = None,
-    last_reconciled_by_id: dict[str, "date"] | None = None,
+    last_reconciled_by_id: dict[str, date] | None = None,
     subtype_by_ledger: dict[str, str] | None = None,
 ) -> dict:
     if subtype_by_ledger is None:

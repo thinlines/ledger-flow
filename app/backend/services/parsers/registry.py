@@ -1,7 +1,6 @@
 from __future__ import annotations
 import importlib
 import pkgutil
-from typing import Optional
 
 from .types import Adapter, Translator
 
@@ -43,7 +42,7 @@ def list_translators() -> list[Translator]:
     return list(_TRANSLATORS.values())
 
 
-def autodetect_adapter(text: str, filename: str) -> Optional[Adapter]:
+def autodetect_adapter(text: str, filename: str) -> Adapter | None:
     """Reserved for future autodetect-on-upload. Walks adapters that define
     a matches() method and returns the unique match, or None if 0 or >1 match.
     """

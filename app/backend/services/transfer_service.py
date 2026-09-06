@@ -111,10 +111,7 @@ def parse_transfer_metadata(
         explicit_transfer_type == TRANSFER_TYPE_IMPORT_MATCH
         and explicit_match_state in ACTIVE_TRANSFER_MATCH_STATES
         and has_linkage
-    ):
-        transfer_type = TRANSFER_TYPE_IMPORT_MATCH
-        transfer_match_state = explicit_match_state
-    elif (
+    ) or (
         explicit_transfer_type is None
         and explicit_match_state in ACTIVE_TRANSFER_MATCH_STATES
         and has_linkage

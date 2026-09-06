@@ -149,7 +149,7 @@ def test_balance_below_thousand_no_quoting():
         commodity="\u00a5",  # ¥
         balance=Decimal("-332.50"),
     )
-    expected = HEADER + "2025/06/15,,Test Payee,¥-7.80,¥-332.50,\r\n".encode("utf-8")
+    expected = HEADER + "2025/06/15,,Test Payee,¥-7.80,¥-332.50,\r\n".encode()
     assert write_intermediate([txn]).encode("utf-8") == expected
 
 

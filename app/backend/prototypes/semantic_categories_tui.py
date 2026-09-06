@@ -10,7 +10,7 @@ from dataclasses import asdict
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from semantic_categories import (  # noqa: E402
+from semantic_categories import (
     EmbeddedExample,
     fit_logistic_category_model,
     predict_logistic_category,

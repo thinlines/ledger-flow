@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-import services.import_service as import_service
+from services import import_service
 from services.config_service import AppConfig
 from services.import_identity_service import ImportIdentityStore
 from services.import_history_service import record_applied_import, undo_import
