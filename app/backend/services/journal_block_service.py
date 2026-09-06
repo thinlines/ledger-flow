@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import hashlib
-from .journal_query_service import LF_TXN_ID_META_RE, TXN_START_RE
 from uuid import uuid7
+
+from .journal_query_service import LF_TXN_ID_META_RE, TXN_START_RE
 
 
 def hash_block(lines: list[str], start: int, end: int) -> str:

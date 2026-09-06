@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from conftest import read_operation_events
 
 import main
 from models import (
@@ -10,7 +11,6 @@ from models import (
     ReconciliationDuplicateReviewRequest,
 )
 from services.config_service import AppConfig
-from conftest import read_operation_events
 from services.import_identity_service import ImportIdentityStore
 from services.import_service import _build_existing_map, _classify_transaction
 from services.undo_service import UndoOutcome, undo_event

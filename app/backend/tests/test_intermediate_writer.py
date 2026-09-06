@@ -18,7 +18,6 @@ from services.parsers.intermediate_writer import (
 )
 from services.parsers.types import LedgerTransaction, Posting
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -240,7 +239,7 @@ def test_empty_commodity_raises():
     txn = LedgerTransaction(
         date=date(2025, 1, 1),
         payee="Bad",
-        postings=[Posting(account="A", amount=Decimal("1"), commodity="")],
+        postings=[Posting(account="A", amount=Decimal(1), commodity="")],
     )
     with pytest.raises(ValueError, match="commodity is required"):
         write_intermediate([txn])
@@ -250,7 +249,7 @@ def test_none_commodity_raises():
     txn = LedgerTransaction(
         date=date(2025, 1, 1),
         payee="Bad",
-        postings=[Posting(account="A", amount=Decimal("1"), commodity=None)],
+        postings=[Posting(account="A", amount=Decimal(1), commodity=None)],
     )
     with pytest.raises(ValueError, match="commodity is required"):
         write_intermediate([txn])

@@ -11,11 +11,15 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-
 from conftest import record_event
+
 from services.config_service import AppConfig
-from services.operations_service import hash_file, list_operations, record_operation, rel_path
+from services.operations_service import (
+    hash_file,
+    list_operations,
+    record_operation,
+    rel_path,
+)
 from services.undo_service import UndoOutcome, undo_event
 
 

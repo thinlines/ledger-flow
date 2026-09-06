@@ -2,12 +2,12 @@ from __future__ import annotations
 
 from decimal import Decimal
 
+from . import projection_service
 from .config_service import AppConfig
 from .journal_query_service import (
     amount_to_number,
     is_generated_opening_balance_transaction,
 )
-from . import projection_service
 from .transaction_helpers import (
     RegisterEvent,
     account_amount,
@@ -105,7 +105,7 @@ def build_account_register(config: AppConfig, account_id: str) -> dict:
 
     events.sort(key=lambda event: (event.posted_on, event.order))
 
-    balance = Decimal("0")
+    balance = Decimal(0)
     balance_commodity: str | None = None
     balance_initialized = False
     rows: list[dict] = []

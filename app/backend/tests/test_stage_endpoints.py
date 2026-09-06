@@ -384,6 +384,7 @@ def test_failed_import_does_not_schedule_classifier(tmp_path, monkeypatch):
 
 def test_committed_import_prepares_subsequent_review_without_waiting(tmp_path, monkeypatch):
     from threading import Event
+
     from services import classifier_service as classifier
     from services.classifier_warmup_service import _WarmupQueue
     config = _make_config(tmp_path / 'workspace')

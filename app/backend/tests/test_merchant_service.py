@@ -14,7 +14,6 @@ from __future__ import annotations
 from pathlib import Path
 
 from services.config_service import AppConfig
-from services.operations_service import hash_file, list_operations
 from services.merchant_service import (
     Merchant,
     list_undeclared_payees,
@@ -22,6 +21,7 @@ from services.merchant_service import (
     match_merchant,
     upsert_merchant,
 )
+from services.operations_service import hash_file, list_operations
 
 
 def make_config(workspace: Path) -> AppConfig:

@@ -4,10 +4,9 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from decimal import Decimal
 from pathlib import Path
-from .journal_query_service import ACCOUNT_LINE_RE, ACCOUNT_ONLY_RE, META_RE
 
 from .currency_parser import parse_optional_amount
-
+from .journal_query_service import ACCOUNT_LINE_RE, ACCOUNT_ONLY_RE, META_RE
 
 TRANSFER_ROOT_ACCOUNT = "Assets:Transfers"
 PAIR_SEPARATOR = "__"
@@ -233,7 +232,7 @@ def infer_blank_posting_amounts(postings: list[dict]) -> list[dict]:
         return normalized
 
     known_total = sum(
-        (posting.get("amountNumber") or Decimal("0"))
+        (posting.get("amountNumber") or Decimal(0))
         for posting in normalized
         if posting.get("amountNumber") is not None
     )

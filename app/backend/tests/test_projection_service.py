@@ -25,11 +25,11 @@ from pathlib import Path
 
 from services.config_service import AppConfig
 from services.journal_block_service import hash_block_text
-from services.projection_db import database_path, ensure_database
+from services.projection_db import database_path
 from services.projection_service import (
     find_projected_transaction_match,
-    refresh_projection,
     rebuild_projection,
+    refresh_projection,
     render_file,
 )
 
@@ -635,7 +635,7 @@ def _ledger_balances(journal: Path) -> dict[str, Decimal]:
         parsed = parse_amount(match.group("amount"))
         assert parsed is not None, f"unparseable ledger bal line: {line!r}"
         account = match.group("account").strip()
-        balances[account] = balances.get(account, Decimal("0")) + parsed.value
+        balances[account] = balances.get(account, Decimal(0)) + parsed.value
     return balances
 
 
@@ -648,7 +648,7 @@ def test_nanounit_sums_match_ledger_bal(tmp_path):
         if journal.name == "archived-manual.journal":
             continue
         for account, total in _ledger_balances(journal).items():
-            expected[account] = expected.get(account, Decimal("0")) + total
+            expected[account] = expected.get(account, Decimal(0)) + total
     expected = {a: t for a, t in expected.items() if t != 0}
 
     with _connect(config) as conn:

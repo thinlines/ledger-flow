@@ -2,7 +2,12 @@ from pathlib import Path
 
 from services.config_service import AppConfig
 from services.import_identity_service import ImportIdentityStore
-from services.import_service import _annotated_raw_txn, _build_existing_map, _classify_transaction, _parse_transaction
+from services.import_service import (
+    _annotated_raw_txn,
+    _build_existing_map,
+    _classify_transaction,
+    _parse_transaction,
+)
 
 
 def _make_config(workspace: Path) -> AppConfig:

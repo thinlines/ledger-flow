@@ -5,6 +5,27 @@ from dataclasses import dataclass
 from datetime import date, timedelta
 from decimal import Decimal
 
+from .activity_service import (
+    PeriodRange,
+)
+from .activity_service import (
+    _build_summary as build_summary,
+)
+from .activity_service import (
+    _first_of_month as first_of_month,
+)
+from .activity_service import (
+    _last_day_of_month as last_day_of_month,
+)
+from .activity_service import (
+    _resolve_current_range as resolve_current_range,
+)
+from .activity_service import (
+    _resolve_prior_range as resolve_prior_range,
+)
+from .activity_service import (
+    _shift_month as shift_month,
+)
 from .config_service import AppConfig
 from .header_parser import TransactionStatus
 from .journal_query_service import (
@@ -13,6 +34,7 @@ from .journal_query_service import (
     pretty_account_name,
 )
 from .projection_service import load_transactions_projected
+from .search_parser import SearchTerm, parse_search
 from .transaction_helpers import (
     RegisterEvent,
     account_amount,
@@ -24,19 +46,9 @@ from .transaction_helpers import (
     pending_transfer_event_for_peer_account,
     transaction_summary,
 )
-from .search_parser import SearchTerm, parse_search
 from .transfer_service import (
     is_transfer_account,
     parse_transfer_metadata,
-)
-from .activity_service import (
-    PeriodRange,
-    _shift_month as shift_month,
-    _last_day_of_month as last_day_of_month,
-    _first_of_month as first_of_month,
-    _resolve_current_range as resolve_current_range,
-    _resolve_prior_range as resolve_prior_range,
-    _build_summary as build_summary,
 )
 
 
@@ -490,7 +502,7 @@ def _compute_rows_with_balance(
                 multi_currency = True
                 break
 
-    balance = Decimal("0")
+    balance = Decimal(0)
     rows: list[dict] = []
     for index, urow in enumerate(unified_rows):
         ev = urow.event
@@ -571,7 +583,7 @@ def _build_account_meta(
     multi_currency: bool,
 ) -> dict:
     """Build account metadata when exactly one account is scoped."""
-    balance = Decimal("0")
+    balance = Decimal(0)
     entry_count = 0
     transaction_count = 0
     has_opening_balance = False

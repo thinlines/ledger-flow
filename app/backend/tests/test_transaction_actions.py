@@ -2,7 +2,6 @@
 
 from services.journal_block_service import locate_block_by_id
 
-
 SAMPLE_JOURNAL = """\
 2026-03-10 * Opening balance
     ; lf_txn_id: txn_opening

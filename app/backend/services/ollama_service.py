@@ -7,11 +7,11 @@ request. See https://docs.ollama.com/api/embed.
 """
 from __future__ import annotations
 
-from contextlib import contextmanager
 import json
 import logging
-from threading import Event, Thread
 import urllib.request
+from contextlib import contextmanager
+from threading import Event, Thread
 
 import numpy as np
 

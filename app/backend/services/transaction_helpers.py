@@ -20,7 +20,6 @@ from .transfer_service import (
     transfer_pair_account,
 )
 
-
 MAX_GROUPED_SETTLEMENT_WINDOW_ROWS = 8
 
 
@@ -76,7 +75,7 @@ def account_amount(transaction, ledger_account: str) -> tuple[Decimal | None, st
         )
 
     return (
-        sum((posting.amount or Decimal("0")) for posting in matched),
+        sum((posting.amount or Decimal(0)) for posting in matched),
         next(iter(commodities), None),
     )
 
@@ -195,7 +194,7 @@ def pending_transfer_candidate(
         return None
 
     expected_transfer_account = transfer_pair_account(source_tracked_account_id, transfer.peer_account_id)
-    if transfer_acct != expected_transfer_account or amount + transfer_amt != Decimal("0"):
+    if transfer_acct != expected_transfer_account or amount + transfer_amt != Decimal(0):
         return None
 
     return PendingTransferCandidate(
@@ -214,7 +213,7 @@ def _grouped_settlement_subset_mask(candidates: list[PendingTransferCandidate], 
     if (candidates[indexes[-1]].posted_on - candidates[indexes[0]].posted_on).days > MAX_TRANSFER_MATCH_DAYS:
         return 0
 
-    if sum((candidates[index].amount for index in indexes), Decimal("0")) != Decimal("0"):
+    if sum((candidates[index].amount for index in indexes), Decimal(0)) != Decimal(0):
         return 0
 
     if len({candidates[index].source_tracked_account_id for index in indexes}) < 2:
@@ -226,7 +225,7 @@ def _grouped_settlement_subset_mask(candidates: list[PendingTransferCandidate], 
             right_candidate = candidates[right_index]
             if left_candidate.source_tracked_account_id == right_candidate.source_tracked_account_id:
                 continue
-            if left_candidate.amount + right_candidate.amount == Decimal("0"):
+            if left_candidate.amount + right_candidate.amount == Decimal(0):
                 return 0
 
     mask = 0

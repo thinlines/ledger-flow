@@ -3,9 +3,9 @@ from __future__ import annotations
 import csv
 import io
 import re
+from collections.abc import Iterator
 from datetime import datetime
 from decimal import Decimal
-from collections.abc import Iterator
 
 from ..registry import register_adapter, register_translator
 from ..types import LedgerTransaction, Posting, Record

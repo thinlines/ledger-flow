@@ -7,8 +7,8 @@ from adapter class attributes.
 from __future__ import annotations
 
 from services.institution_registry import (
-    InstitutionTemplate,
     _REGISTRY,
+    InstitutionTemplate,
     canonical_template_id,
     get_template,
     list_templates,

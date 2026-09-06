@@ -3,18 +3,16 @@ through `_tracked_account_ui` consumers."""
 
 from __future__ import annotations
 
-import json
-import re
 from datetime import date
 from pathlib import Path
 
 import pytest
+from conftest import read_operation_events
 from fastapi import HTTPException
 
 import main
 from models import DeleteTransactionRequest, ReconcileRequest
 from services.config_service import AppConfig
-from conftest import read_operation_events
 from services.reconciliation_service import latest_reconciliation_date
 
 

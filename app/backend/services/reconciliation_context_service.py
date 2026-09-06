@@ -11,11 +11,11 @@ the route never has to worry about which side it's looking at.
 
 from __future__ import annotations
 
+import hashlib
+import re
 from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
-import hashlib
-import re
 
 from .config_service import AppConfig
 from .journal_query_service import (
@@ -187,7 +187,7 @@ def build_reconciliation_context(
 
     transactions = load_transactions_projected(config)
 
-    opening_balance = Decimal("0")
+    opening_balance = Decimal(0)
     earliest_posting: date | None = None
     rows: list[ReconciliationContextRow] = []
     seen_selection_fingerprints: dict[str, int] = {}

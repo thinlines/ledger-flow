@@ -1,9 +1,9 @@
 """Exercise suggestions with real journals and a fake embedding provider."""
 import pytest
+from test_category_suggestion_service import _make_config
 
 from services import classifier_service as classifier
 from services.classifier_service import suggest_review_categories
-from test_category_suggestion_service import _make_config
 
 
 @pytest.fixture

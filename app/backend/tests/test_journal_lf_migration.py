@@ -22,8 +22,9 @@ import re
 import sqlite3
 from pathlib import Path
 
-from services.config_service import AppConfig
 from conftest import read_operation_events
+
+from services.config_service import AppConfig
 from services.journal_migration_service import migrate_lf_metadata
 from services.projection_db import database_path
 from services.projection_service import refresh_projection

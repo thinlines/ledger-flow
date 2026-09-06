@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from .journal_query_service import ACCOUNT_LINE_RE, ACCOUNT_ONLY_RE
 from pathlib import Path
 
 from .config_service import AppConfig, infer_account_kind
 from .journal_block_service import hash_block, locate_block_by_id
+from .journal_query_service import ACCOUNT_LINE_RE, ACCOUNT_ONLY_RE
 from .projection_service import load_projected_transaction_rows
 from .rules_service import extract_set_account, find_matching_rule
 

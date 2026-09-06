@@ -4,10 +4,7 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-import pytest
-
-from services.search_parser import SearchTerm, parse_search
-
+from services.search_parser import parse_search
 
 # ---------------------------------------------------------------------------
 # Bare terms (backward compatibility)
@@ -68,19 +65,19 @@ class TestAmountTerms:
         t = terms[0]
         assert t.field == "amount"
         assert t.operator == "gt"
-        assert t.value_num == Decimal("100")
+        assert t.value_num == Decimal(100)
 
     def test_less_than(self):
         terms = parse_search("amount:<50")
         t = terms[0]
         assert t.operator == "lt"
-        assert t.value_num == Decimal("50")
+        assert t.value_num == Decimal(50)
 
     def test_gte(self):
         terms = parse_search("amount:>=200")
         t = terms[0]
         assert t.operator == "gte"
-        assert t.value_num == Decimal("200")
+        assert t.value_num == Decimal(200)
 
     def test_lte(self):
         terms = parse_search("amount:<=75.50")
@@ -92,27 +89,27 @@ class TestAmountTerms:
         terms = parse_search("amount:42")
         t = terms[0]
         assert t.operator == "eq"
-        assert t.value_num == Decimal("42")
+        assert t.value_num == Decimal(42)
 
     def test_range(self):
         terms = parse_search("amount:50..200")
         t = terms[0]
         assert t.operator == "range"
-        assert t.value_num == Decimal("50")
-        assert t.value_num_end == Decimal("200")
+        assert t.value_num == Decimal(50)
+        assert t.value_num_end == Decimal(200)
 
     def test_strip_dollar_and_commas(self):
         terms = parse_search("amount:>$1,000")
         t = terms[0]
         assert t.operator == "gt"
-        assert t.value_num == Decimal("1000")
+        assert t.value_num == Decimal(1000)
 
     def test_negative_amount_uses_absolute(self):
         """Negative signs in amount values are stripped — comparisons use abs."""
         terms = parse_search("amount:<-50")
         t = terms[0]
         assert t.operator == "lt"
-        assert t.value_num == Decimal("50")
+        assert t.value_num == Decimal(50)
 
     def test_malformed_amount_falls_to_payee(self):
         terms = parse_search("amount:>abc")

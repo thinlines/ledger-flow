@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import argparse
-import os
 import json
+import os
 import sys
 import urllib.error
 import urllib.request

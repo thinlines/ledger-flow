@@ -5,13 +5,12 @@ from pathlib import Path
 
 import pytest
 
-from services.unified_transactions_service import (
-    build_unified_transactions,
-    UnifiedTransactionFilters,
-)
 from services.config_service import AppConfig
+from services.unified_transactions_service import (
+    UnifiedTransactionFilters,
+    build_unified_transactions,
+)
 from services.workspace_service import ensure_workspace_journal_includes
-
 
 EMPTY_FILTERS = UnifiedTransactionFilters(
     accounts=[],

@@ -5,8 +5,11 @@ from services.account_register_service import build_account_register
 from services.config_service import load_config
 from services.dashboard_service import build_dashboard_overview
 from services.import_identity_service import ImportIdentityStore
-from services.import_service import _classify_transaction, _parse_transaction
-from services.import_service import scan_candidates
+from services.import_service import (
+    _classify_transaction,
+    _parse_transaction,
+    scan_candidates,
+)
 from services.opening_balance_service import opening_balance_index
 from services.workspace_service import (
     WorkspaceManager,

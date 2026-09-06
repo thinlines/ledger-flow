@@ -34,9 +34,10 @@ class TestReadNotesFromRegister:
 
     def test_register_event_has_notes_field(self) -> None:
         """RegisterEvent dataclass includes a notes field."""
-        from services.account_register_service import RegisterEvent
         from datetime import date
         from decimal import Decimal
+
+        from services.account_register_service import RegisterEvent
 
         event = RegisterEvent(
             posted_on=date(2026, 3, 15),
@@ -54,9 +55,10 @@ class TestReadNotesFromRegister:
 
     def test_register_event_notes_default_none(self) -> None:
         """RegisterEvent notes defaults to None."""
-        from services.account_register_service import RegisterEvent
         from datetime import date
         from decimal import Decimal
+
+        from services.account_register_service import RegisterEvent
 
         event = RegisterEvent(
             posted_on=date(2026, 3, 15),

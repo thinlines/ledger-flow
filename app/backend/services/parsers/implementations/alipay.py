@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import csv
 import io
+from collections.abc import Iterator
 from datetime import datetime
 from decimal import Decimal
-from collections.abc import Iterator
 
 from ..registry import register_adapter
 from ..types import Record

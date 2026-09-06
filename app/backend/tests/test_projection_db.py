@@ -17,7 +17,6 @@ from services.projection_db import (
     ensure_database,
 )
 
-
 PROJECTION_TABLE_NAMES = {
     "journal_files",
     "journal_items",

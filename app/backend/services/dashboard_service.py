@@ -17,7 +17,9 @@ from .journal_query_service import (
 from .opening_balance_service import opening_balance_index
 from .projection_db import connect, database_path
 from .projection_service import refresh_projection
-from .reconciliation_service import reconciliation_status as compute_reconciliation_status
+from .reconciliation_service import (
+    reconciliation_status as compute_reconciliation_status,
+)
 
 
 def _account_kind(account: str) -> str:
@@ -66,7 +68,7 @@ def _accumulate_total(
 def _decimal_from_nano(value: int | None) -> Decimal | None:
     if value is None:
         return None
-    return Decimal(value) / Decimal("1000000000")
+    return Decimal(value) / Decimal(1000000000)
 
 
 def _load_dashboard_transactions_from_projection(
@@ -224,16 +226,16 @@ def build_dashboard_overview(config: AppConfig, *, today: date | None = None) ->
     transactions = _load_dashboard_transactions_from_projection(config)
     _, opening_by_ledger_account = opening_balance_index(config)
     opening_balance_accounts = set(opening_by_ledger_account)
-    account_balances: defaultdict[str, Decimal] = defaultdict(lambda: Decimal("0"))
+    account_balances: defaultdict[str, Decimal] = defaultdict(lambda: Decimal(0))
     account_balance_commodities: dict[str, str | None] = {}
     accounts_with_balance_source: set[str] = set()
     accounts_with_activity: set[str] = set()
     account_last_transaction: dict[str, date] = {}
-    monthly_income: defaultdict[str, Decimal] = defaultdict(lambda: Decimal("0"))
+    monthly_income: defaultdict[str, Decimal] = defaultdict(lambda: Decimal(0))
     monthly_income_commodities: dict[str, str | None] = {}
-    monthly_spending: defaultdict[str, Decimal] = defaultdict(lambda: Decimal("0"))
+    monthly_spending: defaultdict[str, Decimal] = defaultdict(lambda: Decimal(0))
     monthly_spending_commodities: dict[str, str | None] = {}
-    category_spending: defaultdict[tuple[str, str], Decimal] = defaultdict(lambda: Decimal("0"))
+    category_spending: defaultdict[tuple[str, str], Decimal] = defaultdict(lambda: Decimal(0))
     category_spending_commodities: dict[tuple[str, str], str | None] = {}
     unknown_transaction_count = 0
     recent_rows: list[dict] = []
@@ -300,7 +302,7 @@ def build_dashboard_overview(config: AppConfig, *, today: date | None = None) ->
             unknown_transaction_count += 1
 
         primary = _primary_posting(transaction, config)
-        primary_amount = primary.amount if primary and primary.amount is not None else Decimal("0")
+        primary_amount = primary.amount if primary and primary.amount is not None else Decimal(0)
         account_label, import_account_id = _primary_account_display(primary, config)
         recent_rows.append(
             {
@@ -321,7 +323,7 @@ def build_dashboard_overview(config: AppConfig, *, today: date | None = None) ->
 
     reconciliation_status_map = compute_reconciliation_status(config)
     balances = []
-    tracked_total = Decimal("0")
+    tracked_total = Decimal(0)
     tracked_total_commodity: str | None = None
     tracked_total_initialized = False
     for account_id, account_cfg in sorted(
@@ -329,7 +331,7 @@ def build_dashboard_overview(config: AppConfig, *, today: date | None = None) ->
         key=lambda item: str(item[1].get("display_name", item[0])),
     ):
         ledger_account = str(account_cfg.get("ledger_account", "")).strip()
-        balance = account_balances.get(ledger_account, Decimal("0"))
+        balance = account_balances.get(ledger_account, Decimal(0))
         balance_commodity = account_balance_commodities.get(ledger_account)
         has_opening_balance = ledger_account in opening_balance_accounts
         has_transaction_activity = ledger_account in accounts_with_activity
@@ -360,7 +362,7 @@ def build_dashboard_overview(config: AppConfig, *, today: date | None = None) ->
             }
         )
 
-    net_worth = Decimal("0")
+    net_worth = Decimal(0)
     net_worth_commodity: str | None = None
     net_worth_initialized = False
     for account, balance in account_balances.items():
@@ -379,8 +381,8 @@ def build_dashboard_overview(config: AppConfig, *, today: date | None = None) ->
     series = []
     for year_value, month_value in _month_window(current_day, 6):
         key = f"{year_value:04d}-{month_value:02d}"
-        income = monthly_income.get(key, Decimal("0"))
-        spending = monthly_spending.get(key, Decimal("0"))
+        income = monthly_income.get(key, Decimal(0))
+        spending = monthly_spending.get(key, Decimal(0))
         series.append(
             {
                 "month": key,
@@ -406,14 +408,14 @@ def build_dashboard_overview(config: AppConfig, *, today: date | None = None) ->
     for category in sorted(
         category_names,
         key=lambda account: (
-            current_categories.get(account, Decimal("0")),
-            previous_categories.get(account, Decimal("0")),
+            current_categories.get(account, Decimal(0)),
+            previous_categories.get(account, Decimal(0)),
             account,
         ),
         reverse=True,
     )[:6]:
-        current_total = current_categories.get(category, Decimal("0"))
-        previous_total = previous_categories.get(category, Decimal("0"))
+        current_total = current_categories.get(category, Decimal(0))
+        previous_total = previous_categories.get(category, Decimal(0))
         delta = current_total - previous_total
         direction = "flat"
         if delta > 0:
@@ -446,19 +448,19 @@ def build_dashboard_overview(config: AppConfig, *, today: date | None = None) ->
         {
             "month": month_key,
             "label": date(int(month_key[:4]), int(month_key[5:7]), 1).strftime("%b"),
-            "income": amount_to_number(monthly_income.get(month_key, Decimal("0"))),
-            "spending": amount_to_number(monthly_spending.get(month_key, Decimal("0"))),
+            "income": amount_to_number(monthly_income.get(month_key, Decimal(0))),
+            "spending": amount_to_number(monthly_spending.get(month_key, Decimal(0))),
             "net": amount_to_number(
-                monthly_income.get(month_key, Decimal("0"))
-                - monthly_spending.get(month_key, Decimal("0"))
+                monthly_income.get(month_key, Decimal(0))
+                - monthly_spending.get(month_key, Decimal(0))
             ),
         }
         for month_key in all_cash_flow_months
     ]
 
     last_updated = activity_transactions[-1].posted_on.isoformat() if activity_transactions else None
-    income_this_month = monthly_income.get(current_month, Decimal("0"))
-    spending_this_month = monthly_spending.get(current_month, Decimal("0"))
+    income_this_month = monthly_income.get(current_month, Decimal(0))
+    spending_this_month = monthly_spending.get(current_month, Decimal(0))
 
     return {
         "baseCurrency": str(config.workspace.get("base_currency", "USD")),
@@ -539,7 +541,7 @@ def query_dashboard_transactions(
                 break
 
         primary = _primary_posting(transaction, config)
-        primary_amount = primary.amount if primary and primary.amount is not None else Decimal("0")
+        primary_amount = primary.amount if primary and primary.amount is not None else Decimal(0)
         account_label, account_id = _primary_account_display(primary, config)
 
         matching.append({

@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from .custom_csv_service import normalize_custom_csv_to_intermediate
 from .config_service import AppConfig
+from .custom_csv_service import normalize_custom_csv_to_intermediate
 from .import_profile_service import resolve_import_source
 from .parsers import registry
 from .parsers.intermediate_writer import write_intermediate

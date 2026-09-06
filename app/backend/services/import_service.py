@@ -3,7 +3,6 @@ from __future__ import annotations
 import hashlib
 import logging
 import re
-from .journal_query_service import ACCOUNT_LINE_RE, META_RE, TXN_START_RE
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
@@ -11,17 +10,20 @@ from pathlib import Path
 from .commodity_service import canonicalize_base_currency_posting
 from .config_service import AppConfig
 from .csv_normalizer import normalize_csv_to_intermediate
-from .operations_service import rel_path
+from .header_parser import HEADER_RE, set_header_payee
 from .import_identity_service import ImportIdentityStore, source_payload_hash_for_lines
 from .import_profile_service import import_source_summary, resolve_import_source
 from .journal_block_service import lf_txn_id_line, mint_lf_txn_id
-from .header_parser import HEADER_RE, set_header_payee
+from .journal_query_service import ACCOUNT_LINE_RE, META_RE, TXN_START_RE
 from .ledger_runner import CommandError, run_cmd
 from .merchant_service import Merchant, load_merchants, match_merchant, resolve_category
-from .operations_service import record_operation
+from .operations_service import record_operation, rel_path
 from .rules_service import ensure_rules_store, load_rules
 from .transfer_service import rewrite_posting_account
-from .workspace_service import ensure_standard_commodities_file, ensure_workspace_journal_includes
+from .workspace_service import (
+    ensure_standard_commodities_file,
+    ensure_workspace_journal_includes,
+)
 
 _log = logging.getLogger(__name__)
 

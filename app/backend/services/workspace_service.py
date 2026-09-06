@@ -3,24 +3,29 @@ from __future__ import annotations
 import json
 import os
 import re
-from .journal_query_service import ACCOUNT_LINE_RE, ACCOUNT_ONLY_RE, META_RE, TXN_START_RE
 from dataclasses import dataclass
 from pathlib import Path
 
 from .account_declaration_service import set_subtype
-from .reference_data_service import account_subtypes
 from .commodity_service import BASE_CURRENCY_SYMBOLS
 from .config_service import AppConfig, infer_account_kind, load_config
 from .custom_csv_service import normalize_custom_profile
 from .import_identity_service import ImportIdentityStore, source_payload_hash_for_lines
 from .institution_registry import get_template
+from .journal_query_service import (
+    ACCOUNT_LINE_RE,
+    ACCOUNT_ONLY_RE,
+    META_RE,
+    TXN_START_RE,
+)
 from .opening_balance_service import (
     OPENING_BALANCES_EQUITY,
-    opening_balance_index_path,
     opening_balance_index,
+    opening_balance_index_path,
     sync_opening_balance_include_index,
     write_opening_balance,
 )
+from .reference_data_service import account_subtypes
 
 JOURNAL_INCLUDE_LINES = (
     "include ../rules/10-accounts.dat",

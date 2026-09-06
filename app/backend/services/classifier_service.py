@@ -6,9 +6,9 @@ invalidate the fit, while unchanged descriptions reuse their embeddings.
 """
 from __future__ import annotations
 
+import logging
 from collections import OrderedDict
 from functools import lru_cache
-import logging
 from time import monotonic
 
 import numpy as np

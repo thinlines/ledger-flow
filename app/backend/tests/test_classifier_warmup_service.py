@@ -1,8 +1,9 @@
 """Background preparation stays bounded and never blocks import completion."""
 from threading import Event
 
-from services.classifier_warmup_service import _WarmupQueue
 from test_category_suggestion_service import _make_config
+
+from services.classifier_warmup_service import _WarmupQueue
 
 
 def test_schedule_returns_while_preparation_runs_and_coalesces_imports(tmp_path):

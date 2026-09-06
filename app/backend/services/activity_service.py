@@ -5,19 +5,19 @@ from dataclasses import dataclass
 from datetime import date, timedelta
 from decimal import Decimal
 
+from . import projection_service
 from .config_service import AppConfig
 from .dashboard_service import (
-    _primary_posting,
-    _primary_account_display,
-    _transaction_category,
     _account_kind,
+    _primary_account_display,
+    _primary_posting,
+    _transaction_category,
 )
 from .journal_query_service import (
+    ParsedTransaction,
     amount_to_number,
     is_generated_opening_balance_transaction,
-    ParsedTransaction,
 )
-from . import projection_service
 
 
 @dataclass(frozen=True)
@@ -114,7 +114,7 @@ def _matches_category(transaction: ParsedTransaction, category: str) -> bool:
 def _build_row(transaction: ParsedTransaction, config: AppConfig) -> dict:
     primary = _primary_posting(transaction, config)
     primary_amount = (
-        primary.amount if primary and primary.amount is not None else Decimal("0")
+        primary.amount if primary and primary.amount is not None else Decimal(0)
     )
     account_label, import_account_id = _primary_account_display(primary, config)
     category_label, is_unknown = _transaction_category(transaction)

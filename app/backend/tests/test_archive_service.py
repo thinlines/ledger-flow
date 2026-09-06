@@ -16,9 +16,8 @@ from pathlib import Path
 import pytest
 
 from services.archive_service import archive_manual_entry, rollback_archive
-from services.ledger_runner import CommandError, run_cmd
+from services.ledger_runner import run_cmd
 from services.unknowns_service import apply_unknown_mappings, scan_unknowns
-
 
 _MATCH_ID_RE = re.compile(r"lf_match_id:\s*(match_[0-9a-f-]{36})")
 

@@ -13,7 +13,6 @@ from services.parsers.implementations.ally import (
 )
 from services.parsers.types import Record
 
-
 FIXTURE_DIR = (
     Path(__file__).parent
     / "fixtures"

@@ -5,8 +5,8 @@ from pathlib import Path
 
 import pytest
 
-from services.config_service import AppConfig
 from services import direction_service
+from services.config_service import AppConfig
 from services.direction_service import build_dashboard_direction
 from services.workspace_service import ensure_workspace_journal_includes
 

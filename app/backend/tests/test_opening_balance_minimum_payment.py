@@ -143,8 +143,8 @@ def test_minimum_payment_preserved_in_index(tmp_path: Path) -> None:
     )
 
     by_id, by_ledger = opening_balance_index(config)
-    assert by_id["mortgage"].minimum_payment == Decimal("1850")
-    assert by_ledger["Liabilities:Mortgage"].minimum_payment == Decimal("1850")
+    assert by_id["mortgage"].minimum_payment == Decimal(1850)
+    assert by_ledger["Liabilities:Mortgage"].minimum_payment == Decimal(1850)
 
 
 def test_minimum_payment_different_decimal_places(tmp_path: Path) -> None:

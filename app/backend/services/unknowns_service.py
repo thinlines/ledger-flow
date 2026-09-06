@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from .journal_query_service import ACCOUNT_LINE_RE, ACCOUNT_ONLY_RE
 from collections import defaultdict
 from datetime import date
 from decimal import Decimal
@@ -9,15 +8,23 @@ from uuid import uuid4
 
 from .archive_service import archive_manual_entry, rollback_archive
 from .config_service import AppConfig, infer_account_kind
-from .merchant_service import Merchant
+from .journal_block_service import (
+    hash_block as _hash_block,
+)
+from .journal_block_service import (
+    locate_block_by_id as _locate_block_by_id,
+)
+from .journal_query_service import ACCOUNT_LINE_RE, ACCOUNT_ONLY_RE
+from .journal_syntax import META_RE, TXN_START_RE
 from .manual_entry_service import (
     _extract_user_metadata_lines,
     _parse_manual_entry_destination,
     has_manual_tag,
     populate_match_candidates,
 )
-from .rules_service import extract_set_account, find_matching_rule
+from .merchant_service import Merchant
 from .projection_service import load_projected_transaction_rows
+from .rules_service import extract_set_account, find_matching_rule
 from .transfer_service import (
     MAX_TRANSFER_MATCH_DAYS,
     TRANSFER_MATCH_STATE_MATCHED,
@@ -27,17 +34,12 @@ from .transfer_service import (
     clear_transfer_metadata_updates,
     ensure_transfer_account,
     infer_blank_posting_amounts,
-    parse_transfer_metadata,
     parse_amount,
+    parse_transfer_metadata,
     rewrite_posting_account,
     upsert_transaction_metadata,
 )
 
-from .journal_block_service import (
-    hash_block as _hash_block,
-    locate_block_by_id as _locate_block_by_id,
-)
-from .journal_syntax import META_RE, TXN_START_RE
 
 def _block_has_match_id_tag(lines: list[str]) -> bool:
     for line in lines:
@@ -262,7 +264,7 @@ def _transfer_match(current: dict, candidate: dict) -> bool:
         return False
     if current.get("sourceTrackedAccountId") == candidate.get("sourceTrackedAccountId"):
         return False
-    if current_amount + candidate_amount != Decimal("0"):
+    if current_amount + candidate_amount != Decimal(0):
         return False
     return abs((current_date - candidate_date).days) <= MAX_TRANSFER_MATCH_DAYS
 

@@ -2,8 +2,8 @@ from pathlib import Path
 
 from services.account_declaration_service import create_account
 from services.merchant_service import Merchant
-from services.unknowns_service import apply_unknown_mappings, scan_unknowns
 from services.transfer_service import transfer_pair_account
+from services.unknowns_service import apply_unknown_mappings, scan_unknowns
 
 
 def _selections(groups: list[dict], by_group_key: dict[str, dict]) -> dict[str, dict]:

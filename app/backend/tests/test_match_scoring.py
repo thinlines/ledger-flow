@@ -9,16 +9,14 @@ from decimal import Decimal
 
 from services.manual_entry_service import (
     TIER_SCORES,
-    TIER_QUALITY,
-    _is_exact_amount,
-    _is_close_amount,
     _assign_tier,
     _auto_suggest,
+    _is_close_amount,
+    _is_exact_amount,
     find_match_candidates,
     populate_match_candidates,
 )
 from services.payee_similarity import payee_similarity
-
 
 # ---------------------------------------------------------------------------
 # payee_similarity unit tests
@@ -106,8 +104,8 @@ def test_exact_amount_false() -> None:
 
 
 def test_exact_amount_none() -> None:
-    assert _is_exact_amount(None, Decimal("50")) is False
-    assert _is_exact_amount(Decimal("50"), None) is False
+    assert _is_exact_amount(None, Decimal(50)) is False
+    assert _is_exact_amount(Decimal(50), None) is False
 
 
 def test_close_amount_tip_25pct() -> None:
@@ -117,22 +115,22 @@ def test_close_amount_tip_25pct() -> None:
 
 def test_close_amount_tip_at_boundary() -> None:
     """$100 manual, $135 bank → exactly +35% → inside."""
-    assert _is_close_amount(Decimal("135"), Decimal("100")) is True
+    assert _is_close_amount(Decimal(135), Decimal(100)) is True
 
 
 def test_close_amount_tip_over_boundary() -> None:
     """$100 manual, $136 bank → +36% → outside."""
-    assert _is_close_amount(Decimal("136"), Decimal("100")) is False
+    assert _is_close_amount(Decimal(136), Decimal(100)) is False
 
 
 def test_close_amount_underpay_within() -> None:
     """$100 manual, $91 bank → -9% → within -10%."""
-    assert _is_close_amount(Decimal("91"), Decimal("100")) is True
+    assert _is_close_amount(Decimal(91), Decimal(100)) is True
 
 
 def test_close_amount_underpay_over() -> None:
     """$100 manual, $89 bank → -11% → outside -10%."""
-    assert _is_close_amount(Decimal("89"), Decimal("100")) is False
+    assert _is_close_amount(Decimal(89), Decimal(100)) is False
 
 
 def test_close_amount_excludes_exact() -> None:
@@ -141,12 +139,12 @@ def test_close_amount_excludes_exact() -> None:
 
 
 def test_close_amount_none() -> None:
-    assert _is_close_amount(None, Decimal("50")) is False
-    assert _is_close_amount(Decimal("50"), None) is False
+    assert _is_close_amount(None, Decimal(50)) is False
+    assert _is_close_amount(Decimal(50), None) is False
 
 
 def test_close_amount_zero_manual() -> None:
-    assert _is_close_amount(Decimal("50"), Decimal("0")) is False
+    assert _is_close_amount(Decimal(50), Decimal(0)) is False
 
 
 # ---------------------------------------------------------------------------
@@ -525,8 +523,8 @@ def test_auto_suggest_single_high_confidence() -> None:
             "import_account_id": "checking_import",
         },
     }
-    from pathlib import Path
     import tempfile
+    from pathlib import Path
     with tempfile.NamedTemporaryFile(mode="w", suffix=".journal", delete=False) as f:
         f.write("\n".join(journal_lines))
         f.flush()
@@ -558,8 +556,8 @@ def test_auto_suggest_tier4_sole_candidate() -> None:
             "import_account_id": "cc_import",
         },
     }
-    from pathlib import Path
     import tempfile
+    from pathlib import Path
     with tempfile.NamedTemporaryFile(mode="w", suffix=".journal", delete=False) as f:
         f.write("\n".join(journal_lines))
         f.flush()
@@ -595,8 +593,8 @@ def test_auto_suggest_not_fired_for_multiple_tier1() -> None:
             "import_account_id": "checking_import",
         },
     }
-    from pathlib import Path
     import tempfile
+    from pathlib import Path
     with tempfile.NamedTemporaryFile(mode="w", suffix=".journal", delete=False) as f:
         f.write("\n".join(journal_lines))
         f.flush()
@@ -627,8 +625,8 @@ def test_auto_suggest_tier5_never() -> None:
             "import_account_id": "checking_import",
         },
     }
-    from pathlib import Path
     import tempfile
+    from pathlib import Path
     with tempfile.NamedTemporaryFile(mode="w", suffix=".journal", delete=False) as f:
         f.write("\n".join(journal_lines))
         f.flush()
@@ -660,8 +658,8 @@ def test_cleared_entry_excluded_from_populate() -> None:
             "import_account_id": "checking_import",
         },
     }
-    from pathlib import Path
     import tempfile
+    from pathlib import Path
     with tempfile.NamedTemporaryFile(mode="w", suffix=".journal", delete=False) as f:
         f.write("\n".join(journal_lines))
         f.flush()

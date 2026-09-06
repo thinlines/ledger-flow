@@ -16,7 +16,6 @@ from services.currency_parser import parse_amount
 from services.manual_entry_service import _parse_amount_str
 from services.reconciliation_service import parse_closing_balance
 
-
 FIXTURE_PATH = Path(__file__).parent / "fixtures" / "currency_parser_cases.json"
 
 

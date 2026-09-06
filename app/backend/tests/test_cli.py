@@ -11,9 +11,9 @@ from io import BytesIO
 from pathlib import Path
 from urllib.error import HTTPError
 
-import ledger_flow_cli
 import pytest
 
+import ledger_flow_cli
 from ledger_flow_cli import main
 from models import ManualTransactionRequest
 

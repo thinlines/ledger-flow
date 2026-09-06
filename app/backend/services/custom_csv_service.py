@@ -8,7 +8,6 @@ from pathlib import Path
 
 from dateutil import parser as date_parser
 
-
 INTERMEDIATE_FIELDNAMES = ["date", "code", "description", "amount", "total", "note", "symbol", "price"]
 DEFAULT_ENCODINGS = ("utf-8-sig", "utf-8", "cp1252", "latin-1", "gb18030")
 SUPPORTED_DELIMITERS = [",", ";", "\t", "|"]

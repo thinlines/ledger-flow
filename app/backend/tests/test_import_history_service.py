@@ -1,7 +1,11 @@
 from pathlib import Path
 
 from services.config_service import AppConfig
-from services.import_history_service import list_import_history, record_applied_import, undo_import
+from services.import_history_service import (
+    list_import_history,
+    record_applied_import,
+    undo_import,
+)
 from services.import_identity_service import ImportIdentityStore
 from services.operations_service import list_operations
 

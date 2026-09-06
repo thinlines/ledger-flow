@@ -3,13 +3,12 @@ from __future__ import annotations
 import csv
 import io
 import re
+from collections.abc import Iterator
 from datetime import datetime
 from decimal import Decimal
-from collections.abc import Iterator
 
 from ..registry import register_adapter
 from ..types import Record
-
 
 _CHECK_RE = re.compile(r"Check\s*#\s*(\d+)", re.IGNORECASE)
 _AMOUNT_STRIP_RE = re.compile(r"[,\s]")

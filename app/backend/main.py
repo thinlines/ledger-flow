@@ -14,6 +14,7 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+
 from models import (
     AccountCloseRequest,
     AccountNameRequest,
@@ -64,7 +65,6 @@ from services.activity_service import build_activity_view
 from services.category_suggestion_service import suggest_category
 from services.classifier_service import suggest_review_categories
 from services.classifier_warmup_service import schedule_review_warmup
-from services.ollama_service import keep_embedding_model_alive
 from services.commodity_service import CommodityMismatchError
 from services.custom_csv_service import inspect_csv_bytes
 from services.dashboard_service import (
@@ -99,6 +99,7 @@ from services.merchant_service import (
     load_merchants,
     upsert_merchant,
 )
+from services.ollama_service import keep_embedding_model_alive
 from services.opening_balance_service import (
     OPENING_BALANCES_EQUITY,
     opening_balance_index,

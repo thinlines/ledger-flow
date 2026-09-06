@@ -1,14 +1,13 @@
 from __future__ import annotations
 
-from datetime import UTC, date as calendar_date, datetime
+from datetime import UTC, datetime
+from datetime import date as calendar_date
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from uuid import uuid4
 
-from .config_service import AppConfig
 from .operations_service import record_operation
 from .projection_db import connect, ensure_database
-
 
 ALLOWED_FIELDS = {"payee", "merchant", "date", "amount", "account"}
 FIELD_OPERATORS = {
@@ -35,7 +34,7 @@ AMOUNT_OPERATOR_ALIASES = {
 }
 ALLOWED_JOINERS = {"and", "or"}
 ALLOWED_ACTION_TYPES = {"set_account", "add_tag", "set_kv", "append_comment"}
-NANO_UNITS = Decimal("1000000000")
+NANO_UNITS = Decimal(1000000000)
 
 
 def _rules_dir(path: Path) -> Path:

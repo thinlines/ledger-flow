@@ -27,7 +27,6 @@ from services.config_service import AppConfig
 from services.projection_db import database_path
 from services.projection_service import refresh_projection
 
-
 JOURNAL = """\
 include ../opening/checking.journal
 

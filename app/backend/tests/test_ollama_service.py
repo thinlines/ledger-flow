@@ -1,8 +1,8 @@
 """The local embedding provider: request protocol, validation, and residency."""
 import asyncio
-from contextlib import contextmanager
 import io
 import json
+from contextlib import contextmanager
 from threading import Event
 from types import SimpleNamespace
 
@@ -122,8 +122,9 @@ def test_refreshes_every_minute_and_recovers_after_ollama_outage(monkeypatch, ca
 
 @pytest.mark.parametrize("has_workspace", [False, True])
 def test_app_lifespan_owns_model_residency(monkeypatch, tmp_path, has_workspace):
-    import main
     from test_category_suggestion_service import _make_config
+
+    import main
     config = _make_config(tmp_path) if has_workspace else None
     events = []
     warmed = []

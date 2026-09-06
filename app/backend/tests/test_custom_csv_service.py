@@ -4,7 +4,10 @@ from pathlib import Path
 
 from services.config_service import AppConfig
 from services.csv_normalizer import normalize_csv_to_intermediate
-from services.custom_csv_service import inspect_csv_bytes, normalize_custom_csv_to_intermediate
+from services.custom_csv_service import (
+    inspect_csv_bytes,
+    normalize_custom_csv_to_intermediate,
+)
 
 
 def test_inspect_csv_bytes_detects_delimiter_and_headers() -> None:

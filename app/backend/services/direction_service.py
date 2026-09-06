@@ -4,8 +4,9 @@ from collections import defaultdict
 from datetime import date, timedelta
 from decimal import Decimal
 
+from . import projection_service
 from .config_service import AppConfig, infer_account_kind
-from .dashboard_service import _primary_posting, _primary_account_display
+from .dashboard_service import _primary_account_display, _primary_posting
 from .journal_query_service import (
     ParsedTransaction,
     Posting,
@@ -13,9 +14,10 @@ from .journal_query_service import (
     is_generated_opening_balance_transaction,
     pretty_account_name,
 )
-from . import projection_service
 from .opening_balance_service import opening_balance_index
-from .reconciliation_service import reconciliation_status as compute_reconciliation_status
+from .reconciliation_service import (
+    reconciliation_status as compute_reconciliation_status,
+)
 from .reference_data_service import account_subtypes
 
 
@@ -125,22 +127,22 @@ def build_dashboard_direction(config: AppConfig, *, today: date | None = None) -
     # lf_subtype metadata, not config.toml.
     projected_subtypes = account_subtypes(config)
 
-    spendable_cash = Decimal("0")
+    spendable_cash = Decimal(0)
     for account_id, account_cfg in config.tracked_accounts.items():
         ledger_account = str(account_cfg.get("ledger_account", "")).strip()
         if not ledger_account or infer_account_kind(ledger_account) != "asset":
             continue
         subtype = projected_subtypes.get(ledger_account)
         if subtype is None or subtype in LIQUID_SUBTYPES:
-            spendable_cash += account_balances.get(ledger_account, Decimal("0"))
+            spendable_cash += account_balances.get(ledger_account, Decimal(0))
 
     total_spending_6m = sum(
-        monthly_spending.get(m, Decimal("0")) for m in trailing_6
+        monthly_spending.get(m, Decimal(0)) for m in trailing_6
     )
-    avg_monthly_spending_6m = total_spending_6m / 6 if trailing_6 else Decimal("0")
+    avg_monthly_spending_6m = total_spending_6m / 6 if trailing_6 else Decimal(0)
 
     # Sum minimum payments across all tracked liabilities with the field set
-    monthly_obligations = Decimal("0")
+    monthly_obligations = Decimal(0)
     for account_id, account_cfg in config.tracked_accounts.items():
         ledger_account = str(account_cfg.get("ledger_account", "")).strip()
         if not ledger_account or infer_account_kind(ledger_account) != "liability":
@@ -192,9 +194,9 @@ def build_dashboard_direction(config: AppConfig, *, today: date | None = None) -
             walk_months.append(f"{wy:04d}-{wm:02d}")
             wy, wm = _shift_month(wy, wm, 1)
 
-        cumulative = Decimal("0")
+        cumulative = Decimal(0)
         for m in walk_months:
-            cumulative += monthly_nw_delta.get(m, Decimal("0"))
+            cumulative += monthly_nw_delta.get(m, Decimal(0))
             month_end_net_worth[m] = amount_to_number(cumulative)
 
     # Extract the 6-month window
@@ -214,15 +216,15 @@ def build_dashboard_direction(config: AppConfig, *, today: date | None = None) -
     category_occurrences: defaultdict[str, int] = defaultdict(int)
     for category, month_totals in category_month_spending.items():
         for m in trailing_6:
-            if month_totals.get(m, Decimal("0")) > 0:
+            if month_totals.get(m, Decimal(0)) > 0:
                 category_occurrences[category] += 1
 
     recurring_categories: list[str] = []
-    recurring_total = Decimal("0")
-    discretionary_total = Decimal("0")
+    recurring_total = Decimal(0)
+    discretionary_total = Decimal(0)
 
     for category, month_totals in category_month_spending.items():
-        current_spending = month_totals.get(current_month, Decimal("0"))
+        current_spending = month_totals.get(current_month, Decimal(0))
         if current_spending <= 0:
             continue
         if category_occurrences[category] >= 4:
@@ -243,7 +245,7 @@ def build_dashboard_direction(config: AppConfig, *, today: date | None = None) -
     # -----------------------------------------------------------------------
     week_ago = current_day - timedelta(days=7)
     largest_this_week = None
-    largest_abs = Decimal("0")
+    largest_abs = Decimal(0)
 
     for txn in activity_transactions:
         if txn.posted_on < week_ago:
@@ -266,15 +268,15 @@ def build_dashboard_direction(config: AppConfig, *, today: date | None = None) -
     # Notable Signal: Category spike
     # -----------------------------------------------------------------------
     category_spike = None
-    largest_overshoot = Decimal("0")
+    largest_overshoot = Decimal(0)
 
     for category, month_totals in category_month_spending.items():
-        current_spending = month_totals.get(current_month, Decimal("0"))
+        current_spending = month_totals.get(current_month, Decimal(0))
         if current_spending <= 0:
             continue
 
         # 6-month rolling average (all 6 months, including zeros)
-        total_6m = sum(month_totals.get(m, Decimal("0")) for m in trailing_6)
+        total_6m = sum(month_totals.get(m, Decimal(0)) for m in trailing_6)
         avg_6m = total_6m / 6
 
         if avg_6m > 0 and current_spending > 2 * avg_6m:
@@ -299,8 +301,8 @@ def build_dashboard_direction(config: AppConfig, *, today: date | None = None) -
     for offset in range(0, -12, -1):
         y, m = _shift_month(current_day.year, current_day.month, offset)
         mk = f"{y:04d}-{m:02d}"
-        spending = monthly_spending.get(mk, Decimal("0"))
-        income = monthly_income.get(mk, Decimal("0"))
+        spending = monthly_spending.get(mk, Decimal(0))
+        income = monthly_income.get(mk, Decimal(0))
         if spending > income and (spending > 0 or income > 0):
             streak_count += 1
         else:

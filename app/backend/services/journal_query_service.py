@@ -1,11 +1,11 @@
 from __future__ import annotations
 
+import glob
+import re
 from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
-import glob
 from pathlib import Path
-import re
 
 from .commodity_parser import CommodityMismatchError, commodity_label, parse_amount
 from .header_parser import TransactionStatus, parse_header
@@ -145,7 +145,7 @@ def _parse_transaction(lines: list[str]) -> ParsedTransaction | None:
     if not postings:
         return None
 
-    known_total = sum((posting.amount or Decimal("0")) for posting in postings if posting.amount is not None)
+    known_total = sum((posting.amount or Decimal(0)) for posting in postings if posting.amount is not None)
     blank_indexes = [index for index, posting in enumerate(postings) if posting.amount is None]
     if len(blank_indexes) == 1:
         idx = blank_indexes[0]

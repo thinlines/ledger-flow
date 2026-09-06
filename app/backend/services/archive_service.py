@@ -13,8 +13,8 @@ between the two records.
 
 from __future__ import annotations
 
-from pathlib import Path
 import re
+from pathlib import Path
 from uuid import uuid4
 
 ARCHIVED_MANUAL_JOURNAL_NAME = "archived-manual.journal"

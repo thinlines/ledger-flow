@@ -1,6 +1,6 @@
 """Bounded, best-effort classifier preparation after successful imports."""
-from collections import OrderedDict
 import logging
+from collections import OrderedDict
 from threading import Lock, Thread
 
 from .classifier_service import warm_review_classifier

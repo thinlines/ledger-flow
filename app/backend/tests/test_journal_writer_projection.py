@@ -15,14 +15,13 @@ import sqlite3
 from pathlib import Path
 
 import pytest
-
 from conftest import read_operation_events
+
 from services import journal_writer
 from services.config_service import AppConfig
 from services.journal_writer import VerifyFailure, WriterRejected, mutate
 from services.projection_db import database_path
 from services.projection_service import refresh_projection
-
 
 JOURNAL = """\
 2026-01-05 Grocery Store

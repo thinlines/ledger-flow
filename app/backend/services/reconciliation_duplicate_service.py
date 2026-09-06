@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import logging
 import re
-from .journal_query_service import ACCOUNT_LINE_RE, ACCOUNT_ONLY_RE, META_RE
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
@@ -14,9 +13,11 @@ from fastapi import HTTPException
 from . import journal_writer
 from .archive_service import archive_manual_entry
 from .config_service import AppConfig
-from .operations_service import rel_path
 from .import_identity_service import ImportIdentityStore
 from .journal_block_service import hash_block, locate_block_by_hash, locate_block_by_id
+from .journal_query_service import ACCOUNT_LINE_RE, ACCOUNT_ONLY_RE, META_RE
+from .operations_service import rel_path
+from .payee_similarity import payee_similarity as _payee_similarity
 from .projection_service import find_projected_transaction
 from .reconciliation_context_service import (
     IMPORT_IDENTITY_KEY_RE,
@@ -24,8 +25,6 @@ from .reconciliation_context_service import (
     ReconciliationContextRow,
     build_reconciliation_context,
 )
-
-from .payee_similarity import payee_similarity as _payee_similarity
 
 MATCH_WINDOW_DAYS = 3
 SIMILAR_PAYEE_MIN = 0.72

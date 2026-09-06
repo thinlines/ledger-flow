@@ -258,6 +258,7 @@ def test_build_frequency_map_handles_inferred_postings(tmp_path: Path) -> None:
     """Transactions with an inferred (blank amount) posting should still contribute."""
     from datetime import date
     from decimal import Decimal
+
     from services.journal_query_service import ParsedTransaction, Posting
 
     txns = [

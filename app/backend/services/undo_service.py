@@ -18,14 +18,13 @@ from __future__ import annotations
 
 import logging
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum
-from collections.abc import Callable
 
 from services import journal_writer
 from services.archive_service import archive_manual_entry
 from services.config_service import AppConfig
-from services.operations_service import hash_file
 from services.header_parser import TransactionStatus, set_header_status
 from services.journal_block_service import locate_block_by_id
 from services.journal_query_service import (
@@ -34,15 +33,19 @@ from services.journal_query_service import (
     LF_TXN_ID_META_RE,
     TXN_START_RE,
 )
+from services.operations_service import (
+    hash_file,
+    list_operations,
+    operation_is_compensated,
+)
 from services.projection_service import (
     ProjectedTransactionRef,
-    find_projected_transaction_match,
     find_projected_transaction,
+    find_projected_transaction_match,
     projected_transaction_block,
     refresh_projection,
     render_file,
 )
-from services.operations_service import list_operations, operation_is_compensated
 from services.transfer_service import rewrite_posting_account
 
 logger = logging.getLogger(__name__)

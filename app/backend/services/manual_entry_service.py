@@ -1,21 +1,27 @@
 from __future__ import annotations
 
 import re
-from .journal_query_service import ACCOUNT_LINE_RE, ACCOUNT_ONLY_RE, LF_TXN_ID_META_RE, META_RE, TXN_START_RE
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
 
 from .config_service import AppConfig
 from .currency_parser import parse_amount
-from .journal_writer import format_currency_amount
 from .header_parser import HEADER_RE
-from .journal_block_service import lf_txn_id_line, mint_lf_txn_id
 from .import_service import (
     _merge_transaction_blocks,
     _render_journal_text,
     _split_journal_preamble_and_transactions,
 )
+from .journal_block_service import lf_txn_id_line, mint_lf_txn_id
+from .journal_query_service import (
+    ACCOUNT_LINE_RE,
+    ACCOUNT_ONLY_RE,
+    LF_TXN_ID_META_RE,
+    META_RE,
+    TXN_START_RE,
+)
+from .journal_writer import format_currency_amount
 from .payee_similarity import payee_similarity
 
 MAX_MANUAL_MATCH_DAYS = 3

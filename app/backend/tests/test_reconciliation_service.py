@@ -2,18 +2,16 @@
 
 from __future__ import annotations
 
-import re
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
 
 import pytest
+from conftest import read_operation_events
 
 from services.config_service import AppConfig
-from conftest import read_operation_events
 from services.import_service import apply_reconciliation_fence
 from services.reconciliation_service import (
-    AssertionFailure,
     _parse_all_assertion_failures,
     _parse_ledger_assertion_failure,
     latest_reconciliation_date,

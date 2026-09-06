@@ -1,3 +1,4 @@
+from datetime import date
 from decimal import Decimal
 from pathlib import Path
 
@@ -5,13 +6,8 @@ from services.manual_entry_service import (
     build_manual_transaction_block,
     create_manual_transaction,
     find_match_candidates,
-    has_manual_tag,
-    populate_match_candidates,
-    TIER_SCORES,
 )
 from services.unknowns_service import apply_unknown_mappings, scan_unknowns
-
-from datetime import date
 
 
 def _tracked_accounts() -> dict[str, dict]:

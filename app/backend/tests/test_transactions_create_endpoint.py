@@ -20,7 +20,6 @@ from models import ManualTransactionRequest
 from services.config_service import AppConfig
 from services.projection_service import refresh_projection
 
-
 JOURNAL = """\
 include ../rules/11-payees.dat
 

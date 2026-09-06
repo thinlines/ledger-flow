@@ -13,7 +13,12 @@ from .journal_query_service import ParsedTransaction
 from .merchant_service import load_merchants
 from .payee_similarity import normalize_payee, payee_similarity
 from .projection_service import load_transactions_projected
-from .rules_service import ensure_rules_store, extract_set_account, find_matching_rule, load_rules
+from .rules_service import (
+    ensure_rules_store,
+    extract_set_account,
+    find_matching_rule,
+    load_rules,
+)
 
 # Category posting prefixes — these are the "destination" side of a transaction,
 # as opposed to the "source" side (Assets/Liabilities = bank/tracked accounts).

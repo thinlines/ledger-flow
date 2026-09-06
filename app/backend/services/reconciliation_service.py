@@ -22,13 +22,13 @@ from decimal import Decimal
 from pathlib import Path
 from uuid import uuid7
 
+from .commodity_service import parse_amount as parse_journal_amount
 from .config_service import AppConfig
 from .currency_parser import parse_amount
 from .journal_block_service import lf_txn_id_line, mint_lf_txn_id
 from .journal_query_service import TXN_START_RE
 from .journal_writer import VerifyFailure, format_currency_amount
 from .ledger_runner import CommandError, run_cmd
-from .commodity_service import parse_amount as parse_journal_amount
 from .projection_db import connect, database_path
 from .projection_service import refresh_projection
 
@@ -118,7 +118,7 @@ def _format_assertion_balance(amount: Decimal, currency: str) -> str:
 
 def _format_zero(currency: str) -> str:
     """Format assertion zero using the same canonical journal representation."""
-    return format_currency_amount(Decimal("0"), currency)
+    return format_currency_amount(Decimal(0), currency)
 
 
 def _build_assertion_block(

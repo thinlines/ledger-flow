@@ -34,18 +34,17 @@ Failure semantics ride on Python exceptions:
 from __future__ import annotations
 
 import shutil
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
-from collections.abc import Callable, Iterator
 from uuid import uuid7
 
 from .config_service import AppConfig
 from .operations_service import hash_file, record_operation, rel_path
 from .projection_service import refresh_projection
-
 
 # ---------------------------------------------------------------------------
 # Public types

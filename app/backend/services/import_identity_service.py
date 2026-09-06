@@ -1,17 +1,15 @@
 from __future__ import annotations
 
 import hashlib
-from .journal_query_service import ACCOUNT_LINE_RE, ACCOUNT_ONLY_RE, META_RE
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
-from .config_service import AppConfig
-from .projection_db import connect, database_path, ensure_database
-
 from .commodity_service import canonicalize_base_currency_posting
-
+from .config_service import AppConfig
+from .journal_query_service import ACCOUNT_LINE_RE, ACCOUNT_ONLY_RE, META_RE
+from .projection_db import connect, database_path, ensure_database
 
 IMPORT_ACCOUNT_PLACEHOLDER = "__IMPORT_ACCOUNT__"
 

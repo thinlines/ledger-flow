@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import re
-from .journal_query_service import META_RE, TXN_START_RE
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -9,6 +8,7 @@ from uuid import uuid4
 
 from .config_service import AppConfig
 from .import_identity_service import ImportIdentityStore
+from .journal_query_service import META_RE, TXN_START_RE
 from .operations_service import hash_file, list_operations, record_operation, rel_path
 from .projection_service import load_projected_transaction_rows
 from .transfer_service import (
@@ -18,7 +18,6 @@ from .transfer_service import (
     parse_transfer_metadata,
     upsert_transaction_metadata,
 )
-
 
 APPLIED_STATUS = "applied"
 UNDONE_STATUS = "undone"

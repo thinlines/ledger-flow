@@ -8,7 +8,10 @@ import pytest
 from services import journal_query_service
 from services.commodity_service import CommodityMismatchError
 from services.config_service import AppConfig
-from services.dashboard_service import build_dashboard_overview, query_dashboard_transactions
+from services.dashboard_service import (
+    build_dashboard_overview,
+    query_dashboard_transactions,
+)
 from services.workspace_service import ensure_workspace_journal_includes
 
 

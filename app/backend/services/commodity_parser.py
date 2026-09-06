@@ -1,11 +1,10 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from decimal import Decimal
-import re
 
 from .currency_parser import parse_amount as parse_currency_amount
-
 
 AMOUNT_RE = re.compile(
     r"^\s*"
