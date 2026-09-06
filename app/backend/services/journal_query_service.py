@@ -61,6 +61,21 @@ class ParsedTransaction:
     block_hash: str | None = None
 
 
+UNKNOWN_ACCOUNT_LEAF = ":unknown"
+
+
+def is_uncategorized(txn: ParsedTransaction) -> bool:
+    """Whether any posting still sits on an ``…:Unknown`` category placeholder.
+
+    Import parks postings it cannot categorize on ``Expenses:Unknown``; Review
+    is the surface that clears them. Matching the leaf segment (rather than the
+    full account) also covers placeholders under other parents, while leaving
+    real accounts that merely begin with the word — ``Expenses:Unknown
+    Subscriptions`` — categorized.
+    """
+    return any(posting.account.casefold().endswith(UNKNOWN_ACCOUNT_LEAF) for posting in txn.postings)
+
+
 def amount_to_number(value: Decimal) -> float:
     return float(value.quantize(Decimal("0.01")))
 
