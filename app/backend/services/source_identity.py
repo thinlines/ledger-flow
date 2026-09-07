@@ -40,6 +40,8 @@ from __future__ import annotations
 import csv
 import hashlib
 import re
+from collections.abc import Mapping
+from dataclasses import dataclass
 from decimal import Decimal
 
 from .currency_parser import parse_optional_amount
@@ -49,10 +51,21 @@ from .currency_parser import parse_optional_amount
 IDENTITY_KEY = "lf_source_identity"
 PAYLOAD_HASH_KEY = "source_payload_hash"
 
+SOURCE_FILE_KEY = "source_file_sha256"
+IMPORTER_VERSION_KEY = "importer_version"
+
+#: The four key families that together describe one carried source row. They
+#: move in lockstep: a variant is written, read and removed as a set.
+CARRIED_KEY_BASES = (IDENTITY_KEY, PAYLOAD_HASH_KEY, SOURCE_FILE_KEY, IMPORTER_VERSION_KEY)
+
 #: ``lf_source_identity`` and its carried-duplicate family (``…_2``, ``…_3``).
 IDENTITY_KEY_RE = re.compile(rf"^{IDENTITY_KEY}(?:_(?P<suffix>\d+))?$")
 #: ``source_payload_hash`` and its matching family.
 PAYLOAD_HASH_KEY_RE = re.compile(rf"^{PAYLOAD_HASH_KEY}(?:_(?P<suffix>\d+))?$")
+
+_CARRIED_KEY_RE = re.compile(
+    rf"^(?P<base>{'|'.join(CARRIED_KEY_BASES)})(?:_(?P<suffix>\d+))?$"
+)
 
 
 class IdentityInputError(ValueError):
@@ -62,6 +75,113 @@ class IdentityInputError(ValueError):
     distinct transactions collide, and a row we cannot identify must fail
     loudly instead of being quietly mis-identified.
     """
+
+
+def carried_key(base: str, suffix: int) -> str:
+    """The metadata key for *base* at *suffix*.
+
+    Suffix 1 is the unsuffixed key — ``carried_key(IDENTITY_KEY, 1)`` is
+    ``"lf_source_identity"``, and only 2 upward take ``_N``. That asymmetry is
+    the convention every reader used to reimplement, usually as ``or "1"``.
+    """
+    if base not in CARRIED_KEY_BASES:
+        raise ValueError(f"{base!r} is not a carried key family")
+    return base if suffix == 1 else f"{base}_{suffix}"
+
+
+def carried_keys(suffix: int) -> frozenset[str]:
+    """Every key belonging to the carried row at *suffix*.
+
+    Removing a variant means removing this whole set: leaving a stray
+    ``source_payload_hash_2`` behind an erased identity is how a block starts
+    disagreeing with itself.
+    """
+    return frozenset(carried_key(base, suffix) for base in CARRIED_KEY_BASES)
+
+
+def suffix_of(key: str) -> int | None:
+    """Which carried row *key* belongs to, or ``None`` if it belongs to none.
+
+    ``"lf_source_identity"`` and ``"importer_version"`` → 1;
+    ``"source_payload_hash_2"`` → 2; ``"lf_txn_id"`` → ``None``.
+    """
+    match = _CARRIED_KEY_RE.match(key)
+    if match is None:
+        return None
+    return int(match.group("suffix") or 1)
+
+
+@dataclass(frozen=True)
+class IdentityVariant:
+    """One source row a journal block claims to be.
+
+    A block normally claims one. It claims several when duplicates were merged:
+    the survivor keeps its own identity at suffix 1 and carries each absorbed
+    row's at 2, 3, … so a re-import of any of their source files still
+    recognises the merged block instead of writing the row again.
+    """
+
+    suffix: int
+    identity: str
+    payload_hash: str | None = None
+    source_file_sha256: str | None = None
+    importer_version: str | None = None
+
+    @property
+    def keys(self) -> frozenset[str]:
+        """The metadata keys this variant occupies."""
+        return carried_keys(self.suffix)
+
+
+def _clean(value: object) -> str | None:
+    text = str(value or "").strip()
+    return text or None
+
+
+def variants_of(metadata: Mapping[str, object]) -> tuple[IdentityVariant, ...]:
+    """Every source row *metadata* claims, in suffix order.
+
+    A suffix with no identity yields nothing, however many of its other keys are
+    present — an identity is what makes a variant a variant. The first element is
+    the block's primary row, which is what a caller wanting "the" identity should
+    take.
+    """
+    by_suffix: dict[int, dict[str, str | None]] = {}
+    for key, value in metadata.items():
+        match = _CARRIED_KEY_RE.match(str(key).strip().lower())
+        if match is None:
+            continue
+        suffix = int(match.group("suffix") or 1)
+        by_suffix.setdefault(suffix, {})[match.group("base")] = _clean(value)
+
+    variants = []
+    for suffix in sorted(by_suffix):
+        fields = by_suffix[suffix]
+        identity = fields.get(IDENTITY_KEY)
+        if not identity:
+            continue
+        variants.append(
+            IdentityVariant(
+                suffix=suffix,
+                identity=identity,
+                payload_hash=fields.get(PAYLOAD_HASH_KEY),
+                source_file_sha256=fields.get(SOURCE_FILE_KEY),
+                importer_version=fields.get(IMPORTER_VERSION_KEY),
+            )
+        )
+    return tuple(variants)
+
+
+def next_free_suffix(metadata: Mapping[str, object]) -> int:
+    """The lowest carried slot *metadata* has not used, never below 2.
+
+    Slot 1 belongs to the block's own row and is never handed out.
+    """
+    used = {variant.suffix for variant in variants_of(metadata)}
+    suffix = 2
+    while suffix in used or carried_key(IDENTITY_KEY, suffix) in metadata:
+        suffix += 1
+    return suffix
 
 
 def _sha256_text(text: str) -> str:

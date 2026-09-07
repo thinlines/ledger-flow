@@ -266,7 +266,7 @@ def migrate_source_identities(config: AppConfig, *, dry_run: bool = False) -> di
                 continue
 
             metadata, postings = _block_metadata_and_postings(item.raw_text)
-            stored = metadata.get("lf_source_identity")
+            stored = metadata.get(source_identity.IDENTITY_KEY)
             if not stored:
                 pieces.append(item.raw_text)
                 continue

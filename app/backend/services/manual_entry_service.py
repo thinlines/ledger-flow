@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-import re
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
 
+from . import source_identity
 from .config_service import AppConfig
 from .currency_parser import parse_amount
 from .header_parser import HEADER_RE
@@ -41,20 +41,16 @@ TIER_SCORES = {1: 1.0, 2: 0.85, 3: 0.70, 4: 0.55, 5: 0.35}
 # Tier → matchQuality label.
 TIER_QUALITY = {1: "strong", 2: "strong", 3: "likely", 4: "possible", 5: "possible"}
 
+# The carried-identity families are not listed here — ``suffix_of`` recognises
+# them at every suffix, including the unsuffixed one.
 SYSTEM_METADATA_KEYS = frozenset({
-    "import_account_id", "institution_template", "lf_source_identity",
-    "source_payload_hash", "source_file_sha256", "importer_version",
+    "import_account_id", "institution_template",
     "transfer_id", "transfer_peer_account_id", "transfer_type",
     "transfer_match_state", "transfer_state",
     "match-id",
     "lf_txn_id", "lf_posting_id", "lf_operation_id",
 })
 
-# Suffixed carried-identity families (merged duplicates): source_identity_2,
-# source_payload_hash_2, ... are system metadata like their unsuffixed forms.
-SYSTEM_METADATA_KEY_RE = re.compile(
-    r"^(?:lf_source_identity|source_payload_hash|source_file_sha256|importer_version)_\d+$"
-)
 
 
 
@@ -211,7 +207,7 @@ def _extract_user_metadata_lines(lines: list[str]) -> list[str]:
         m = META_RE.match(line)
         if m:
             key = m.group(1).strip().lower()
-            if key in SYSTEM_METADATA_KEYS or SYSTEM_METADATA_KEY_RE.match(key):
+            if key in SYSTEM_METADATA_KEYS or source_identity.suffix_of(key) is not None:
                 continue
         result.append(line)
     return result

@@ -178,3 +178,109 @@ def test_stored_identities_are_all_on_the_current_generation() -> None:
     large = _identity(COSTCO_LARGE)
 
     assert small != large
+
+
+# ---------------------------------------------------------------------------
+# The carried-duplicate family
+#
+# A block claims one source row normally, several when duplicates were merged:
+# the survivor keeps its own identity at suffix 1 and carries each absorbed
+# row's at 2, 3, … so a re-import of any of their source files still
+# recognises the merged block. Five modules used to reimplement reading that.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("key", "expected"),
+    [
+        ("lf_source_identity", 1),
+        ("lf_source_identity_2", 2),
+        ("lf_source_identity_13", 13),
+        ("source_payload_hash", 1),
+        ("source_file_sha256_3", 3),
+        ("importer_version", 1),
+        ("source_identity", None),
+        ("lf_source_identity_x", None),
+        ("lf_txn_id", None),
+        ("", None),
+    ],
+)
+def test_suffix_of_spans_every_carried_family(key: str, expected: int | None) -> None:
+    """The unsuffixed key is suffix 1 — the ``or "1"`` step each reader used to
+    write for itself, and the one they wrote differently."""
+    assert source_identity.suffix_of(key) == expected
+
+
+def test_carried_key_leaves_suffix_one_unsuffixed() -> None:
+    assert source_identity.carried_key(source_identity.IDENTITY_KEY, 1) == "lf_source_identity"
+    assert source_identity.carried_key(source_identity.IDENTITY_KEY, 2) == "lf_source_identity_2"
+    assert source_identity.carried_key(source_identity.PAYLOAD_HASH_KEY, 3) == "source_payload_hash_3"
+
+
+def test_carried_key_rejects_a_family_it_does_not_own() -> None:
+    with pytest.raises(ValueError, match="carried key family"):
+        source_identity.carried_key("lf_txn_id", 2)
+
+
+def test_carried_keys_covers_the_whole_slot() -> None:
+    """Removing a variant means removing all four: a stray payload hash behind
+    an erased identity is how a block starts disagreeing with itself."""
+    assert source_identity.carried_keys(2) == {
+        "lf_source_identity_2",
+        "source_payload_hash_2",
+        "source_file_sha256_2",
+        "importer_version_2",
+    }
+
+
+def test_variants_of_pairs_each_identity_with_its_own_slot() -> None:
+    metadata = {
+        "lf_source_identity": "own",
+        "source_payload_hash": "own-payload",
+        "lf_source_identity_2": "carried",
+        "source_payload_hash_2": "carried-payload",
+        "importer_version_2": "mvp2",
+        "lf_txn_id": "not-a-variant",
+    }
+    own, carried = source_identity.variants_of(metadata)
+
+    assert (own.suffix, own.identity, own.payload_hash) == (1, "own", "own-payload")
+    assert (carried.suffix, carried.identity) == (2, "carried")
+    assert carried.payload_hash == "carried-payload"
+    assert carried.importer_version == "mvp2"
+    assert carried.source_file_sha256 is None
+
+
+def test_variants_are_ordered_by_suffix_not_by_metadata_order() -> None:
+    """Callers take ``variants[0]`` as the block's own row, so order is part of
+    the contract — and dicts preserve insertion order, not suffix order."""
+    metadata = {
+        "lf_source_identity_10": "tenth",
+        "lf_source_identity_2": "second",
+        "lf_source_identity": "own",
+    }
+    assert [v.suffix for v in source_identity.variants_of(metadata)] == [1, 2, 10]
+
+
+def test_a_slot_without_an_identity_is_not_a_variant() -> None:
+    """An identity is what makes a variant; the other three are description."""
+    metadata = {"source_payload_hash_2": "orphan", "importer_version_2": "mvp2"}
+    assert source_identity.variants_of(metadata) == ()
+
+
+def test_blank_values_do_not_become_variants() -> None:
+    assert source_identity.variants_of({"lf_source_identity": "   "}) == ()
+
+
+def test_next_free_suffix_never_hands_out_slot_one() -> None:
+    """Slot 1 is the block's own row."""
+    assert source_identity.next_free_suffix({}) == 2
+    assert source_identity.next_free_suffix({"lf_source_identity": "own"}) == 2
+    assert source_identity.next_free_suffix(
+        {"lf_source_identity": "own", "lf_source_identity_2": "a", "lf_source_identity_3": "b"}
+    ) == 4
+
+
+def test_variant_reports_the_keys_it_occupies() -> None:
+    (variant,) = source_identity.variants_of({"lf_source_identity_2": "carried"})
+    assert variant.keys == source_identity.carried_keys(2)

@@ -270,14 +270,34 @@ identity is keyed on the institution's own amount. The rest of the surface is
 (`import_service` re-exports them), `institution_amount`, and
 `IdentityInputError`.
 
-**Naming is not consolidated.** Only `import_service` was rewired. The key name
-is still spelled independently in `import_history_service` (two regexes),
-`reconciliation_context_service` (two), `manual_entry_service` (one),
-`journal_migration_service` (one), and as `startswith` checks in
-`reconciliation_duplicate_service` — so the drift that caused incident 3 remains
-structurally possible. Deliberately deferred, not overlooked. (A `suffix_of`
-helper was written for this and removed again: dead public API is a worse
-placeholder than a note.)
+**Naming is consolidated.** No module outside `source_identity` matches an
+identity or payload key any more — `grep -E 're\.(match|compile|fullmatch)|startswith'`
+over the key names returns nothing. The drift that caused incident 3 is now a
+change to one regex.
+
+What the five reimplementations were actually doing was reading the
+**carried-duplicate family**: when duplicates are merged the survivor keeps its
+own identity at suffix 1 and carries each absorbed row's at 2, 3, … across four
+parallel key families (`lf_source_identity`, `source_payload_hash`,
+`source_file_sha256`, `importer_version`) that must move in lockstep. The
+convention's sharp edge is that the unsuffixed key *is* suffix 1, which every
+reader re-derived, usually as `or "1"`, and two of them got subtly different.
+
+The module now owns that:
+
+| | |
+|---|---|
+| `suffix_of(key)` | which carried row a key belongs to, across all four families |
+| `variants_of(metadata)` | every source row a block claims, as `IdentityVariant`s in suffix order |
+| `carried_key(base, suffix)` / `carried_keys(suffix)` | the key name, and the whole slot |
+| `next_free_suffix(metadata)` | the next slot a merge may claim; never 1 |
+
+Rewired: `import_service._existing_identity_map_from_journal`,
+`import_history_service` ×3 (two readers and the un-merge), `reconciliation_context_service` ×2,
+`reconciliation_duplicate_service` ×4 (its own variant reader, the merge writer
+and two metadata filters), `manual_entry_service`. `re` is now unused in
+`import_history_service` entirely, and the `SOURCE_IDENTITY_KEY_RE` /
+`SOURCE_PAYLOAD_KEY_RE` / `IMPORT_IDENTITY_KEY_RE` re-exports are deleted.
 
 Fixes:
 
@@ -293,10 +313,11 @@ Fixes:
 | Metric | Before | After |
 |---|---|---|
 | Places computing an import identity | 1 inline expression, 0 tests | 1 module, 2 entry points |
-| Public names in that module | — | 13 → 7 |
-| Identity key regexes | 4 (unsynchronised) | 5 (1 authoritative, 4 not yet rewired) |
+| Public names in that module | — | 13 → 14, covering 5 modules' logic |
+| Identity key regexes | 4 (unsynchronised) | 1 |
+| Modules reading the carried-duplicate family | 5, each its own way | 1 |
 | Stored identities a re-import reproduces | 0 of 460 | 457 of 460 |
-| Backend tests | 1071 | 1112 |
+| Backend tests | 1071 | 1122 |
 
 #### Migrated, not versioned
 
@@ -436,7 +457,7 @@ them properly is seam 5 / frontend work.
 - [x] Journal history rewritten to one identity generation (457 rows, 0 collisions)
 - [x] Legacy generation machinery removed
 - [x] The import path and the migration path compute the same identity for the same row
-- [ ] Identity key names come from one registry — only `import_service` rewired so far
+- [x] Identity key names come from one registry — no module outside `source_identity` matches them
 - [ ] Non-fence conflicts are surfaced rather than silently skipped (they are now at least logged)
 - [x] 3 provenance-less ACH blocks triaged — synthetic transfer counterparts, see above
 - [x] The 3 synthetic blocks no longer claim import provenance — stripped and tagged `:manual:`

@@ -38,10 +38,6 @@ INBOX_FILE_RE = re.compile(
     r"^(?P<year>\d{4})__(?P<import_account_id>[a-z0-9_]+)__(?P<label>.+)\.csv$"
 )
 
-# Key names and their carried-duplicate families live in source_identity;
-# re-exported here for the existing call sites in this module.
-SOURCE_IDENTITY_KEY_RE = source_identity.IDENTITY_KEY_RE
-SOURCE_PAYLOAD_KEY_RE = source_identity.PAYLOAD_HASH_KEY_RE
 IMPORTER_VERSION = "mvp2"
 UNKNOWN_ACCOUNT = "Expenses:Unknown"
 
@@ -512,26 +508,14 @@ def _existing_identity_map_from_journal(config: AppConfig, target_journal: Path)
     text = target_journal.read_text(encoding="utf-8")
     out: dict[str, str | None] = {}
     for lines in _split_transactions(text):
-        identities_by_suffix: dict[str, str] = {}
-        payloads_by_suffix: dict[str, str | None] = {}
-        import_account_id = None
+        metadata: dict[str, str] = {}
         for line in lines[1:]:
             mm = META_RE.match(line)
-            if not mm:
-                continue
-            key = mm.group(1).strip().lower()
-            value = mm.group(2).strip()
-            identity_match = SOURCE_IDENTITY_KEY_RE.match(key)
-            payload_match = SOURCE_PAYLOAD_KEY_RE.match(key)
-            if identity_match:
-                suffix = identity_match.group("suffix") or "1"
-                identities_by_suffix[suffix] = value
-            elif payload_match:
-                suffix = payload_match.group("suffix") or "1"
-                payloads_by_suffix[suffix] = value or None
-            elif key == "import_account_id":
-                import_account_id = value
-        if identities_by_suffix:
+            if mm:
+                metadata[mm.group(1).strip().lower()] = mm.group(2).strip()
+        variants = source_identity.variants_of(metadata)
+        import_account_id = metadata.get("import_account_id") or None
+        if variants:
             ledger_account = None
             if import_account_id:
                 import_account = config.import_account(import_account_id)
@@ -543,13 +527,14 @@ def _existing_identity_map_from_journal(config: AppConfig, target_journal: Path)
                     ledger_account,
                     base_currency=str(config.workspace.get("base_currency", "USD")),
                 )
-            for suffix, stored_identity in identities_by_suffix.items():
-                if suffix == "1":
-                    out[stored_identity] = (
-                        computed_payload_hash if computed_payload_hash is not None else payloads_by_suffix.get(suffix)
-                    )
+            for variant in variants:
+                # The block's own row (suffix 1) is compared against the hash
+                # recomputed from the block as it stands now; a carried row can
+                # only be compared against what was stored when it was absorbed.
+                if variant.suffix == 1 and computed_payload_hash is not None:
+                    out[variant.identity] = computed_payload_hash
                 else:
-                    out[stored_identity] = payloads_by_suffix.get(suffix)
+                    out[variant.identity] = variant.payload_hash
     return out
 
 

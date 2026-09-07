@@ -12,11 +12,11 @@ the route never has to worry about which side it's looking at.
 from __future__ import annotations
 
 import hashlib
-import re
 from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
 
+from . import source_identity
 from .config_service import AppConfig
 from .journal_query_service import (
     is_generated_opening_balance_transaction,
@@ -29,8 +29,6 @@ from .transaction_helpers import (
     tracked_account_display,
 )
 from .transfer_service import is_transfer_account, parse_transfer_metadata
-
-IMPORT_IDENTITY_KEY_RE = re.compile(r"^lf_source_identity(?:_\d+)?$")
 
 
 @dataclass(frozen=True)
@@ -109,10 +107,7 @@ def _is_imported_transaction(transaction) -> bool:
     metadata = transaction.metadata
     if str(metadata.get("import_account_id") or "").strip():
         return True
-    for key, value in metadata.items():
-        if IMPORT_IDENTITY_KEY_RE.match(key) and str(value or "").strip():
-            return True
-    return False
+    return bool(source_identity.variants_of(metadata))
 
 
 def _selection_fingerprint(transaction, ledger_account: str, signed_amount: Decimal) -> str:
@@ -140,24 +135,13 @@ def _selection_fingerprint(transaction, ledger_account: str, signed_amount: Deci
 
 
 def _preferred_source_identity(metadata: dict[str, str]) -> str | None:
-    exact = str(metadata.get("lf_source_identity") or "").strip()
-    if exact:
-        return exact
+    """The block's own identity, or the lowest carried one if it has no own.
 
-    keyed_suffixes: list[tuple[int, str]] = []
-    for key, value in metadata.items():
-        match = re.match(r"^lf_source_identity_(\d+)$", key)
-        if not match:
-            continue
-        candidate = str(value or "").strip()
-        if not candidate:
-            continue
-        keyed_suffixes.append((int(match.group(1)), candidate))
-
-    if not keyed_suffixes:
-        return None
-    keyed_suffixes.sort(key=lambda item: item[0])
-    return keyed_suffixes[0][1]
+    ``variants_of`` is suffix-ordered and suffix 1 is the block's own row, so
+    the first variant is the preferred one by construction.
+    """
+    variants = source_identity.variants_of(metadata)
+    return variants[0].identity if variants else None
 
 
 def build_reconciliation_context(

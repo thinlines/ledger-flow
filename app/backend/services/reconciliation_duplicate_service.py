@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-import re
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
@@ -10,7 +9,7 @@ from uuid import uuid4
 
 from fastapi import HTTPException
 
-from . import journal_writer
+from . import journal_writer, source_identity
 from .archive_service import archive_manual_entry
 from .config_service import AppConfig
 from .import_identity_service import ImportIdentityStore
@@ -20,7 +19,6 @@ from .operations_service import rel_path
 from .payee_similarity import payee_similarity as _payee_similarity
 from .projection_service import find_projected_transaction
 from .reconciliation_context_service import (
-    IMPORT_IDENTITY_KEY_RE,
     ReconciliationContext,
     ReconciliationContextRow,
     build_reconciliation_context,
@@ -212,7 +210,7 @@ def _user_metadata_lines(block_lines: list[str]) -> list[str]:
         if not match:
             continue
         key = match.group(1).strip().lower()
-        if key.startswith("lf_source_identity") or key.startswith("source_payload_hash"):
+        if source_identity.suffix_of(key) is not None:
             continue
         if key in {
             "import_account_id",
@@ -239,10 +237,12 @@ def _replace_user_metadata(block_lines: list[str], user_metadata_lines: list[str
             key = match.group(1).strip().lower()
             if key == "notes":
                 continue
-            if key.startswith("lf_source_identity") or key.startswith("source_payload_hash"):
+            # Carried-identity keys at any suffix survive the rewrite: dropping
+            # one would lose a row the block still claims to be.
+            if source_identity.suffix_of(key) is not None:
                 kept.append(line)
                 continue
-            if key in {"source_file_sha256", "importer_version", "import_account_id", "institution_template", "match-id", "lf_txn_id", "lf_posting_id"}:
+            if key in {"import_account_id", "institution_template", "match-id", "lf_txn_id", "lf_posting_id"}:
                 kept.append(line)
                 continue
             if line.strip() == "; :manual:":
@@ -281,68 +281,36 @@ def _upsert_match_tags(block_lines: list[str], match_id: str) -> list[str]:
     return out
 
 
-def _import_identity_variants(metadata: dict[str, str]) -> list[dict[str, str | None]]:
-    variants: list[tuple[int, dict[str, str | None]]] = []
-
-    def add_variant(suffix: int | None) -> None:
-        suffix_part = "" if suffix is None else f"_{suffix}"
-        identity = str(metadata.get(f"lf_source_identity{suffix_part}") or "").strip()
-        if not identity:
-            return
-        variants.append(
-            (
-                1 if suffix is None else suffix,
-                {
-                    "sourceIdentity": identity,
-                    "sourcePayloadHash": str(metadata.get(f"source_payload_hash{suffix_part}") or "").strip() or None,
-                    "sourceFileSha256": str(metadata.get(f"source_file_sha256{suffix_part}") or "").strip() or None,
-                    "importerVersion": str(metadata.get(f"importer_version{suffix_part}") or "").strip() or None,
-                },
-            )
-        )
-
-    add_variant(None)
-    suffixes: list[int] = []
-    for key in metadata:
-        match = re.match(r"^lf_source_identity_(\d+)$", key)
-        if match:
-            suffixes.append(int(match.group(1)))
-    for suffix in sorted(set(suffixes)):
-        add_variant(suffix)
-
-    return [variant for _, variant in sorted(variants, key=lambda item: item[0])]
-
-
 def _upsert_import_identity_metadata(
     survivor_lines: list[str],
     imported_metadata: dict[str, str],
 ) -> list[str]:
-    variants = _import_identity_variants(imported_metadata)
+    variants = source_identity.variants_of(imported_metadata)
     if not variants:
         raise HTTPException(status_code=422, detail="Imported duplicate is missing import identity metadata.")
 
     existing = _extract_metadata(survivor_lines)
-    existing_identities = {value for key, value in existing.items() if IMPORT_IDENTITY_KEY_RE.match(key)}
+    existing_identities = {v.identity for v in source_identity.variants_of(existing)}
     metadata_lines: list[str] = []
-    next_suffix = 2
-    while f"lf_source_identity_{next_suffix}" in existing:
-        next_suffix += 1
+    next_suffix = source_identity.next_free_suffix(existing)
 
+    # The four families move as one: whichever fields the absorbed row carried
+    # are re-emitted together at the same free slot.
+    carried_fields = (
+        (source_identity.IDENTITY_KEY, "identity"),
+        (source_identity.PAYLOAD_HASH_KEY, "payload_hash"),
+        (source_identity.SOURCE_FILE_KEY, "source_file_sha256"),
+        (source_identity.IMPORTER_VERSION_KEY, "importer_version"),
+    )
     for variant in variants:
-        identity = str(variant["sourceIdentity"] or "").strip()
-        if not identity or identity in existing_identities:
+        if variant.identity in existing_identities:
             continue
-        metadata_lines.append(f"    ; lf_source_identity_{next_suffix}: {identity}")
-        payload = str(variant["sourcePayloadHash"] or "").strip()
-        if payload:
-            metadata_lines.append(f"    ; source_payload_hash_{next_suffix}: {payload}")
-        file_sha = str(variant["sourceFileSha256"] or "").strip()
-        if file_sha:
-            metadata_lines.append(f"    ; source_file_sha256_{next_suffix}: {file_sha}")
-        importer_version = str(variant["importerVersion"] or "").strip()
-        if importer_version:
-            metadata_lines.append(f"    ; importer_version_{next_suffix}: {importer_version}")
-        existing_identities.add(identity)
+        for base, field in carried_fields:
+            value = getattr(variant, field)
+            if value:
+                key = source_identity.carried_key(base, next_suffix)
+                metadata_lines.append(f"    ; {key}: {value}")
+        existing_identities.add(variant.identity)
         next_suffix += 1
 
     if not metadata_lines:
@@ -529,15 +497,19 @@ def resolve_duplicate_candidate(
 
             import_account_id = str(merged_row.import_account_id or survivor_row.import_account_id or "").strip()
             if import_account_id:
-                txns = _import_identity_variants(_extract_metadata(updated_survivor))
-                if txns:
+                variants = source_identity.variants_of(_extract_metadata(updated_survivor))
+                if variants:
                     ImportIdentityStore(config).upsert_active(
                         import_account_id=import_account_id,
-                        source_file_sha256=str(txns[0].get("sourceFileSha256") or ""),
+                        source_file_sha256=variants[0].source_file_sha256 or "",
                         original_path=None,
                         archived_path=None,
                         file_name=f"{Path(journal_path).stem}.journal",
-                        txns=txns,
+                        # The store keys on identity and payload hash only.
+                        txns=[
+                            {"sourceIdentity": v.identity, "sourcePayloadHash": v.payload_hash}
+                            for v in variants
+                        ],
                     )
 
             mut.summary = f"Merged imported duplicates for {survivor_row.payee[:60]} on {survivor_row.date}"

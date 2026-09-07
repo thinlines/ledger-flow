@@ -6,6 +6,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
+from . import source_identity as source_identity_module
 from .account_declaration_service import set_subtype
 from .commodity_service import BASE_CURRENCY_SYMBOLS
 from .config_service import AppConfig, infer_account_kind, load_config
@@ -830,13 +831,13 @@ class WorkspaceManager:
             key = match.group(1).strip().lower()
             value = match.group(2).strip()
             metadata[key] = value
-            if key == "source_payload_hash":
+            if key == source_identity_module.PAYLOAD_HASH_KEY:
                 source_payload_hash_idx = idx
 
         if metadata.get("import_account_id") != import_account_id:
             return txn_lines, None
 
-        source_identity = metadata.get("lf_source_identity")
+        source_identity = metadata.get(source_identity_module.IDENTITY_KEY)
         if not source_identity:
             return txn_lines, None
 

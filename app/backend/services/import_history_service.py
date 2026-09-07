@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
+from . import source_identity as source_identity_module
 from .config_service import AppConfig
 from .import_identity_service import ImportIdentityStore
 from .journal_query_service import META_RE, TXN_START_RE
@@ -69,43 +69,24 @@ def _parse_rendered_transactions(lines: list[str]) -> list[JournalTransaction]:
     """Re-index an in-memory journal rendering during an undo mutation."""
     transactions: list[JournalTransaction] = []
     for start, end in _iter_transaction_ranges(lines):
-        source_identity = None
-        source_payload_hash = None
         metadata: dict[str, str] = {}
-        identities_by_suffix: dict[str, str] = {}
-        payloads_by_suffix: dict[str, str | None] = {}
         for line in lines[start + 1:end]:
             match = META_RE.match(line)
             if not match:
                 continue
-            key = match.group(1).strip().lower()
-            value = match.group(2).strip() or None
-            if value is not None:
-                metadata[key] = value
-            if key == "lf_source_identity":
-                source_identity = value
-                identities_by_suffix["1"] = value
-            elif key == "source_payload_hash":
-                source_payload_hash = value
-                payloads_by_suffix["1"] = value
-            else:
-                identity_match = re.match(r"^lf_source_identity_(\d+)$", key)
-                if identity_match and value is not None:
-                    identities_by_suffix[identity_match.group(1)] = value
-                    continue
-                payload_match = re.match(r"^source_payload_hash_(\d+)$", key)
-                if payload_match:
-                    payloads_by_suffix[payload_match.group(1)] = value
-        identity_variants: list[tuple[str, str | None]] = []
-        for suffix, identity in sorted(identities_by_suffix.items(), key=lambda item: int(item[0])):
-            identity_variants.append((identity, payloads_by_suffix.get(suffix)))
+            value = match.group(2).strip()
+            if value:
+                metadata[match.group(1).strip().lower()] = value
+        variants = source_identity_module.variants_of(metadata)
         transactions.append(
             JournalTransaction(
                 start=start,
                 end=end,
-                source_identity=source_identity,
-                source_payload_hash=source_payload_hash,
-                identity_variants=tuple(identity_variants),
+                source_identity=metadata.get(source_identity_module.IDENTITY_KEY),
+                source_payload_hash=metadata.get(source_identity_module.PAYLOAD_HASH_KEY),
+                identity_variants=tuple(
+                    (variant.identity, variant.payload_hash) for variant in variants
+                ),
                 metadata=metadata,
             )
         )
@@ -123,21 +104,15 @@ def _load_journal_transactions(
     transactions: list[JournalTransaction] = []
     for row in rows:
         metadata = dict(row["metadata"])
-        identities_with_suffix: list[tuple[int, str, str | None]] = []
-        for key, value in metadata.items():
-            match = re.fullmatch(r"lf_source_identity(?:_(\d+))?", key)
-            if not match or not value:
-                continue
-            suffix = match.group(1) or "1"
-            payload_key = "source_payload_hash" if suffix == "1" else f"source_payload_hash_{suffix}"
-            identities_with_suffix.append((int(suffix), value, metadata.get(payload_key)))
-        identities_with_suffix.sort(key=lambda item: item[0])
+        variants = source_identity_module.variants_of(metadata)
         transactions.append(JournalTransaction(
             start=int(row["transactionStartLine"]) - 1,
             end=int(row["transactionEndLine"]),
             source_identity=metadata.get("lf_source_identity"),
             source_payload_hash=metadata.get("source_payload_hash"),
-            identity_variants=tuple((identity, payload) for _, identity, payload in identities_with_suffix),
+            identity_variants=tuple(
+                (variant.identity, variant.payload_hash) for variant in variants
+            ),
             metadata=metadata,
         ))
     return lines, transactions
@@ -280,22 +255,18 @@ def _remove_metadata_variant(
     updated_lines = list(lines)
     txn_lines = list(updated_lines[transaction.start:transaction.end])
     metadata = transaction.metadata
-    suffix_to_remove: str | None = None
-    for key, value in metadata.items():
-        match = re.match(r"^lf_source_identity_(\d+)$", key)
-        if match and value == source_identity:
-            suffix_to_remove = match.group(1)
-            break
-    if suffix_to_remove is None:
+    blocked_keys: frozenset[str] | None = next(
+        (
+            variant.keys
+            for variant in source_identity_module.variants_of(metadata)
+            if variant.identity == source_identity and variant.suffix != 1
+        ),
+        None,
+    )
+    if blocked_keys is None:
         raise ValueError("Carried import identity could not be found on the surviving transaction.")
 
     stripped_lines: list[str] = []
-    blocked_keys = {
-        f"lf_source_identity_{suffix_to_remove}",
-        f"source_payload_hash_{suffix_to_remove}",
-        f"source_file_sha256_{suffix_to_remove}",
-        f"importer_version_{suffix_to_remove}",
-    }
     for line in txn_lines:
         match = META_RE.match(line)
         if not match:
