@@ -12,6 +12,7 @@ from .journal_query_service import (
     is_generated_opening_balance_transaction,
     pretty_account_name,
 )
+from .month_math import shift_month
 from .projection_service import load_transactions_projected
 from .search_parser import SearchTerm, parse_search
 from .transaction_helpers import (
@@ -35,12 +36,6 @@ from .transfer_service import (
 class PeriodRange:
     start: date
     end: date  # inclusive
-
-
-def _shift_month(year: int, month: int, offset: int) -> tuple[int, int]:
-    total = (year * 12 + (month - 1)) + offset
-    shifted_year, shifted_month_index = divmod(total, 12)
-    return shifted_year, shifted_month_index + 1
 
 
 def _first_of_month(year: int, month: int) -> date:
@@ -112,7 +107,7 @@ def _resolve_period(period: str, today: date) -> PeriodRange:
     if period == "this-year":
         return PeriodRange(date(today.year, 1, 1), today)
     months_back = 5 if period == "last-6-months" else 2
-    start_year, start_month = _shift_month(today.year, today.month, -months_back)
+    start_year, start_month = shift_month(today.year, today.month, -months_back)
     return PeriodRange(_first_of_month(start_year, start_month), today)
 
 
@@ -348,7 +343,7 @@ def _resolve_search_date_range(term: SearchTerm, today: date) -> PeriodRange | N
     if val == "this-month":
         return _month_range(today.year, today.month)
     if val == "last-month":
-        return _month_range(*_shift_month(today.year, today.month, -1))
+        return _month_range(*shift_month(today.year, today.month, -1))
     if val == "this-year":
         return PeriodRange(date(today.year, 1, 1), date(today.year, 12, 31))
     # YYYY-MM
