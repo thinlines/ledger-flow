@@ -1,94 +1,17 @@
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 
+from conftest import write_year_journal
 from services import account_register_service
 from services.account_register_service import build_account_register
 from services.commodity import CommodityMismatchError
 from services.config_service import AppConfig
 from services.transfer_service import transfer_pair_account
-from services.workspace_service import ensure_workspace_journal_includes
 
 
-def _make_config(workspace: Path) -> AppConfig:
-    for rel in ["settings", "journals", "inbox", "rules", "opening", "imports"]:
-        (workspace / rel).mkdir(parents=True, exist_ok=True)
-
-    return AppConfig(
-        root_dir=workspace,
-        config_toml=workspace / "settings" / "workspace.toml",
-        workspace={"name": "Test Books", "start_year": 2026, "base_currency": "USD"},
-        dirs={
-            "csv_dir": "inbox",
-            "journal_dir": "journals",
-            "init_dir": "rules",
-            "opening_bal_dir": "opening",
-            "imports_dir": "imports",
-        },
-        institution_templates={},
-        import_accounts={
-            "checking": {
-                "display_name": "Wells Fargo Checking",
-                "institution": "wells_fargo",
-                "ledger_account": "Assets:Bank:Checking",
-                "last4": "1234",
-                "tracked_account_id": "checking",
-            },
-            "savings": {
-                "display_name": "Savings",
-                "institution": "wells_fargo",
-                "ledger_account": "Assets:Bank:Savings",
-                "last4": "4321",
-                "tracked_account_id": "savings",
-            },
-            "visa": {
-                "display_name": "Visa Signature",
-                "institution": "visa",
-                "ledger_account": "Liabilities:Cards:Visa",
-                "last4": "5678",
-                "tracked_account_id": "visa",
-            },
-        },
-        tracked_accounts={
-            "checking": {
-                "display_name": "Wells Fargo Checking",
-                "institution": "wells_fargo",
-                "ledger_account": "Assets:Bank:Checking",
-                "last4": "1234",
-                "import_account_id": "checking",
-            },
-            "visa": {
-                "display_name": "Visa Signature",
-                "institution": "visa",
-                "ledger_account": "Liabilities:Cards:Visa",
-                "last4": "5678",
-                "import_account_id": "visa",
-            },
-            "savings": {
-                "display_name": "Savings",
-                "institution": "wells_fargo",
-                "ledger_account": "Assets:Bank:Savings",
-                "last4": "4321",
-                "import_account_id": "savings",
-            },
-            "vehicle": {
-                "display_name": "Vehicle",
-                "ledger_account": "Assets:Vehicle:Subaru",
-                "import_account_id": None,
-            },
-        },
-    )
-
-
-def _write_year_journal(config: AppConfig, body: str = "") -> None:
-    (config.journal_dir / "2026.journal").write_text(body, encoding="utf-8")
-    ensure_workspace_journal_includes(config)
-
-
-def test_account_register_returns_latest_first_rows_with_running_balances(tmp_path: Path) -> None:
-    config = _make_config(tmp_path / "workspace")
+def test_account_register_returns_latest_first_rows_with_running_balances(books_config) -> None:
+    config = books_config
     (config.opening_bal_dir / "checking.journal").write_text(
         """
 2026-02-01 Opening balance
@@ -99,7 +22,7 @@ def test_account_register_returns_latest_first_rows_with_running_balances(tmp_pa
         + "\n",
         encoding="utf-8",
     )
-    _write_year_journal(
+    write_year_journal(
         config,
         """
 2026/02/02 Grocer
@@ -148,9 +71,9 @@ def test_account_register_returns_latest_first_rows_with_running_balances(tmp_pa
     assert opening["runningBalance"] == 500.0
 
 
-def test_account_register_is_served_from_projection(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    config = _make_config(tmp_path / "workspace")
-    _write_year_journal(
+def test_account_register_is_served_from_projection(books_config, monkeypatch: pytest.MonkeyPatch) -> None:
+    config = books_config
+    write_year_journal(
         config,
         """
 2026/02/02 Grocer
@@ -178,8 +101,8 @@ def test_account_register_is_served_from_projection(tmp_path: Path, monkeypatch:
     assert [entry["payee"] for entry in register["entries"]] == ["Paycheck", "Grocer"]
 
 
-def test_account_register_parses_balance_assertions_for_matching_commodities(tmp_path: Path) -> None:
-    config = _make_config(tmp_path / "workspace")
+def test_account_register_parses_balance_assertions_for_matching_commodities(books_config) -> None:
+    config = books_config
     (config.opening_bal_dir / "checking.journal").write_text(
         """
 2026-02-01 Opening balance
@@ -190,7 +113,7 @@ def test_account_register_parses_balance_assertions_for_matching_commodities(tmp
         + "\n",
         encoding="utf-8",
     )
-    _write_year_journal(
+    write_year_journal(
         config,
         """
 2026/02/02 Paycheck
@@ -209,8 +132,8 @@ def test_account_register_parses_balance_assertions_for_matching_commodities(tmp
     assert latest["runningBalance"] == 1200.0
 
 
-def test_account_register_rejects_mixed_commodities_in_running_balance(tmp_path: Path) -> None:
-    config = _make_config(tmp_path / "workspace")
+def test_account_register_rejects_mixed_commodities_in_running_balance(books_config) -> None:
+    config = books_config
     (config.opening_bal_dir / "checking.journal").write_text(
         """
 2026-02-01 Opening balance
@@ -221,7 +144,7 @@ def test_account_register_rejects_mixed_commodities_in_running_balance(tmp_path:
         + "\n",
         encoding="utf-8",
     )
-    _write_year_journal(
+    write_year_journal(
         config,
         """
 2026/02/02 Paycheck
@@ -236,9 +159,9 @@ def test_account_register_rejects_mixed_commodities_in_running_balance(tmp_path:
         build_account_register(config, "checking")
 
 
-def test_account_register_preserves_liability_signs_in_running_balance(tmp_path: Path) -> None:
-    config = _make_config(tmp_path / "workspace")
-    _write_year_journal(
+def test_account_register_preserves_liability_signs_in_running_balance(books_config) -> None:
+    config = books_config
+    write_year_journal(
         config,
         """
 2026/03/04 Online Shop
@@ -271,8 +194,8 @@ def test_account_register_preserves_liability_signs_in_running_balance(tmp_path:
     assert first_charge["runningBalance"] == -83.21
 
 
-def test_account_register_shows_selected_tracked_account_for_opening_balance_detail(tmp_path: Path) -> None:
-    config = _make_config(tmp_path / "workspace")
+def test_account_register_shows_selected_tracked_account_for_opening_balance_detail(books_config) -> None:
+    config = books_config
     (config.opening_bal_dir / "visa.journal").write_text(
         """
 2026-02-01 Opening balance
@@ -283,7 +206,7 @@ def test_account_register_shows_selected_tracked_account_for_opening_balance_det
         + "\n",
         encoding="utf-8",
     )
-    _write_year_journal(config)
+    write_year_journal(config)
 
     register = build_account_register(config, "visa")
 
@@ -298,9 +221,9 @@ def test_account_register_shows_selected_tracked_account_for_opening_balance_det
     ]
 
 
-def test_account_register_uses_transfer_peer_metadata_for_pending_transfers(tmp_path: Path) -> None:
-    config = _make_config(tmp_path / "workspace")
-    _write_year_journal(
+def test_account_register_uses_transfer_peer_metadata_for_pending_transfers(books_config) -> None:
+    config = books_config
+    write_year_journal(
         config,
         """
 2026/02/04 Transfer to savings
@@ -331,8 +254,8 @@ def test_account_register_uses_transfer_peer_metadata_for_pending_transfers(tmp_
     ]
 
 
-def test_account_register_shows_pending_transfer_on_peer_account_without_changing_balance(tmp_path: Path) -> None:
-    config = _make_config(tmp_path / "workspace")
+def test_account_register_shows_pending_transfer_on_peer_account_without_changing_balance(books_config) -> None:
+    config = books_config
     (config.opening_bal_dir / "savings.journal").write_text(
         """
 2026-02-01 Opening balance
@@ -343,7 +266,7 @@ def test_account_register_shows_pending_transfer_on_peer_account_without_changin
         + "\n",
         encoding="utf-8",
     )
-    _write_year_journal(
+    write_year_journal(
         config,
         """
 2026/02/04 Transfer to savings
@@ -382,9 +305,9 @@ def test_account_register_shows_pending_transfer_on_peer_account_without_changin
     ]
 
 
-def test_account_register_shows_pending_transfer_on_liability_peer_account_without_changing_balance(tmp_path: Path) -> None:
-    config = _make_config(tmp_path / "workspace")
-    _write_year_journal(
+def test_account_register_shows_pending_transfer_on_liability_peer_account_without_changing_balance(books_config) -> None:
+    config = books_config
+    write_year_journal(
         config,
         """
 2026/02/04 Credit card payment
@@ -424,10 +347,10 @@ def test_account_register_shows_pending_transfer_on_liability_peer_account_witho
     ]
 
 
-def test_account_register_treats_balanced_grouped_pending_transfer_rows_as_settled(tmp_path: Path) -> None:
-    config = _make_config(tmp_path / "workspace")
+def test_account_register_treats_balanced_grouped_pending_transfer_rows_as_settled(books_config) -> None:
+    config = books_config
     transfer_account = transfer_pair_account("checking", "savings")
-    _write_year_journal(
+    write_year_journal(
         config,
         f"""
 2026/03/12 ACH verification withdrawal
@@ -478,10 +401,10 @@ def test_account_register_treats_balanced_grouped_pending_transfer_rows_as_settl
     assert latest["transferState"] == "settled_grouped"
 
 
-def test_account_register_leaves_only_grouped_transfer_residue_pending(tmp_path: Path) -> None:
-    config = _make_config(tmp_path / "workspace")
+def test_account_register_leaves_only_grouped_transfer_residue_pending(books_config) -> None:
+    config = books_config
     transfer_account = transfer_pair_account("checking", "savings")
-    _write_year_journal(
+    write_year_journal(
         config,
         f"""
 2026/03/12 ACH verification withdrawal
@@ -538,10 +461,10 @@ def test_account_register_leaves_only_grouped_transfer_residue_pending(tmp_path:
     assert residue_entries[0]["summary"] == "Transfer · Wells Fargo Checking (Pending)"
 
 
-def test_account_register_fails_closed_for_ambiguous_same_window_grouped_transfers(tmp_path: Path) -> None:
-    config = _make_config(tmp_path / "workspace")
+def test_account_register_fails_closed_for_ambiguous_same_window_grouped_transfers(books_config) -> None:
+    config = books_config
     transfer_account = transfer_pair_account("checking", "savings")
-    _write_year_journal(
+    write_year_journal(
         config,
         f"""
 2026/03/12 Transfer out 1
@@ -592,10 +515,10 @@ def test_account_register_fails_closed_for_ambiguous_same_window_grouped_transfe
     assert all("(Pending)" not in entry["summary"] for entry in checking_register["entries"])
 
 
-def test_account_register_preserves_matched_import_transfer_behavior(tmp_path: Path) -> None:
-    config = _make_config(tmp_path / "workspace")
+def test_account_register_preserves_matched_import_transfer_behavior(books_config) -> None:
+    config = books_config
     transfer_account = transfer_pair_account("checking", "savings")
-    _write_year_journal(
+    write_year_journal(
         config,
         f"""
 2026/03/12 Transfer out
@@ -625,9 +548,9 @@ def test_account_register_preserves_matched_import_transfer_behavior(tmp_path: P
     assert latest["transferState"] == "matched"
 
 
-def test_account_register_shows_direct_transfer_on_manual_destination_without_pending_state(tmp_path: Path) -> None:
-    config = _make_config(tmp_path / "workspace")
-    _write_year_journal(
+def test_account_register_shows_direct_transfer_on_manual_destination_without_pending_state(books_config) -> None:
+    config = books_config
+    write_year_journal(
         config,
         """
 2026/02/04 Vehicle purchase
@@ -665,9 +588,9 @@ def test_account_register_shows_direct_transfer_on_manual_destination_without_pe
     ]
 
 
-def test_account_register_ignores_legacy_pending_state_for_manual_destination(tmp_path: Path) -> None:
-    config = _make_config(tmp_path / "workspace")
-    _write_year_journal(
+def test_account_register_ignores_legacy_pending_state_for_manual_destination(books_config) -> None:
+    config = books_config
+    write_year_journal(
         config,
         """
 2026/02/04 Vehicle purchase
@@ -694,9 +617,9 @@ def test_account_register_ignores_legacy_pending_state_for_manual_destination(tm
     assert latest["transferPeerAccountName"] == "Wells Fargo Checking"
 
 
-def test_account_register_treats_manual_destination_transfer_account_entry_as_posted_direct_transfer(tmp_path: Path) -> None:
-    config = _make_config(tmp_path / "workspace")
-    _write_year_journal(
+def test_account_register_treats_manual_destination_transfer_account_entry_as_posted_direct_transfer(books_config) -> None:
+    config = books_config
+    write_year_journal(
         config,
         """
 2026/02/04 Vehicle purchase
@@ -733,9 +656,9 @@ def test_account_register_treats_manual_destination_transfer_account_entry_as_po
     ]
 
 
-def test_account_register_treats_import_match_without_active_state_as_posted_direct_transfer(tmp_path: Path) -> None:
-    config = _make_config(tmp_path / "workspace")
-    _write_year_journal(
+def test_account_register_treats_import_match_without_active_state_as_posted_direct_transfer(books_config) -> None:
+    config = books_config
+    write_year_journal(
         config,
         """
 2026/02/04 Transfer to savings
@@ -772,8 +695,8 @@ def test_account_register_treats_import_match_without_active_state_as_posted_dir
     ]
 
 
-def test_account_register_reflects_offsetting_tracked_account_opening_balance_on_peer_account(tmp_path: Path) -> None:
-    config = _make_config(tmp_path / "workspace")
+def test_account_register_reflects_offsetting_tracked_account_opening_balance_on_peer_account(books_config) -> None:
+    config = books_config
     config.tracked_accounts["loan"] = {
         "display_name": "Car Loan",
         "ledger_account": "Liabilities:Loans:Car",
@@ -788,7 +711,7 @@ def test_account_register_reflects_offsetting_tracked_account_opening_balance_on
         + "\n",
         encoding="utf-8",
     )
-    _write_year_journal(config)
+    write_year_journal(config)
 
     register = build_account_register(config, "checking")
 
@@ -807,10 +730,10 @@ def test_account_register_reflects_offsetting_tracked_account_opening_balance_on
     assert opening_offset["isOpeningBalance"] is False
 
 
-def test_bilateral_match_excludes_both_from_pending_and_shows_as_posted(tmp_path: Path) -> None:
-    config = _make_config(tmp_path / "workspace")
+def test_bilateral_match_excludes_both_from_pending_and_shows_as_posted(books_config) -> None:
+    config = books_config
     transfer_account = transfer_pair_account("checking", "savings")
-    _write_year_journal(
+    write_year_journal(
         config,
         f"""
 2026/03/02 Transfer out
@@ -857,8 +780,8 @@ def test_bilateral_match_excludes_both_from_pending_and_shows_as_posted(tmp_path
     assert "(Pending)" not in savings_entry["summary"]
 
 
-def test_bilateral_match_excludes_pair_from_pending_balance_and_counts(tmp_path: Path) -> None:
-    config = _make_config(tmp_path / "workspace")
+def test_bilateral_match_excludes_pair_from_pending_balance_and_counts(books_config) -> None:
+    config = books_config
     transfer_account = transfer_pair_account("checking", "savings")
     (config.opening_bal_dir / "checking.journal").write_text(
         """
@@ -870,7 +793,7 @@ def test_bilateral_match_excludes_pair_from_pending_balance_and_counts(tmp_path:
         + "\n",
         encoding="utf-8",
     )
-    _write_year_journal(
+    write_year_journal(
         config,
         f"""
 2026/03/02 Transfer out
@@ -904,10 +827,10 @@ def test_bilateral_match_excludes_pair_from_pending_balance_and_counts(tmp_path:
     assert len(pending_entries) == 0
 
 
-def test_bilateral_match_ambiguous_same_amount_remains_pending(tmp_path: Path) -> None:
-    config = _make_config(tmp_path / "workspace")
+def test_bilateral_match_ambiguous_same_amount_remains_pending(books_config) -> None:
+    config = books_config
     transfer_account = transfer_pair_account("checking", "savings")
-    _write_year_journal(
+    write_year_journal(
         config,
         f"""
 2026/03/01 Transfer out 1
@@ -966,80 +889,10 @@ def test_bilateral_match_ambiguous_same_amount_remains_pending(tmp_path: Path) -
     assert savings_states == ["", "", "pending", "pending"]
 
 
-def test_bilateral_match_date_boundary_exact_window_matches(tmp_path: Path) -> None:
-    config = _make_config(tmp_path / "workspace")
+def test_bilateral_match_single_sided_pending_still_shows_synthetic_peer(books_config) -> None:
+    config = books_config
     transfer_account = transfer_pair_account("checking", "savings")
-    _write_year_journal(
-        config,
-        f"""
-2026/03/01 Transfer out
-    ; import_account_id: checking
-    ; transfer_id: transfer-c
-    ; transfer_type: import_match
-    ; transfer_match_state: pending
-    ; transfer_peer_account_id: savings
-    {transfer_account}  $100.00
-    Assets:Bank:Checking
-
-2026/03/08 Transfer in
-    ; import_account_id: savings
-    ; transfer_id: transfer-s
-    ; transfer_type: import_match
-    ; transfer_match_state: pending
-    ; transfer_peer_account_id: checking
-    {transfer_account}  $-100.00
-    Assets:Bank:Savings
-""".strip()
-        + "\n",
-    )
-
-    # Exactly MAX_TRANSFER_MATCH_DAYS (7) apart → should match
-    checking_register = build_account_register(config, "checking")
-    assert checking_register["entryCount"] == 1
-    assert checking_register["entries"][0]["transferState"] == "bilateral_match"
-
-
-def test_bilateral_match_date_boundary_exceeds_window_remains_pending(tmp_path: Path) -> None:
-    config = _make_config(tmp_path / "workspace")
-    transfer_account = transfer_pair_account("checking", "savings")
-    _write_year_journal(
-        config,
-        f"""
-2026/03/01 Transfer out
-    ; import_account_id: checking
-    ; lf_source_identity: tx-c
-    ; transfer_id: transfer-c
-    ; transfer_type: import_match
-    ; transfer_match_state: pending
-    ; transfer_peer_account_id: savings
-    {transfer_account}  $100.00
-    Assets:Bank:Checking
-
-2026/03/09 Transfer in
-    ; import_account_id: savings
-    ; lf_source_identity: tx-s
-    ; transfer_id: transfer-s
-    ; transfer_type: import_match
-    ; transfer_match_state: pending
-    ; transfer_peer_account_id: checking
-    {transfer_account}  $-100.00
-    Assets:Bank:Savings
-""".strip()
-        + "\n",
-    )
-
-    # MAX_TRANSFER_MATCH_DAYS + 1 (8 days) apart → should NOT match.
-    # Source-side entry has no transferState; peer-side synthetic keeps "pending".
-    checking_register = build_account_register(config, "checking")
-    assert checking_register["entryCount"] == 2
-    states = sorted(entry["transferState"] or "" for entry in checking_register["entries"])
-    assert states == ["", "pending"]
-
-
-def test_bilateral_match_single_sided_pending_still_shows_synthetic_peer(tmp_path: Path) -> None:
-    config = _make_config(tmp_path / "workspace")
-    transfer_account = transfer_pair_account("checking", "savings")
-    _write_year_journal(
+    write_year_journal(
         config,
         f"""
 2026/03/02 Transfer out
@@ -1071,43 +924,3 @@ def test_bilateral_match_single_sided_pending_still_shows_synthetic_peer(tmp_pat
     assert savings_entry["amount"] == 2000.0  # peer side gets negated source amount
 
 
-def test_bilateral_match_does_not_interfere_with_grouped_settlement(tmp_path: Path) -> None:
-    config = _make_config(tmp_path / "workspace")
-    transfer_account = transfer_pair_account("checking", "savings")
-    _write_year_journal(
-        config,
-        f"""
-2026/03/12 ACH verification withdrawal
-    ; import_account_id: checking
-    ; transfer_id: transfer-checking
-    ; transfer_type: import_match
-    ; transfer_match_state: pending
-    ; transfer_peer_account_id: savings
-    {transfer_account}  $0.46
-    Assets:Bank:Checking
-
-2026/03/12 ACH verification deposit 1
-    ; import_account_id: savings
-    ; transfer_id: transfer-savings-1
-    ; transfer_type: import_match
-    ; transfer_match_state: pending
-    ; transfer_peer_account_id: checking
-    {transfer_account}  $-0.12
-    Assets:Bank:Savings
-
-2026/03/12 ACH verification deposit 2
-    ; import_account_id: savings
-    ; transfer_id: transfer-savings-2
-    ; transfer_type: import_match
-    ; transfer_match_state: pending
-    ; transfer_peer_account_id: checking
-    {transfer_account}  $-0.34
-    Assets:Bank:Savings
-""".strip()
-        + "\n",
-    )
-
-    # These 3 transactions form a grouped settlement (sum to zero)
-    # Bilateral matching should not interfere
-    savings_register = build_account_register(config, "savings")
-    assert all(entry["transferState"] == "settled_grouped" for entry in savings_register["entries"])

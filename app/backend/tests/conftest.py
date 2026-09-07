@@ -9,6 +9,92 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+import pytest  # noqa: E402
+
+from services.config_service import AppConfig  # noqa: E402
+from services.workspace_service import ensure_workspace_journal_includes  # noqa: E402
+
+
+def _build_books_config(workspace: Path) -> AppConfig:
+    for rel in ["settings", "journals", "inbox", "rules", "opening", "imports"]:
+        (workspace / rel).mkdir(parents=True, exist_ok=True)
+
+    return AppConfig(
+        root_dir=workspace,
+        config_toml=workspace / "settings" / "workspace.toml",
+        workspace={"name": "Test Books", "start_year": 2026, "base_currency": "USD"},
+        dirs={
+            "csv_dir": "inbox",
+            "journal_dir": "journals",
+            "init_dir": "rules",
+            "opening_bal_dir": "opening",
+            "imports_dir": "imports",
+        },
+        institution_templates={},
+        import_accounts={
+            "checking": {
+                "display_name": "Wells Fargo Checking",
+                "institution": "wells_fargo",
+                "ledger_account": "Assets:Bank:Checking",
+                "last4": "1234",
+                "tracked_account_id": "checking",
+            },
+            "savings": {
+                "display_name": "Savings",
+                "institution": "wells_fargo",
+                "ledger_account": "Assets:Bank:Savings",
+                "last4": "4321",
+                "tracked_account_id": "savings",
+            },
+            "visa": {
+                "display_name": "Visa Signature",
+                "institution": "visa",
+                "ledger_account": "Liabilities:Cards:Visa",
+                "last4": "5678",
+                "tracked_account_id": "visa",
+            },
+        },
+        tracked_accounts={
+            "checking": {
+                "display_name": "Wells Fargo Checking",
+                "institution": "wells_fargo",
+                "ledger_account": "Assets:Bank:Checking",
+                "last4": "1234",
+                "import_account_id": "checking",
+            },
+            "visa": {
+                "display_name": "Visa Signature",
+                "institution": "visa",
+                "ledger_account": "Liabilities:Cards:Visa",
+                "last4": "5678",
+                "import_account_id": "visa",
+            },
+            "savings": {
+                "display_name": "Savings",
+                "institution": "wells_fargo",
+                "ledger_account": "Assets:Bank:Savings",
+                "last4": "4321",
+                "import_account_id": "savings",
+            },
+            "vehicle": {
+                "display_name": "Vehicle",
+                "ledger_account": "Assets:Vehicle:Subaru",
+                "import_account_id": None,
+            },
+        },
+    )
+
+
+@pytest.fixture
+def books_config(tmp_path: Path) -> AppConfig:
+    """A workspace with checking, savings, visa, and vehicle tracked accounts."""
+    return _build_books_config(tmp_path / "workspace")
+
+
+def write_year_journal(config: AppConfig, body: str = "") -> None:
+    (config.journal_dir / "2026.journal").write_text(body, encoding="utf-8")
+    ensure_workspace_journal_includes(config)
+
 
 def record_event(
     workspace: Path,
