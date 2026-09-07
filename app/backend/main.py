@@ -67,10 +67,10 @@ from services.classifier_warmup_service import schedule_review_warmup
 from services.commodity import CommodityMismatchError
 from services.custom_csv_service import inspect_csv_bytes
 from services.dashboard_service import (
+    build_dashboard_direction,
     build_dashboard_overview,
     query_dashboard_transactions,
 )
-from services.direction_service import build_dashboard_direction
 from services.git_snapshot_service import hours_since_last_snapshot, snapshot_commit
 from services.header_parser import HEADER_RE as _HEADER_RE
 from services.header_parser import TransactionStatus, parse_header, set_header_status

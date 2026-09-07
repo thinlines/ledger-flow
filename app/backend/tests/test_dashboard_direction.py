@@ -5,9 +5,9 @@ from pathlib import Path
 
 import pytest
 
-from services import direction_service
+from services import dashboard_service
 from services.config_service import AppConfig
-from services.direction_service import build_dashboard_direction
+from services.dashboard_service import build_dashboard_direction
 from services.workspace_service import ensure_workspace_journal_includes
 
 
@@ -143,8 +143,8 @@ def test_dashboard_direction_is_served_from_projection(tmp_path: Path, monkeypat
     def fail_legacy_loader(config: AppConfig) -> list:
         raise AssertionError("legacy regex loader should not serve direction")
 
-    if hasattr(direction_service, "load_transactions"):
-        monkeypatch.setattr(direction_service, "load_transactions", fail_legacy_loader)
+    if hasattr(dashboard_service, "load_transactions"):
+        monkeypatch.setattr(dashboard_service, "load_transactions", fail_legacy_loader)
 
     result = build_dashboard_direction(config, today=date(2026, 4, 18))
 
