@@ -298,7 +298,7 @@ Measured against the 460 stored identities, it was not enough on its own —
 | the current hash | 0 |
 | `legacy_value` | 304 |
 | neither (still-earlier formulas) | 153 |
-| unknown — no `; CSV:` provenance | 3 |
+| unknown — no `; CSV:` provenance (synthetic, since resolved) | 3 |
 
 — so 153 rows would still have re-imported as `"new"`, a duplication risk latent
 since the formula last changed. The journal was migrated instead, and the compat
@@ -352,7 +352,7 @@ throughout. The lesson is the cheap invariant nobody had written down — *the
 importer and any journal reader must agree on a block's postings*. Seam 5's
 `check_integrity` is the place for it.
 
-#### The 3 skipped blocks are synthetic transfer counterparts
+#### The 3 skipped blocks were synthetic transfer counterparts (resolved)
 
 Not statement rows at all, and not a migration failure. On 2026-02-17 three
 micro-deposits (`$0.54`, `$0.41`, `$0.13`, payee `ACH … ACCTVERIFY`) landed while
@@ -380,17 +380,30 @@ No current code writes `missing_import_counterpart`; `transfer_manual_resolution
 survives only as a known key in `workspace_service`. These are orphans of a
 removed flow.
 
-**No collision risk.** Since no WF statement will ever carry these rows, no import
-can compute an identity that meets them. The three stale identities sit in the
-journal-derived dedupe map matching nothing, which is inert.
+No collision was ever possible: with no WF statement to import, nothing could
+compute an identity that met theirs. But the blocks *claimed* to be imported,
+which would have forced seam 5's `check_integrity` to either flag them or learn
+an exemption for a fiction.
 
-**Open, low priority.** The blocks still *claim* to be imported —
-`import_account_id`, `lf_source_identity`, `source_payload_hash`,
-`importer_version: mvp2` — which is false, and seam 5's `check_integrity` will
-have to either flag them or learn to exempt them. Stripping those four keys, and
-keeping `lf_txn_id` and the transfer metadata, would make the record say what
-actually happened. Worth doing when seam 5 defines the invariant, not before —
-and it edits the ledger, so it needs a decision either way.
+**Resolved.** `import_account_id`, `institution_template`, `lf_source_identity`,
+`source_payload_hash` and `importer_version` are stripped, and the `:manual:` tag
+they should always have carried is added. `lf_txn_id` and the transfer metadata
+stay, so the pairs are intact. Verified before applying: balances and register
+byte-identical, `ledger` exits 0, blocks still parse as `managed`,
+`parse_transfer_metadata` returns the same `transfer_id` / peer / type / state,
+and `has_manual_tag` now returns `True`. `migrate-source-identities` reports
+**0 skipped**, down from 3 — nothing in the journal is unaccounted for.
+
+**A gap this exposes.** Both accounts are import-backed, so
+`unknowns_service` routes them down the `import_match` branch, which assumes a
+real imported counterpart arrives on each side. The `direct` transfer type exists
+for a non-import-backed peer, but there is no way to express "this leg is manual
+because the institution never reported it". These blocks still say
+`transfer_type: import_match`, which is now inaccurate, and
+`transfer_manual_resolution: missing_import_counterpart` was the escape hatch —
+written by code that no longer exists. Left as-is deliberately: changing the
+transfer type alters matching behaviour, and the honest fix is a supported
+manual-leg transfer, not a metadata edit. Frontend has never offered this.
 
 #### Silently skipped conflicts
 
@@ -415,7 +428,8 @@ them properly is seam 5 / frontend work.
 - [ ] Identity key names come from one registry — only `import_service` rewired so far
 - [ ] Non-fence conflicts are surfaced rather than silently skipped (they are now at least logged)
 - [x] 3 provenance-less ACH blocks triaged — synthetic transfer counterparts, see above
-- [ ] Decide whether the 3 synthetic blocks keep their (false) import metadata — no collision risk, but `check_integrity` must flag or exempt them
+- [x] The 3 synthetic blocks no longer claim import provenance — stripped and tagged `:manual:`
+- [ ] Transfers support a leg that is manual by nature (institution never reported it); today only `direct` (non-import-backed peer) and `import_match` exist
 - [ ] Journal block editing happens in exactly one module; no service or endpoint calls `read_text().splitlines()` on a journal to edit a transaction
 - [ ] Metadata parsing and writing happen in exactly one module; one key registry drives `12-tags.dat`
 - [ ] `check_integrity` exists, runs on startup, and reports all five invariants
