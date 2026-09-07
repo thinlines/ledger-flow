@@ -23,14 +23,28 @@ structural gap, not to three unrelated bugs:
    field is **empty**. `_extract_institution_amount` finds the institution posting and
    returns its amount, but the importer elides that posting's amount, so it returns
    `""`; the `if postings:` fallback never fires because the account matched. Ten of
-   those groups are legitimate distinct transactions colliding. This is live: the next
-   import silently classifies a genuine new purchase as `"duplicate"` whenever an
-   existing transaction shares account + date + payee. A skipped row leaves no trace.
+   those groups are legitimate distinct transactions colliding. This is live, and the
+   consequence is data loss rather than noise: a colliding row classifies as
+   `"conflict"` with `conflictReason == "identity_collision"`, which
+   `_build_fence_conflicts` excludes from the UI ("identity-collision rows … never
+   reach the UI"), `duplicateCount` folds into the duplicate tally, and only
+   `matchStatus == "new"` rows are written. A genuine new purchase sharing
+   account + date + payee with any existing transaction is therefore **silently
+   dropped, and reported as a duplicate**.
 
-3. **Three genuine duplicates were written anyway.** One re-import (source file
-   `d7fc789f…`, 2026-07-05) re-covered rows already present with different description
-   whitespace. `_classify_transaction` returned `"conflict"` (identity known, payload
-   hash differs) and the importer wrote them regardless.
+3. **Three genuine duplicates were written by a one-day reader/data mismatch.**
+   Commit `1bdfacb` (2026-07-04 21:57) changed `SOURCE_IDENTITY_KEY_RE` from
+   `^source_identity(_N)?$` to `^lf_source_identity(_N)?$`, and changed the writer to
+   emit the prefixed key. The journal's existing blocks still carried the *unprefixed*
+   key — `journal_migration_service` was not run against this workspace until
+   2026-09-06. On 2026-07-05 an import (source file `d7fc789f…`) ran in that gap:
+   `_existing_identity_map_from_journal` matched **nothing**, dedupe fell back to the
+   `import_identities` DB map alone, and every row absent from it classified as
+   `"new"` and was written. The first journal commit containing `lf_source_identity`
+   (`ba04d5f`, 2026-07-05) is that import's own output.
+
+   The reader's key name and the data's key name disagreed for two months with no
+   registry binding them and no diagnostic noticing. That is this issue in miniature.
 
 Related, found while investigating:
 
@@ -42,9 +56,12 @@ Related, found while investigating:
   ("re-link `import_identities.transaction_id` by `lf_txn_id`") was specified and never
   implemented.
 - **`import_identities` is unrebuildable.** It lives in gitignored `.workflow/state.db`
-  and is not in `operation_dump_service._DURABLE_TABLES`. Losing the DB loses all
-  dedupe memory, while the journal — which carries every fact needed to reconstruct it
-  — is never consulted at import time.
+  and is not in `operation_dump_service._DURABLE_TABLES`. Losing the DB loses every
+  `current_status` bit (`undone` / `merged`), which nothing else records.
+  `_build_existing_map` *does* merge a journal-derived identity map with the DB map, so
+  dedupe is not blind to journal-only identities — but that map is built from **the
+  target year's journal only**, so a cross-year import sees none of them, and it is
+  silently empty whenever the journal's key names drift from the reader's (incident 3).
 - **Startup validates nothing.** `lifespan` runs stage cleanup, a git snapshot, and
   embedding warmup. No projection refresh, no integrity check.
 
@@ -237,13 +254,140 @@ dict the caller already holds (chiefly `workspace_service`, which *writes*
 config back to TOML and correctly stays dict-based). They are not envy and do
 not need converting.
 
+### Seam 2 — `SourceIdentity` (landed)
+
+`services/source_identity.py` is now the only place that *computes* an import
+identity. It owns `IDENTITY_KEY` / `PAYLOAD_HASH_KEY` and their suffix-family
+regexes (`import_service` re-exports them), `normalize_payee`, `suffix_of`,
+`institution_amount`, `canonical_amount` and `compute`.
+
+**Naming is not yet consolidated.** Only `import_service` was rewired. The key
+name is still spelled independently in `import_history_service` (two regexes),
+`reconciliation_context_service` (two), `manual_entry_service` (one),
+`journal_migration_service` (one), and as `startswith` checks in
+`reconciliation_duplicate_service` — so the drift that caused incident 3 is
+still structurally possible. `suffix_of` exists to replace them and has no
+production callers yet.
+
+Fixes:
+
+- `institution_amount` derives the **elided** institution posting's amount by
+  negating the counter-postings — the value ledger itself would infer — instead
+  of returning `""`. This is the 2026-04-27 Costco collision.
+- `compute` raises `IdentityInputError` rather than hashing a blank amount. A row
+  whose amount cannot be determined now fails loudly.
+- Generation 2 hashes a canonical `Decimal`, so `USD -7.92`, `-7.92` and
+  `-7.920` identify as one row. Generation 1 hashed whatever string the posting
+  carried, which is why identity was sensitive to rendering.
+
+Generation handling — **no journal data has been rewritten yet**. `compute`
+returns both the generation-2 `value` (what new writes store) and the
+generation-1 `legacy_value`. `_classify_transaction` looks a row up under the
+current identity first and the legacy identity second, so rows already in these
+journals are still recognised. `tests/test_import_identity.py` pins
+`legacy_value` as byte-identical to the pre-fix expression; without that, a
+re-import would classify every previously imported row as `"new"` and write it
+again.
+
+Measured against this workspace's 460 stored identities:
+
+| Stored identity reproduced by | rows |
+|---|---|
+| the current generation-2 hash | 0 |
+| `legacy_value` | 304 |
+| neither (written by still-earlier formulas) | 153 |
+| unknown — no `; CSV:` provenance to recompute from | 3 |
+
+So the legacy path is **load-bearing but only two-thirds effective**: without it
+every one of the 460 rows re-imports as `"new"`; with it, 153 still do. That
+shortfall is what the migration below exists to close, and why the two are not
+meant to coexist permanently.
+
+A legacy-only match whose payload hash differs is recorded as
+`conflictReason == "legacy_identity_ambiguous"` rather than being treated as a
+duplicate, because a generation-1 hash cannot tell two same-day purchases at one
+merchant apart.
+
+| Metric | Before | After |
+|---|---|---|
+| Places computing an import identity | 1 inline expression, 0 tests | 1 module, 43 tests |
+| Identity key regexes | 4 (unsynchronised) | 5 (1 authoritative, 4 not yet rewired) |
+| Backend tests | 1071 | 1117 |
+| Pre-existing ruff findings | 45 | 45 |
+
+#### Journal history to be rewritten to one generation — **written, not yet run**
+
+The migration below is implemented, tested, and exposed on the CLI. **It has not
+been executed against this workspace**; every identity in `journals/2026.journal`
+is still generation 1, unchanged since it was first written. Verified by
+comparing identity values across every journal snapshot back to `ba04d5f`
+(2026-07-06): no `lf_source_identity` value has ever changed.
+
+Chosen over carrying the legacy-compat path indefinitely, because that path is
+not sufficient on its own: of 457 identities with provenance, **153 cannot be
+reproduced by `legacy_value` either**, having been written by still-earlier
+identity formulas. Those rows were *already* unrecognisable on re-import before
+any of this work — a live duplication risk, latent since the formula last
+changed.
+
+`journal_migration_service.migrate_source_identities(config, dry_run=...)`
+recomputes every stored identity from each block's own `; CSV:` provenance —
+`import_account_id`, the statement date and description as the institution wrote
+them, and the institution posting's amount (deriving the elided value). Exposed as
+`ledger-flow migrate-source-identities [--dry-run]`.
+
+It refuses to guess. A block with no provenance row, or whose postings no longer
+include its import account (the account was reassigned, so the amount is not
+comparable), is left untouched and reported. Blocks resolving to one identity are
+reported as collisions — genuine same-row duplicates needing triage.
+
+Dry-run result on this workspace: **457 would be rewritten, 0 unchanged, 0
+collisions, 3 skipped** (2026-02-17 ACH rows with no `; CSV:` line), touching
+`journals/2026.journal` only.
+
+Zero collisions is the substantive finding: every imported row *would* get a
+unique identity, which the pre-fix scheme could not express.
+
+Remaining steps, in order — the sequence matters, since the legacy path is the
+only thing preventing mass duplication until the migration runs:
+
+1. Run `ledger-flow migrate-source-identities` and commit the journal diff.
+2. Confirm `ledger` still exits 0 and a second run rewrites nothing.
+3. Then remove the legacy generation machinery — `legacy_value`,
+   `SourceIdentity.matches` / `is_legacy_only_match` / `generation`,
+   `CURRENT_GENERATION`, `compute`'s `raw_amount`, `sourceIdentityLegacy`, the
+   legacy branch of `_classify_transaction`, and the `legacy_identity_ambiguous`
+   reason — all of which become unreachable once every row is generation 2.
+
+**Open decision — needs a product call.** Ambiguous rows are classified but not
+yet surfaced: `_build_fence_conflicts` still returns only
+`reconciled_date_fence` rows, and the frontend does not render the `conflicts`
+list at all. So a legacy-ambiguous row is still silently skipped at write time.
+Options: (a) surface ambiguous rows in the import UI for a per-row decision —
+safest, needs frontend work; (b) write them and let the existing duplicate
+review flow catch them; (c) leave them skipped and rely on `check_integrity`
+(seam 5) to report them after the fact. Until this is decided, the underlying
+"silently dropped" behaviour persists for rows colliding with **pre-fix** data
+only — newly written identities are unambiguous.
+
+They are no longer *traceless*, at least: `_emit_identity_collision_events` now
+keys off "conflict that is not a date fence" rather than the literal
+`identity_collision` reason, so an ambiguous row emits an
+`import.identity_collision.v1` operation carrying its `conflict_reason` and the
+identity it matched under. Running the migration removes the case entirely.
+
 ## Acceptance criteria
 
 - [x] `Account` dataclass and `AppConfig.accounts` / `.account()` / `.account_for_ledger()` exist and are covered by tests
 - [x] No service reimplements the ledger-account → tracked-account reverse lookup — one site remains, documented above with its reason
 - [x] `.get("ledger_account")` no longer appears in service modules for *resolving* tracked/import accounts; remaining uses are config serialization
-- [ ] Source identity refuses an empty amount and is computed in exactly one place
-- [ ] Existing identities are migrated or versioned, with the choice recorded
+- [x] Source identity refuses an empty amount and is computed in exactly one place
+- [x] Existing identities are migrated or versioned, with the choice recorded — versioned for now; migration written, run pending
+- [ ] Journal history rewritten to one identity generation (dry run: 457 rows, 0 collisions — not yet applied)
+- [ ] Legacy generation machinery removed once the migration has run
+- [ ] Identity key names come from one registry — only `import_service` rewired so far
+- [ ] Ambiguous legacy-identity rows are surfaced rather than silently skipped (open decision, above; they are now at least logged)
+- [ ] 3 provenance-less ACH blocks triaged (they keep pre-fix identities)
 - [ ] Journal block editing happens in exactly one module; no service or endpoint calls `read_text().splitlines()` on a journal to edit a transaction
 - [ ] Metadata parsing and writing happen in exactly one module; one key registry drives `12-tags.dat`
 - [ ] `check_integrity` exists, runs on startup, and reports all five invariants
