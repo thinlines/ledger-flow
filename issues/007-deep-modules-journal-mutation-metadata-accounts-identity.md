@@ -256,18 +256,18 @@ not need converting.
 
 ### Seam 2 — `SourceIdentity` (landed)
 
-`services/source_identity.py` is now the only place that *computes* an import
-identity. It owns `IDENTITY_KEY` / `PAYLOAD_HASH_KEY` and their suffix-family
-regexes (`import_service` re-exports them), `normalize_payee`, `suffix_of`,
+`services/source_identity.py` is the one place that computes an import identity.
+It owns `IDENTITY_KEY` / `PAYLOAD_HASH_KEY` and their suffix-family regexes
+(`import_service` re-exports them), `normalize_payee`, `suffix_of`,
 `institution_amount`, `canonical_amount` and `compute`.
 
-**Naming is not yet consolidated.** Only `import_service` was rewired. The key
-name is still spelled independently in `import_history_service` (two regexes),
+**Naming is not consolidated.** Only `import_service` was rewired. The key name
+is still spelled independently in `import_history_service` (two regexes),
 `reconciliation_context_service` (two), `manual_entry_service` (one),
 `journal_migration_service` (one), and as `startswith` checks in
-`reconciliation_duplicate_service` — so the drift that caused incident 3 is
-still structurally possible. `suffix_of` exists to replace them and has no
-production callers yet.
+`reconciliation_duplicate_service` — so the drift that caused incident 3 remains
+structurally possible. `suffix_of` exists to replace them and has no production
+callers yet. Deliberately deferred, not overlooked.
 
 Fixes:
 
@@ -276,30 +276,9 @@ Fixes:
   of returning `""`. This is the 2026-04-27 Costco collision.
 - `compute` raises `IdentityInputError` rather than hashing a blank amount. A row
   whose amount cannot be determined now fails loudly.
-- Generation 2 hashes a canonical `Decimal`, so `USD -7.92`, `-7.92` and
-  `-7.920` identify as one row. Generation 1 hashed whatever string the posting
-  carried, which is why identity was sensitive to rendering.
-
-Generation handling — the journal was **migrated**, not versioned. A
-compatibility path was written first (`compute` returned both the new hash and
-a generation-1 `legacy_value`, and `_classify_transaction` tried each in turn)
-and then removed once the migration had run. Measured before the migration, it
-would not have been enough on its own:
-
-| Stored identity reproduced by | rows |
-|---|---|
-| the current hash | 0 |
-| `legacy_value` | 304 |
-| neither (written by still-earlier formulas) | 153 |
-| unknown — no `; CSV:` provenance to recompute from | 3 |
-
-Two-thirds coverage, so 153 rows would still have re-imported as `"new"`. That
-shortfall is why the migration below was chosen over carrying the compat path.
-
-A legacy-only match whose payload hash differs is recorded as
-`conflictReason == "legacy_identity_ambiguous"` rather than being treated as a
-duplicate, because a generation-1 hash cannot tell two same-day purchases at one
-merchant apart.
+- The hash covers a canonical `Decimal`, so `USD -7.92`, `-7.92` and `-7.920`
+  identify as one row. The old hash took whatever string the posting carried,
+  which is why identity was sensitive to rendering.
 
 | Metric | Before | After |
 |---|---|---|
@@ -307,59 +286,47 @@ merchant apart.
 | Identity key regexes | 4 (unsynchronised) | 5 (1 authoritative, 4 not yet rewired) |
 | Stored identities a re-import reproduces | 0 of 460 | 457 of 460 |
 | Backend tests | 1071 | 1112 |
-| Pre-existing ruff findings | 45 | 45 |
 
-#### Journal history to be rewritten to one generation — **written, not yet run**
+#### Migrated, not versioned
 
-The migration below is implemented, tested, and exposed on the CLI. **It has not
-been executed against this workspace**; every identity in `journals/2026.journal`
-is still generation 1, unchanged since it was first written. Verified by
-comparing identity values across every journal snapshot back to `ba04d5f`
-(2026-07-06): no `lf_source_identity` value has ever changed.
+A compatibility path was written first: `compute` returned both the new hash and
+a generation-1 `legacy_value`, and `_classify_transaction` tried each in turn.
+Measured against the 460 stored identities, it was not enough on its own —
 
-Chosen over carrying the legacy-compat path indefinitely, because that path is
-not sufficient on its own: of 457 identities with provenance, **153 cannot be
-reproduced by `legacy_value` either**, having been written by still-earlier
-identity formulas. Those rows were *already* unrecognisable on re-import before
-any of this work — a live duplication risk, latent since the formula last
-changed.
+| Stored identity reproduced by | rows |
+|---|---|
+| the current hash | 0 |
+| `legacy_value` | 304 |
+| neither (still-earlier formulas) | 153 |
+| unknown — no `; CSV:` provenance | 3 |
+
+— so 153 rows would still have re-imported as `"new"`, a duplication risk latent
+since the formula last changed. The journal was migrated instead, and the compat
+path then removed: `legacy_value`, `SourceIdentity` itself, `CURRENT_GENERATION`,
+`compute`'s `raw_amount`, `sourceIdentityLegacy`, `matchedIdentity`, the legacy
+branch of `_classify_transaction`, and the `legacy_identity_ambiguous` reason.
+`compute` returns the hash directly.
 
 `journal_migration_service.migrate_source_identities(config, dry_run=...)`
-recomputes every stored identity from each block's own `; CSV:` provenance —
+recomputes each stored identity from the block's own `; CSV:` provenance —
 `import_account_id`, the statement date and description as the institution wrote
-them, and the institution posting's amount (deriving the elided value). Exposed as
-`ledger-flow migrate-source-identities [--dry-run]`.
+them, and the institution posting's amount. Exposed as
+`ledger-flow migrate-source-identities [--dry-run]`. It refuses to guess: a block
+with no provenance row, or whose postings no longer include its import account,
+is left untouched and reported.
 
-It refuses to guess. A block with no provenance row, or whose postings no longer
-include its import account (the account was reassigned, so the amount is not
-comparable), is left untouched and reported. Blocks resolving to one identity are
-reported as collisions — genuine same-row duplicates needing triage.
-
-Dry-run result on this workspace: **457 would be rewritten, 0 unchanged, 0
-collisions, 3 skipped** (2026-02-17 ACH rows with no `; CSV:` line), touching
-`journals/2026.journal` only.
-
-Zero collisions is the substantive finding: every imported row *would* get a
-unique identity, which the pre-fix scheme could not express.
-
-Run and committed: 457 rewritten, 3 skipped, 0 collisions, touching only the
-457 identity lines. A second run rewrites nothing. The legacy generation
-machinery has since been removed — `legacy_value`, `SourceIdentity` itself,
-`CURRENT_GENERATION`, `compute`'s `raw_amount`, `sourceIdentityLegacy`, the
-legacy branch of `_classify_transaction`, and the `legacy_identity_ambiguous`
-reason. `compute` now returns the hash directly.
-
-The three provenance-less ACH blocks keep identities that no formula in the
-module reproduces. They were unmatchable before the migration too; removing the
-legacy path did not change their status. Still to be triaged.
+Run and committed: **457 rewritten, 3 skipped, 0 collisions**, touching only the
+457 identity lines in `journals/2026.journal`. A second run rewrites nothing.
+Zero collisions is the substantive finding — every imported row now has a unique
+identity, which the pre-fix scheme could not express.
 
 #### The two paths disagreed on the amount's sign
 
-Found while removing the legacy path, by checking the thing that had never been
-checked: whether a re-import reproduces what the migration wrote. It did not —
-**437 of 460 rows disagreed**, and journal-derived dedupe matched 0 of 56
-previewed rows. Dedupe was surviving only on the gitignored
-`.workflow/state.db`.
+Found while removing the compat path, by checking what had never been checked:
+whether a re-import reproduces what the migration wrote. It did not — **437 of
+460 rows disagreed**, and the journal-derived dedupe map matched **0 of 56**
+previewed rows. Dedupe was surviving only on the gitignored `.workflow/state.db`,
+the store this issue already flags as unrebuildable.
 
 Two defects, compounding, both on the import side:
 
@@ -368,38 +335,65 @@ Two defects, compounding, both on the import side:
   institution posting bare, so the posting list held only the counter-posting.
   Every other reader of the same block — `_block_metadata_and_postings` among
   them — falls back to `ACCOUNT_ONLY_RE` and keeps it.
-- `institution_amount`'s "no institution posting" branch then returned the
-  first posting's amount *unchanged*. For a deposit written
+- `institution_amount`'s "no institution posting" branch then returned the first
+  posting's amount *unchanged*. For a deposit written
   `Income:Employer  USD -975.70` the institution amount is +975.70; it returned
   -975.70. The branch was documented as "matching the pre-existing behaviour",
-  which was true of generation 1 and precisely the thing being replaced.
+  which was true of the formula being replaced.
 
-So the importer hashed `+296.79` where the migration hashed `-296.79`. Both
-paths are now consistent: `_parse_transaction` records bare postings with an
-empty amount, and the fallback derives the negated sum like the main path.
-Verified against the live workspace — 457 of 460 stored identities are
-reproduced by the import path, the 3 exceptions being the ACH blocks above, and
-54 of 56 previewed rows are now recognised from the journal alone.
+So the importer hashed `+296.79` where the migration hashed `-296.79`. Both paths
+are consistent now: `_parse_transaction` records bare postings with an empty
+amount, and the fallback derives the negated sum like the main path. Verified
+against the live workspace — 457 of 460 stored identities are reproduced by the
+import path, and 54 of 56 previewed rows are recognised from the journal alone.
 
-The committed journal needed no correction: the migration path was the correct
-one throughout.
+The committed journal needed no correction: the migration path was correct
+throughout. The lesson is the cheap invariant nobody had written down — *the
+importer and any journal reader must agree on a block's postings*. Seam 5's
+`check_integrity` is the place for it.
 
-**Open decision — needs a product call.** Ambiguous rows are classified but not
-yet surfaced: `_build_fence_conflicts` still returns only
-`reconciled_date_fence` rows, and the frontend does not render the `conflicts`
-list at all. So a legacy-ambiguous row is still silently skipped at write time.
-Options: (a) surface ambiguous rows in the import UI for a per-row decision —
-safest, needs frontend work; (b) write them and let the existing duplicate
-review flow catch them; (c) leave them skipped and rely on `check_integrity`
-(seam 5) to report them after the fact. Until this is decided, the underlying
-"silently dropped" behaviour persists for rows colliding with **pre-fix** data
-only — newly written identities are unambiguous.
+#### The 3 skipped blocks are synthetic transfer counterparts
 
-They are no longer *traceless*, at least: `_emit_identity_collision_events` now
-keys off "conflict that is not a date fence" rather than the literal
-`identity_collision` reason, so an ambiguous row emits an
-`import.identity_collision.v1` operation carrying its `conflict_reason` and the
-identity it matched under. Running the migration removes the case entirely.
+Not statement rows at all, and not a migration failure. On 2026-02-17 three
+micro-deposits (`$0.54`, `$0.41`, `$0.13`, payee `ACH … ACCTVERIFY`) landed while
+linking ICCU to Wells Fargo for transfers. Six blocks exist, one pair per amount:
+
+- **ICCU side** (`journals/2026.journal:769`, `:788`, `:807`) — genuinely
+  imported, with full provenance: `; CSV:`, `source_file_sha256`, `Imported:`,
+  `UUID:`.
+- **Wells Fargo side** (`:858`, `:873`, `:888`) — none of that, yet stamped with
+  `import_account_id`, `lf_source_identity`, `source_payload_hash` and
+  `importer_version: mvp2`. Both sides share a `transfer_id` and carry
+  `transfer_manual_resolution: missing_import_counterpart`.
+
+The Wells Fargo blocks were fabricated to complete the transfer pair when the WF
+statement had no matching row. Their `lf_source_identity` was never derived from
+a statement row, so there is no correct value for the migration to compute — it
+was right to skip them.
+
+No current code writes `missing_import_counterpart`; `transfer_manual_resolution`
+survives only as a known key in `workspace_service`. These are orphans of a
+removed flow.
+
+**Risk if left as-is.** Should a Wells Fargo statement covering 2026-02-17 ever be
+imported, the real ACCTVERIFY rows would compute proper identities, match nothing,
+and be written — duplicating the synthetic blocks. Small (three rows, $1.08) but
+it is the failure this seam exists to prevent.
+
+**Proposed fix:** strip `lf_source_identity`, `source_payload_hash` and
+`importer_version` from the three Wells Fargo blocks. A synthetic counterpart has
+no import identity, and claiming one is what makes it collide. `lf_txn_id` and the
+transfer metadata stay. Needs a decision before acting — it edits the ledger.
+
+#### Silently skipped conflicts
+
+`_build_fence_conflicts` returns only `reconciled_date_fence` rows and the
+frontend does not render the `conflicts` list at all, so any other conflict is
+dropped at write time without reaching the UI. `_emit_identity_collision_events`
+now keys off "conflict that is not a date fence" rather than the literal
+`identity_collision` reason, so such a row at least emits an
+`import.identity_collision.v1` operation carrying its `conflict_reason`. Surfacing
+them properly is seam 5 / frontend work.
 
 ## Acceptance criteria
 
@@ -412,8 +406,9 @@ identity it matched under. Running the migration removes the case entirely.
 - [x] Legacy generation machinery removed
 - [x] The import path and the migration path compute the same identity for the same row
 - [ ] Identity key names come from one registry — only `import_service` rewired so far
-- [ ] Ambiguous legacy-identity rows are surfaced rather than silently skipped (open decision, above; they are now at least logged)
-- [ ] 3 provenance-less ACH blocks triaged (they keep pre-fix identities)
+- [ ] Non-fence conflicts are surfaced rather than silently skipped (they are now at least logged)
+- [x] 3 provenance-less ACH blocks triaged — synthetic transfer counterparts, see above
+- [ ] Strip the meaningless import metadata from those 3 blocks (needs a decision, edits the ledger)
 - [ ] Journal block editing happens in exactly one module; no service or endpoint calls `read_text().splitlines()` on a journal to edit a transaction
 - [ ] Metadata parsing and writing happen in exactly one module; one key registry drives `12-tags.dat`
 - [ ] `check_integrity` exists, runs on startup, and reports all five invariants
