@@ -116,8 +116,8 @@ def build_dashboard_direction(config: AppConfig, *, today: date | None = None) -
     # Health Signal: Runway gauge
     # -----------------------------------------------------------------------
     tracked_ledger_accounts = {
-        str(cfg.get("ledger_account", "")).strip()
-        for cfg in config.tracked_accounts.values()
+        account.ledger_account
+        for account in config.accounts
     }
 
     LIQUID_SUBTYPES = {"checking", "savings", "cash"}
@@ -128,13 +128,12 @@ def build_dashboard_direction(config: AppConfig, *, today: date | None = None) -
     projected_subtypes = account_subtypes(config)
 
     spendable_cash = Decimal(0)
-    for account_id, account_cfg in config.tracked_accounts.items():
-        ledger_account = str(account_cfg.get("ledger_account", "")).strip()
-        if not ledger_account or infer_account_kind(ledger_account) != "asset":
+    for account in config.accounts:
+        if not account.ledger_account or account.kind != "asset":
             continue
-        subtype = projected_subtypes.get(ledger_account)
+        subtype = projected_subtypes.get(account.ledger_account)
         if subtype is None or subtype in LIQUID_SUBTYPES:
-            spendable_cash += account_balances.get(ledger_account, Decimal(0))
+            spendable_cash += account_balances.get(account.ledger_account, Decimal(0))
 
     total_spending_6m = sum(
         monthly_spending.get(m, Decimal(0)) for m in trailing_6
@@ -143,11 +142,10 @@ def build_dashboard_direction(config: AppConfig, *, today: date | None = None) -
 
     # Sum minimum payments across all tracked liabilities with the field set
     monthly_obligations = Decimal(0)
-    for account_id, account_cfg in config.tracked_accounts.items():
-        ledger_account = str(account_cfg.get("ledger_account", "")).strip()
-        if not ledger_account or infer_account_kind(ledger_account) != "liability":
+    for account in config.accounts:
+        if not account.ledger_account or account.kind != "liability":
             continue
-        ob_entry = opening_by_ledger_account.get(ledger_account)
+        ob_entry = opening_by_ledger_account.get(account.ledger_account)
         if ob_entry and ob_entry.minimum_payment:
             monthly_obligations += abs(ob_entry.minimum_payment)
 
@@ -328,34 +326,32 @@ def build_dashboard_direction(config: AppConfig, *, today: date | None = None) -
     # Skip fixed assets (vehicles, real estate) — inactivity is expected, not a loose end.
     stale_threshold = current_day - timedelta(days=30)
     stale_accounts: list[dict] = []
-    for account_id, account_cfg in config.tracked_accounts.items():
-        ledger_account = str(account_cfg.get("ledger_account", "")).strip()
-        if not ledger_account:
+    for account in config.accounts:
+        if not account.ledger_account:
             continue
-        if projected_subtypes.get(ledger_account) in FIXED_ASSET_SUBTYPES:
+        if projected_subtypes.get(account.ledger_account) in FIXED_ASSET_SUBTYPES:
             continue
-        last_date = account_last_transaction.get(ledger_account)
+        last_date = account_last_transaction.get(account.ledger_account)
         if last_date is not None and last_date < stale_threshold:
             days_since = (current_day - last_date).days
             stale_accounts.append({
-                "id": account_id,
-                "displayName": str(account_cfg.get("display_name", account_id)),
+                "id": account.id,
+                "displayName": account.display_name,
                 "daysSinceActivity": days_since,
             })
 
     # Missing opening balances
     opening_balance_ledger_accounts = set(opening_by_ledger_account.keys())
     missing_opening_balances: list[dict] = []
-    for account_id, account_cfg in config.tracked_accounts.items():
-        ledger_account = str(account_cfg.get("ledger_account", "")).strip()
-        if not ledger_account:
+    for account in config.accounts:
+        if not account.ledger_account:
             continue
-        has_activity = ledger_account in accounts_with_activity
-        has_opening = ledger_account in opening_balance_ledger_accounts
+        has_activity = account.ledger_account in accounts_with_activity
+        has_opening = account.ledger_account in opening_balance_ledger_accounts
         if has_activity and not has_opening:
             missing_opening_balances.append({
-                "id": account_id,
-                "displayName": str(account_cfg.get("display_name", account_id)),
+                "id": account.id,
+                "displayName": account.display_name,
             })
 
     # Broken reconciliations

@@ -523,7 +523,8 @@ def _existing_identity_map_from_journal(config: AppConfig, target_journal: Path)
         if identities_by_suffix:
             ledger_account = None
             if import_account_id:
-                ledger_account = str(config.import_accounts.get(import_account_id, {}).get("ledger_account", "")).strip() or None
+                import_account = config.import_account(import_account_id)
+                ledger_account = (import_account.ledger_account or None) if import_account else None
             computed_payload_hash = None
             if ledger_account:
                 computed_payload_hash = source_payload_hash_for_lines(

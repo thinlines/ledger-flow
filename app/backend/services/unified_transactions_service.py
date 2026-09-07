@@ -162,9 +162,9 @@ def build_unified_transactions(
 
     scope_ledger_accounts: dict[str, tuple[str, str]] = {}
     for account_id in scope_account_ids:
-        tracked = config.tracked_accounts[account_id]
-        ledger_acct = str(tracked.get("ledger_account", "")).strip()
-        display_name = str(tracked.get("display_name", account_id))
+        tracked = config.account(account_id)
+        ledger_acct = tracked.ledger_account
+        display_name = tracked.display_name
         if ledger_acct:
             scope_ledger_accounts[ledger_acct] = (account_id, display_name)
 

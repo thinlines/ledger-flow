@@ -98,34 +98,20 @@ def next_running_commodity(
 
 
 def tracked_account_display(config: AppConfig, tracked_account_id: str | None) -> tuple[str | None, str | None, str | None]:
-    if not tracked_account_id:
+    account = config.account(tracked_account_id)
+    if account is None:
         return (None, None, None)
-    tracked_account = config.tracked_accounts.get(tracked_account_id)
-    if tracked_account is None:
-        return (None, None, None)
-    ledger_account = str(tracked_account.get("ledger_account", "")).strip() or None
-    return (
-        str(tracked_account.get("display_name", tracked_account_id)),
-        ledger_account,
-        infer_account_kind(ledger_account or ""),
-    )
+    return (account.display_name, account.ledger_account or None, account.kind)
 
 
 def tracked_account_by_ledger_account(
     config: AppConfig,
     ledger_account: str,
 ) -> tuple[str | None, str | None, str | None]:
-    target = ledger_account.strip()
-    for tracked_account_id, tracked_account in config.tracked_accounts.items():
-        tracked_ledger_account = str(tracked_account.get("ledger_account", "")).strip()
-        if tracked_ledger_account != target:
-            continue
-        return (
-            tracked_account_id,
-            str(tracked_account.get("display_name", tracked_account_id)),
-            infer_account_kind(tracked_ledger_account),
-        )
-    return (None, None, None)
+    account = config.account_for_ledger(ledger_account)
+    if account is None:
+        return (None, None, None)
+    return (account.id, account.display_name, account.kind)
 
 
 def source_tracked_account_details(
@@ -133,13 +119,11 @@ def source_tracked_account_details(
     transaction,
 ) -> tuple[str | None, str | None, str | None, str | None]:
     import_account_id = str(transaction.metadata.get("import_account_id") or "").strip() or None
-    import_account = config.import_accounts.get(import_account_id or "") if import_account_id else None
+    import_account = config.import_account(import_account_id)
     source_tracked_account_id = (
-        str(import_account.get("tracked_account_id", "")).strip()
-        if import_account is not None
-        else ""
-    ) or None
-    if source_tracked_account_id is None and import_account_id and import_account_id in config.tracked_accounts:
+        import_account.tracked_account_id if import_account is not None else None
+    )
+    if source_tracked_account_id is None and config.account(import_account_id) is not None:
         source_tracked_account_id = import_account_id
 
     if source_tracked_account_id:
@@ -150,15 +134,9 @@ def source_tracked_account_details(
     for posting in transaction.postings:
         if is_transfer_account(posting.account):
             continue
-        for tracked_account_id, tracked_account in config.tracked_accounts.items():
-            ledger_account = str(tracked_account.get("ledger_account", "")).strip()
-            if ledger_account == posting.account:
-                return (
-                    tracked_account_id,
-                    str(tracked_account.get("display_name", tracked_account_id)),
-                    ledger_account,
-                    infer_account_kind(ledger_account),
-                )
+        account = config.account_for_ledger(posting.account)
+        if account is not None:
+            return (account.id, account.display_name, account.ledger_account, account.kind)
         return (None, pretty_account_name(posting.account), posting.account, infer_account_kind(posting.account))
 
     return (None, None, None, None)
@@ -557,7 +535,7 @@ def transaction_summary(
 
 
 def opening_balance_detail_line(config: AppConfig, offset_account: str) -> dict[str, str]:
-    tracked_account_id, tracked_name, tracked_kind = tracked_account_by_ledger_account(config, offset_account)
+    _tracked_account_id, tracked_name, tracked_kind = tracked_account_by_ledger_account(config, offset_account)
     if tracked_name:
         return {
             "label": tracked_name,

@@ -328,11 +328,11 @@ def _tracked_account_id_for_ledger_account(
     target = str(ledger_account or "").strip()
     if not target or target == OPENING_BALANCES_EQUITY:
         return None
-    for tracked_account_id, tracked_account in config.tracked_accounts.items():
-        if tracked_account_id == exclude_account_id:
+    for account in config.accounts:
+        if account.id == exclude_account_id:
             continue
-        if str(tracked_account.get("ledger_account", "")).strip() == target:
-            return tracked_account_id
+        if account.ledger_account == target:
+            return account.id
     return None
 
 
@@ -653,9 +653,9 @@ def _resolve_source_tracked_account(config, req: ManualTransactionRequest) -> tu
 
     selector = str(req.sourceAccount or "").strip()
     matches = [
-        (tracked_account_id, tracked_account)
-        for tracked_account_id, tracked_account in config.tracked_accounts.items()
-        if str(tracked_account.get("ledger_account", "")).strip() == selector
+        (account.id, account.raw)
+        for account in config.accounts
+        if account.ledger_account == selector
     ]
     if not matches:
         raise HTTPException(
@@ -1497,10 +1497,9 @@ def tracked_accounts_list() -> dict:
     txn_counts = _transaction_counts_by_ledger_account(config)
     subtype_map = _projected_subtypes(config)
     rows = []
-    for account_id, account_cfg in config.tracked_accounts.items():
-        row = _tracked_account_ui(config, account_id, account_cfg, opening_by_id, opening_by_ledger, reconciliation_status_map, last_reconciled_map, subtype_map)
-        ledger_acct = str(account_cfg.get("ledger_account", "")).strip()
-        row["transactionCount"] = txn_counts.get(ledger_acct, 0)
+    for account in config.accounts:
+        row = _tracked_account_ui(config, account.id, account.raw, opening_by_id, opening_by_ledger, reconciliation_status_map, last_reconciled_map, subtype_map)
+        row["transactionCount"] = txn_counts.get(account.ledger_account, 0)
         rows.append(row)
     rows.sort(key=lambda r: (-r["transactionCount"], r["displayName"]))
     return {"trackedAccounts": rows, "institutionTemplates": list_templates()}

@@ -23,11 +23,11 @@ from .transaction_helpers import (
 
 
 def build_account_register(config: AppConfig, account_id: str) -> dict:
-    tracked_account = config.tracked_accounts.get(account_id)
+    tracked_account = config.account(account_id)
     if tracked_account is None:
         raise ValueError(f"Tracked account not found: {account_id}")
 
-    ledger_account = str(tracked_account.get("ledger_account", "")).strip()
+    ledger_account = tracked_account.ledger_account
     if not ledger_account:
         raise ValueError(f"Tracked account is missing a ledger account: {account_id}")
 

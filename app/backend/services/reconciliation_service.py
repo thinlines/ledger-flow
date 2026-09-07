@@ -476,13 +476,12 @@ def latest_reconciliation_dates_by_tracked_id(config: AppConfig) -> dict[str, da
     """
     by_account = _latest_dates_by_ledger_account(config)
     out: dict[str, date] = {}
-    for tracked_id, cfg in config.tracked_accounts.items():
-        ledger_account = str(cfg.get("ledger_account", "")).strip()
-        if not ledger_account:
+    for account in config.accounts:
+        if not account.ledger_account:
             continue
-        d = by_account.get(ledger_account)
+        d = by_account.get(account.ledger_account)
         if d is not None:
-            out[tracked_id] = d
+            out[account.id] = d
     return out
 
 
@@ -552,10 +551,9 @@ def reconciliation_status(config: AppConfig) -> dict[str, dict]:
 
 def _ledger_account_to_tracked_id(config: AppConfig) -> dict[str, str]:
     out: dict[str, str] = {}
-    for tracked_id, cfg in config.tracked_accounts.items():
-        ledger_account = str(cfg.get("ledger_account", "")).strip()
-        if ledger_account and ledger_account not in out:
-            out[ledger_account] = tracked_id
+    for account in config.accounts:
+        if account.ledger_account:
+            out.setdefault(account.ledger_account, account.id)
     return out
 
 

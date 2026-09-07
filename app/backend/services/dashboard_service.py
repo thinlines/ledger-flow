@@ -166,26 +166,18 @@ def _load_dashboard_transactions_from_projection(
 
 
 def _primary_posting(transaction: ParsedTransaction, config: AppConfig) -> Posting | None:
-    import_account_id = transaction.metadata.get("import_account_id")
-    if import_account_id and import_account_id in config.import_accounts:
-        linked_tracked_account_id = (
-            str(config.import_accounts[import_account_id].get("tracked_account_id", "")).strip() or import_account_id
+    import_account = config.import_account(transaction.metadata.get("import_account_id"))
+    if import_account is not None:
+        linked = config.account(import_account.tracked_account_id or import_account.id)
+        tracked_account = (
+            linked.ledger_account if linked is not None else import_account.ledger_account
         )
-        tracked_account = str(
-            config.tracked_accounts.get(linked_tracked_account_id, {}).get(
-                "ledger_account",
-                config.import_accounts[import_account_id].get("ledger_account", ""),
-            )
-        ).strip()
         if tracked_account:
             for posting in transaction.postings:
                 if posting.account == tracked_account:
                     return posting
 
-    tracked_accounts = {
-        str(account_cfg.get("ledger_account", "")).strip()
-        for account_cfg in config.tracked_accounts.values()
-    }
+    tracked_accounts = {account.ledger_account for account in config.accounts}
     for posting in transaction.postings:
         if posting.account in tracked_accounts:
             return posting
@@ -200,10 +192,9 @@ def _primary_account_display(posting: Posting | None, config: AppConfig) -> tupl
     if posting is None:
         return ("Unassigned account", None)
 
-    for account_id, account_cfg in config.tracked_accounts.items():
-        ledger_account = str(account_cfg.get("ledger_account", "")).strip()
-        if ledger_account == posting.account:
-            return (str(account_cfg.get("display_name", account_id)), account_id)
+    account = config.account_for_ledger(posting.account)
+    if account is not None:
+        return (account.display_name, account.id)
 
     return (pretty_account_name(posting.account), None)
 
@@ -330,7 +321,7 @@ def build_dashboard_overview(config: AppConfig, *, today: date | None = None) ->
         config.tracked_accounts.items(),
         key=lambda item: str(item[1].get("display_name", item[0])),
     ):
-        ledger_account = str(account_cfg.get("ledger_account", "")).strip()
+        ledger_account = config.ledger_account_for(account_id)
         balance = account_balances.get(ledger_account, Decimal(0))
         balance_commodity = account_balance_commodities.get(ledger_account)
         has_opening_balance = ledger_account in opening_balance_accounts
