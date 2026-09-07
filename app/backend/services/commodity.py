@@ -78,6 +78,23 @@ def commodity_label(commodity: str | None) -> str:
     return commodity or "unmarked amount"
 
 
+def next_running_commodity(
+    ledger_account: str,
+    current: str | None,
+    incoming: str | None,
+    *,
+    initialized: bool,
+) -> str | None:
+    if not initialized:
+        return incoming
+    if current != incoming:
+        raise CommodityMismatchError(
+            f"Account {ledger_account} mixes commodities in its running balance "
+            f"({commodity_label(current)} and {commodity_label(incoming)})."
+        )
+    return current
+
+
 def format_currency_amount(
     amount: Decimal,
     currency: str,

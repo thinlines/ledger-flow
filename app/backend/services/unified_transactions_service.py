@@ -6,30 +6,11 @@ from datetime import date, timedelta
 from decimal import Decimal
 
 from .config_service import AppConfig
-from .header_parser import TransactionStatus
-from .journal_query_service import (
-    amount_to_number,
-    is_generated_opening_balance_transaction,
-    pretty_account_name,
-)
+from .journal_query_service import amount_to_number, pretty_account_name
 from .month_math import shift_month
-from .projection_service import load_transactions_projected
 from .search_parser import SearchTerm, parse_search
-from .transaction_helpers import (
-    RegisterEvent,
-    account_amount,
-    bilateral_matched_pending_transfer_orders,
-    detail_lines,
-    direct_transfer_event_for_peer_account,
-    grouped_settled_pending_transfer_orders,
-    opening_balance_detail_line,
-    pending_transfer_event_for_peer_account,
-    transaction_summary,
-)
-from .transfer_service import (
-    is_transfer_account,
-    parse_transfer_metadata,
-)
+from .transaction_events import RegisterEvent, account_events
+from .transfer_service import is_transfer_account
 
 
 @dataclass(frozen=True)
@@ -63,18 +44,6 @@ class UnifiedTransactionFilters:
     month: str | None          # YYYY-MM shorthand
     status: list[str] | None   # cleared, pending, unmarked
     search: str | None         # payee text match
-
-
-@dataclass(frozen=True)
-class _UnifiedRow:
-    """Internal composite holding a RegisterEvent plus unified-endpoint-specific fields."""
-    event: RegisterEvent
-    account_id: str
-    account_label: str
-    categories: list[dict]
-    is_transfer: bool
-    is_manual: bool
-    is_assertion: bool = False
 
 
 def _resolve_date_range(
@@ -119,152 +88,19 @@ def build_unified_transactions(
 ) -> dict:
     current_day = today or date.today()
 
-    # 1. Load all transactions (served from the journal projection).
-    transactions = load_transactions_projected(config)
-
-    # 2. Determine scope accounts.
+    # 1. Determine scope accounts.
     if filters.accounts:
-        scope_account_ids = []
         for account_id in filters.accounts:
             if account_id not in config.tracked_accounts:
                 raise ValueError(f"Tracked account not found: {account_id}")
-            scope_account_ids.append(account_id)
+        scope_account_ids = list(filters.accounts)
     else:
         scope_account_ids = list(config.tracked_accounts.keys())
 
-    scope_ledger_accounts: dict[str, tuple[str, str]] = {}
-    for account_id in scope_account_ids:
-        tracked = config.account(account_id)
-        ledger_acct = tracked.ledger_account
-        display_name = tracked.display_name
-        if ledger_acct:
-            scope_ledger_accounts[ledger_acct] = (account_id, display_name)
-
     single_account_scope = len(scope_account_ids) == 1
 
-    # 3. Compute grouped-settlement and bilateral-match orders.
-    grouped_settled_orders = grouped_settled_pending_transfer_orders(config, transactions)
-    bilateral_matched_orders = bilateral_matched_pending_transfer_orders(config, transactions, grouped_settled_orders)
-    pending_excluded_orders = grouped_settled_orders | bilateral_matched_orders
-
-    # 4. Build rows.
-    unified_rows: list[_UnifiedRow] = []
-
-    for order, transaction in enumerate(transactions):
-        found_in_scope = False
-        for ledger_account, (acct_id, acct_display_name) in scope_ledger_accounts.items():
-            amount, commodity = account_amount(transaction, ledger_account)
-            if amount is None:
-                continue
-
-            found_in_scope = True
-            other_postings = [posting for posting in transaction.postings if posting.account != ledger_account]
-            is_generated_opening = is_generated_opening_balance_transaction(transaction)
-            opening_account_id = str(transaction.metadata.get("tracked_account_id", "")).strip() or None
-            is_primary_opening = is_generated_opening and opening_account_id == acct_id
-
-            if is_primary_opening:
-                offset_account = other_postings[0].account if other_postings else ""
-                summary = "Starting point for this account"
-                is_unknown = False
-                transfer_state = None
-                transfer_peer_account_id = None
-                transfer_peer_name = None
-                dl = [opening_balance_detail_line(config, offset_account)]
-            else:
-                summary, is_unknown, transfer_state, transfer_peer_account_id, transfer_peer_name = transaction_summary(
-                    config,
-                    transaction,
-                    other_postings,
-                    acct_id,
-                    grouped_settled=order in grouped_settled_orders,
-                    bilateral_matched=order in bilateral_matched_orders,
-                )
-                if is_generated_opening:
-                    is_unknown = False
-                dl = detail_lines(config, transaction, other_postings, acct_id)
-
-            categories = _build_categories(transaction, ledger_account)
-            transfer = parse_transfer_metadata(transaction.metadata, config.tracked_accounts)
-            is_transfer = bool(transfer.peer_account_id)
-            has_import = bool(str(transaction.metadata.get("import_account_id") or "").strip())
-            is_manual = (
-                transaction.status == TransactionStatus.unmarked
-                and not has_import
-                and not is_generated_opening
-            )
-
-            is_assertion = bool(
-                str(transaction.metadata.get("lf_operation_id") or "").strip()
-            )
-
-            event = RegisterEvent(
-                posted_on=transaction.posted_on,
-                order=order,
-                amount=amount,
-                commodity=commodity,
-                payee=transaction.payee,
-                summary=summary,
-                is_unknown=is_unknown,
-                is_opening_balance=is_primary_opening,
-                detail_lines=dl,
-                transfer_state=transfer_state,
-                transfer_peer_account_id=transfer_peer_account_id,
-                transfer_peer_account_name=transfer_peer_name,
-                clearing_status=transaction.status.value,
-                header_line=transaction.header_line,
-                journal_path=transaction.source_journal,
-                match_id=transaction.metadata.get("match-id") or None,
-                notes=transaction.metadata.get("notes") or None,
-                statement_payee=transaction.metadata.get("statement_payee") or None,
-                counts_as_transaction=not is_generated_opening,
-                txn_id=transaction.txn_id,
-                block_hash=transaction.block_hash,
-            )
-            unified_rows.append(_UnifiedRow(
-                event=event,
-                account_id=acct_id,
-                account_label=acct_display_name,
-                categories=categories,
-                is_transfer=is_transfer,
-                is_manual=is_manual,
-                is_assertion=is_assertion,
-            ))
-            break  # Only count once per transaction
-
-        if found_in_scope:
-            continue
-
-        # Synthetic peer rows — only in single-account scope.
-        if single_account_scope:
-            acct_id = scope_account_ids[0]
-            acct_cfg = config.tracked_accounts.get(acct_id, {})
-            acct_label = str(acct_cfg.get("display_name", acct_id))
-
-            pending_peer_event = pending_transfer_event_for_peer_account(
-                config, transaction, acct_id, order, pending_excluded_orders,
-            )
-            if pending_peer_event is not None:
-                unified_rows.append(_UnifiedRow(
-                    event=pending_peer_event,
-                    account_id=acct_id,
-                    account_label=acct_label,
-                    categories=[],
-                    is_transfer=True,
-                    is_manual=False,
-                ))
-                continue
-
-            direct_peer_event = direct_transfer_event_for_peer_account(config, transaction, acct_id, order)
-            if direct_peer_event is not None:
-                unified_rows.append(_UnifiedRow(
-                    event=direct_peer_event,
-                    account_id=acct_id,
-                    account_label=acct_label,
-                    categories=[],
-                    is_transfer=True,
-                    is_manual=False,
-                ))
+    # 2. Build events. Transfer settlement is resolved inside account_events.
+    unified_rows = account_events(config, scope_account_ids)
 
     # 5. Apply filters.
     search_terms = parse_search(filters.search or "")
@@ -280,7 +116,7 @@ def build_unified_transactions(
         date_range = _resolve_date_range(filters, current_day)
 
     if date_range is not None:
-        unified_rows = [r for r in unified_rows if date_range.start <= r.event.posted_on <= date_range.end]
+        unified_rows = [r for r in unified_rows if date_range.start <= r.posted_on <= date_range.end]
 
     if filters.categories:
         unified_rows = _filter_by_categories(unified_rows, filters.categories)
@@ -288,10 +124,10 @@ def build_unified_transactions(
     if status_search_terms:
         # Search formula status term overrides chip status filter.
         status_set = {t.value for t in status_search_terms}
-        unified_rows = [r for r in unified_rows if r.event.clearing_status in status_set]
+        unified_rows = [r for r in unified_rows if r.clearing_status in status_set]
     elif filters.status:
         status_set = set(filters.status)
-        unified_rows = [r for r in unified_rows if r.event.clearing_status in status_set]
+        unified_rows = [r for r in unified_rows if r.clearing_status in status_set]
 
     # Apply remaining (non-date, non-status) search terms.
     non_override_terms = [t for t in search_terms if t.field not in ("date", "status")]
@@ -299,7 +135,7 @@ def build_unified_transactions(
         unified_rows = _apply_search_terms(unified_rows, non_override_terms)
 
     # 6. Sort.
-    unified_rows.sort(key=lambda r: (r.event.posted_on, r.event.order))
+    unified_rows.sort(key=lambda r: (r.posted_on, r.order))
 
     # 7. Compute running balance.
     rows, multi_currency = _compute_rows_with_balance(unified_rows)
@@ -363,22 +199,22 @@ def _resolve_search_date_range(term: SearchTerm, today: date) -> PeriodRange | N
 
 
 def _apply_search_terms(
-    rows: list[_UnifiedRow],
+    rows: list[RegisterEvent],
     terms: list[SearchTerm],
-) -> list[_UnifiedRow]:
+) -> list[RegisterEvent]:
     """Filter rows by AND-combining all search terms."""
     for term in terms:
         rows = [r for r in rows if _row_matches_term(r, term)]
     return rows
 
 
-def _row_matches_term(row: _UnifiedRow, term: SearchTerm) -> bool:
+def _row_matches_term(row: RegisterEvent, term: SearchTerm) -> bool:
     """Test whether a single unified row matches a single search term."""
     if term.field == "payee":
-        return term.value.lower() in row.event.payee.lower()
+        return term.value.lower() in row.payee.lower()
 
     if term.field == "amount":
-        abs_amount = abs(row.event.amount)
+        abs_amount = abs(row.amount)
         if term.operator == "gt":
             return abs_amount > term.value_num
         if term.operator == "lt":
@@ -425,7 +261,7 @@ def _build_categories(transaction, tracked_ledger_account: str) -> list[dict]:
     return categories
 
 
-def _filter_by_categories(unified_rows: list[_UnifiedRow], categories: list[str]) -> list[_UnifiedRow]:
+def _filter_by_categories(unified_rows: list[RegisterEvent], categories: list[str]) -> list[RegisterEvent]:
     """Keep rows where any category entry matches any of the category prefixes."""
     filtered = []
     for row in unified_rows:
@@ -445,7 +281,7 @@ def _any_category_matches(categories: list[dict], prefixes: list[str]) -> bool:
 
 
 def _compute_rows_with_balance(
-    unified_rows: list[_UnifiedRow],
+    unified_rows: list[RegisterEvent],
 ) -> tuple[list[dict], bool]:
     """Compute running balance and serialize unified rows to response row dicts.
 
@@ -456,7 +292,7 @@ def _compute_rows_with_balance(
     seen_commodity: str | None = None
     multi_currency = False
     for urow in unified_rows:
-        ev = urow.event
+        ev = urow
         if ev.affects_balance and ev.commodity is not None:
             if seen_commodity is None:
                 seen_commodity = ev.commodity
@@ -467,7 +303,7 @@ def _compute_rows_with_balance(
     balance = Decimal(0)
     rows: list[dict] = []
     for index, urow in enumerate(unified_rows):
-        ev = urow.event
+        ev = urow
         if ev.affects_balance and not multi_currency:
             balance += ev.amount
 
@@ -537,7 +373,7 @@ def _build_unified_summary(rows: list[dict]) -> dict | None:
 
 
 def _build_account_meta(
-    unified_rows: list[_UnifiedRow],
+    unified_rows: list[RegisterEvent],
     account_id: str,
     multi_currency: bool,
 ) -> dict:
@@ -551,7 +387,7 @@ def _build_account_meta(
     latest_activity_date: str | None = None
 
     for urow in unified_rows:
-        ev = urow.event
+        ev = urow
         entry_count += 1
         if ev.affects_balance and not multi_currency:
             balance += ev.amount
@@ -567,7 +403,7 @@ def _build_account_meta(
             latest_transaction_date = ev.posted_on.isoformat()
 
     if unified_rows:
-        latest_activity_date = max(r.event.posted_on for r in unified_rows).isoformat()
+        latest_activity_date = max(r.posted_on for r in unified_rows).isoformat()
 
     current_balance = None if multi_currency else amount_to_number(balance)
 

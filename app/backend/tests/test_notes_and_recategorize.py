@@ -37,7 +37,7 @@ class TestReadNotesFromRegister:
         from datetime import date
         from decimal import Decimal
 
-        from services.account_register_service import RegisterEvent
+        from services.transaction_events import RegisterEvent
 
         event = RegisterEvent(
             posted_on=date(2026, 3, 15),
@@ -58,7 +58,7 @@ class TestReadNotesFromRegister:
         from datetime import date
         from decimal import Decimal
 
-        from services.account_register_service import RegisterEvent
+        from services.transaction_events import RegisterEvent
 
         event = RegisterEvent(
             posted_on=date(2026, 3, 15),

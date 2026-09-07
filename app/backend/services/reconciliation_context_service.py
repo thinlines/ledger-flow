@@ -19,15 +19,12 @@ from decimal import Decimal
 from . import source_identity
 from .config_service import AppConfig
 from .journal_query_service import (
+    account_amount,
     is_generated_opening_balance_transaction,
     pretty_account_name,
 )
 from .projection_service import load_transactions_projected
 from .reconciliation_service import latest_reconciliation_date
-from .transaction_helpers import (
-    account_amount,
-    tracked_account_display,
-)
 from .transfer_service import is_transfer_account, parse_transfer_metadata
 
 
@@ -74,7 +71,8 @@ def _category_label(config: AppConfig, transaction, ledger_account: str) -> str:
     """
     transfer = parse_transfer_metadata(transaction.metadata, config.tracked_accounts)
     if transfer.peer_account_id:
-        peer_name, _, _ = tracked_account_display(config, transfer.peer_account_id)
+        peer_account = config.account(transfer.peer_account_id)
+        peer_name = peer_account.display_name if peer_account is not None else None
         if peer_name:
             return f"Transfer · {peer_name}"
 

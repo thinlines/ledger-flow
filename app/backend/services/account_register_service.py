@@ -2,24 +2,10 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-from . import projection_service
+from .commodity import next_running_commodity
 from .config_service import AppConfig
-from .journal_query_service import (
-    amount_to_number,
-    is_generated_opening_balance_transaction,
-)
-from .transaction_helpers import (
-    RegisterEvent,
-    account_amount,
-    bilateral_matched_pending_transfer_orders,
-    detail_lines,
-    direct_transfer_event_for_peer_account,
-    grouped_settled_pending_transfer_orders,
-    next_running_commodity,
-    opening_balance_detail_line,
-    pending_transfer_event_for_peer_account,
-    transaction_summary,
-)
+from .journal_query_service import amount_to_number
+from .transaction_events import account_events
 
 
 def build_account_register(config: AppConfig, account_id: str) -> dict:
@@ -31,79 +17,7 @@ def build_account_register(config: AppConfig, account_id: str) -> dict:
     if not ledger_account:
         raise ValueError(f"Tracked account is missing a ledger account: {account_id}")
 
-    transactions = projection_service.load_transactions_projected(config)
-    grouped_settled_orders = grouped_settled_pending_transfer_orders(config, transactions)
-    bilateral_matched_orders = bilateral_matched_pending_transfer_orders(config, transactions, grouped_settled_orders)
-    pending_excluded_orders = grouped_settled_orders | bilateral_matched_orders
-
-    events: list[RegisterEvent] = []
-    for order, transaction in enumerate(transactions):
-        amount, commodity = account_amount(transaction, ledger_account)
-        if amount is not None:
-            other_postings = [posting for posting in transaction.postings if posting.account != ledger_account]
-            is_generated_opening = is_generated_opening_balance_transaction(transaction)
-            opening_account_id = str(transaction.metadata.get("tracked_account_id", "")).strip() or None
-            is_primary_opening = is_generated_opening and opening_account_id == account_id
-            if is_primary_opening:
-                offset_account = other_postings[0].account if other_postings else ""
-                summary = "Starting point for this account"
-                is_unknown = False
-                transfer_state = None
-                transfer_peer_account_id = None
-                transfer_peer_name = None
-                dl = [opening_balance_detail_line(config, offset_account)]
-            else:
-                summary, is_unknown, transfer_state, transfer_peer_account_id, transfer_peer_name = transaction_summary(
-                    config,
-                    transaction,
-                    other_postings,
-                    account_id,
-                    grouped_settled=order in grouped_settled_orders,
-                    bilateral_matched=order in bilateral_matched_orders,
-                )
-                if is_generated_opening:
-                    is_unknown = False
-                dl = detail_lines(config, transaction, other_postings, account_id)
-            events.append(
-                RegisterEvent(
-                    posted_on=transaction.posted_on,
-                    order=order,
-                    amount=amount,
-                    commodity=commodity,
-                    payee=transaction.payee,
-                    summary=summary,
-                    is_unknown=is_unknown,
-                    is_opening_balance=is_primary_opening,
-                    detail_lines=dl,
-                    transfer_state=transfer_state,
-                    transfer_peer_account_id=transfer_peer_account_id,
-                    transfer_peer_account_name=transfer_peer_name,
-                    clearing_status=transaction.status.value,
-                    header_line=transaction.header_line,
-                    journal_path=transaction.source_journal,
-                    match_id=transaction.metadata.get("match-id") or None,
-                    notes=transaction.metadata.get("notes") or None,
-                    counts_as_transaction=not is_generated_opening,
-                )
-            )
-            continue
-
-        pending_peer_event = pending_transfer_event_for_peer_account(
-            config,
-            transaction,
-            account_id,
-            order,
-            pending_excluded_orders,
-        )
-        if pending_peer_event is not None:
-            events.append(pending_peer_event)
-            continue
-
-        direct_peer_event = direct_transfer_event_for_peer_account(config, transaction, account_id, order)
-        if direct_peer_event is not None:
-            events.append(direct_peer_event)
-
-    events.sort(key=lambda event: (event.posted_on, event.order))
+    events = account_events(config, [account_id])
 
     balance = Decimal(0)
     balance_commodity: str | None = None
@@ -111,6 +25,7 @@ def build_account_register(config: AppConfig, account_id: str) -> dict:
     rows: list[dict] = []
     transaction_count = 0
     latest_transaction_date: str | None = None
+
     for index, event in enumerate(events):
         if event.affects_balance:
             balance_commodity = next_running_commodity(
@@ -148,8 +63,6 @@ def build_account_register(config: AppConfig, account_id: str) -> dict:
 
     entries = list(reversed(rows))
     latest_activity_date = entries[0]["date"] if entries else None
-    has_opening_balance = any(event.is_opening_balance for event in events)
-    has_balance_source = any(event.affects_balance for event in events)
 
     return {
         "baseCurrency": str(config.workspace.get("base_currency", "USD")),
@@ -159,8 +72,8 @@ def build_account_register(config: AppConfig, account_id: str) -> dict:
         "transactionCount": transaction_count,
         "latestTransactionDate": latest_transaction_date,
         "latestActivityDate": latest_activity_date,
-        "hasOpeningBalance": has_opening_balance,
+        "hasOpeningBalance": any(event.is_opening_balance for event in events),
         "hasTransactionActivity": transaction_count > 0,
-        "hasBalanceSource": has_balance_source,
+        "hasBalanceSource": any(event.affects_balance for event in events),
         "entries": entries,
     }

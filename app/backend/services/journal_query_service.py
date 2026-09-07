@@ -80,6 +80,23 @@ def amount_to_number(value: Decimal) -> float:
     return float(value.quantize(Decimal("0.01")))
 
 
+def account_amount(transaction, ledger_account: str) -> tuple[Decimal | None, str | None]:
+    matched = [posting for posting in transaction.postings if posting.account == ledger_account and posting.amount is not None]
+    if not matched:
+        return (None, None)
+
+    commodities = {posting.commodity for posting in matched}
+    if len(commodities) > 1:
+        raise CommodityMismatchError(
+            f"Account {ledger_account} mixes commodities within one transaction "
+            f"({', '.join(sorted(commodity_label(commodity) for commodity in commodities))})."
+        )
+
+    return (
+        sum((posting.amount or Decimal(0)) for posting in matched),
+        next(iter(commodities), None),
+    )
+
 def pretty_account_name(account: str) -> str:
     parts = [segment.replace("_", " ").strip() for segment in account.split(":") if segment.strip()]
     if not parts:
