@@ -231,5 +231,4 @@ def test_recomputed_identity_matches_what_a_reimport_would_compute(tmp_path: Pat
         amount=Decimal("-7.92"),
     )
 
-    assert reimported.value == stored
-    assert reimported.matches(stored)
+    assert reimported == stored

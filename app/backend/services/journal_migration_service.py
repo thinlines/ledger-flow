@@ -295,19 +295,19 @@ def migrate_source_identities(config: AppConfig, *, dry_run: bool = False) -> di
                 pieces.append(item.raw_text)
                 continue
 
-            by_new_identity.setdefault(identity.value, []).append({
+            by_new_identity.setdefault(identity, []).append({
                 "journal": rel,
                 "line": item.start_line,
                 "header": item.raw_text.splitlines()[0].strip(),
             })
 
-            if identity.value == stored:
+            if identity == stored:
                 unchanged += 1
                 pieces.append(item.raw_text)
                 continue
 
-            identity_map[stored] = identity.value
-            new_text = _rewrite_identity_line(item.raw_text, identity.value)
+            identity_map[stored] = identity
+            new_text = _rewrite_identity_line(item.raw_text, identity)
             pieces.append(new_text)
             if new_text != item.raw_text:
                 file_changed = True

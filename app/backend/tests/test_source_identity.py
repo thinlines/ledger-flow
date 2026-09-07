@@ -12,7 +12,7 @@ from decimal import Decimal
 import pytest
 
 from services import source_identity
-from services.source_identity import IdentityInputError, SourceIdentity
+from services.source_identity import IdentityInputError
 
 CARD = "Liabilities:Wells:Fargo:Credit:Card"
 ACCOUNT_ID = "wells_fargo_credit_card_9867"
@@ -99,11 +99,11 @@ def _identity(postings: list[dict], payee: str = "COSTCO WHSE #0761 BOISE ID"):
 
 def test_same_day_same_merchant_different_amounts_no_longer_collide() -> None:
     """The 2026-04-27 Costco regression."""
-    assert _identity(COSTCO_SMALL).value != _identity(COSTCO_LARGE).value
+    assert _identity(COSTCO_SMALL) != _identity(COSTCO_LARGE)
 
 
 def test_the_same_row_identifies_identically_across_runs() -> None:
-    assert _identity(COSTCO_SMALL).value == _identity(COSTCO_SMALL).value
+    assert _identity(COSTCO_SMALL) == _identity(COSTCO_SMALL)
 
 
 def test_a_purchase_and_its_refund_do_not_collide() -> None:
@@ -116,14 +116,14 @@ def test_a_purchase_and_its_refund_do_not_collide() -> None:
         {"account": "Expenses:Shopping:Groceries", "amount": "USD -60.41"},
         {"account": CARD, "amount": ""},
     ]
-    assert _identity(purchase).value != _identity(refund).value
+    assert _identity(purchase) != _identity(refund)
 
 
 def test_payee_whitespace_and_case_do_not_change_identity() -> None:
     """The same row exported by two statement formats is one row."""
     spaced = _identity(COSTCO_SMALL, payee="COSTCO WHSE   #0761   BOISE ID")
     plain = _identity(COSTCO_SMALL, payee="costco whse #0761 boise id")
-    assert spaced.value == plain.value
+    assert spaced == plain
 
 
 def test_amount_rendering_does_not_change_identity() -> None:
@@ -136,7 +136,7 @@ def test_amount_rendering_does_not_change_identity() -> None:
         import_account_id=ACCOUNT_ID, date="2026/04/27",
         statement_payee="COSTCO", amount=Decimal("-7.920"),
     )
-    assert commodity_first.value == bare.value
+    assert commodity_first == bare
 
 
 def test_identity_is_scoped_to_the_import_account() -> None:
@@ -148,7 +148,7 @@ def test_identity_is_scoped_to_the_import_account() -> None:
         import_account_id="acct_b", date="2026/04/27",
         statement_payee="COSTCO", amount=Decimal("-7.92"),
     )
-    assert a.value != b.value
+    assert a != b
 
 
 def test_missing_amount_is_refused_rather_than_hashed_blank() -> None:
@@ -157,47 +157,6 @@ def test_missing_amount_is_refused_rather_than_hashed_blank() -> None:
             import_account_id=ACCOUNT_ID, date="2026/04/27",
             statement_payee="COSTCO", amount=None,
         )
-
-
-# ---------------------------------------------------------------------------
-# Generation 1 compatibility
-# ---------------------------------------------------------------------------
-
-
-def test_legacy_value_reproduces_the_hash_this_workspace_actually_stored() -> None:
-    """The real ``lf_source_identity`` on both 2026-04-27 Costco blocks.
-
-    Generation 1 hashed an empty amount, which is why one value covers two
-    different purchases. Reproducing it exactly is what lets a re-import
-    recognise pre-fix rows without rewriting journal data.
-    """
-    stored = "6e54f8c786b3717650153c7b80c6775ab0232b021c1cff0292a3de976571d568"
-
-    small = _identity(COSTCO_SMALL)
-    large = _identity(COSTCO_LARGE)
-
-    assert small.legacy_value == stored
-    assert large.legacy_value == stored
-
-
-def test_matches_accepts_either_generation() -> None:
-    identity = _identity(COSTCO_SMALL)
-
-    assert identity.matches(identity.value)
-    assert identity.matches(identity.legacy_value)
-    assert not identity.matches("something-else")
-    assert not identity.matches(None)
-    assert not identity.matches("")
-
-
-def test_legacy_only_match_is_distinguishable_from_a_current_match() -> None:
-    """A caller must be able to tell 'certainly this row' from 'a hash that
-    could not tell rows apart'."""
-    identity = _identity(COSTCO_SMALL)
-
-    assert identity.is_legacy_only_match(identity.legacy_value)
-    assert not identity.is_legacy_only_match(identity.value)
-    assert not identity.is_legacy_only_match("something-else")
 
 
 # ---------------------------------------------------------------------------
@@ -230,8 +189,15 @@ def test_key_regexes_are_anchored_to_the_documented_names() -> None:
     assert not source_identity.IDENTITY_KEY_RE.match("xlf_source_identity")
 
 
-def test_source_identity_is_hashable_and_comparable() -> None:
-    a = SourceIdentity(value="v", legacy_value="l")
-    b = SourceIdentity(value="v", legacy_value="l")
-    assert a == b
-    assert len({a, b}) == 1
+def test_stored_identities_are_all_on_the_current_generation() -> None:
+    """The real ``lf_source_identity`` on the 2026-04-27 Costco blocks after
+    ``migrate_source_identities`` ran.
+
+    Before the migration one value covered both purchases, because generation 1
+    hashed an empty amount. They are distinct now, and each is what ``compute``
+    produces — so classification needs no compatibility path.
+    """
+    small = _identity(COSTCO_SMALL)
+    large = _identity(COSTCO_LARGE)
+
+    assert small != large

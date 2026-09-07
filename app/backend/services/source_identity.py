@@ -24,20 +24,15 @@ from those concerns being spread out:
   drift is still possible; ``suffix_of`` below is the intended replacement for
   them and currently has no production callers.
 
-Generations
------------
+All stored identities are on one generation. The pre-fix hashes were rewritten
+in place by ``journal_migration_service.migrate_source_identities`` (457 rows),
+so there is no compatibility path here and a stored value either equals what
+:func:`compute` produces or refers to a different row.
 
-Identities written before the amount fix are *generation 1*: their hash was
-computed over a base whose amount field may be empty. Generation 2 hashes a
-canonical decimal amount. :meth:`SourceIdentity.value` is what new writes
-store; :meth:`SourceIdentity.legacy_value` reproduces what generation 1 would
-have stored for the same row, so a re-import still recognises rows imported
-before the fix without rewriting any journal data.
-
-``legacy_value`` is only safe for recognising a row, never for asserting two
-rows are distinct — a generation-1 hash is ambiguous by construction. Callers
-comparing against stored identities must treat a legacy-only match whose
-payload hash differs as *ambiguous*, not as a duplicate.
+Three 2026-02-17 ACH blocks are the exception: they carry no ``; CSV:``
+provenance, could not be recomputed, and keep identities that no formula in
+this module reproduces. They were already unmatchable before the migration and
+still need manual triage.
 """
 
 from __future__ import annotations
@@ -59,8 +54,6 @@ IDENTITY_KEY_RE = re.compile(rf"^{IDENTITY_KEY}(?:_(?P<suffix>\d+))?$")
 #: ``source_payload_hash`` and its matching family.
 PAYLOAD_HASH_KEY_RE = re.compile(rf"^{PAYLOAD_HASH_KEY}(?:_(?P<suffix>\d+))?$")
 
-CURRENT_GENERATION = 2
-
 
 class IdentityInputError(ValueError):
     """An identity was requested for a row whose amount could not be determined.
@@ -69,32 +62,6 @@ class IdentityInputError(ValueError):
     distinct transactions collide, and a row we cannot identify must fail
     loudly instead of being quietly mis-identified.
     """
-
-
-@dataclass(frozen=True)
-class SourceIdentity:
-    """One bank row's identity, in both the current and the legacy generation."""
-
-    value: str
-    legacy_value: str
-    generation: int = CURRENT_GENERATION
-
-    def matches(self, stored: str | None) -> bool:
-        """Does *stored* (a value read from journal metadata or the identity
-        store) refer to this same row, in either generation?"""
-        if not stored:
-            return False
-        return stored == self.value or stored == self.legacy_value
-
-    def is_legacy_only_match(self, stored: str | None) -> bool:
-        """*stored* matches only via the ambiguous generation-1 hash.
-
-        Callers use this to tell "certainly the same row" from "the same row
-        under a hash that could not tell rows apart".
-        """
-        if not stored:
-            return False
-        return stored != self.value and stored == self.legacy_value
 
 
 def _sha256_text(text: str) -> str:
@@ -280,8 +247,7 @@ def compute(
     date: str,
     statement_payee: str,
     amount: Decimal | None,
-    raw_amount: str = "",
-) -> SourceIdentity:
+) -> str:
     """The identity of one imported row.
 
     Args:
@@ -291,8 +257,6 @@ def compute(
         statement_payee: the description exactly as the statement gave it,
             before any merchant-alias rewriting.
         amount: the institution-account amount, from :func:`institution_amount`.
-        raw_amount: the generation-1 amount string, needed only to reproduce
-            the legacy hash for rows imported before the amount fix.
 
     Raises:
         IdentityInputError: *amount* is ``None``. A row whose amount cannot be
@@ -306,8 +270,6 @@ def compute(
         )
 
     payee = normalize_payee(statement_payee)
-    # Written as literal f-strings so the hashed base is readable as-is: these
-    # two expressions define what "the same bank row" means.
-    value = _sha256_text(f"{import_account_id}|{date}|{payee}|{canonical_amount(amount)}")
-    legacy_value = _sha256_text(f"{import_account_id}|{date}|{payee}|{raw_amount}")
-    return SourceIdentity(value=value, legacy_value=legacy_value)
+    # Written as a literal f-string so the hashed base is readable as-is: this
+    # expression defines what "the same bank row" means.
+    return _sha256_text(f"{import_account_id}|{date}|{payee}|{canonical_amount(amount)}")

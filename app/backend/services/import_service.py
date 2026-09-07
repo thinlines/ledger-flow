@@ -483,7 +483,6 @@ def _parse_transaction(
         date=date,
         statement_payee=statement_payee,
         amount=source_identity.institution_amount(postings, institution_account),
-        raw_amount=inst_amount,
     )
 
     normalized_body = "\n".join(line.rstrip() for line in lines).strip() + "\n"
@@ -501,8 +500,7 @@ def _parse_transaction(
         "postings": postings,
         "raw": normalized_body,
         "metadata": metadata,
-        "sourceIdentity": identity.value,
-        "sourceIdentityLegacy": identity.legacy_value,
+        "sourceIdentity": identity,
         "sourcePayloadHash": source_payload_hash,
     }
 
@@ -557,32 +555,18 @@ def _existing_identity_map_from_journal(config: AppConfig, target_journal: Path)
 def _classify_transaction(txn: dict, existing_map: dict[str, str | None]) -> str:
     """``new`` / ``duplicate`` / ``conflict`` for one parsed row.
 
-    Stored identities may predate the amount fix (issue #007, seam 2), so a row
-    is looked up under its current identity first and its generation-1 identity
-    second. A generation-1 match is only trustworthy when the payload hash
-    agrees: that hash could not tell two same-day purchases at one merchant
-    apart, so a legacy match with a differing payload is recorded as
-    ``legacy_identity_ambiguous`` rather than silently treated as a duplicate.
+    Every stored identity is on the current generation — the pre-fix hashes
+    were rewritten by ``migrate_source_identities`` (issue #007, seam 2) — so
+    one lookup settles it. An identity the journal has never seen is ``new``;
+    a known identity whose payload hash differs is a ``conflict``.
     """
     identity = txn["sourceIdentity"]
-    legacy_identity = txn.get("sourceIdentityLegacy")
-
-    matched_legacy_only = False
-    if identity in existing_map:
-        existing_hash = existing_map[identity]
-        txn["matchedIdentity"] = identity
-    elif legacy_identity and legacy_identity in existing_map:
-        existing_hash = existing_map[legacy_identity]
-        txn["matchedIdentity"] = legacy_identity
-        matched_legacy_only = True
-    else:
+    if identity not in existing_map:
         return "new"
 
+    existing_hash = existing_map[identity]
     if existing_hash is None or existing_hash == txn["sourcePayloadHash"]:
         return "duplicate"
-
-    if matched_legacy_only:
-        txn["conflictReason"] = "legacy_identity_ambiguous"
     return "conflict"
 
 
@@ -773,9 +757,7 @@ def preview_import(
             # Capture the journal-side payload hash so apply_import can emit a
             # diagnostic event for identity collisions without re-reading the
             # journal. None means the existing entry lacked a stored hash.
-            txn["storedPayloadHash"] = existing_map.get(
-                txn.get("matchedIdentity", txn["sourceIdentity"])
-            )
+            txn["storedPayloadHash"] = existing_map.get(txn["sourceIdentity"])
         txn["annotatedRaw"] = _annotated_raw_txn(
             txn,
             source_file_sha256,
@@ -955,10 +937,10 @@ def _emit_identity_collision_events(
 
     Every conflict reason *except* ``reconciled_date_fence`` is skipped this
     way — fence rows do reach the UI, via ``_build_fence_conflicts``. The
-    predicate is written as that exclusion rather than as a list of known
-    reasons so a newly added reason is logged by default: a row that vanishes
-    with no operation record is the failure mode this event exists to prevent
-    (issue #007, incident 2), and defaulting to silence reintroduces it.
+    predicate is deliberately written as that exclusion rather than as a list
+    of known reasons, so a reason added later is logged by default: a row that
+    vanishes with no operation record is the failure mode this event exists to
+    prevent (issue #007, incident 2), and defaulting to silence reintroduces it.
 
     The function is fail-soft: any emission error is logged and discarded
     so a misbehaving event log cannot fail an otherwise-successful import.
@@ -981,9 +963,6 @@ def _emit_identity_collision_events(
                     "import_account_id": import_account_id,
                     "conflict_reason": txn.get("conflictReason"),
                     "source_identity": txn.get("sourceIdentity"),
-                    # Which stored identity the row matched under: the current
-                    # hash, or the ambiguous generation-1 one.
-                    "matched_identity": txn.get("matchedIdentity"),
                     "stored_payload_hash": txn.get("storedPayloadHash"),
                     "new_payload_hash": txn.get("sourcePayloadHash"),
                     "target_journal": journal_ref,
