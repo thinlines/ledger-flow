@@ -870,9 +870,23 @@ def test_summary_with_date_filter(tmp_path: Path) -> None:
 
     summary = result["summary"]
     assert summary is not None
-    assert "periodTotal" in summary
-    assert "periodCount" in summary
-    assert "averageAmount" in summary
+    # The summary reports only what it can actually compute from the filtered
+    # rows. No prior-period or rolling-average fields: those were always null.
+    assert set(summary) == {
+        "periodTotal",
+        "periodCount",
+        "averageAmount",
+        "topTransaction",
+    }
+    assert summary["periodTotal"] == -55.0
+    assert summary["periodCount"] == 2
+    assert summary["averageAmount"] == -27.5
+    assert summary["topTransaction"] == {
+        "date": "2026-02-01",
+        "payee": "Grocery Store",
+        "amount": -50.0,
+        "accountLabel": "Wells Fargo Checking",
+    }
 
 
 # ---------------------------------------------------------------------------

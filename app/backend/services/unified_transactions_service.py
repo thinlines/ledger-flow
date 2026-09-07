@@ -5,27 +5,6 @@ from dataclasses import dataclass
 from datetime import date, timedelta
 from decimal import Decimal
 
-from .activity_service import (
-    PeriodRange,
-)
-from .activity_service import (
-    _build_summary as build_summary,
-)
-from .activity_service import (
-    _first_of_month as first_of_month,
-)
-from .activity_service import (
-    _last_day_of_month as last_day_of_month,
-)
-from .activity_service import (
-    _resolve_current_range as resolve_current_range,
-)
-from .activity_service import (
-    _resolve_prior_range as resolve_prior_range,
-)
-from .activity_service import (
-    _shift_month as shift_month,
-)
 from .config_service import AppConfig
 from .header_parser import TransactionStatus
 from .journal_query_service import (
@@ -50,6 +29,33 @@ from .transfer_service import (
     is_transfer_account,
     parse_transfer_metadata,
 )
+
+
+@dataclass(frozen=True)
+class PeriodRange:
+    start: date
+    end: date  # inclusive
+
+
+def _shift_month(year: int, month: int, offset: int) -> tuple[int, int]:
+    total = (year * 12 + (month - 1)) + offset
+    shifted_year, shifted_month_index = divmod(total, 12)
+    return shifted_year, shifted_month_index + 1
+
+
+def _first_of_month(year: int, month: int) -> date:
+    return date(year, month, 1)
+
+
+def _last_day_of_month(value: date) -> date:
+    _, last = calendar.monthrange(value.year, value.month)
+    return date(value.year, value.month, last)
+
+
+def _month_range(year: int, month: int) -> PeriodRange:
+    """The full calendar month containing `year`-`month`."""
+    start = _first_of_month(year, month)
+    return PeriodRange(start, _last_day_of_month(start))
 
 
 @dataclass(frozen=True)
@@ -83,60 +89,31 @@ def _resolve_date_range(
     """Resolve filters into a date range, or None if no date filter is active."""
     if filters.month:
         year_str, month_str = filters.month.split("-")
-        start = first_of_month(int(year_str), int(month_str))
-        end = last_day_of_month(start)
-        return PeriodRange(start, end)
+        return _month_range(int(year_str), int(month_str))
 
     if filters.from_date or filters.to_date:
-        start = filters.from_date or date.min
-        end = filters.to_date or today
-        return PeriodRange(start, end)
+        return PeriodRange(filters.from_date or date.min, filters.to_date or today)
 
     if filters.period:
-        if filters.period == "last-6-months":
-            start_year, start_month = shift_month(today.year, today.month, -5)
-            start = first_of_month(start_year, start_month)
-            return PeriodRange(start, today)
-        if filters.period == "this-year":
-            start = date(today.year, 1, 1)
-            return PeriodRange(start, today)
-        return resolve_current_range(None, filters.period, today)
+        return _resolve_period(filters.period, today)
 
     return None
 
 
-def _resolve_prior_range_for_filters(
-    filters: UnifiedTransactionFilters,
-    today: date,
-    current: PeriodRange,
-) -> PeriodRange:
-    """Resolve the prior comparison range for summary computation."""
-    if filters.month:
-        return resolve_prior_range(filters.month, "last-3-months", today, current)
+def _resolve_period(period: str, today: date) -> PeriodRange:
+    """Resolve a named relative period into a range ending today.
 
-    if filters.from_date or filters.to_date:
-        # Custom range: prior range is same-length window ending the day before current starts.
-        duration = (current.end - current.start).days
-        prior_end = current.start - timedelta(days=1)
-        prior_start = prior_end - timedelta(days=duration)
-        return PeriodRange(prior_start, prior_end)
-
-    if filters.period:
-        if filters.period == "last-6-months":
-            start_year, start_month = shift_month(current.start.year, current.start.month, -6)
-            prior_start = first_of_month(start_year, start_month)
-            end_year, end_month = shift_month(current.start.year, current.start.month, -1)
-            prior_end = last_day_of_month(first_of_month(end_year, end_month))
-            return PeriodRange(prior_start, prior_end)
-        if filters.period == "this-year":
-            prior_start = date(today.year - 1, 1, 1)
-            _, last_day = calendar.monthrange(today.year - 1, today.month)
-            prior_end = date(today.year - 1, today.month, min(today.day, last_day))
-            return PeriodRange(prior_start, prior_end)
-        return resolve_prior_range(None, filters.period, today, current)
-
-    # No date filter — should not be called, but handle gracefully.
-    return PeriodRange(current.start, current.end)
+    An unrecognized name falls back to last-3-months.
+    """
+    if period == "this-month":
+        return PeriodRange(today.replace(day=1), today)
+    if period == "last-30":
+        return PeriodRange(today - timedelta(days=29), today)
+    if period == "this-year":
+        return PeriodRange(date(today.year, 1, 1), today)
+    months_back = 5 if period == "last-6-months" else 2
+    start_year, start_month = _shift_month(today.year, today.month, -months_back)
+    return PeriodRange(_first_of_month(start_year, start_month), today)
 
 
 def build_unified_transactions(
@@ -335,7 +312,7 @@ def build_unified_transactions(
     # 8. Summary.
     summary = None
     if date_range is not None:
-        summary = _build_unified_summary(rows, filters, current_day, date_range)
+        summary = _build_unified_summary(rows)
 
     # 9. Account metadata.
     account_meta = None
@@ -369,25 +346,15 @@ def _resolve_search_date_range(term: SearchTerm, today: date) -> PeriodRange | N
     """Resolve a date: search term into a PeriodRange."""
     val = term.value
     if val == "this-month":
-        start = first_of_month(today.year, today.month)
-        end = last_day_of_month(start)
-        return PeriodRange(start, end)
+        return _month_range(today.year, today.month)
     if val == "last-month":
-        y, m = shift_month(today.year, today.month, -1)
-        start = first_of_month(y, m)
-        end = last_day_of_month(start)
-        return PeriodRange(start, end)
+        return _month_range(*_shift_month(today.year, today.month, -1))
     if val == "this-year":
-        start = date(today.year, 1, 1)
-        end = date(today.year, 12, 31)
-        return PeriodRange(start, end)
+        return PeriodRange(date(today.year, 1, 1), date(today.year, 12, 31))
     # YYYY-MM
     if len(val) == 7 and val[4:5] == "-":
         try:
-            y, m = int(val[:4]), int(val[5:7])
-            start = first_of_month(y, m)
-            end = last_day_of_month(start)
-            return PeriodRange(start, end)
+            return _month_range(int(val[:4]), int(val[5:7]))
         except (ValueError, OverflowError):
             return None
     # YYYY-MM-DD
@@ -548,33 +515,30 @@ def _compute_rows_with_balance(
     return (rows, multi_currency)
 
 
-def _build_unified_summary(
-    rows: list[dict],
-    filters: UnifiedTransactionFilters,
-    today: date,
-    current_range: PeriodRange,
-) -> dict | None:
-    """Build the summary block reusing activity service's _build_summary."""
+def _build_unified_summary(rows: list[dict]) -> dict | None:
+    """Totals across the rows left after filtering, or None when there are none."""
     if not rows:
         return None
 
-    prior_range = _resolve_prior_range_for_filters(filters, today, current_range)
+    period_total = sum(row["amount"] for row in rows)
+    period_count = len(rows)
 
-    # Build summary-compatible rows: need "date", "payee", "accountLabel", "amount".
-    summary_current_rows = [
-        {
-            "date": row["date"],
-            "payee": row["payee"],
-            "accountLabel": row["account"]["label"],
-            "amount": row["amount"],
+    top_row = max(rows, key=lambda row: abs(row["amount"]))
+    top_transaction = None
+    if abs(top_row["amount"]) > 0:
+        top_transaction = {
+            "date": top_row["date"],
+            "payee": top_row["payee"],
+            "amount": top_row["amount"],
+            "accountLabel": top_row["account"]["label"],
         }
-        for row in rows
-    ]
 
-    # Pass current_rows as all_rows. The summary builder will compute prior_rows
-    # from all_rows, which will be empty since all rows are in the current range.
-    # This means prior comparison may show no data, which is acceptable.
-    return build_summary(summary_current_rows, summary_current_rows, current_range, prior_range)
+    return {
+        "periodTotal": round(period_total, 2),
+        "periodCount": period_count,
+        "averageAmount": round(period_total / period_count, 2),
+        "topTransaction": top_transaction,
+    }
 
 
 def _build_account_meta(

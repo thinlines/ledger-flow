@@ -52,12 +52,6 @@ export type ActivitySummary = {
   periodTotal: number;
   periodCount: number;
   averageAmount: number;
-  priorPeriodTotal: number | null;
-  priorPeriodCount: number | null;
-  deltaAmount: number | null;
-  deltaPercent: number | null;
-  rollingMonthlyAverage: number | null;
-  rollingMonths: number;
   topTransaction: ActivityTopTransaction | null;
 };
 

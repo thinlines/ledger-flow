@@ -61,7 +61,6 @@ from services.account_declaration_service import (
     set_subtype,
 )
 from services.account_register_service import build_account_register
-from services.activity_service import build_activity_view
 from services.category_suggestion_service import suggest_category
 from services.classifier_service import suggest_review_categories
 from services.classifier_warmup_service import schedule_review_warmup
@@ -581,16 +580,6 @@ def dashboard_transactions(
         )
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e)) from e
-
-
-@app.get("/api/transactions/activity")
-def transactions_activity(
-    category: str | None = None,
-    month: str | None = None,
-    period: str | None = None,
-) -> dict:
-    config = _require_workspace_config()
-    return build_activity_view(config, category=category, month=month, period=period)
 
 
 @app.get("/api/transactions/register")
