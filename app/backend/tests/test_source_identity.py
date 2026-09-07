@@ -34,8 +34,8 @@ COSTCO_LARGE = [
 
 
 def test_elided_institution_amount_is_derived_from_the_counter_posting() -> None:
-    assert source_identity.institution_amount(COSTCO_SMALL, CARD) == Decimal("-7.92")
-    assert source_identity.institution_amount(COSTCO_LARGE, CARD) == Decimal("-127.53")
+    assert source_identity._institution_amount(COSTCO_SMALL, CARD) == Decimal("-7.92")
+    assert source_identity._institution_amount(COSTCO_LARGE, CARD) == Decimal("-127.53")
 
 
 def test_explicit_institution_amount_is_used_as_written() -> None:
@@ -43,7 +43,7 @@ def test_explicit_institution_amount_is_used_as_written() -> None:
         {"account": "Expenses:Eating Out", "amount": "USD 7.92"},
         {"account": CARD, "amount": "USD -7.92"},
     ]
-    assert source_identity.institution_amount(postings, CARD) == Decimal("-7.92")
+    assert source_identity._institution_amount(postings, CARD) == Decimal("-7.92")
 
 
 def test_elided_amount_across_several_counter_postings_sums_them() -> None:
@@ -52,7 +52,7 @@ def test_elided_amount_across_several_counter_postings_sums_them() -> None:
         {"account": "Expenses:Household", "amount": "USD 5.50"},
         {"account": CARD, "amount": ""},
     ]
-    assert source_identity.institution_amount(postings, CARD) == Decimal("-15.50")
+    assert source_identity._institution_amount(postings, CARD) == Decimal("-15.50")
 
 
 def test_indeterminable_amount_returns_none() -> None:
@@ -61,7 +61,7 @@ def test_indeterminable_amount_returns_none() -> None:
         {"account": "Expenses:Groceries", "amount": ""},
         {"account": CARD, "amount": ""},
     ]
-    assert source_identity.institution_amount(postings, CARD) is None
+    assert source_identity._institution_amount(postings, CARD) is None
 
 
 def test_missing_institution_posting_still_derives_the_negated_sum() -> None:
@@ -73,14 +73,14 @@ def test_missing_institution_posting_still_derives_the_negated_sum() -> None:
     import path and the migration path disagree on 437 of 460 rows.
     """
     postings = [{"account": "Expenses:Groceries", "amount": "USD 10.00"}]
-    assert source_identity.institution_amount(postings, CARD) == Decimal("-10.00")
+    assert source_identity._institution_amount(postings, CARD) == Decimal("-10.00")
 
     deposit = [{"account": "Income:Employer", "amount": "USD -975.70"}]
-    assert source_identity.institution_amount(deposit, CARD) == Decimal("975.70")
+    assert source_identity._institution_amount(deposit, CARD) == Decimal("975.70")
 
 
 def test_no_postings_at_all_returns_none() -> None:
-    assert source_identity.institution_amount([], CARD) is None
+    assert source_identity._institution_amount([], CARD) is None
 
 
 # ---------------------------------------------------------------------------
@@ -159,11 +159,11 @@ def test_missing_amount_is_refused_rather_than_hashed_blank() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_key_regexes_are_anchored_to_the_documented_names() -> None:
+def test_key_names_are_the_documented_ones() -> None:
     assert source_identity.IDENTITY_KEY == "lf_source_identity"
     assert source_identity.PAYLOAD_HASH_KEY == "source_payload_hash"
-    assert source_identity.IDENTITY_KEY_RE.match("lf_source_identity_2")
-    assert not source_identity.IDENTITY_KEY_RE.match("xlf_source_identity")
+    assert source_identity.suffix_of("lf_source_identity_2") == 2
+    assert source_identity.suffix_of("xlf_source_identity") is None
 
 
 def test_stored_identities_are_all_on_the_current_generation() -> None:
@@ -211,26 +211,44 @@ def test_suffix_of_spans_every_carried_family(key: str, expected: int | None) ->
     assert source_identity.suffix_of(key) == expected
 
 
-def test_carried_key_leaves_suffix_one_unsuffixed() -> None:
-    assert source_identity.carried_key(source_identity.IDENTITY_KEY, 1) == "lf_source_identity"
-    assert source_identity.carried_key(source_identity.IDENTITY_KEY, 2) == "lf_source_identity_2"
-    assert source_identity.carried_key(source_identity.PAYLOAD_HASH_KEY, 3) == "source_payload_hash_3"
+def test_carry_onto_writes_the_whole_slot_in_order() -> None:
+    """The four families move as one: whichever fields the absorbed row carried
+    are emitted together at the slot they share."""
+    (variant,) = source_identity.variants_of({
+        "lf_source_identity": "absorbed",
+        "source_payload_hash": "absorbed-payload",
+        "importer_version": "mvp2",
+    })
+    added = source_identity.carry_onto({"lf_source_identity": "own"}, [variant])
+
+    assert added == (
+        ("lf_source_identity_2", "absorbed"),
+        ("source_payload_hash_2", "absorbed-payload"),
+        # source_file_sha256 absent — the absorbed row never carried one.
+        ("importer_version_2", "mvp2"),
+    )
 
 
-def test_carried_key_rejects_a_family_it_does_not_own() -> None:
-    with pytest.raises(ValueError, match="carried key family"):
-        source_identity.carried_key("lf_txn_id", 2)
+def test_carry_onto_skips_a_row_the_block_already_claims() -> None:
+    """Merging the same row twice adds nothing."""
+    (variant,) = source_identity.variants_of({"lf_source_identity": "dup"})
+    existing = {"lf_source_identity": "own", "lf_source_identity_2": "dup"}
+    assert source_identity.carry_onto(existing, [variant]) == ()
 
 
-def test_carried_keys_covers_the_whole_slot() -> None:
-    """Removing a variant means removing all four: a stray payload hash behind
-    an erased identity is how a block starts disagreeing with itself."""
-    assert source_identity.carried_keys(2) == {
-        "lf_source_identity_2",
-        "source_payload_hash_2",
-        "source_file_sha256_2",
-        "importer_version_2",
-    }
+def test_carry_onto_gives_each_new_row_its_own_slot() -> None:
+    variants = source_identity.variants_of({
+        "lf_source_identity": "a", "lf_source_identity_2": "b",
+    })
+    added = source_identity.carry_onto({"lf_source_identity": "own"}, variants)
+    assert [key for key, _ in added] == ["lf_source_identity_2", "lf_source_identity_3"]
+
+
+def test_carry_onto_never_claims_slot_one() -> None:
+    """Slot 1 is the block's own row, even when the block has no identity yet."""
+    (variant,) = source_identity.variants_of({"lf_source_identity": "absorbed"})
+    added = source_identity.carry_onto({}, [variant])
+    assert added == (("lf_source_identity_2", "absorbed"),)
 
 
 def test_variants_of_pairs_each_identity_with_its_own_slot() -> None:
@@ -272,15 +290,14 @@ def test_blank_values_do_not_become_variants() -> None:
     assert source_identity.variants_of({"lf_source_identity": "   "}) == ()
 
 
-def test_next_free_suffix_never_hands_out_slot_one() -> None:
-    """Slot 1 is the block's own row."""
-    assert source_identity.next_free_suffix({}) == 2
-    assert source_identity.next_free_suffix({"lf_source_identity": "own"}) == 2
-    assert source_identity.next_free_suffix(
-        {"lf_source_identity": "own", "lf_source_identity_2": "a", "lf_source_identity_3": "b"}
-    ) == 4
-
-
-def test_variant_reports_the_keys_it_occupies() -> None:
+def test_variant_reports_the_whole_slot_it_occupies() -> None:
+    """The un-merge removes a variant by this set. Leaving a stray
+    ``source_payload_hash_2`` behind an erased identity is how a block starts
+    disagreeing with itself."""
     (variant,) = source_identity.variants_of({"lf_source_identity_2": "carried"})
-    assert variant.keys == source_identity.carried_keys(2)
+    assert variant.keys == {
+        "lf_source_identity_2",
+        "source_payload_hash_2",
+        "source_file_sha256_2",
+        "importer_version_2",
+    }

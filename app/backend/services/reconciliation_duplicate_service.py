@@ -290,28 +290,10 @@ def _upsert_import_identity_metadata(
         raise HTTPException(status_code=422, detail="Imported duplicate is missing import identity metadata.")
 
     existing = _extract_metadata(survivor_lines)
-    existing_identities = {v.identity for v in source_identity.variants_of(existing)}
-    metadata_lines: list[str] = []
-    next_suffix = source_identity.next_free_suffix(existing)
-
-    # The four families move as one: whichever fields the absorbed row carried
-    # are re-emitted together at the same free slot.
-    carried_fields = (
-        (source_identity.IDENTITY_KEY, "identity"),
-        (source_identity.PAYLOAD_HASH_KEY, "payload_hash"),
-        (source_identity.SOURCE_FILE_KEY, "source_file_sha256"),
-        (source_identity.IMPORTER_VERSION_KEY, "importer_version"),
-    )
-    for variant in variants:
-        if variant.identity in existing_identities:
-            continue
-        for base, field in carried_fields:
-            value = getattr(variant, field)
-            if value:
-                key = source_identity.carried_key(base, next_suffix)
-                metadata_lines.append(f"    ; {key}: {value}")
-        existing_identities.add(variant.identity)
-        next_suffix += 1
+    metadata_lines = [
+        f"    ; {key}: {value}"
+        for key, value in source_identity.carry_onto(existing, variants)
+    ]
 
     if not metadata_lines:
         return survivor_lines

@@ -7,7 +7,7 @@ from those concerns being spread out:
 
 * The identity base omitted the amount whenever the institution posting's
   amount was elided, so two genuinely different purchases at one merchant on
-  one day hashed identically. :func:`institution_amount` derives the elided
+  one day hashed identically. :func:`_institution_amount` derives the elided
   amount instead of yielding ``""``, and both entry points refuse to hash an
   amount they could not determine.
 * The journal key name (``lf_source_identity``) lived in one regex here, a
@@ -40,31 +40,41 @@ from __future__ import annotations
 import csv
 import hashlib
 import re
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from decimal import Decimal
 
 from .currency_parser import parse_optional_amount
+
+#: The whole interface. Everything else is how this module keeps its promises —
+#: the suffix convention, the hashing details, the amount derivation.
+__all__ = [
+    "IDENTITY_KEY",
+    "PAYLOAD_HASH_KEY",
+    "IdentityInputError",
+    "IdentityVariant",
+    "carry_onto",
+    "of_journal_block",
+    "of_statement_row",
+    "suffix_of",
+    "variants_of",
+]
 
 # The journal key names, in one place. Everything that reads or writes import
 # provenance metadata uses these rather than spelling the names out again.
 IDENTITY_KEY = "lf_source_identity"
 PAYLOAD_HASH_KEY = "source_payload_hash"
 
-SOURCE_FILE_KEY = "source_file_sha256"
-IMPORTER_VERSION_KEY = "importer_version"
+_SOURCE_FILE_KEY = "source_file_sha256"
+_IMPORTER_VERSION_KEY = "importer_version"
 
-#: The four key families that together describe one carried source row. They
-#: move in lockstep: a variant is written, read and removed as a set.
-CARRIED_KEY_BASES = (IDENTITY_KEY, PAYLOAD_HASH_KEY, SOURCE_FILE_KEY, IMPORTER_VERSION_KEY)
-
-#: ``lf_source_identity`` and its carried-duplicate family (``…_2``, ``…_3``).
-IDENTITY_KEY_RE = re.compile(rf"^{IDENTITY_KEY}(?:_(?P<suffix>\d+))?$")
-#: ``source_payload_hash`` and its matching family.
-PAYLOAD_HASH_KEY_RE = re.compile(rf"^{PAYLOAD_HASH_KEY}(?:_(?P<suffix>\d+))?$")
+# The four key families that together describe one carried source row. They move
+# in lockstep: a variant is written, read and removed as a set. Callers never
+# name them — they go through IdentityVariant.
+_CARRIED_KEY_BASES = (IDENTITY_KEY, PAYLOAD_HASH_KEY, _SOURCE_FILE_KEY, _IMPORTER_VERSION_KEY)
 
 _CARRIED_KEY_RE = re.compile(
-    rf"^(?P<base>{'|'.join(CARRIED_KEY_BASES)})(?:_(?P<suffix>\d+))?$"
+    rf"^(?P<base>{'|'.join(_CARRIED_KEY_BASES)})(?:_(?P<suffix>\d+))?$"
 )
 
 
@@ -77,26 +87,26 @@ class IdentityInputError(ValueError):
     """
 
 
-def carried_key(base: str, suffix: int) -> str:
+def _carried_key(base: str, suffix: int) -> str:
     """The metadata key for *base* at *suffix*.
 
-    Suffix 1 is the unsuffixed key — ``carried_key(IDENTITY_KEY, 1)`` is
+    Suffix 1 is the unsuffixed key — ``_carried_key(IDENTITY_KEY, 1)`` is
     ``"lf_source_identity"``, and only 2 upward take ``_N``. That asymmetry is
     the convention every reader used to reimplement, usually as ``or "1"``.
     """
-    if base not in CARRIED_KEY_BASES:
+    if base not in _CARRIED_KEY_BASES:
         raise ValueError(f"{base!r} is not a carried key family")
     return base if suffix == 1 else f"{base}_{suffix}"
 
 
-def carried_keys(suffix: int) -> frozenset[str]:
+def _carried_keys(suffix: int) -> frozenset[str]:
     """Every key belonging to the carried row at *suffix*.
 
     Removing a variant means removing this whole set: leaving a stray
     ``source_payload_hash_2`` behind an erased identity is how a block starts
     disagreeing with itself.
     """
-    return frozenset(carried_key(base, suffix) for base in CARRIED_KEY_BASES)
+    return frozenset(_carried_key(base, suffix) for base in _CARRIED_KEY_BASES)
 
 
 def suffix_of(key: str) -> int | None:
@@ -130,7 +140,15 @@ class IdentityVariant:
     @property
     def keys(self) -> frozenset[str]:
         """The metadata keys this variant occupies."""
-        return carried_keys(self.suffix)
+        return _carried_keys(self.suffix)
+
+    def _fields(self) -> tuple[tuple[str, str], tuple[str, str | None], ...]:
+        return (
+            (IDENTITY_KEY, self.identity),
+            (PAYLOAD_HASH_KEY, self.payload_hash),
+            (_SOURCE_FILE_KEY, self.source_file_sha256),
+            (_IMPORTER_VERSION_KEY, self.importer_version),
+        )
 
 
 def _clean(value: object) -> str | None:
@@ -165,23 +183,50 @@ def variants_of(metadata: Mapping[str, object]) -> tuple[IdentityVariant, ...]:
                 suffix=suffix,
                 identity=identity,
                 payload_hash=fields.get(PAYLOAD_HASH_KEY),
-                source_file_sha256=fields.get(SOURCE_FILE_KEY),
-                importer_version=fields.get(IMPORTER_VERSION_KEY),
+                source_file_sha256=fields.get(_SOURCE_FILE_KEY),
+                importer_version=fields.get(_IMPORTER_VERSION_KEY),
             )
         )
     return tuple(variants)
 
 
-def next_free_suffix(metadata: Mapping[str, object]) -> int:
+def _next_free_suffix(metadata: Mapping[str, object]) -> int:
     """The lowest carried slot *metadata* has not used, never below 2.
 
     Slot 1 belongs to the block's own row and is never handed out.
     """
     used = {variant.suffix for variant in variants_of(metadata)}
     suffix = 2
-    while suffix in used or carried_key(IDENTITY_KEY, suffix) in metadata:
+    while suffix in used or _carried_key(IDENTITY_KEY, suffix) in metadata:
         suffix += 1
     return suffix
+
+
+def carry_onto(
+    existing: Mapping[str, object],
+    variants: Iterable[IdentityVariant],
+) -> tuple[tuple[str, str], ...]:
+    """The metadata to add so the *existing* block also claims *variants*.
+
+    Returns ``(key, value)`` pairs in write order. A variant whose identity the
+    block already claims is skipped, so merging the same row twice adds nothing;
+    the rest take consecutive free slots. Fields the absorbed row did not carry
+    are simply absent, and the four families stay aligned on their shared slot.
+    """
+    claimed = {variant.identity for variant in variants_of(existing)}
+    suffix = _next_free_suffix(existing)
+    out: list[tuple[str, str]] = []
+    for variant in variants:
+        if variant.identity in claimed:
+            continue
+        out.extend(
+            (_carried_key(base, suffix), value)
+            for base, value in variant._fields()
+            if value
+        )
+        claimed.add(variant.identity)
+        suffix += 1
+    return tuple(out)
 
 
 def _sha256_text(text: str) -> str:
@@ -194,7 +239,7 @@ def _normalize_payee(payee: str) -> str:
     return re.sub(r"\s+", " ", (payee or "").strip().lower())
 
 
-def institution_amount(
+def _institution_amount(
     postings: list[dict],
     institution_account: str,
 ) -> Decimal | None:
@@ -311,7 +356,7 @@ def of_statement_row(
             row with no trustworthy amount has no trustworthy identity — that
             is what let two same-day purchases at one merchant collide.
     """
-    amount = institution_amount(postings, institution_account)
+    amount = _institution_amount(postings, institution_account)
     if amount is None:
         raise IdentityInputError(
             "Cannot compute a source identity without an amount "
