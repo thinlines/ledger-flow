@@ -21,6 +21,14 @@ def _migrate_lf_metadata(args: argparse.Namespace) -> dict:
     return migrate_lf_metadata(config)
 
 
+def _migrate_source_identities(args: argparse.Namespace) -> dict:
+    from services.config_service import load_config
+    from services.journal_migration_service import migrate_source_identities
+
+    config = load_config(Path(args.config))
+    return migrate_source_identities(config, dry_run=args.dry_run)
+
+
 def _run_server(args: argparse.Namespace) -> dict:
     workspace = Path(args.workspace).expanduser().resolve()
     os.environ["LEDGER_FLOW_ROOT"] = str(workspace)
@@ -111,6 +119,20 @@ def _build_parser() -> argparse.ArgumentParser:
         help="One-time migration: assign lf_txn_id and rename app metadata keys to lf_ house style",
     )
     migrate.set_defaults(handler=_migrate_lf_metadata)
+
+    identities = subparsers.add_parser(
+        "migrate-source-identities",
+        help=(
+            "Recompute every stored lf_source_identity under the current rules "
+            "so re-imports recognise rows written before the amount fix"
+        ),
+    )
+    identities.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Report what would change without writing.",
+    )
+    identities.set_defaults(handler=_migrate_source_identities)
 
     server = subparsers.add_parser("server", help="Start the Ledger Flow API server")
     server.add_argument(
