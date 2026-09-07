@@ -280,28 +280,21 @@ Fixes:
   `-7.920` identify as one row. Generation 1 hashed whatever string the posting
   carried, which is why identity was sensitive to rendering.
 
-Generation handling — **no journal data has been rewritten yet**. `compute`
-returns both the generation-2 `value` (what new writes store) and the
-generation-1 `legacy_value`. `_classify_transaction` looks a row up under the
-current identity first and the legacy identity second, so rows already in these
-journals are still recognised. `tests/test_import_identity.py` pins
-`legacy_value` as byte-identical to the pre-fix expression; without that, a
-re-import would classify every previously imported row as `"new"` and write it
-again.
-
-Measured against this workspace's 460 stored identities:
+Generation handling — the journal was **migrated**, not versioned. A
+compatibility path was written first (`compute` returned both the new hash and
+a generation-1 `legacy_value`, and `_classify_transaction` tried each in turn)
+and then removed once the migration had run. Measured before the migration, it
+would not have been enough on its own:
 
 | Stored identity reproduced by | rows |
 |---|---|
-| the current generation-2 hash | 0 |
+| the current hash | 0 |
 | `legacy_value` | 304 |
 | neither (written by still-earlier formulas) | 153 |
 | unknown — no `; CSV:` provenance to recompute from | 3 |
 
-So the legacy path is **load-bearing but only two-thirds effective**: without it
-every one of the 460 rows re-imports as `"new"`; with it, 153 still do. That
-shortfall is what the migration below exists to close, and why the two are not
-meant to coexist permanently.
+Two-thirds coverage, so 153 rows would still have re-imported as `"new"`. That
+shortfall is why the migration below was chosen over carrying the compat path.
 
 A legacy-only match whose payload hash differs is recorded as
 `conflictReason == "legacy_identity_ambiguous"` rather than being treated as a
@@ -312,7 +305,8 @@ merchant apart.
 |---|---|---|
 | Places computing an import identity | 1 inline expression, 0 tests | 1 module, 43 tests |
 | Identity key regexes | 4 (unsynchronised) | 5 (1 authoritative, 4 not yet rewired) |
-| Backend tests | 1071 | 1117 |
+| Stored identities a re-import reproduces | 0 of 460 | 457 of 460 |
+| Backend tests | 1071 | 1112 |
 | Pre-existing ruff findings | 45 | 45 |
 
 #### Journal history to be rewritten to one generation — **written, not yet run**
@@ -348,16 +342,47 @@ collisions, 3 skipped** (2026-02-17 ACH rows with no `; CSV:` line), touching
 Zero collisions is the substantive finding: every imported row *would* get a
 unique identity, which the pre-fix scheme could not express.
 
-Remaining steps, in order — the sequence matters, since the legacy path is the
-only thing preventing mass duplication until the migration runs:
+Run and committed: 457 rewritten, 3 skipped, 0 collisions, touching only the
+457 identity lines. A second run rewrites nothing. The legacy generation
+machinery has since been removed — `legacy_value`, `SourceIdentity` itself,
+`CURRENT_GENERATION`, `compute`'s `raw_amount`, `sourceIdentityLegacy`, the
+legacy branch of `_classify_transaction`, and the `legacy_identity_ambiguous`
+reason. `compute` now returns the hash directly.
 
-1. Run `ledger-flow migrate-source-identities` and commit the journal diff.
-2. Confirm `ledger` still exits 0 and a second run rewrites nothing.
-3. Then remove the legacy generation machinery — `legacy_value`,
-   `SourceIdentity.matches` / `is_legacy_only_match` / `generation`,
-   `CURRENT_GENERATION`, `compute`'s `raw_amount`, `sourceIdentityLegacy`, the
-   legacy branch of `_classify_transaction`, and the `legacy_identity_ambiguous`
-   reason — all of which become unreachable once every row is generation 2.
+The three provenance-less ACH blocks keep identities that no formula in the
+module reproduces. They were unmatchable before the migration too; removing the
+legacy path did not change their status. Still to be triaged.
+
+#### The two paths disagreed on the amount's sign
+
+Found while removing the legacy path, by checking the thing that had never been
+checked: whether a re-import reproduces what the migration wrote. It did not —
+**437 of 460 rows disagreed**, and journal-derived dedupe matched 0 of 56
+previewed rows. Dedupe was surviving only on the gitignored
+`.workflow/state.db`.
+
+Two defects, compounding, both on the import side:
+
+- `_parse_transaction` dropped amount-less postings. `ACCOUNT_LINE_RE` needs a
+  two-space separator after the account, and `ledger convert` writes the elided
+  institution posting bare, so the posting list held only the counter-posting.
+  Every other reader of the same block — `_block_metadata_and_postings` among
+  them — falls back to `ACCOUNT_ONLY_RE` and keeps it.
+- `institution_amount`'s "no institution posting" branch then returned the
+  first posting's amount *unchanged*. For a deposit written
+  `Income:Employer  USD -975.70` the institution amount is +975.70; it returned
+  -975.70. The branch was documented as "matching the pre-existing behaviour",
+  which was true of generation 1 and precisely the thing being replaced.
+
+So the importer hashed `+296.79` where the migration hashed `-296.79`. Both
+paths are now consistent: `_parse_transaction` records bare postings with an
+empty amount, and the fallback derives the negated sum like the main path.
+Verified against the live workspace — 457 of 460 stored identities are
+reproduced by the import path, the 3 exceptions being the ACH blocks above, and
+54 of 56 previewed rows are now recognised from the journal alone.
+
+The committed journal needed no correction: the migration path was the correct
+one throughout.
 
 **Open decision — needs a product call.** Ambiguous rows are classified but not
 yet surfaced: `_build_fence_conflicts` still returns only
@@ -382,9 +407,10 @@ identity it matched under. Running the migration removes the case entirely.
 - [x] No service reimplements the ledger-account → tracked-account reverse lookup — one site remains, documented above with its reason
 - [x] `.get("ledger_account")` no longer appears in service modules for *resolving* tracked/import accounts; remaining uses are config serialization
 - [x] Source identity refuses an empty amount and is computed in exactly one place
-- [x] Existing identities are migrated or versioned, with the choice recorded — versioned for now; migration written, run pending
-- [ ] Journal history rewritten to one identity generation (dry run: 457 rows, 0 collisions — not yet applied)
-- [ ] Legacy generation machinery removed once the migration has run
+- [x] Existing identities are migrated or versioned, with the choice recorded — migrated
+- [x] Journal history rewritten to one identity generation (457 rows, 0 collisions)
+- [x] Legacy generation machinery removed
+- [x] The import path and the migration path compute the same identity for the same row
 - [ ] Identity key names come from one registry — only `import_service` rewired so far
 - [ ] Ambiguous legacy-identity rows are surfaced rather than silently skipped (open decision, above; they are now at least logged)
 - [ ] 3 provenance-less ACH blocks triaged (they keep pre-fix identities)
