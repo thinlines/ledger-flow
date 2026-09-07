@@ -101,7 +101,7 @@ class TestAlipayEndToEnd:
 
     def test_fixture_through_seam(self, tmp_path):
         from services.config_service import AppConfig
-        from services.csv_normalizer import normalize_csv_to_intermediate
+        from services.import_service import normalize_csv_to_intermediate
 
         fixture_dir = FIXTURES_DIR / "alipay"
         input_path = fixture_dir / "input.csv"

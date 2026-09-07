@@ -10,7 +10,7 @@ from ..registry import register_adapter
 from ..types import Record
 
 # Alipay CSV column names. The CSV header row is sliced off by
-# csv_normalizer (head=13), so DictReader needs explicit fieldnames.
+# import_service (head=13), so DictReader needs explicit fieldnames.
 _FIELDNAMES = [
     "流水号",
     "时间",

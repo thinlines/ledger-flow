@@ -10,7 +10,7 @@ from ..registry import register_adapter
 from ..types import Record
 
 # ICBC CSV column names. The preamble (including the header row) is sliced
-# off by csv_normalizer.py, so the adapter must supply explicit fieldnames
+# off by import_service.py, so the adapter must supply explicit fieldnames
 # to DictReader.
 FIELDNAMES = [
     "交易日期",

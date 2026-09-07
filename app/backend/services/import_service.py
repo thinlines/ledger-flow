@@ -10,7 +10,7 @@ from pathlib import Path
 from . import source_identity
 from .commodity import canonicalize_base_currency_posting
 from .config_service import AppConfig
-from .csv_normalizer import normalize_csv_to_intermediate
+from .custom_csv_service import normalize_custom_csv_to_intermediate
 from .header_parser import HEADER_RE, set_header_payee
 from .import_identity_service import ImportIdentityStore, source_payload_hash_for_lines
 from .import_profile_service import import_source_summary, resolve_import_source
@@ -24,6 +24,9 @@ from .journal_query_service import (
 from .ledger_runner import CommandError, run_cmd
 from .merchant_service import Merchant, load_merchants, match_merchant, resolve_category
 from .operations_service import record_operation, rel_path
+from .parsers import registry
+from .parsers.intermediate_writer import write_intermediate
+from .parsers.types import Adapter, Record
 from .rules_service import ensure_rules_store, load_rules
 from .transfer_service import rewrite_posting_account
 from .workspace_service import (
@@ -87,6 +90,60 @@ class ImportPreviewBlockedError(Exception):
         return detail
 
 
+def _parse_institution_csv(
+    config: AppConfig, csv_path: Path, institution_template_id: str
+) -> tuple[Adapter, list[Record]]:
+    """Slice a raw institution CSV per its template and parse it with the adapter.
+
+    The single home for head/tail slicing and adapter lookup, so the scan path and
+    the normalize path can never disagree about which rows are data.
+    """
+    inst_cfg = config.institution_templates[institution_template_id]
+    head = int(inst_cfg.get("head", 0))
+    tail_cfg = inst_cfg.get("tail", 0)
+    tail = int(tail_cfg) if tail_cfg else 0
+    encoding = str(inst_cfg.get("encoding", "utf-8"))
+
+    with csv_path.open("r", encoding=encoding) as f:
+        lines = f.readlines()
+
+    end_idx = -tail if tail else len(lines)
+    sliced = lines[head:end_idx]
+
+    registry.discover()
+    try:
+        adapter = registry.get_adapter(institution_template_id)
+    except KeyError:
+        raise ValueError(
+            f"No adapter registered for institution {institution_template_id!r}"
+        )
+
+    return adapter, list(adapter.parse("".join(sliced)))
+
+
+def normalize_csv_to_intermediate(config: AppConfig, csv_path: Path, account_cfg: dict) -> str:
+    """Convert a raw statement CSV into the intermediate CSV `ledger convert` reads."""
+    source = resolve_import_source(config, account_cfg)
+    if source["mode"] == "custom":
+        return normalize_custom_csv_to_intermediate(csv_path, source["profile"])
+
+    institution_template_id = str(source["institution_id"])
+    adapter, records = _parse_institution_csv(config, csv_path, institution_template_id)
+
+    translator_name = getattr(adapter, "translator_name", None)
+    if translator_name is None:
+        raise RuntimeError(
+            f"Adapter {adapter.name!r} did not declare translator_name; "
+            f"cannot route without an explicit translator"
+        )
+    translator = registry.get_translator(translator_name)
+    account = str(account_cfg["ledger_account"])
+
+    transactions = [translator.translate(r, account) for r in records]
+    transactions.reverse()
+    return write_intermediate(transactions)
+
+
 def _scan_csv_stats(
     config: AppConfig, csv_path: Path, account_cfg: dict
 ) -> tuple[int, tuple[str, str]] | tuple[None, None]:
@@ -102,8 +159,6 @@ def _scan_csv_stats(
         dates: list[str] = []
 
         if source["mode"] == "custom":
-            from .custom_csv_service import normalize_custom_csv_to_intermediate
-
             intermediate_text = normalize_custom_csv_to_intermediate(csv_path, source["profile"])
             reader = _csv.DictReader(intermediate_text.splitlines())
             for row in reader:
@@ -111,24 +166,9 @@ def _scan_csv_stats(
                 if d:
                     dates.append(d)
         else:
-            from .parsers import registry
-
-            institution_template_id = str(source["institution_id"])
-            inst_cfg = config.institution_templates[institution_template_id]
-            head = int(inst_cfg.get("head", 0))
-            tail_cfg = inst_cfg.get("tail", 0)
-            tail = int(tail_cfg) if tail_cfg else 0
-            encoding = str(inst_cfg.get("encoding", "utf-8"))
-
-            with csv_path.open("r", encoding=encoding) as f:
-                lines = f.readlines()
-
-            end_idx = -tail if tail else len(lines)
-            sliced = lines[head:end_idx]
-
-            registry.discover()
-            adapter = registry.get_adapter(institution_template_id)
-            records = list(adapter.parse("".join(sliced)))
+            _adapter, records = _parse_institution_csv(
+                config, csv_path, str(source["institution_id"])
+            )
             dates = [r.date.isoformat() for r in records]
 
         if not dates:

@@ -114,7 +114,7 @@ FIXTURE_DIR = Path(__file__).parent / "fixtures" / "csv_snapshots" / "bank_of_am
 
 def test_end_to_end_matches_golden_intermediate(tmp_path):
     from services.config_service import AppConfig
-    from services.csv_normalizer import normalize_csv_to_intermediate
+    from services.import_service import normalize_csv_to_intermediate
 
     input_path = FIXTURE_DIR / "input.csv"
     expected_path = FIXTURE_DIR / "expected_intermediate.csv"

@@ -131,7 +131,7 @@ def test_raw_dict_preserves_original_columns():
 
 def test_fixture_end_to_end_byte_exact(tmp_path: Path):
     from services.config_service import AppConfig
-    from services.csv_normalizer import normalize_csv_to_intermediate
+    from services.import_service import normalize_csv_to_intermediate
 
     fixture_root = (
         Path(__file__).parent / "fixtures" / "csv_snapshots" / "us_bank"

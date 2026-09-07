@@ -67,7 +67,7 @@ def _make_config(tmp_path: Path, institution: str):
 
 @pytest.mark.parametrize("institution", INSTITUTIONS)
 def test_fixture_reproduces_expected_intermediate(institution: str, tmp_path: Path) -> None:
-    from services.csv_normalizer import normalize_csv_to_intermediate
+    from services.import_service import normalize_csv_to_intermediate
 
     fixture_dir = FIXTURES_DIR / institution
     input_path = fixture_dir / "input.csv"

@@ -195,7 +195,7 @@ class TestWellsFargoEndToEnd:
 
     def test_fixture_through_seam(self, tmp_path):
         from services.config_service import AppConfig
-        from services.csv_normalizer import normalize_csv_to_intermediate
+        from services.import_service import normalize_csv_to_intermediate
 
         fixture_dir = FIXTURES_DIR / "wells_fargo"
         input_path = fixture_dir / "input.csv"
