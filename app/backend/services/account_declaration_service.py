@@ -269,9 +269,9 @@ def delete_declaration(config: AppConfig, account: str) -> None:
 
     del lines[header:end]
     # Collapse the separator the block owned so blank runs don't double up.
-    if header < len(lines) and not lines[header].strip():
-        if header == 0 or not lines[header - 1].strip():
-            del lines[header]
+    collapses_into_run = header == 0 or not lines[header - 1].strip()
+    if header < len(lines) and not lines[header].strip() and collapses_into_run:
+        del lines[header]
 
     path.write_text("".join(lines), encoding="utf-8")
     refresh_projection(config)
