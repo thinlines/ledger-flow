@@ -478,11 +478,12 @@ def _parse_transaction(
             if posting["account"] == UNKNOWN_ACCOUNT:
                 posting["account"] = category_account
 
-    identity = source_identity.compute(
+    identity = source_identity.of_statement_row(
         import_account_id=import_account_id,
         date=date,
         statement_payee=statement_payee,
-        amount=source_identity.institution_amount(postings, institution_account),
+        postings=postings,
+        institution_account=institution_account,
     )
 
     normalized_body = "\n".join(line.rstrip() for line in lines).strip() + "\n"

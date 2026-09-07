@@ -275,14 +275,8 @@ def migrate_source_identities(config: AppConfig, *, dry_run: bool = False) -> di
                 config, str(metadata.get("import_account_id") or "")
             )
             try:
-                inputs = source_identity.inputs_from_block(
+                identity = source_identity.of_journal_block(
                     metadata=metadata, postings=postings, institution_account=institution
-                )
-                identity = source_identity.compute(
-                    import_account_id=inputs.import_account_id,
-                    date=inputs.date,
-                    statement_payee=inputs.statement_payee,
-                    amount=inputs.amount,
                 )
             except source_identity.IdentityInputError as exc:
                 skipped.append({

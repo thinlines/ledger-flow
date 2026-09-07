@@ -211,7 +211,6 @@ def test_dry_run_reports_without_writing(tmp_path: Path) -> None:
 def test_recomputed_identity_matches_what_a_reimport_would_compute(tmp_path: Path) -> None:
     """The point of the whole exercise: after migration, re-importing the same
     statement row recognises it instead of writing it again."""
-    from decimal import Decimal
 
     from services import source_identity
 
@@ -224,11 +223,12 @@ def test_recomputed_identity_matches_what_a_reimport_would_compute(tmp_path: Pat
         for line in path.read_text().splitlines()
         if "lf_source_identity:" in line
     )
-    reimported = source_identity.compute(
+    reimported = source_identity.of_statement_row(
         import_account_id="card",
         date="2026/04/27",
         statement_payee="COSTCO WHSE #0761",
-        amount=Decimal("-7.92"),
+        postings=[{"account": CARD, "amount": "USD -7.92"}],
+        institution_account=CARD,
     )
 
     assert reimported == stored

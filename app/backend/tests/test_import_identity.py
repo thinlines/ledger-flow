@@ -282,8 +282,6 @@ def test_identity_is_computed_over_the_derived_institution_amount() -> None:
     """
     import hashlib
 
-    from services import source_identity
-
     def parse(amount: str) -> dict:
         return _parse_transaction(
             [
@@ -301,9 +299,8 @@ def test_identity_is_computed_over_the_derived_institution_amount() -> None:
     assert small["sourceIdentity"] != large["sourceIdentity"]
 
     # And the hashed base is the documented one, over the derived amount.
-    payee = source_identity.normalize_payee("COSTCO WHSE #0761 BOISE ID")
     expected = hashlib.sha256(
-        f"wf_checking|2026/04/27|{payee}|-7.92".encode()
+        b"wf_checking|2026/04/27|costco whse #0761 boise id|-7.92"
     ).hexdigest()
     assert small["sourceIdentity"] == expected
 

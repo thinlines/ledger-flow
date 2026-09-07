@@ -257,17 +257,27 @@ not need converting.
 ### Seam 2 — `SourceIdentity` (landed)
 
 `services/source_identity.py` is the one place that computes an import identity.
-It owns `IDENTITY_KEY` / `PAYLOAD_HASH_KEY` and their suffix-family regexes
-(`import_service` re-exports them), `normalize_payee`, `suffix_of`,
-`institution_amount`, `canonical_amount` and `compute`.
+Two entry points, one call each, differing only in where the row is read from:
+
+- `of_statement_row(import_account_id, date, statement_payee, postings, institution_account)`
+  — a row arriving from an import.
+- `of_journal_block(metadata, postings, institution_account)` — a row recovered
+  from a block already written, reading date and payee from its `; CSV:` line.
+
+Both derive the institution amount themselves, so no caller has to know that
+identity is keyed on the institution's own amount. The rest of the surface is
+`IDENTITY_KEY` / `PAYLOAD_HASH_KEY` and their suffix-family regexes
+(`import_service` re-exports them), `institution_amount`, and
+`IdentityInputError`.
 
 **Naming is not consolidated.** Only `import_service` was rewired. The key name
 is still spelled independently in `import_history_service` (two regexes),
 `reconciliation_context_service` (two), `manual_entry_service` (one),
 `journal_migration_service` (one), and as `startswith` checks in
 `reconciliation_duplicate_service` — so the drift that caused incident 3 remains
-structurally possible. `suffix_of` exists to replace them and has no production
-callers yet. Deliberately deferred, not overlooked.
+structurally possible. Deliberately deferred, not overlooked. (A `suffix_of`
+helper was written for this and removed again: dead public API is a worse
+placeholder than a note.)
 
 Fixes:
 
@@ -282,7 +292,8 @@ Fixes:
 
 | Metric | Before | After |
 |---|---|---|
-| Places computing an import identity | 1 inline expression, 0 tests | 1 module, 43 tests |
+| Places computing an import identity | 1 inline expression, 0 tests | 1 module, 2 entry points |
+| Public names in that module | — | 13 → 7 |
 | Identity key regexes | 4 (unsynchronised) | 5 (1 authoritative, 4 not yet rewired) |
 | Stored identities a re-import reproduces | 0 of 460 | 457 of 460 |
 | Backend tests | 1071 | 1112 |

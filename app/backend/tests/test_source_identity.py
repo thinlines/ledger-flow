@@ -88,13 +88,23 @@ def test_no_postings_at_all_returns_none() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _identity(postings: list[dict], payee: str = "COSTCO WHSE #0761 BOISE ID"):
-    return source_identity.compute(
-        import_account_id=ACCOUNT_ID,
+def _identity(
+    postings: list[dict],
+    payee: str = "COSTCO WHSE #0761 BOISE ID",
+    account_id: str = ACCOUNT_ID,
+):
+    return source_identity.of_statement_row(
+        import_account_id=account_id,
         date="2026/04/27",
         statement_payee=payee,
-        amount=source_identity.institution_amount(postings, CARD),
+        postings=postings,
+        institution_account=CARD,
     )
+
+
+def _card_posting(amount: str) -> list[dict]:
+    """One explicit institution posting — the amount, with nothing to derive."""
+    return [{"account": CARD, "amount": amount}]
 
 
 def test_same_day_same_merchant_different_amounts_no_longer_collide() -> None:
@@ -128,58 +138,25 @@ def test_payee_whitespace_and_case_do_not_change_identity() -> None:
 
 def test_amount_rendering_does_not_change_identity() -> None:
     """``USD -7.92`` and ``-7.92`` are the same amount, so the same row."""
-    commodity_first = source_identity.compute(
-        import_account_id=ACCOUNT_ID, date="2026/04/27",
-        statement_payee="COSTCO", amount=Decimal("-7.92"),
-    )
-    bare = source_identity.compute(
-        import_account_id=ACCOUNT_ID, date="2026/04/27",
-        statement_payee="COSTCO", amount=Decimal("-7.920"),
-    )
+    commodity_first = _identity(_card_posting("USD -7.92"), payee="COSTCO")
+    bare = _identity(_card_posting("-7.920"), payee="COSTCO")
     assert commodity_first == bare
 
 
 def test_identity_is_scoped_to_the_import_account() -> None:
-    a = source_identity.compute(
-        import_account_id="acct_a", date="2026/04/27",
-        statement_payee="COSTCO", amount=Decimal("-7.92"),
-    )
-    b = source_identity.compute(
-        import_account_id="acct_b", date="2026/04/27",
-        statement_payee="COSTCO", amount=Decimal("-7.92"),
-    )
+    a = _identity(_card_posting("USD -7.92"), payee="COSTCO", account_id="acct_a")
+    b = _identity(_card_posting("USD -7.92"), payee="COSTCO", account_id="acct_b")
     assert a != b
 
 
 def test_missing_amount_is_refused_rather_than_hashed_blank() -> None:
     with pytest.raises(IdentityInputError, match="without an amount"):
-        source_identity.compute(
-            import_account_id=ACCOUNT_ID, date="2026/04/27",
-            statement_payee="COSTCO", amount=None,
-        )
+        _identity([{"account": "Expenses:Groceries", "amount": ""}], payee="COSTCO")
 
 
 # ---------------------------------------------------------------------------
-# Key names and the carried-duplicate suffix family
+# Key names
 # ---------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize(
-    ("key", "expected"),
-    [
-        ("lf_source_identity", "1"),
-        ("lf_source_identity_2", "2"),
-        ("lf_source_identity_13", "13"),
-        ("source_payload_hash", "1"),
-        ("source_payload_hash_2", "2"),
-        ("source_identity", None),
-        ("lf_source_identity_x", None),
-        ("lf_txn_id", None),
-        ("", None),
-    ],
-)
-def test_suffix_of_covers_both_families(key: str, expected: str | None) -> None:
-    assert source_identity.suffix_of(key) == expected
 
 
 def test_key_regexes_are_anchored_to_the_documented_names() -> None:
@@ -193,9 +170,9 @@ def test_stored_identities_are_all_on_the_current_generation() -> None:
     """The real ``lf_source_identity`` on the 2026-04-27 Costco blocks after
     ``migrate_source_identities`` ran.
 
-    Before the migration one value covered both purchases, because generation 1
-    hashed an empty amount. They are distinct now, and each is what ``compute``
-    produces — so classification needs no compatibility path.
+    Before the migration one value covered both purchases, because the pre-fix
+    hash took an empty amount. They are distinct now, and each is what
+    ``of_statement_row`` produces — so classification needs no compat path.
     """
     small = _identity(COSTCO_SMALL)
     large = _identity(COSTCO_LARGE)
