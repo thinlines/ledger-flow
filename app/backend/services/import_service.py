@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 
+from . import source_identity
 from .commodity_service import canonicalize_base_currency_posting
 from .config_service import AppConfig
 from .csv_normalizer import normalize_csv_to_intermediate
@@ -32,8 +33,10 @@ INBOX_FILE_RE = re.compile(
     r"^(?P<year>\d{4})__(?P<import_account_id>[a-z0-9_]+)__(?P<label>.+)\.csv$"
 )
 
-SOURCE_IDENTITY_KEY_RE = re.compile(r"^lf_source_identity(?:_(?P<suffix>\d+))?$")
-SOURCE_PAYLOAD_KEY_RE = re.compile(r"^source_payload_hash(?:_(?P<suffix>\d+))?$")
+# Key names and their carried-duplicate families live in source_identity;
+# re-exported here for the existing call sites in this module.
+SOURCE_IDENTITY_KEY_RE = source_identity.IDENTITY_KEY_RE
+SOURCE_PAYLOAD_KEY_RE = source_identity.PAYLOAD_HASH_KEY_RE
 IMPORTER_VERSION = "mvp2"
 UNKNOWN_ACCOUNT = "Expenses:Unknown"
 
@@ -268,10 +271,6 @@ def archive_inbox_csv(
     return str(dest.resolve())
 
 
-def _sha256_text(text: str) -> str:
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
-
-
 def _sha256_file(path: Path) -> str:
     h = hashlib.sha256()
     with path.open("rb") as f:
@@ -355,10 +354,6 @@ def _merge_transaction_blocks(existing_blocks: list[list[str]], new_blocks: list
 
     merged.extend(block for _, block in new_dated[new_index:])
     return merged
-
-
-def _normalize_payee(payee: str) -> str:
-    return re.sub(r"\s+", " ", payee.strip().lower())
 
 
 def _extract_institution_amount(postings: list[dict], institution_account: str) -> str:
@@ -467,13 +462,13 @@ def _parse_transaction(
             if posting["account"] == UNKNOWN_ACCOUNT:
                 posting["account"] = category_account
 
-    identity_base = "|".join([
-        import_account_id,
-        date,
-        _normalize_payee(statement_payee),
-        inst_amount,
-    ])
-    source_identity = _sha256_text(identity_base)
+    identity = source_identity.compute(
+        import_account_id=import_account_id,
+        date=date,
+        statement_payee=statement_payee,
+        amount=source_identity.institution_amount(postings, institution_account),
+        raw_amount=inst_amount,
+    )
 
     normalized_body = "\n".join(line.rstrip() for line in lines).strip() + "\n"
     source_payload_hash = source_payload_hash_for_lines(
@@ -490,7 +485,8 @@ def _parse_transaction(
         "postings": postings,
         "raw": normalized_body,
         "metadata": metadata,
-        "sourceIdentity": source_identity,
+        "sourceIdentity": identity.value,
+        "sourceIdentityLegacy": identity.legacy_value,
         "sourcePayloadHash": source_payload_hash,
     }
 
@@ -532,24 +528,45 @@ def _existing_identity_map_from_journal(config: AppConfig, target_journal: Path)
                     ledger_account,
                     base_currency=str(config.workspace.get("base_currency", "USD")),
                 )
-            for suffix, source_identity in identities_by_suffix.items():
+            for suffix, stored_identity in identities_by_suffix.items():
                 if suffix == "1":
-                    out[source_identity] = (
+                    out[stored_identity] = (
                         computed_payload_hash if computed_payload_hash is not None else payloads_by_suffix.get(suffix)
                     )
                 else:
-                    out[source_identity] = payloads_by_suffix.get(suffix)
+                    out[stored_identity] = payloads_by_suffix.get(suffix)
     return out
 
 
 def _classify_transaction(txn: dict, existing_map: dict[str, str | None]) -> str:
-    existing_hash = existing_map.get(txn["sourceIdentity"])
-    if existing_hash is None and txn["sourceIdentity"] not in existing_map:
+    """``new`` / ``duplicate`` / ``conflict`` for one parsed row.
+
+    Stored identities may predate the amount fix (issue #007, seam 2), so a row
+    is looked up under its current identity first and its generation-1 identity
+    second. A generation-1 match is only trustworthy when the payload hash
+    agrees: that hash could not tell two same-day purchases at one merchant
+    apart, so a legacy match with a differing payload is recorded as
+    ``legacy_identity_ambiguous`` rather than silently treated as a duplicate.
+    """
+    identity = txn["sourceIdentity"]
+    legacy_identity = txn.get("sourceIdentityLegacy")
+
+    matched_legacy_only = False
+    if identity in existing_map:
+        existing_hash = existing_map[identity]
+        txn["matchedIdentity"] = identity
+    elif legacy_identity and legacy_identity in existing_map:
+        existing_hash = existing_map[legacy_identity]
+        txn["matchedIdentity"] = legacy_identity
+        matched_legacy_only = True
+    else:
         return "new"
-    if existing_hash is None:
+
+    if existing_hash is None or existing_hash == txn["sourcePayloadHash"]:
         return "duplicate"
-    if existing_hash == txn["sourcePayloadHash"]:
-        return "duplicate"
+
+    if matched_legacy_only:
+        txn["conflictReason"] = "legacy_identity_ambiguous"
     return "conflict"
 
 
@@ -740,7 +757,9 @@ def preview_import(
             # Capture the journal-side payload hash so apply_import can emit a
             # diagnostic event for identity collisions without re-reading the
             # journal. None means the existing entry lacked a stored hash.
-            txn["storedPayloadHash"] = existing_map.get(txn["sourceIdentity"])
+            txn["storedPayloadHash"] = existing_map.get(
+                txn.get("matchedIdentity", txn["sourceIdentity"])
+            )
         txn["annotatedRaw"] = _annotated_raw_txn(
             txn,
             source_file_sha256,
@@ -910,13 +929,20 @@ def _emit_identity_collision_events(
     import_account_id: str,
     all_txns: list[dict],
 ) -> None:
-    """Record one ``import.identity_collision.v1`` operation per identity-collision row.
+    """Record one ``import.identity_collision.v1`` operation per silently-skipped row.
 
     Identity collisions are silently skipped at write time (excluded from
     new_txns) and never surface in the UI. Per DECISIONS §21 we log them
     to operations so support and debugging have a record of which
     rows the importer refused to overwrite, with both the stored and the
     newly-computed payload hashes for diff inspection.
+
+    Every conflict reason *except* ``reconciled_date_fence`` is skipped this
+    way — fence rows do reach the UI, via ``_build_fence_conflicts``. The
+    predicate is written as that exclusion rather than as a list of known
+    reasons so a newly added reason is logged by default: a row that vanishes
+    with no operation record is the failure mode this event exists to prevent
+    (issue #007, incident 2), and defaulting to silence reintroduces it.
 
     The function is fail-soft: any emission error is logged and discarded
     so a misbehaving event log cannot fail an otherwise-successful import.
@@ -925,7 +951,7 @@ def _emit_identity_collision_events(
     for txn in all_txns:
         if txn.get("matchStatus") != "conflict":
             continue
-        if txn.get("conflictReason") != "identity_collision":
+        if txn.get("conflictReason") == "reconciled_date_fence":
             continue
         try:
             record_operation(
@@ -937,7 +963,11 @@ def _emit_identity_collision_events(
                 ),
                 payload={
                     "import_account_id": import_account_id,
+                    "conflict_reason": txn.get("conflictReason"),
                     "source_identity": txn.get("sourceIdentity"),
+                    # Which stored identity the row matched under: the current
+                    # hash, or the ambiguous generation-1 one.
+                    "matched_identity": txn.get("matchedIdentity"),
                     "stored_payload_hash": txn.get("storedPayloadHash"),
                     "new_payload_hash": txn.get("sourcePayloadHash"),
                     "target_journal": journal_ref,

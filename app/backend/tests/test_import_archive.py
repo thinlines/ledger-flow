@@ -538,6 +538,45 @@ def test_apply_import_emits_identity_collision_diagnostic_event(tmp_path: Path) 
     assert coll_1["journal_refs"] == []
 
 
+def test_apply_import_emits_a_diagnostic_event_for_legacy_ambiguous_rows(tmp_path: Path) -> None:
+    """A legacy-ambiguous row is skipped at write time and excluded from the UI
+    conflicts list, so the operation event is its only trace (issue #007,
+    incident 2). The emitter keys off "conflict that is not a date fence"
+    rather than the literal ``identity_collision`` reason precisely so a row
+    carrying a newer reason cannot vanish without a record."""
+    config = _make_config(tmp_path / "workspace")
+
+    ambiguous = _prepared_collision_txn(
+        date="2026/03/02", payee="Costco", source_identity="amb-1"
+    )
+    ambiguous["conflictReason"] = "legacy_identity_ambiguous"
+    ambiguous["matchedIdentity"] = "legacy-hash-1"
+
+    stage = {
+        "targetJournalPath": str(config.journal_dir / "2026.journal"),
+        "preparedTransactions": [
+            _prepared_txn(date="2026/03/01", payee="Coffee", source_identity="new-1", amount="$-4.00"),
+            ambiguous,
+        ],
+        "importAccountId": "wf_checking",
+        "year": "2026",
+        "sourceFileSha256": "deadbeef",
+    }
+
+    apply_import(config, stage)
+
+    events = _read_operation_events(config.root_dir)
+    collision_events = [e for e in events if e["type"] == "import.identity_collision.v1"]
+    assert len(collision_events) == 1, "The ambiguous row must leave a trace"
+
+    payload = collision_events[0]["payload"]
+    assert payload["conflict_reason"] == "legacy_identity_ambiguous"
+    assert payload["source_identity"] == "amb-1"
+    # Which stored identity it matched under is the whole point of the record:
+    # a generation-1 match is not proof the rows are the same.
+    assert payload["matched_identity"] == "legacy-hash-1"
+
+
 def test_apply_import_does_not_emit_events_for_fence_or_duplicate_rows(tmp_path: Path) -> None:
     config = _make_config(tmp_path / "workspace")
 
@@ -569,7 +608,7 @@ def test_apply_import_does_not_emit_events_for_fence_or_duplicate_rows(tmp_path:
 
     events = _read_operation_events(config.root_dir)
     collision_events = [e for e in events if e["type"] == "import.identity_collision.v1"]
-    assert collision_events == [], "Only identity_collision conflicts emit diagnostic events"
+    assert collision_events == [], "Fence and duplicate rows emit no diagnostic events"
 
 
 def test_apply_import_conflicts_list_contains_only_fence_rows(tmp_path: Path) -> None:

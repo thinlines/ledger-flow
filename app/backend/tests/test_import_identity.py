@@ -240,3 +240,127 @@ def test_build_existing_map_uses_active_import_identities_and_ignores_undone(tmp
     store.mark_undone("checking", ["source-1"])
 
     assert _build_existing_map(config, "checking", journal_path) == {}
+
+
+# ---------------------------------------------------------------------------
+# Generation-aware classification (issue #007, seam 2)
+#
+# Identities written before the amount fix are generation 1. A re-import must
+# still recognise those rows, or every previously imported transaction would
+# come back as "new" and be written a second time.
+# ---------------------------------------------------------------------------
+
+
+def test_row_imported_before_the_amount_fix_is_still_recognised() -> None:
+    """The mass-duplication guard: a journal full of generation-1 identities
+    must not read as a journal full of new transactions."""
+    txn = {
+        "sourceIdentity": "v2-hash",
+        "sourceIdentityLegacy": "v1-hash",
+        "sourcePayloadHash": "payload",
+    }
+    assert _classify_transaction(txn, {"v1-hash": "payload"}) == "duplicate"
+
+
+def test_legacy_match_records_which_identity_matched() -> None:
+    txn = {
+        "sourceIdentity": "v2-hash",
+        "sourceIdentityLegacy": "v1-hash",
+        "sourcePayloadHash": "payload",
+    }
+    _classify_transaction(txn, {"v1-hash": "payload"})
+    assert txn["matchedIdentity"] == "v1-hash"
+
+
+def test_current_identity_wins_over_the_legacy_one() -> None:
+    txn = {
+        "sourceIdentity": "v2-hash",
+        "sourceIdentityLegacy": "v1-hash",
+        "sourcePayloadHash": "payload",
+    }
+    _classify_transaction(txn, {"v2-hash": "payload", "v1-hash": "stale"})
+    assert txn["matchedIdentity"] == "v2-hash"
+
+
+def test_legacy_match_with_a_differing_payload_is_flagged_ambiguous() -> None:
+    """A generation-1 hash cannot tell two same-day purchases apart, so this
+    is not evidence of a duplicate — it is recorded as needing a decision."""
+    txn = {
+        "sourceIdentity": "v2-hash",
+        "sourceIdentityLegacy": "v1-hash",
+        "sourcePayloadHash": "payload",
+    }
+    assert _classify_transaction(txn, {"v1-hash": "different-payload"}) == "conflict"
+    assert txn["conflictReason"] == "legacy_identity_ambiguous"
+
+
+def test_current_generation_conflict_is_not_labelled_ambiguous() -> None:
+    txn = {
+        "sourceIdentity": "v2-hash",
+        "sourceIdentityLegacy": "v1-hash",
+        "sourcePayloadHash": "payload",
+    }
+    assert _classify_transaction(txn, {"v2-hash": "different-payload"}) == "conflict"
+    assert "conflictReason" not in txn
+
+
+def test_a_genuinely_new_row_is_still_new() -> None:
+    txn = {
+        "sourceIdentity": "v2-hash",
+        "sourceIdentityLegacy": "v1-hash",
+        "sourcePayloadHash": "payload",
+    }
+    assert _classify_transaction(txn, {"unrelated": "payload"}) == "new"
+
+
+def test_rows_without_a_legacy_identity_still_classify() -> None:
+    """Rows built by code paths that do not carry the legacy hash."""
+    txn = {"sourceIdentity": "v2-hash", "sourcePayloadHash": "payload"}
+    assert _classify_transaction(txn, {}) == "new"
+    assert _classify_transaction(txn, {"v2-hash": "payload"}) == "duplicate"
+
+
+def test_legacy_identity_is_byte_identical_to_the_pre_fix_formula() -> None:
+    """The mass-duplication guarantee, pinned by construction.
+
+    Generation 1 hashed ``account|date|normalized_payee|raw_amount_string``.
+    Every identity already in this workspace's journals was produced by that
+    exact expression, so ``legacy_value`` must reproduce it character for
+    character — otherwise a re-import stops recognising previously imported
+    rows and writes them all again.
+    """
+    import hashlib
+    import re
+
+    from services import source_identity
+
+    lines = [
+        "2026/03/01 Coffee Shop",
+        "    Assets:Wells Fargo Checking  $-7.50",
+        "    Expenses:Unknown",
+    ]
+    txn = _parse_transaction(
+        lines,
+        import_account_id="wf_checking",
+        institution_account="Assets:Wells Fargo Checking",
+        base_currency="USD",
+    )
+
+    # The pre-fix expression, transcribed from the commit that introduced it.
+    raw_amount = re.sub(r"\s+", " ", "$-7.50".strip())
+    normalized_payee = re.sub(r"\s+", " ", "Coffee Shop".strip().lower())
+    # Kept as the original ``"|".join([...])`` rather than an f-string: this is a
+    # verbatim transcription of the shipped pre-fix expression, and its value as a
+    # pin comes from being readable against that commit.
+    expected = hashlib.sha256(
+        "|".join(["wf_checking", "2026/03/01", normalized_payee, raw_amount]).encode("utf-8")  # noqa: FLY002
+    ).hexdigest()
+
+    assert txn["sourceIdentityLegacy"] == expected
+    assert txn["sourceIdentity"] != expected  # the fixed generation differs
+
+    # And a row carrying that stored identity is still recognised.
+    identity = source_identity.SourceIdentity(
+        value=txn["sourceIdentity"], legacy_value=txn["sourceIdentityLegacy"]
+    )
+    assert identity.matches(expected)
