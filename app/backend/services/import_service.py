@@ -15,7 +15,12 @@ from .header_parser import HEADER_RE, set_header_payee
 from .import_identity_service import ImportIdentityStore, source_payload_hash_for_lines
 from .import_profile_service import import_source_summary, resolve_import_source
 from .journal_block_service import lf_txn_id_line, mint_lf_txn_id
-from .journal_query_service import ACCOUNT_LINE_RE, META_RE, TXN_START_RE
+from .journal_query_service import (
+    ACCOUNT_LINE_RE,
+    ACCOUNT_ONLY_RE,
+    META_RE,
+    TXN_START_RE,
+)
 from .ledger_runner import CommandError, run_cmd
 from .merchant_service import Merchant, load_merchants, match_merchant, resolve_category
 from .operations_service import record_operation, rel_path
@@ -414,6 +419,17 @@ def _parse_transaction(
         pm = ACCOUNT_LINE_RE.match(line)
         if pm:
             postings.append({"account": pm.group(2).strip(), "amount": pm.group(4).strip()})
+            continue
+        # A balanced transaction may elide its last posting's amount, and
+        # ``ledger convert`` writes the institution posting that way — bare,
+        # with no two-space separator for ACCOUNT_LINE_RE to find. Recording it
+        # with an empty amount is what lets ``institution_amount`` recognise
+        # the elision and derive the value. Dropping it instead made this
+        # function disagree with every other reader of the same block.
+        if line.strip() and not line.strip().startswith(";"):
+            om = ACCOUNT_ONLY_RE.match(line)
+            if om:
+                postings.append({"account": om.group(2).strip(), "amount": ""})
 
     # Merchant layer: the app matches raw statement text against payee
     # aliases and writes the canonical merchant name on the payee line.
@@ -480,7 +496,7 @@ def _parse_transaction(
     return {
         "date": date,
         "payee": payee,
-		"amount": inst_amount,
+        "amount": inst_amount,
         "statementPayee": statement_payee,
         "postings": postings,
         "raw": normalized_body,

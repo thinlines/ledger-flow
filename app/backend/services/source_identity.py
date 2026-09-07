@@ -143,11 +143,17 @@ def institution_amount(
             break
 
     if institution_index is None:
-        # No posting for the institution account: fall back to the first
-        # posting's amount, matching the pre-existing behaviour.
-        if postings:
-            return parse_optional_amount(str(postings[0].get("amount", "")))
-        return None
+        # No posting names the institution account. Its amount is still the
+        # negated sum of the others — the transaction balances either way — so
+        # derive it rather than returning a counter-posting's amount unchanged.
+        # Returning it unchanged is a sign error: for a deposit written as
+        # ``Income:Employer  USD -975.70``, the institution amount is +975.70.
+        others = [
+            parse_optional_amount(str(posting.get("amount", ""))) for posting in postings
+        ]
+        if not others or any(amount is None for amount in others):
+            return None
+        return -sum(others, Decimal(0))
 
     own = parse_optional_amount(str(postings[institution_index].get("amount", "")))
     if own is not None:

@@ -64,9 +64,19 @@ def test_indeterminable_amount_returns_none() -> None:
     assert source_identity.institution_amount(postings, CARD) is None
 
 
-def test_missing_institution_posting_falls_back_to_the_first_posting() -> None:
+def test_missing_institution_posting_still_derives_the_negated_sum() -> None:
+    """``ledger convert`` writes the institution posting bare, and some readers
+    drop amount-less postings entirely — so this list can arrive without it.
+
+    The institution amount is the negation of what remains either way. Returning
+    the counter-posting's amount unchanged is a sign error, and it made the
+    import path and the migration path disagree on 437 of 460 rows.
+    """
     postings = [{"account": "Expenses:Groceries", "amount": "USD 10.00"}]
-    assert source_identity.institution_amount(postings, CARD) == Decimal("10.00")
+    assert source_identity.institution_amount(postings, CARD) == Decimal("-10.00")
+
+    deposit = [{"account": "Income:Employer", "amount": "USD -975.70"}]
+    assert source_identity.institution_amount(deposit, CARD) == Decimal("975.70")
 
 
 def test_no_postings_at_all_returns_none() -> None:
