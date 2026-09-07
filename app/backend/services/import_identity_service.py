@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
-from .commodity_service import canonicalize_base_currency_posting
+from .commodity import canonicalize_base_currency_posting
 from .config_service import AppConfig
 from .journal_query_service import ACCOUNT_LINE_RE, ACCOUNT_ONLY_RE, META_RE
 from .projection_db import connect, database_path, ensure_database

@@ -42,7 +42,7 @@ def _month_window(today: date, count: int) -> list[str]:
 
 def _matches_base_currency(posting: Posting, base_currency: str) -> bool:
     """Return True if the posting's commodity matches the base currency or is unmarked."""
-    from .commodity_service import BASE_CURRENCY_SYMBOLS
+    from .commodity import BASE_CURRENCY_SYMBOLS
 
     if posting.commodity is None:
         return True

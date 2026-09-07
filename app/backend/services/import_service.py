@@ -8,7 +8,7 @@ from datetime import date
 from pathlib import Path
 
 from . import source_identity
-from .commodity_service import canonicalize_base_currency_posting
+from .commodity import canonicalize_base_currency_posting
 from .config_service import AppConfig
 from .csv_normalizer import normalize_csv_to_intermediate
 from .header_parser import HEADER_RE, set_header_payee

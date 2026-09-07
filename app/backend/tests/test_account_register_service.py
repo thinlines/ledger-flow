@@ -6,7 +6,7 @@ import pytest
 
 from services import account_register_service
 from services.account_register_service import build_account_register
-from services.commodity_service import CommodityMismatchError
+from services.commodity import CommodityMismatchError
 from services.config_service import AppConfig
 from services.transfer_service import transfer_pair_account
 from services.workspace_service import ensure_workspace_journal_includes

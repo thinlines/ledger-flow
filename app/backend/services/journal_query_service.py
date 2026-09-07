@@ -7,7 +7,7 @@ from datetime import date
 from decimal import Decimal
 from pathlib import Path
 
-from .commodity_parser import CommodityMismatchError, commodity_label, parse_amount
+from .commodity import CommodityMismatchError, commodity_label, parse_amount
 from .header_parser import TransactionStatus, parse_header
 from .journal_syntax import (
     ACCOUNT_LINE_RE,

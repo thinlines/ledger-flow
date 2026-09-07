@@ -618,7 +618,7 @@ _BAL_LINE_RE = re.compile(r"^\s*(?P<amount>.*?[\d.])\s{2,}(?P<account>\S.*)$")
 
 
 def _ledger_balances(journal: Path) -> dict[str, Decimal]:
-    from services.commodity_service import parse_amount
+    from services.commodity import parse_amount
 
     output = subprocess.run(
         ["ledger", "-f", str(journal), "bal", "--flat", "--no-total"],

@@ -38,7 +38,6 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime
-from decimal import Decimal
 from pathlib import Path
 from uuid import uuid7
 
@@ -62,24 +61,6 @@ class VerifyFailure:
 
 
 Verifier = Callable[[AppConfig, list[Path]], "VerifyFailure | None"]
-
-
-def format_currency_amount(
-    amount: Decimal,
-    currency: str,
-    *,
-    decimal_places: int | None = 2,
-) -> str:
-    """Render a currency amount in Ledger Flow's canonical journal form.
-
-    App-authored money uses two decimal places by default. Passing ``None``
-    preserves a parsed source amount's precision during import normalization.
-    """
-    commodity = str(currency or "").strip().upper()
-    if not commodity:
-        raise ValueError("Currency is required when formatting a journal amount.")
-    number = format(amount, "f") if decimal_places is None else f"{amount:.{decimal_places}f}"
-    return f"{commodity} {number}"
 
 
 class WriterRejected(Exception):

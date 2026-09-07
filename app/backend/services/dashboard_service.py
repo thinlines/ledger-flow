@@ -4,7 +4,7 @@ from collections import defaultdict
 from datetime import date
 from decimal import Decimal
 
-from .commodity_service import CommodityMismatchError, commodity_label
+from .commodity import CommodityMismatchError, commodity_label
 from .config_service import AppConfig, infer_account_kind
 from .header_parser import TransactionStatus
 from .journal_query_service import (

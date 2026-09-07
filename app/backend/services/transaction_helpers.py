@@ -6,7 +6,7 @@ from datetime import date
 from decimal import Decimal
 from functools import cache
 
-from .commodity_service import CommodityMismatchError, commodity_label
+from .commodity import CommodityMismatchError, commodity_label
 from .config_service import AppConfig, infer_account_kind
 from .journal_query_service import (
     pretty_account_name,

@@ -8,7 +8,7 @@ from pathlib import Path
 
 from . import source_identity as source_identity_module
 from .account_declaration_service import set_subtype
-from .commodity_service import BASE_CURRENCY_SYMBOLS
+from .commodity import BASE_CURRENCY_SYMBOLS
 from .config_service import AppConfig, infer_account_kind, load_config
 from .custom_csv_service import normalize_custom_profile
 from .import_identity_service import ImportIdentityStore, source_payload_hash_for_lines

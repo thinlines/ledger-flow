@@ -21,7 +21,7 @@ from .journal_query_service import (
     META_RE,
     TXN_START_RE,
 )
-from .journal_writer import format_currency_amount
+from .commodity import format_currency_amount
 from .payee_similarity import payee_similarity
 
 MAX_MANUAL_MATCH_DAYS = 3

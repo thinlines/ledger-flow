@@ -65,7 +65,7 @@ from services.activity_service import build_activity_view
 from services.category_suggestion_service import suggest_category
 from services.classifier_service import suggest_review_categories
 from services.classifier_warmup_service import schedule_review_warmup
-from services.commodity_service import CommodityMismatchError
+from services.commodity import CommodityMismatchError
 from services.custom_csv_service import inspect_csv_bytes
 from services.dashboard_service import (
     build_dashboard_overview,
