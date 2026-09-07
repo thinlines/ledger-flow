@@ -366,24 +366,31 @@ linking ICCU to Wells Fargo for transfers. Six blocks exist, one pair per amount
   `importer_version: mvp2`. Both sides share a `transfer_id` and carry
   `transfer_manual_resolution: missing_import_counterpart`.
 
-The Wells Fargo blocks were fabricated to complete the transfer pair when the WF
-statement had no matching row. Their `lf_source_identity` was never derived from
-a statement row, so there is no correct value for the migration to compute — it
-was right to skip them.
+The Wells Fargo blocks were synthesized by hand to give each transfer its second
+leg. Wells Fargo never reported these micro-deposits on account 4770 — the ACH
+originated from `WELLS FARGO IFI`, not from the checking account itself — so no
+WF statement contains an ACCTVERIFY row to import. That is *why* they were
+synthesized, and it is a permanent property of the source data, not a gap waiting
+to be filled.
+
+Their `lf_source_identity` was therefore never derived from a statement row, and
+no correct value exists for the migration to compute. Skipping them was right.
 
 No current code writes `missing_import_counterpart`; `transfer_manual_resolution`
 survives only as a known key in `workspace_service`. These are orphans of a
 removed flow.
 
-**Risk if left as-is.** Should a Wells Fargo statement covering 2026-02-17 ever be
-imported, the real ACCTVERIFY rows would compute proper identities, match nothing,
-and be written — duplicating the synthetic blocks. Small (three rows, $1.08) but
-it is the failure this seam exists to prevent.
+**No collision risk.** Since no WF statement will ever carry these rows, no import
+can compute an identity that meets them. The three stale identities sit in the
+journal-derived dedupe map matching nothing, which is inert.
 
-**Proposed fix:** strip `lf_source_identity`, `source_payload_hash` and
-`importer_version` from the three Wells Fargo blocks. A synthetic counterpart has
-no import identity, and claiming one is what makes it collide. `lf_txn_id` and the
-transfer metadata stay. Needs a decision before acting — it edits the ledger.
+**Open, low priority.** The blocks still *claim* to be imported —
+`import_account_id`, `lf_source_identity`, `source_payload_hash`,
+`importer_version: mvp2` — which is false, and seam 5's `check_integrity` will
+have to either flag them or learn to exempt them. Stripping those four keys, and
+keeping `lf_txn_id` and the transfer metadata, would make the record say what
+actually happened. Worth doing when seam 5 defines the invariant, not before —
+and it edits the ledger, so it needs a decision either way.
 
 #### Silently skipped conflicts
 
@@ -408,7 +415,7 @@ them properly is seam 5 / frontend work.
 - [ ] Identity key names come from one registry — only `import_service` rewired so far
 - [ ] Non-fence conflicts are surfaced rather than silently skipped (they are now at least logged)
 - [x] 3 provenance-less ACH blocks triaged — synthetic transfer counterparts, see above
-- [ ] Strip the meaningless import metadata from those 3 blocks (needs a decision, edits the ledger)
+- [ ] Decide whether the 3 synthetic blocks keep their (false) import metadata — no collision risk, but `check_integrity` must flag or exempt them
 - [ ] Journal block editing happens in exactly one module; no service or endpoint calls `read_text().splitlines()` on a journal to edit a transaction
 - [ ] Metadata parsing and writing happen in exactly one module; one key registry drives `12-tags.dat`
 - [ ] `check_integrity` exists, runs on startup, and reports all five invariants
