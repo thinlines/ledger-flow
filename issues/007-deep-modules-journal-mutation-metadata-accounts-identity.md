@@ -447,6 +447,59 @@ now keys off "conflict that is not a date fence" rather than the literal
 `import.identity_collision.v1` operation carrying its `conflict_reason`. Surfacing
 them properly is seam 5 / frontend work.
 
+### Seam 3 — the transaction edit session (landed, GH #53)
+
+`services/transaction_edit_service.py` is the only writer of transaction blocks.
+The sketch above nested an editor inside `journal_writer.mutate`; design review
+settled on a single session that opens the mutation itself, because verbs
+spanning two transactions (unmatch, transfer linkage) must share one mutation
+and one operation and the caller should not have to know that.
+
+```python
+with edit(config, tag="recategorize", event_type="transaction.recategorized.v1") as session:
+    session.open(txn_id, expect_hash=block_hash).set_category("Expenses:Groceries")
+
+session.result.operation_id        # the recorded operation
+session.result.identity(txn_id)    # post-edit durable id + block hash
+```
+
+The whole surface: `edit()`, `Session.open` / `.restore` / `.unmatch` / `.match`,
+`Transaction`'s reads (`date`, `payee`, `status`, `notes`, `metadata`, `tags`,
+`postings`, `source_posting`, `category_posting`, `block_text`) and its verbs
+(`set_category`, `set_source_account`, `set_status`, `set_notes`,
+`set_metadata` / `clear_metadata`, `set_tag` / `clear_tag`, `delete`), the
+`Posting` / `Identity` / `EditResult` values, and six typed refusals.
+
+Each verb writes its own undo payload, so no caller assembles one, and every
+undo handler is now the forward verb with the payload's prior value plus one
+semantic precondition. `undo_service` went from 833 lines to 497; `main.py`
+from 2679 to 2254.
+
+**Deliberate deviations from the sketch.** `Posting` is a read-only value: its
+only setter would have been `account`, which is the same change `set_category`
+and `set_source_account` already express in the user's words, and routing it
+through the parent for validation would have bought a second way to do one
+thing. `unmatch` and `match` are session verbs rather than compositions the
+caller assembles, because the archive's shape (append with a header, drop the
+file when only comments remain) is journal knowledge, not API knowledge.
+
+**Scope fence.** The six row-action endpoints import nothing from the journal
+writer, the journal syntax module, the block-location helpers, or the
+projection internals, and never compute a workspace path. `main.py` still
+imports `journal_writer` for the batch flows this slice left alone —
+import-apply, unknowns-apply, reconcile, rules-history-apply.
+
+**Line primitives consolidated.** `posting_account()` and
+`rewrite_posting_account()` now live in `journal_syntax` beside the regexes
+they pair. The account-rewrite helper is gone from `transfer_service` (its
+third copy, in `reconciliation_duplicate_service`, is deleted), and every site
+that hand-paired `ACCOUNT_LINE_RE` with `ACCOUNT_ONLY_RE` to read an account
+asks `posting_account` instead.
+
+Still open here: the metadata key registry and `12-tags.dat` generation (seam
+4) slot in behind the metadata verbs without changing the interface; the batch
+flows still edit journal text directly.
+
 ## Acceptance criteria
 
 - [x] `Account` dataclass and `AppConfig.accounts` / `.account()` / `.account_for_ledger()` exist and are covered by tests
@@ -462,7 +515,7 @@ them properly is seam 5 / frontend work.
 - [x] 3 provenance-less ACH blocks triaged — synthetic transfer counterparts, see above
 - [x] The 3 synthetic blocks no longer claim import provenance — stripped and tagged `:manual:`
 - [ ] Transfers support a leg that is manual by nature (institution never reported it); today only `direct` (non-import-backed peer) and `import_match` exist
-- [ ] Journal block editing happens in exactly one module; no service or endpoint calls `read_text().splitlines()` on a journal to edit a transaction
+- [~] Journal block editing happens in exactly one module — true for every transaction row action and its undo (GH #53); the batch flows (import-apply, unknowns-apply, reconcile, rules-history-apply) still edit journal text directly
 - [ ] Metadata parsing and writing happen in exactly one module; one key registry drives `12-tags.dat`
 - [ ] `check_integrity` exists, runs on startup, and reports all five invariants
 - [ ] `ledger -f journals/<year>.journal bal` exits 0 with no warnings after each step
