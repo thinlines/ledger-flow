@@ -158,3 +158,38 @@ A durable relationship where an imported transaction replaces or absorbs a
 manual transaction that represented the same real-world movement of money. The
 match exists while the current journal state links the surviving imported
 transaction to the archived manual transaction.
+
+## transfer
+
+A movement of money between two tracked accounts. It is never income or
+spending, and the Dashboard's cash-flow analysis keeps it distinct from both.
+
+**Import-fed account**:
+A tracked account whose activity arrives through Import. Its transactions are
+dated by its own institution, and it is the kind of account that gets
+reconciled against a statement.
+
+**Direct transfer**:
+A transfer in which at most one side is import-fed. It is one transaction
+between the two accounts.
+
+**Transfer pair**:
+A transfer in which both sides are import-fed. Each side is its own
+transaction, dated by its own bank; the two are linked and shown as one
+movement. They are never merged in the books — see ADR-0011.
+_Avoid_: Merged transfer, combined transfer
+
+**In-transit account**:
+The account that holds a transfer pair's money between the moment it leaves
+one institution and the moment it arrives at the other. Its balance is exactly
+the money currently in flight. Each pair of tracked accounts has its own.
+_Avoid_: Clearing account, middle man, intermediate account
+
+**Pending transfer**:
+A transfer pair with only one side recorded. The money sits in the in-transit
+account until the counterpart is imported and matched.
+
+**Matched transfer**:
+A transfer pair with both sides recorded and linked. The in-transit account
+nets to zero for that movement.
+_Avoid_: Settled transfer
