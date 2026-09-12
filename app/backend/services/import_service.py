@@ -21,6 +21,7 @@ from .journal_query_service import (
     META_RE,
     TXN_START_RE,
 )
+from .journal_syntax import rewrite_posting_account
 from .ledger_runner import CommandError, run_cmd
 from .merchant_service import Merchant, load_merchants, match_merchant, resolve_category
 from .operations_service import record_operation, rel_path
@@ -28,7 +29,6 @@ from .parsers import registry
 from .parsers.intermediate_writer import write_intermediate
 from .parsers.types import Adapter, Record
 from .rules_service import ensure_rules_store, load_rules
-from .transfer_service import rewrite_posting_account
 from .workspace_service import (
     ensure_standard_commodities_file,
     ensure_workspace_journal_includes,

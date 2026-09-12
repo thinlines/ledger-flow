@@ -15,7 +15,7 @@ from .journal_block_service import (
     locate_block_by_id as _locate_block_by_id,
 )
 from .journal_query_service import ACCOUNT_LINE_RE, ACCOUNT_ONLY_RE
-from .journal_syntax import META_RE, TXN_START_RE
+from .journal_syntax import META_RE, TXN_START_RE, rewrite_posting_account
 from .manual_entry_service import (
     _extract_user_metadata_lines,
     _parse_manual_entry_destination,
@@ -36,7 +36,6 @@ from .transfer_service import (
     infer_blank_posting_amounts,
     parse_amount,
     parse_transfer_metadata,
-    rewrite_posting_account,
     upsert_transaction_metadata,
 )
 

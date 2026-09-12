@@ -1,4 +1,11 @@
-"""Canonical regular expressions for Ledger journal syntax."""
+"""Canonical regular expressions and line primitives for Ledger journal syntax.
+
+The two line primitives live here rather than in any one writer because they
+are the same question asked from several places — *which account does this
+posting line name*, and *rename it without disturbing anything else*. Every
+caller that used to pair ``ACCOUNT_LINE_RE`` with ``ACCOUNT_ONLY_RE`` by hand
+now asks one of them.
+"""
 from __future__ import annotations
 
 import re
@@ -9,3 +16,33 @@ META_RE = re.compile(r"^\s*;\s*([^:]+):\s*(.*)$")
 ACCOUNT_LINE_RE = re.compile(r"^(\s+)([^\s].*?)(\s{2,}|\t+)(.*)$")
 ACCOUNT_ONLY_RE = re.compile(r"^(\s+)([^\s].*?)\s*$")
 LF_TXN_ID_META_RE = re.compile(r"^\s*;\s*lf_txn_id:\s*(\S+)\s*$")
+
+
+def posting_account(line: str) -> str | None:
+    """The account a posting line names, or ``None`` for any other line.
+
+    Comment lines, blank lines, and the transaction header all answer ``None``.
+    """
+    match = ACCOUNT_LINE_RE.match(line) or ACCOUNT_ONLY_RE.match(line)
+    if match is None:
+        return None
+    account = match.group(2).strip()
+    if not account or account.startswith(";"):
+        return None
+    return account
+
+
+def rewrite_posting_account(line: str, target_account: str) -> tuple[str, bool]:
+    """Rename a posting line's account, preserving its alignment and amount.
+
+    Returns ``(line, False)`` unchanged when the line is not a posting.
+    """
+    match = ACCOUNT_LINE_RE.match(line)
+    if match:
+        return (f"{match.group(1)}{target_account}{match.group(3)}{match.group(4)}", True)
+
+    match = ACCOUNT_ONLY_RE.match(line)
+    if match:
+        return (f"{match.group(1)}{target_account}", True)
+
+    return line, False

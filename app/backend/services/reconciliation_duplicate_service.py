@@ -14,7 +14,7 @@ from .archive_service import archive_manual_entry
 from .config_service import AppConfig
 from .import_identity_service import ImportIdentityStore
 from .journal_block_service import hash_block, locate_block_by_hash, locate_block_by_id
-from .journal_query_service import ACCOUNT_LINE_RE, ACCOUNT_ONLY_RE, META_RE
+from .journal_syntax import META_RE, posting_account, rewrite_posting_account
 from .operations_service import rel_path
 from .payee_similarity import payee_similarity as _payee_similarity
 from .projection_service import find_projected_transaction
@@ -161,41 +161,18 @@ def _extract_metadata(block_lines: list[str]) -> dict[str, str]:
     return metadata
 
 
-def _find_other_posting(block_lines: list[str], ledger_account: str) -> tuple[int | None, str | None]:
-    for idx, line in enumerate(block_lines[1:], start=1):
-        if line.strip().startswith(";"):
-            continue
-        match = ACCOUNT_LINE_RE.match(line) or ACCOUNT_ONLY_RE.match(line)
-        if not match:
-            continue
-        account = match.group(2).strip()
-        if account != ledger_account:
-            return idx, account
-    return None, None
+def _category_postings(block_lines: list[str], ledger_account: str) -> list[tuple[int, str]]:
+    """The block's legs that are not the tracked account — its category side.
 
-
-def _find_other_postings(block_lines: list[str], ledger_account: str) -> list[tuple[int, str]]:
-    postings: list[tuple[int, str]] = []
-    for idx, line in enumerate(block_lines[1:], start=1):
-        if line.strip().startswith(";"):
-            continue
-        match = ACCOUNT_LINE_RE.match(line) or ACCOUNT_ONLY_RE.match(line)
-        if not match:
-            continue
-        account = match.group(2).strip()
-        if account != ledger_account:
-            postings.append((idx, account))
-    return postings
-
-
-def _rewrite_posting_account(line: str, target_account: str) -> str:
-    match = ACCOUNT_LINE_RE.match(line)
-    if match:
-        return f"{match.group(1)}{target_account}{match.group(3)}{match.group(4)}"
-    match = ACCOUNT_ONLY_RE.match(line)
-    if match:
-        return f"{match.group(1)}{target_account}"
-    raise HTTPException(status_code=422, detail="Could not rewrite the duplicate transaction.")
+    Same rule the edit session applies through ``Transaction.category_posting``;
+    this flow builds merged block text rather than editing an open transaction,
+    so it addresses the legs by line offset.
+    """
+    return [
+        (offset, account)
+        for offset, line in enumerate(block_lines[1:], start=1)
+        if (account := posting_account(line)) is not None and account != ledger_account
+    ]
 
 
 def _user_metadata_lines(block_lines: list[str]) -> list[str]:
@@ -377,13 +354,13 @@ def resolve_duplicate_candidate(
                 manual_block = manual_lines[manual_start:manual_end]
                 imported_block = imported_lines[imported_start:imported_end]
 
-            manual_postings = _find_other_postings(manual_block, ledger_account)
+            manual_postings = _category_postings(manual_block, ledger_account)
             if len(manual_postings) != 1:
                 raise HTTPException(
                     status_code=422,
                     detail="Split manual duplicates need a fuller merge flow before they can replace an imported transaction.",
                 )
-            imported_postings = _find_other_postings(imported_block, ledger_account)
+            imported_postings = _category_postings(imported_block, ledger_account)
             if len(imported_postings) != 1:
                 raise HTTPException(status_code=422, detail="Imported duplicate does not have a usable category posting.")
             _, destination_account = manual_postings[0]
@@ -391,10 +368,15 @@ def resolve_duplicate_candidate(
 
             updated_imported = list(imported_block)
             if imported_other_account != destination_account:
-                updated_imported[imported_posting_idx] = _rewrite_posting_account(
-                    updated_imported[imported_posting_idx],
-                    destination_account,
+                rewritten, changed = rewrite_posting_account(
+                    updated_imported[imported_posting_idx], destination_account
                 )
+                if not changed:
+                    raise HTTPException(
+                        status_code=422,
+                        detail="Could not rewrite the duplicate transaction.",
+                    )
+                updated_imported[imported_posting_idx] = rewritten
             updated_imported = _replace_user_metadata(updated_imported, _user_metadata_lines(manual_block))
             match_id = f"match_{uuid4()}"
             updated_imported = _upsert_match_tags(updated_imported, match_id)

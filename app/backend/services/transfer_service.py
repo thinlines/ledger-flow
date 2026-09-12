@@ -6,7 +6,7 @@ from decimal import Decimal
 from pathlib import Path
 
 from .currency_parser import parse_optional_amount
-from .journal_query_service import ACCOUNT_LINE_RE, ACCOUNT_ONLY_RE, META_RE
+from .journal_query_service import META_RE
 
 TRANSFER_ROOT_ACCOUNT = "Assets:Transfers"
 PAIR_SEPARATOR = "__"
@@ -294,18 +294,6 @@ def upsert_transaction_metadata(txn_lines: list[str], updates: dict[str, str | N
         updated[insert_at:insert_at] = inserts
 
     return updated
-
-
-def rewrite_posting_account(line: str, target_account: str) -> tuple[str, bool]:
-    match = ACCOUNT_LINE_RE.match(line)
-    if match:
-        return (f"{match.group(1)}{target_account}{match.group(3)}{match.group(4)}", True)
-
-    match = ACCOUNT_ONLY_RE.match(line)
-    if match:
-        return (f"{match.group(1)}{target_account}", True)
-
-    return line, False
 
 
 def ensure_transfer_account(accounts_dat: Path, source_tracked_account_id: str, target_tracked_account_id: str) -> str:
