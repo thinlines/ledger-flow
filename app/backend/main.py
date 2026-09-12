@@ -4,7 +4,7 @@ import logging
 import os
 import re
 import sqlite3
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, contextmanager
 from datetime import date
 from importlib import resources
 from pathlib import Path
@@ -49,7 +49,7 @@ from models import (
     WorkspaceImportAccountUpsertRequest,
     WorkspaceSelectRequest,
 )
-from services import journal_writer
+from services import journal_writer, transaction_edit_service
 from services.account_declaration_service import (
     AccountNotDeclared,
     DeclarationInUse,
@@ -72,8 +72,7 @@ from services.dashboard_service import (
     query_dashboard_transactions,
 )
 from services.git_snapshot_service import hours_since_last_snapshot, snapshot_commit
-from services.header_parser import HEADER_RE as _HEADER_RE
-from services.header_parser import TransactionStatus, parse_header, set_header_status
+from services.header_parser import TransactionStatus
 from services.import_history_service import list_import_history, record_applied_import
 from services.import_service import (
     ImportPreviewBlockedError,
@@ -89,8 +88,6 @@ from services.institution_registry import (
     display_name_for,
     list_templates,
 )
-from services.journal_block_service import hash_block, locate_block_by_id
-from services.journal_query_service import TXN_START_RE
 from services.ledger_runner import CommandError, run_cmd
 from services.manual_entry_service import create_manual_transaction
 from services.merchant_service import (
@@ -104,14 +101,7 @@ from services.opening_balance_service import (
     opening_balance_index,
 )
 from services.operations_service import list_operations, rel_path
-from services.projection_service import (
-    find_projected_transaction,
-    find_projected_transaction_at,
-    find_projected_transaction_match,
-    projected_transaction_block,
-    refresh_projection,
-    render_file,
-)
+from services.projection_service import find_projected_transaction, refresh_projection
 from services.reconciliation_context_service import build_reconciliation_context
 from services.reconciliation_duplicate_service import (
     build_duplicate_review_payload,
@@ -146,10 +136,14 @@ from services.rules_service import (
     upsert_payee_rule,
 )
 from services.stage_store import StageNotFoundError, StageStore
-from services.transfer_service import (
-    ACCOUNT_LINE_RE,
-    ACCOUNT_ONLY_RE,
-    rewrite_posting_account,
+from services.transaction_edit_service import (
+    AlreadyInState,
+    EditError,
+    NotACategory,
+    NotTracked,
+    SplitTransaction,
+    StaleTransaction,
+    TransactionNotFound,
 )
 from services.undo_service import UndoOutcome, is_undoable_type, undo_event
 from services.unified_transactions_service import (
@@ -748,538 +742,120 @@ _STATUS_CYCLE = {
 }
 
 
-_STALE_TRANSACTION_DETAIL = (
-    "This transaction changed since it was loaded — refresh and try again."
-)
+# ---------------------------------------------------------------------------
+# Transaction actions
+#
+# Every row action is a verb on the transaction edit session: request in,
+# session verb, response out. The session owns the journal, the projection,
+# staleness, and the undo payload; this layer owns only the translation
+# between HTTP and the user's vocabulary.
+# ---------------------------------------------------------------------------
 
 
-def _locate_projected_transaction(config, txn_id: str, block_hash: str):
-    """The stable-identity locate ritual shared by every row mutation:
-    self-heal the projection, look the transaction up by id, reject only
-    true block-level staleness (hash mismatch)."""
-    refresh_projection(config)
-    ref = find_projected_transaction(config, txn_id)
-    if ref is None:
+_EDIT_REFUSAL_STATUS: dict[type[EditError], int] = {
+    TransactionNotFound: 404,
+    StaleTransaction: 409,
+    SplitTransaction: 422,
+    NotACategory: 422,
+    NotTracked: 422,
+    AlreadyInState: 422,
+}
+
+
+@contextmanager
+def _transaction_edit(*, tag: str, event_type: str):
+    """One edit session, with its typed refusals translated to HTTP once."""
+    try:
+        with transaction_edit_service.edit(
+            _require_workspace_config(), tag=tag, event_type=event_type
+        ) as session:
+            yield session
+    except EditError as exc:
         raise HTTPException(
-            status_code=404,
-            detail="Transaction not found (stale data — try refreshing)",
-        )
-    if block_hash != ref.raw_block_hash:
-        raise HTTPException(status_code=409, detail=_STALE_TRANSACTION_DETAIL)
-    return ref
+            status_code=_EDIT_REFUSAL_STATUS.get(type(exc), 422), detail=str(exc)
+        ) from exc
 
 
-def _post_edit_identity(config, ref) -> dict:
-    """Post-edit projected identity for the response. The id lookup wins for
-    blocks carrying ``lf_txn_id`` (stable across edits and re-ordering); the
-    ``txn_order`` fallback recovers ephemeral-id blocks after in-place edits."""
-    updated = find_projected_transaction(config, ref.id) or find_projected_transaction_at(
-        config, ref.journal_file_id, ref.txn_order
-    )
+def _edited(session, txn_id: str) -> dict:
+    """Post-edit identity plus operation id, for re-spreading onto the row."""
+    identity = session.result.identity(txn_id)
     return {
-        "txnId": updated.id if updated else ref.id,
-        "blockHash": updated.raw_block_hash if updated else None,
+        "txnId": identity.txn_id,
+        "blockHash": identity.block_hash,
+        "eventId": session.result.operation_id,
     }
 
 
 @app.post("/api/transactions/toggle-status")
 def transactions_toggle_status(req: ToggleStatusRequest) -> dict:
-    """Stable-identity mutation contract (spec: Mutation-Time Projection):
-    locate the block by ``lf_txn_id``, reject as stale only when the block
-    hash differs, re-project the touched file, return updated projected data.
-    """
-    config = _require_workspace_config()
-    ref = _locate_projected_transaction(config, req.txnId, req.blockHash)
+    with _transaction_edit(
+        tag="toggle-status", event_type="transaction.status_toggled.v1"
+    ) as session:
+        transaction = session.open(req.txnId, expect_hash=req.blockHash)
+        next_status = _STATUS_CYCLE[transaction.status]
+        transaction.set_status(next_status)
 
-    parsed = parse_header(ref.raw_header)
-    if parsed is None:
-        raise HTTPException(status_code=400, detail="Invalid header line")
-
-    next_status = _STATUS_CYCLE[parsed.status]
-    new_line = set_header_status(ref.raw_header, next_status)
-
-    if not _HEADER_RE.match(new_line):
-        raise HTTPException(status_code=500, detail="Rewritten header is invalid")
-
-    journal_path = config.root_dir / ref.journal_path
-    with journal_writer.mutate(
-        config=config,
-        paths=[journal_path],
-        tag="toggle-status",
-        event_type="transaction.status_toggled.v1",
-    ) as mut:
-        text = journal_path.read_text(encoding="utf-8")
-        lines = text.splitlines()
-
-        header_idx, _ = _locate_current_block(lines, ref)
-        lines[header_idx] = new_line
-        journal_path.write_text("\n".join(lines) + ("\n" if text.endswith("\n") else ""), encoding="utf-8")
-
-        mut.summary = f"Toggled status to {next_status.value}: {ref.raw_header[:60]}"
-        mut.payload = {
-            "journal_path": ref.journal_path,
-            "header_line": ref.raw_header,
-            "previous_status": parsed.status.value,
-            "new_status": next_status.value,
-            "txn_id": ref.id,
-        }
-
-    # The writer re-projected the touched file; just re-read the row.
-    return {
-        "newStatus": next_status.value,
-        **_post_edit_identity(config, ref),
-        "eventId": mut.event_id,
-    }
-
-
-# ---------------------------------------------------------------------------
-# Transaction actions: delete, re-categorize, unmatch
-# ---------------------------------------------------------------------------
-
-
-def _locate_current_block(lines: list[str], ref) -> tuple[int, int]:
-    """Relocate a projected transaction by durable id inside the writer.
-
-    The projection hash is checked again after relocation so an edit to the
-    target is stale, while edits elsewhere in the file are harmless.
-    """
-    located = locate_block_by_id(lines, ref.id)
-    if located is None or hash_block(lines, *located) != ref.raw_block_hash:
-        raise HTTPException(status_code=409, detail=_STALE_TRANSACTION_DETAIL)
-    return located
+    return {"newStatus": next_status.value, **_edited(session, req.txnId)}
 
 
 @app.post("/api/transactions/delete")
 def transactions_delete(req: DeleteTransactionRequest) -> dict:
-    config = _require_workspace_config()
-    ref = _locate_projected_transaction(config, req.txnId, req.blockHash)
-    journal_path = config.root_dir / ref.journal_path
+    with _transaction_edit(tag="delete", event_type="transaction.deleted.v1") as session:
+        session.open(req.txnId, expect_hash=req.blockHash).delete()
 
-    parsed = parse_header(ref.raw_header)
-    payee = parsed.payee if parsed else ref.raw_header[:60]
-    date_str = parsed.date if parsed else ""
-
-    with journal_writer.mutate(
-        config=config,
-        paths=[journal_path],
-        tag="delete",
-        event_type="transaction.deleted.v1",
-    ) as mut:
-        text = journal_path.read_text(encoding="utf-8")
-        lines = text.splitlines()
-        block_start, block_end = _locate_current_block(lines, ref)
-        deleted_block = "\n".join(lines[block_start:block_end])
-
-        # Also consume a preceding blank line to avoid double-blank-line gaps.
-        remove_start = block_start
-        if remove_start > 0 and lines[remove_start - 1].strip() == "":
-            remove_start -= 1
-        new_lines = lines[:remove_start] + lines[block_end:]
-        journal_path.write_text("\n".join(new_lines) + ("\n" if text.endswith("\n") else ""), encoding="utf-8")
-
-        mut.summary = f"Deleted transaction: {payee} on {date_str}"
-        mut.payload = {
-            "journal_path": ref.journal_path,
-            "header_line": ref.raw_header,
-            "txn_id": ref.id,
-            "deleted_block": deleted_block,
-        }
-
-    return {"success": True, "eventId": mut.event_id}
+    return {"success": True, "eventId": session.result.operation_id}
 
 
 @app.post("/api/transactions/recategorize")
 def transactions_recategorize(req: RecategorizeTransactionRequest) -> dict:
-    config = _require_workspace_config()
-    ref = _locate_projected_transaction(config, req.txnId, req.blockHash)
-    journal_path = config.root_dir / ref.journal_path
-
-    parsed = parse_header(ref.raw_header)
-    payee = parsed.payee if parsed else ref.raw_header[:60]
-    date_str = parsed.date if parsed else ""
-
-    # Collect tracked account ledger names for distinguishing categories from
-    # tracked accounts (transfers).
-    tracked_ledger_accounts: set[str] = set()
-    for ta in config.tracked_accounts.values():
-        la = str(ta.get("ledger_account", "")).strip()
-        if la:
-            tracked_ledger_accounts.add(la)
-
-    previous_account: str | None = None
-    target_account: str = ""
-
-    with journal_writer.mutate(
-        config=config,
-        paths=[journal_path],
-        tag="recategorize",
-        event_type="transaction.recategorized.v1",
-    ) as mut:
-        text = journal_path.read_text(encoding="utf-8")
-        lines = text.splitlines()
-        block_start, block_end = _locate_current_block(lines, ref)
-
-        # Find the single destination posting to rewrite.
-        destination_idx: int | None = None
-        for i in range(block_start + 1, block_end):
-            line = lines[i]
-            # Skip metadata comments and blank lines.
-            stripped = line.strip()
-            if stripped.startswith(";") or stripped == "":
-                continue
-            # Parse the posting account.
-            m = ACCOUNT_LINE_RE.match(line) or ACCOUNT_ONLY_RE.match(line)
-            if m:
-                account = m.group(2).strip()
-                if account in tracked_ledger_accounts:
-                    continue  # Source (tracked) account — skip.
-                if account == "Expenses:Unknown" and not (req.newCategory and req.newCategory.strip()):
-                    raise HTTPException(status_code=422, detail="Transaction is already uncategorized")
-                if destination_idx is not None:
-                    # Multiple non-source postings — split transaction, not supported.
-                    raise HTTPException(status_code=422, detail="Cannot re-categorize a split transaction")
-                destination_idx = i
-                previous_account = account
-
-        if destination_idx is None:
-            raise HTTPException(status_code=422, detail="Cannot re-categorize a transfer")
-
-        target_account = req.newCategory.strip() if req.newCategory and req.newCategory.strip() else "Expenses:Unknown"
-
-        if previous_account == target_account:
-            raise HTTPException(status_code=422, detail="Transaction already has this category")
-
-        new_line, changed = rewrite_posting_account(lines[destination_idx], target_account)
-        if not changed:
-            raise HTTPException(status_code=500, detail="Failed to rewrite posting account")
-        lines[destination_idx] = new_line
-
-        journal_path.write_text("\n".join(lines) + ("\n" if text.endswith("\n") else ""), encoding="utf-8")
-
-        mut.summary = f"Recategorized: {payee} on {date_str} ({previous_account} → {target_account})"
-        mut.payload = {
-            "journal_path": ref.journal_path,
-            "header_line": ref.raw_header,
-            "txn_id": ref.id,
-            "previous_account": previous_account,
-            "new_account": target_account,
-        }
+    with _transaction_edit(
+        tag="recategorize", event_type="transaction.recategorized.v1"
+    ) as session:
+        transaction = session.open(req.txnId, expect_hash=req.blockHash)
+        previous_account = transaction.set_category(req.newCategory)
+        new_account = transaction.category_posting.account
 
     return {
         "success": True,
         "previousAccount": previous_account,
-        "newAccount": target_account,
-        **_post_edit_identity(config, ref),
-        "eventId": mut.event_id,
+        "newAccount": new_account,
+        **_edited(session, req.txnId),
     }
-
-
-# ---------------------------------------------------------------------------
-# Reassign account (source posting)
-# ---------------------------------------------------------------------------
 
 
 @app.post("/api/transactions/reassign-account")
 def transactions_reassign_account(req: ReassignAccountRequest) -> dict:
-    config = _require_workspace_config()
-
-    # Collect tracked account ledger names.
-    tracked_ledger_accounts: set[str] = set()
-    for ta in config.tracked_accounts.values():
-        la = str(ta.get("ledger_account", "")).strip()
-        if la:
-            tracked_ledger_accounts.add(la)
-
-    if req.newAccountLedgerName not in tracked_ledger_accounts:
-        raise HTTPException(status_code=422, detail="Not a tracked account")
-
-    ref = _locate_projected_transaction(config, req.txnId, req.blockHash)
-    journal_path = config.root_dir / ref.journal_path
-
-    parsed = parse_header(ref.raw_header)
-    payee = parsed.payee if parsed else ref.raw_header[:60]
-    date_str = parsed.date if parsed else ""
-
-    previous_account: str | None = None
-
-    with journal_writer.mutate(
-        config=config,
-        paths=[journal_path],
-        tag="reassign-account",
-        event_type="transaction.account_reassigned.v1",
-    ) as mut:
-        text = journal_path.read_text(encoding="utf-8")
-        lines = text.splitlines()
-        block_start, block_end = _locate_current_block(lines, ref)
-
-        # Find the single source (tracked) posting to rewrite.
-        source_idx: int | None = None
-        for i in range(block_start + 1, block_end):
-            line = lines[i]
-            stripped = line.strip()
-            if stripped.startswith(";") or stripped == "":
-                continue
-            m = ACCOUNT_LINE_RE.match(line) or ACCOUNT_ONLY_RE.match(line)
-            if m:
-                account = m.group(2).strip()
-                if account not in tracked_ledger_accounts:
-                    continue  # Destination (category) posting — skip.
-                if source_idx is not None:
-                    raise HTTPException(status_code=422, detail="Cannot reassign a multi-account transaction")
-                source_idx = i
-                previous_account = account
-
-        if source_idx is None:
-            raise HTTPException(status_code=422, detail="Cannot reassign account on this transaction")
-
-        if previous_account == req.newAccountLedgerName:
-            raise HTTPException(status_code=422, detail="Transaction already belongs to this account")
-
-        new_line, changed = rewrite_posting_account(lines[source_idx], req.newAccountLedgerName)
-        if not changed:
-            raise HTTPException(status_code=500, detail="Failed to rewrite posting account")
-        lines[source_idx] = new_line
-
-        journal_path.write_text("\n".join(lines) + ("\n" if text.endswith("\n") else ""), encoding="utf-8")
-
-        mut.summary = f"Reassigned account: {payee} on {date_str} ({previous_account} → {req.newAccountLedgerName})"
-        mut.payload = {
-            "journal_path": ref.journal_path,
-            "header_line": ref.raw_header,
-            "txn_id": ref.id,
-            "previous_account": previous_account,
-            "new_account": req.newAccountLedgerName,
-        }
+    with _transaction_edit(
+        tag="reassign-account", event_type="transaction.account_reassigned.v1"
+    ) as session:
+        previous_account = session.open(
+            req.txnId, expect_hash=req.blockHash
+        ).set_source_account(req.newAccountLedgerName)
 
     return {
         "success": True,
         "previousAccount": previous_account,
         "newAccount": req.newAccountLedgerName,
-        **_post_edit_identity(config, ref),
-        "eventId": mut.event_id,
+        **_edited(session, req.txnId),
     }
-
-
-# ---------------------------------------------------------------------------
-# Notes
-# ---------------------------------------------------------------------------
-
-_NOTES_RE = re.compile(r"^(\s*;\s*)notes:\s*(.*)$")
 
 
 @app.post("/api/transactions/notes")
 def transactions_notes(req: UpdateNotesRequest) -> dict:
-    config = _require_workspace_config()
-    ref = _locate_projected_transaction(config, req.txnId, req.blockHash)
-    journal_path = config.root_dir / ref.journal_path
+    with _transaction_edit(tag="notes", event_type="transaction.notes_updated.v1") as session:
+        session.open(req.txnId, expect_hash=req.blockHash).set_notes(req.notes)
 
-    parsed = parse_header(ref.raw_header)
-    payee = parsed.payee if parsed else ref.raw_header[:60]
-    date_str = parsed.date if parsed else ""
-
-    with journal_writer.mutate(
-        config=config,
-        paths=[journal_path],
-        tag="notes",
-        event_type="transaction.notes_updated.v1",
-    ) as mut:
-        text = journal_path.read_text(encoding="utf-8")
-        lines = text.splitlines()
-        block_start, block_end = _locate_current_block(lines, ref)
-
-        # Find existing notes line within the block and capture its prior value.
-        notes_idx: int | None = None
-        previous_notes = ""
-        for i in range(block_start + 1, block_end):
-            m = _NOTES_RE.match(lines[i])
-            if m:
-                notes_idx = i
-                previous_notes = m.group(2).strip()
-                break
-
-        if req.notes:
-            new_notes_line = f"    ; notes: {req.notes}"
-            if notes_idx is not None:
-                lines[notes_idx] = new_notes_line
-            else:
-                # Insert after the header line.
-                lines.insert(block_start + 1, new_notes_line)
-        else:
-            # Empty notes — remove the line if it exists.
-            if notes_idx is not None:
-                del lines[notes_idx]
-
-        journal_path.write_text("\n".join(lines) + ("\n" if text.endswith("\n") else ""), encoding="utf-8")
-
-        mut.summary = f"Notes updated: {payee} on {date_str}"
-        mut.payload = {
-            "journal_path": ref.journal_path,
-            "header_line": ref.raw_header,
-            "txn_id": ref.id,
-            "notes": req.notes,
-            "previous_notes": previous_notes,
-        }
-
-    return {"success": True, **_post_edit_identity(config, ref), "eventId": mut.event_id}
+    return {"success": True, **_edited(session, req.txnId)}
 
 
 @app.post("/api/transactions/unmatch")
 def transactions_unmatch(req: UnmatchTransactionRequest) -> dict:
-    config = _require_workspace_config()
-    ref = _locate_projected_transaction(config, req.txnId, req.blockHash)
-    journal_path = config.root_dir / ref.journal_path
-
-    match = find_projected_transaction_match(config, req.matchId)
-    if match is None or match.imported_transaction_id != req.txnId:
-        raise HTTPException(status_code=404, detail="Transaction match not found")
-    archived_ref = find_projected_transaction(
-        config, match.archived_manual_transaction_id
-    )
-    archived_block = projected_transaction_block(
-        config, match.archived_manual_transaction_id
-    )
-    if archived_ref is None or archived_block is None:
-        raise HTTPException(status_code=404, detail="Archived manual transaction not found")
-    archive_path = config.root_dir / archived_ref.journal_path
-
-    tracked_ledger_accounts: set[str] = set()
-    for ta in config.tracked_accounts.values():
-        la = str(ta.get("ledger_account", "")).strip()
-        if la:
-            tracked_ledger_accounts.add(la)
-
-    parsed = parse_header(ref.raw_header)
-    payee = parsed.payee if parsed else ref.raw_header[:60]
-    date_str = parsed.date if parsed else ""
-
-    with journal_writer.mutate(
-        config=config,
-        paths=[journal_path, archive_path],
-        tag="unmatch",
-        event_type="transaction.unmatched.v1",
-    ) as mut:
-        # The relationship and block are resolved from the projection. Render
-        # the enclosing file from projected journal items only to remove it.
-        archive_text = render_file(config, archived_ref.journal_path)
-        archive_lines = archive_text.splitlines()
-        archived_block_lines = archived_block.rstrip("\n").splitlines()
-        located_archive = locate_block_by_id(archive_lines, archived_ref.id)
-        if located_archive is None:
-            raise HTTPException(status_code=409, detail=_STALE_TRANSACTION_DETAIL)
-        archived_block_start, _ = located_archive
-        archived_block_end = archived_block_start + len(archived_block_lines)
-
-        # --- Modify the main journal: remove :manual: and match-id: tags,
-        #     rewrite destination to Expenses:Unknown ---
-        main_text = journal_path.read_text(encoding="utf-8")
-        main_lines = main_text.splitlines()
-        block_start, block_end = _locate_current_block(main_lines, ref)
-
-        lines_to_remove: list[int] = []
-        destination_idx: int | None = None
-        for i in range(block_start + 1, block_end):
-            stripped = main_lines[i].strip()
-            if stripped == "; :manual:" or stripped in {
-                f"; lf_match_id: {req.matchId}",
-                f"; match-id: {req.matchId}",
-            }:
-                lines_to_remove.append(i)
-            elif not stripped.startswith(";") and stripped != "":
-                m = ACCOUNT_LINE_RE.match(main_lines[i]) or ACCOUNT_ONLY_RE.match(main_lines[i])
-                if m:
-                    account = m.group(2).strip()
-                    if account not in tracked_ledger_accounts and destination_idx is None:
-                        destination_idx = i
-
-        # Remove tag lines in reverse order to preserve indices.
-        for idx in sorted(lines_to_remove, reverse=True):
-            del main_lines[idx]
-
-        # Adjust destination_idx for removed lines above it.
-        if destination_idx is not None:
-            removed_above = sum(1 for idx in lines_to_remove if idx < destination_idx)
-            destination_idx -= removed_above
-            new_line, _ = rewrite_posting_account(main_lines[destination_idx], "Expenses:Unknown")
-            main_lines[destination_idx] = new_line
-
-        journal_path.write_text(
-            "\n".join(main_lines) + ("\n" if main_text.endswith("\n") else ""),
-            encoding="utf-8",
+    with _transaction_edit(tag="unmatch", event_type="transaction.unmatched.v1") as session:
+        session.unmatch(
+            session.open(req.txnId, expect_hash=req.blockHash), match_id=req.matchId
         )
 
-        # --- Prepare the restored manual entry (strip the match-id tag) ---
-        restored_lines: list[str] = []
-        for line in archived_block_lines:
-            stripped = line.strip()
-            if stripped in {
-                f"; lf_match_id: {req.matchId}",
-                f"; match-id: {req.matchId}",
-            }:
-                continue
-            restored_lines.append(line)
-        restored_block = "\n".join(restored_lines)
-
-        # --- Insert restored manual entry into main journal in date order ---
-        # Re-read after the first write.
-        main_text2 = journal_path.read_text(encoding="utf-8")
-        main_lines2 = main_text2.splitlines()
-
-        # Parse the date from the restored entry header.
-        restored_date = ""
-        if restored_lines and TXN_START_RE.match(restored_lines[0]):
-            restored_date = restored_lines[0][:10]
-
-        # Find insertion point: after the last transaction with date <= restored_date.
-        insert_idx = len(main_lines2)
-        for i in range(len(main_lines2) - 1, -1, -1):
-            if TXN_START_RE.match(main_lines2[i]) and main_lines2[i][:10] <= restored_date:
-                # Find end of this block to insert after it.
-                end_i = i + 1
-                while end_i < len(main_lines2):
-                    if TXN_START_RE.match(main_lines2[end_i]):
-                        break
-                    end_i += 1
-                insert_idx = end_i
-                break
-
-        # Insert with a blank line separator.
-        insert_block = [""] + restored_lines if insert_idx > 0 else restored_lines
-        main_lines2[insert_idx:insert_idx] = insert_block
-
-        journal_path.write_text(
-            "\n".join(main_lines2) + ("\n" if main_text2.endswith("\n") else ""),
-            encoding="utf-8",
-        )
-
-        # --- Remove the archived block from the archive journal ---
-        # Also remove any trailing blank line that separated this block from the next.
-        remove_end = archived_block_end
-        while remove_end < len(archive_lines) and archive_lines[remove_end].strip() == "":
-            remove_end += 1
-        # If removing from the beginning, also remove leading blank line of next block.
-        new_archive_lines = archive_lines[:archived_block_start] + archive_lines[remove_end:]
-
-        # Clean up: if only the header comment remains, remove the file entirely.
-        non_empty = [l for l in new_archive_lines if l.strip() and not l.strip().startswith(";")]
-        if non_empty:
-            archive_path.write_text(
-                "\n".join(new_archive_lines) + ("\n" if archive_text.endswith("\n") else ""),
-                encoding="utf-8",
-            )
-        else:
-            archive_path.unlink(missing_ok=True)
-
-        mut.summary = f"Unmatched: {payee} on {date_str} (match-id: {req.matchId})"
-        mut.payload = {
-            "journal_path": ref.journal_path,
-            "archive_path": rel_path(archive_path, config.root_dir),
-            "header_line": ref.raw_header,
-            "txn_id": ref.id,
-            "match_id": req.matchId,
-            "restored_manual_block": restored_block,
-        }
-
-    return {"success": True, **_post_edit_identity(config, ref), "eventId": mut.event_id}
+    return {"success": True, **_edited(session, req.txnId)}
 
 
 # ---------------------------------------------------------------------------
