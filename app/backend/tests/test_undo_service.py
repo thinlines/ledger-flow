@@ -37,6 +37,14 @@ def _make_config(workspace: Path) -> AppConfig:
         },
         institution_templates={},
         import_accounts={},
+        # The edit session classifies postings by role, so a workspace must
+        # declare which ledger accounts it tracks — as every real one does.
+        tracked_accounts={
+            "checking": {
+                "display_name": "Checking",
+                "ledger_account": "Assets:Bank:Checking",
+            },
+        },
     )
 
 

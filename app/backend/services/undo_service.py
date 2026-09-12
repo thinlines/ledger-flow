@@ -17,20 +17,18 @@ the change as a compensating operation.  Operation history is never rewritten.
 from __future__ import annotations
 
 import logging
-import re
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from enum import Enum
 
-from services import journal_writer
-from services.archive_service import archive_manual_entry
+from services import journal_writer, transaction_edit_service
 from services.config_service import AppConfig
-from services.header_parser import TransactionStatus, set_header_status
+from services.header_parser import TransactionStatus
 from services.journal_block_service import locate_block_by_id
 from services.journal_query_service import (
     ACCOUNT_LINE_RE,
     ACCOUNT_ONLY_RE,
-    LF_TXN_ID_META_RE,
     TXN_START_RE,
 )
 from services.operations_service import (
@@ -46,12 +44,8 @@ from services.projection_service import (
     refresh_projection,
     render_file,
 )
-from services.transfer_service import rewrite_posting_account
 
 logger = logging.getLogger(__name__)
-
-# Mirrors the regex in main.py; duplicated to keep services free of FastAPI deps.
-_NOTES_RE = re.compile(r"^(\s*;\s*)notes:\s*(.*)$")
 
 
 # ---------------------------------------------------------------------------
@@ -80,12 +74,12 @@ class UndoFailedError(Exception):
     """Raised by a handler when the inverse mutation cannot be applied cleanly."""
 
 
-# Handler protocol: handlers take ``(config, event)`` and own emission via
-# ``journal_writer.mutate``; they return the compensating event id.
+# Handler protocol: handlers take ``(config, event)`` and own emission — the
+# transaction-level ones through the edit session, the batch ones through
+# ``journal_writer.mutate``. They return the compensating event id.
 HandlerFn = Callable[[AppConfig, dict], str]
 
 
-# Matches the migration/minting line shape: ``    ; lf_txn_id: txn_...``.
 def _payload_txn_id(payload: dict) -> str:
     txn_id = str(payload.get("txn_id") or "").strip()
     if not txn_id:
@@ -110,14 +104,6 @@ def _block_range(lines: list[str], ref: ProjectedTransactionRef) -> tuple[int, i
     if located is None:
         raise UndoFailedError("This transaction changed since the action — cannot undo")
     return located
-
-
-def _block_txn_id(block_text: str) -> str | None:
-    for line in block_text.splitlines():
-        match = LF_TXN_ID_META_RE.match(line)
-        if match:
-            return match.group(1)
-    return None
 
 
 # ---------------------------------------------------------------------------
@@ -223,482 +209,160 @@ def undo_event(config: AppConfig, event_id: str) -> UndoResult:
 # ---------------------------------------------------------------------------
 
 
-def _undo_transaction_deleted(config: AppConfig, event: dict) -> str:
-    """Restore a deleted transaction block at the correct date-ordered position.
+@contextmanager
+def _compensating(config: AppConfig, event: dict) -> Iterator[transaction_edit_service.Session]:
+    """One edit session that compensates *event*.
 
-    Routed through ``journal_writer.mutate`` — the writer owns backup, hashing,
-    rollback, and emission of the compensating event.
+    The inverse of every transaction-level verb is another verb, so each
+    handler below is a call into the session with the payload's prior value.
+    The session owns the journal, the projection, and the operation record;
+    this layer owns only the semantic precondition — that the transaction
+    still holds the state the forward action produced.
     """
-    workspace_path = config.root_dir
-    payload = event.get("payload", {})
-    journal_rel = payload.get("journal_path", "")
-    header_line = payload.get("header_line", "")
-    deleted_block = payload.get("deleted_block", "")
-    forward_event_id = event.get("id", "")
-    forward_summary = event.get("summary", "")
-    forward_type = event.get("type", "")
+    try:
+        with transaction_edit_service.edit(
+            config,
+            tag="undo",
+            event_type=f"{event.get('type', '')}.compensated.v1",
+            compensates=event.get("id", ""),
+            summary=f"Undid: {event.get('summary', '')}",
+            payload={
+                **event.get("payload", {}),
+                "compensated_event_id": event.get("id", ""),
+            },
+        ) as session:
+            yield session
+    except transaction_edit_service.EditError as exc:
+        raise UndoFailedError(str(exc)) from exc
 
+
+def _undo_transaction_deleted(config: AppConfig, event: dict) -> str:
+    """Restore a deleted transaction block at its date-ordered position."""
+    payload = event.get("payload", {})
+    journal_rel = payload.get("deleted_journal_path") or payload.get("journal_path") or ""
+    deleted_block = payload.get("deleted_block", "")
     if not journal_rel or not deleted_block:
         raise UndoFailedError("Incomplete event payload — missing journal_path or deleted_block")
 
-    journal_path = workspace_path / journal_rel
-
-    # Safety: refuse if the deleted transaction already exists again. The
-    # block's own lf_txn_id is the reliable signal; header-text equality is
-    # the fallback for blocks that never carried one.
-    deleted_txn_id = _block_txn_id(deleted_block)
-    if deleted_txn_id is not None:
-        refresh_projection(config)
-        if find_projected_transaction(config, deleted_txn_id) is not None:
-            raise UndoFailedError("Transaction was re-created — refusing to duplicate")
-    else:
-        text = journal_path.read_text(encoding="utf-8") if journal_path.is_file() else ""
-        if header_line and any(line == header_line for line in text.splitlines()):
-            raise UndoFailedError("Transaction was re-created — refusing to duplicate")
-
-    with journal_writer.mutate(
-        config=config,
-        paths=[journal_path],
-        tag="undo",
-        event_type=f"{forward_type}.compensated.v1",
-    ) as mut:
-        # Re-read inside the block so the writer's pre-mutation hash sees what
-        # we are about to write against.
-        text = journal_path.read_text(encoding="utf-8") if journal_path.is_file() else ""
-        lines = text.splitlines()
-
-        # Parse the date from the header line for insertion ordering.
-        restored_date = header_line[:10] if header_line else ""
-        restored_lines = deleted_block.splitlines()
-
-        # Find insertion point: after the last transaction with date <= restored_date.
-        insert_idx = len(lines)
-        for i in range(len(lines) - 1, -1, -1):
-            if TXN_START_RE.match(lines[i]) and lines[i][:10] <= restored_date:
-                # Find end of this block to insert after it.
-                end_i = i + 1
-                while end_i < len(lines):
-                    if TXN_START_RE.match(lines[end_i]):
-                        break
-                    end_i += 1
-                insert_idx = end_i
-                break
-
-        # Insert with a blank line separator.
-        insert_block = [""] + restored_lines if insert_idx > 0 else restored_lines
-        lines[insert_idx:insert_idx] = insert_block
-
-        journal_path.write_text(
-            "\n".join(lines) + ("\n" if text.endswith("\n") or not text else "\n"),
-            encoding="utf-8",
-        )
-
-        mut.summary = f"Undid: {forward_summary}"
-        mut.payload = {**payload, "compensated_event_id": forward_event_id}
-        mut.compensates = forward_event_id
-
-    return mut.event_id
+    with _compensating(config, event) as session:
+        session.restore(journal_rel, deleted_block)
+    return session.result.operation_id
 
 
 def _undo_transaction_recategorized(config: AppConfig, event: dict) -> str:
-    """Restore the previous category account on a recategorized transaction.
-
-    Routed through ``journal_writer.mutate`` — the writer owns backup, hashing,
-    rollback, and emission of the compensating event.
-    """
-    workspace_path = config.root_dir
+    """Put the previous category back on a recategorized transaction."""
     payload = event.get("payload", {})
     previous_account = payload.get("previous_account", "")
     new_account = payload.get("new_account", "Expenses:Unknown")
-    forward_event_id = event.get("id", "")
-    forward_summary = event.get("summary", "")
-    forward_type = event.get("type", "")
-
     if not previous_account:
         raise UndoFailedError("Incomplete event payload")
 
-    ref = _locate_projected(config, _payload_txn_id(payload))
-    journal_path = workspace_path / ref.journal_path
-
-    with journal_writer.mutate(
-        config=config,
-        paths=[journal_path],
-        tag="undo",
-        event_type=f"{forward_type}.compensated.v1",
-    ) as mut:
-        text = journal_path.read_text(encoding="utf-8")
-        lines = text.splitlines()
-
-        block_start, block_end = _block_range(lines, ref)
-
-        # Find the posting with new_account and rewrite it back.
-        found = False
-        for i in range(block_start + 1, block_end):
-            stripped = lines[i].strip()
-            if stripped.startswith(";") or stripped == "":
-                continue
-            m = ACCOUNT_LINE_RE.match(lines[i]) or ACCOUNT_ONLY_RE.match(lines[i])
-            if m and m.group(2).strip() == new_account:
-                new_line, changed = rewrite_posting_account(lines[i], previous_account)
-                if changed:
-                    lines[i] = new_line
-                    found = True
-                    break
-
-        if not found:
+    with _compensating(config, event) as session:
+        transaction = session.open(_payload_txn_id(payload))
+        posting = transaction.category_posting
+        if posting is None or posting.account != new_account:
             raise UndoFailedError(f"Destination account {new_account} not found on transaction")
-
-        journal_path.write_text("\n".join(lines) + ("\n" if text.endswith("\n") else ""), encoding="utf-8")
-
-        mut.summary = f"Undid: {forward_summary}"
-        mut.payload = {**payload, "compensated_event_id": forward_event_id}
-        mut.compensates = forward_event_id
-
-    return mut.event_id
+        transaction.set_category(previous_account)
+    return session.result.operation_id
 
 
 def _undo_transaction_account_reassigned(config: AppConfig, event: dict) -> str:
-    """Restore the previous source account on a reassigned transaction.
-
-    Routed through ``journal_writer.mutate`` — the writer owns backup, hashing,
-    rollback, and emission of the compensating event.
-    """
-    workspace_path = config.root_dir
+    """Put the previous tracked account back on a reassigned transaction."""
     payload = event.get("payload", {})
     previous_account = payload.get("previous_account", "")
     new_account = payload.get("new_account", "")
-    forward_event_id = event.get("id", "")
-    forward_summary = event.get("summary", "")
-    forward_type = event.get("type", "")
-
     if not previous_account:
         raise UndoFailedError("Incomplete event payload")
 
-    ref = _locate_projected(config, _payload_txn_id(payload))
-    journal_path = workspace_path / ref.journal_path
-
-    with journal_writer.mutate(
-        config=config,
-        paths=[journal_path],
-        tag="undo",
-        event_type=f"{forward_type}.compensated.v1",
-    ) as mut:
-        text = journal_path.read_text(encoding="utf-8")
-        lines = text.splitlines()
-
-        block_start, block_end = _block_range(lines, ref)
-
-        # Find the posting with new_account and rewrite it back.
-        found = False
-        for i in range(block_start + 1, block_end):
-            stripped = lines[i].strip()
-            if stripped.startswith(";") or stripped == "":
-                continue
-            m = ACCOUNT_LINE_RE.match(lines[i]) or ACCOUNT_ONLY_RE.match(lines[i])
-            if m and m.group(2).strip() == new_account:
-                new_line, changed = rewrite_posting_account(lines[i], previous_account)
-                if changed:
-                    lines[i] = new_line
-                    found = True
-                    break
-
-        if not found:
+    with _compensating(config, event) as session:
+        transaction = session.open(_payload_txn_id(payload))
+        posting = transaction.source_posting
+        if posting is None or posting.account != new_account:
             raise UndoFailedError(f"Source account {new_account} not found on transaction")
-
-        journal_path.write_text("\n".join(lines) + ("\n" if text.endswith("\n") else ""), encoding="utf-8")
-
-        mut.summary = f"Undid: {forward_summary}"
-        mut.payload = {**payload, "compensated_event_id": forward_event_id}
-        mut.compensates = forward_event_id
-
-    return mut.event_id
+        transaction.set_source_account(previous_account)
+    return session.result.operation_id
 
 
 def _undo_transaction_status_toggled(config: AppConfig, event: dict) -> str:
-    """Restore the previous clearing status on a toggled transaction.
-
-    Routed through ``journal_writer.mutate`` — the writer owns backup, hashing,
-    rollback, and emission of the compensating event.
-    """
-    workspace_path = config.root_dir
+    """Put the previous clearing status back on a toggled transaction."""
     payload = event.get("payload", {})
     previous_status_str = payload.get("previous_status", "")
     new_status_str = payload.get("new_status", "")
-    forward_event_id = event.get("id", "")
-    forward_summary = event.get("summary", "")
-    forward_type = event.get("type", "")
-
     if not previous_status_str:
         raise UndoFailedError("Incomplete event payload")
-
     try:
         previous_status = TransactionStatus(previous_status_str)
     except ValueError as exc:
         raise UndoFailedError(f"Invalid previous_status in event: {previous_status_str}") from exc
 
-    ref = _locate_projected(config, _payload_txn_id(payload))
-    # Semantic staleness gate: the transaction must still hold the status
-    # the forward toggle produced; a later toggle supersedes this event.
-    if ref.status != new_status_str:
-        raise UndoFailedError(
-            "Transaction status changed since this action — undo the later change first"
-        )
-    journal_path = workspace_path / ref.journal_path
-
-    with journal_writer.mutate(
-        config=config,
-        paths=[journal_path],
-        tag="undo",
-        event_type=f"{forward_type}.compensated.v1",
-    ) as mut:
-        text = journal_path.read_text(encoding="utf-8")
-        lines = text.splitlines()
-
-        header_idx, _ = _block_range(lines, ref)
-        restored_line = set_header_status(ref.raw_header, previous_status)
-        lines[header_idx] = restored_line
-        journal_path.write_text("\n".join(lines) + ("\n" if text.endswith("\n") else ""), encoding="utf-8")
-
-        mut.summary = f"Undid: {forward_summary}"
-        mut.payload = {**payload, "compensated_event_id": forward_event_id}
-        mut.compensates = forward_event_id
-
-    return mut.event_id
+    with _compensating(config, event) as session:
+        transaction = session.open(_payload_txn_id(payload))
+        if transaction.status.value != new_status_str:
+            raise UndoFailedError(
+                "Transaction status changed since this action — undo the later change first"
+            )
+        transaction.set_status(previous_status)
+    return session.result.operation_id
 
 
 def _undo_manual_entry_created(config: AppConfig, event: dict) -> str:
-    """Delete the manual entry that was created.
+    """Delete the manual entry that was created."""
+    with _compensating(config, event) as session:
+        session.open(_payload_txn_id(event.get("payload", {}))).delete()
+    return session.result.operation_id
 
-    Routed through ``journal_writer.mutate`` — the writer owns backup, hashing,
-    rollback, and emission of the compensating event.
-    """
-    workspace_path = config.root_dir
+
+def _undo_transaction_notes_updated(config: AppConfig, event: dict) -> str:
+    """Put the previous note back (or take the added one away)."""
     payload = event.get("payload", {})
-    forward_event_id = event.get("id", "")
-    forward_summary = event.get("summary", "")
-    forward_type = event.get("type", "")
+    if "previous_notes" not in payload:
+        # Pre-migration event: no captured prior value, no safe inverse.
+        raise UndoFailedError("Pre-existing notes event lacks previous_notes — cannot undo")
 
-    ref = _locate_projected(config, _payload_txn_id(payload))
-    journal_path = workspace_path / ref.journal_path
+    with _compensating(config, event) as session:
+        session.open(_payload_txn_id(payload)).set_notes(payload.get("previous_notes") or "")
+    return session.result.operation_id
 
-    with journal_writer.mutate(
-        config=config,
-        paths=[journal_path],
-        tag="undo",
-        event_type=f"{forward_type}.compensated.v1",
-    ) as mut:
-        text = journal_path.read_text(encoding="utf-8")
-        lines = text.splitlines()
 
-        block_start, block_end = _block_range(lines, ref)
-
-        # Consume a preceding blank line to avoid double-blank-line gaps.
-        remove_start = block_start
-        if remove_start > 0 and lines[remove_start - 1].strip() == "":
-            remove_start -= 1
-        new_lines = lines[:remove_start] + lines[block_end:]
-
-        journal_path.write_text("\n".join(new_lines) + ("\n" if text.endswith("\n") else ""), encoding="utf-8")
-
-        mut.summary = f"Undid: {forward_summary}"
-        mut.payload = {**payload, "compensated_event_id": forward_event_id}
-        mut.compensates = forward_event_id
-
-    return mut.event_id
+def _category_from_block(block_text: str) -> str | None:
+    """Recover the category account from a pre-session unmatch payload, which
+    recorded no ``previous_account``."""
+    for line in block_text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith(";") or not stripped or TXN_START_RE.match(stripped):
+            continue
+        match = ACCOUNT_LINE_RE.match(line) or ACCOUNT_ONLY_RE.match(line)
+        if match and match.group(2).strip().startswith(("Expenses:", "Income:", "Revenue:")):
+            return match.group(2).strip()
+    return None
 
 
 def _undo_transaction_unmatched(config: AppConfig, event: dict) -> str:
-    """Re-create the match that was undone: re-stamp the imported transaction,
-    remove the restored manual entry from the main journal, and re-archive it.
-
-    Routed through ``journal_writer.mutate`` — the writer owns backup, hashing,
-    rollback, and emission of the compensating event across both files.
-    """
-    workspace_path = config.root_dir
+    """Re-create the match that was undone — unmatch's inverse."""
     payload = event.get("payload", {})
-    archive_rel = payload.get("archive_path", "")
     match_id = payload.get("match_id", "")
-    restored_manual_block = payload.get("restored_manual_block", "")
-    forward_event_id = event.get("id", "")
-    forward_summary = event.get("summary", "")
-    forward_type = event.get("type", "")
-
-    if not match_id or not restored_manual_block:
+    manual_block = payload.get("restored_block") or payload.get("restored_manual_block") or ""
+    archive_rel = (
+        payload.get("deleted_journal_path")
+        or payload.get("archive_path")
+        or "journals/archived-manual.journal"
+    )
+    if not match_id or not manual_block:
         raise UndoFailedError("Incomplete event payload")
 
-    ref = _locate_projected(config, _payload_txn_id(payload))
-    journal_path = workspace_path / ref.journal_path
-    archive_path = workspace_path / archive_rel if archive_rel else workspace_path / "journals" / "archived-manual.journal"
-
-    # The restored manual entry carries its own identity; locate it through
-    # the same fresh projection instead of scanning for header text.
-    manual_txn_id = _block_txn_id(restored_manual_block)
-    manual_ref = (
-        find_projected_transaction(config, manual_txn_id)
-        if manual_txn_id is not None
-        else None
-    )
-
-    # Parse the restored manual block to recover the category account.
-    manual_lines = restored_manual_block.splitlines()
-    manual_category: str | None = None
-    for ml in manual_lines:
-        stripped = ml.strip()
-        if stripped.startswith(";") or stripped == "" or TXN_START_RE.match(stripped):
-            continue
-        m = ACCOUNT_LINE_RE.match(ml) or ACCOUNT_ONLY_RE.match(ml)
-        if m:
-            acct = m.group(2).strip()
-            # Skip the source (tracked) account — we want the destination category.
-            # Heuristic: category accounts start with Expenses: or Income:.
-            if acct.startswith("Expenses:") or acct.startswith("Income:") or acct.startswith("Revenue:"):
-                manual_category = acct
-                break
-
-    if not manual_category:
+    category = payload.get("previous_account") or _category_from_block(manual_block)
+    if not category:
         raise UndoFailedError("Could not determine category from restored manual block")
 
-    with journal_writer.mutate(
-        config=config,
-        paths=[journal_path, archive_path],
-        tag="undo",
-        event_type=f"{forward_type}.compensated.v1",
-    ) as mut:
-        # --- Step 1: Re-stamp the imported transaction in the main journal ---
-        text = journal_path.read_text(encoding="utf-8")
-        lines = text.splitlines()
-
-        block_start, block_end = _block_range(lines, ref)
-
-        # Insert :manual: and match-id: tags after the header (same order as unknowns_service).
-        # Process in reverse so indices stay valid: match-id first, then :manual:.
-        lines.insert(block_start + 1, f"    ; lf_match_id: {match_id}")
-        lines.insert(block_start + 1, "    ; :manual:")
-        # block_end shifted by 2 due to insertions.
-        block_end += 2
-
-        # Rewrite destination posting from Expenses:Unknown to the original category.
-        for i in range(block_start + 3, block_end):  # +3 to skip header + two new tag lines.
-            stripped = lines[i].strip()
-            if stripped.startswith(";") or stripped == "":
-                continue
-            m = ACCOUNT_LINE_RE.match(lines[i]) or ACCOUNT_ONLY_RE.match(lines[i])
-            if m and m.group(2).strip() == "Expenses:Unknown":
-                new_line, changed = rewrite_posting_account(lines[i], manual_category)
-                if changed:
-                    lines[i] = new_line
-                break
-
-        # --- Step 2: Find and remove the restored manual entry from the main journal ---
-        # The manual entry was inserted by the original unmatch. Prefer its
-        # projected identity; fall back to a header scan for blocks that
-        # never carried an lf_txn_id. Step 1 inserted two tag lines, so any
-        # projected position after the imported header has shifted by two.
-        manual_entry_idx: int | None = None
-        manual_block_end: int | None = None
-        if manual_ref is not None and manual_ref.journal_path == ref.journal_path:
-            located_manual = locate_block_by_id(lines, manual_ref.id)
-            if located_manual is not None:
-                manual_entry_idx, manual_block_end = located_manual
-
-        if manual_entry_idx is None:
-            raise UndoFailedError("Could not locate restored manual entry in journal")
-
-        manual_block_start = manual_entry_idx
-        assert manual_block_end is not None
-        # Consume a preceding blank line.
-        remove_start = manual_block_start
-        if remove_start > 0 and lines[remove_start - 1].strip() == "":
-            remove_start -= 1
-        lines = lines[:remove_start] + lines[manual_block_end:]
-
-        journal_path.write_text("\n".join(lines) + ("\n" if text.endswith("\n") else ""), encoding="utf-8")
-
-        # --- Step 3: Re-archive the manual entry ---
-        # Use the original block lines (without the match-id tag that archive_manual_entry adds).
-        # archive_manual_entry inserts the match-id tag itself on the second line.
-        block_for_archive = [
-            l
-            for l in manual_lines
-            if l.strip() not in {
-                f"; match-id: {match_id}",
-                f"; lf_match_id: {match_id}",
-            }
-        ]
-        archive_manual_entry(archive_path, match_id, block_for_archive)
-
-        mut.summary = f"Undid: {forward_summary}"
-        mut.payload = {**payload, "compensated_event_id": forward_event_id}
-        mut.compensates = forward_event_id
-
-    return mut.event_id
-
-
-# ---------------------------------------------------------------------------
-# Handler dispatch table
-# ---------------------------------------------------------------------------
-
-def _undo_transaction_notes_updated(config: AppConfig, event: dict) -> str:
-    """Restore the previous notes value (or absence) on a transaction.
-
-    Routed through ``journal_writer.mutate`` — the writer owns backup, hashing,
-    rollback, and emission of the compensating event.
-    """
-    workspace_path = config.root_dir
-    payload = event.get("payload", {})
-    forward_event_id = event.get("id", "")
-    forward_summary = event.get("summary", "")
-    forward_type = event.get("type", "")
-
-    if "previous_notes" not in payload:
-        # Pre-migration event: no captured prior value, no safe inverse.
-        raise UndoFailedError(
-            "Pre-existing notes event lacks previous_notes — cannot undo"
+    with _compensating(config, event) as session:
+        session.match(
+            session.open(_payload_txn_id(payload)),
+            match_id=match_id,
+            manual_block=manual_block,
+            archive_path=archive_rel,
+            category=category,
         )
-
-    previous_notes = payload.get("previous_notes", "") or ""
-
-    ref = _locate_projected(config, _payload_txn_id(payload))
-    journal_path = workspace_path / ref.journal_path
-
-    with journal_writer.mutate(
-        config=config,
-        paths=[journal_path],
-        tag="undo",
-        event_type=f"{forward_type}.compensated.v1",
-    ) as mut:
-        text = journal_path.read_text(encoding="utf-8")
-        lines = text.splitlines()
-
-        block_start, block_end = _block_range(lines, ref)
-
-        # Find the current notes line in the block (post-forward-write state).
-        notes_idx: int | None = None
-        for i in range(block_start + 1, block_end):
-            if _NOTES_RE.match(lines[i]):
-                notes_idx = i
-                break
-
-        if previous_notes:
-            restored_line = f"    ; notes: {previous_notes}"
-            if notes_idx is not None:
-                lines[notes_idx] = restored_line
-            else:
-                # Forward write deleted the line — re-insert at the same position
-                # the forward path would have used (immediately after the header).
-                lines.insert(block_start + 1, restored_line)
-        else:
-            # No prior notes line existed — remove the one the forward write added.
-            if notes_idx is not None:
-                del lines[notes_idx]
-
-        journal_path.write_text("\n".join(lines) + ("\n" if text.endswith("\n") else ""), encoding="utf-8")
-
-        mut.summary = f"Undid: {forward_summary}"
-        mut.payload = {**payload, "compensated_event_id": forward_event_id}
-        mut.compensates = forward_event_id
-
-    return mut.event_id
+    return session.result.operation_id
 
 
 def _undo_import_applied(config: AppConfig, event: dict) -> str:
