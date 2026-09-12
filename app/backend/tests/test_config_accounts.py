@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from services.config_service import AppConfig, load_config
 
 _DIRS = {
@@ -210,6 +212,11 @@ init_dir = "rules"
 opening_bal_dir = "opening"
 imports_dir = "imports"
 
+[institution_templates.wells_fargo]
+display_name = "Wells Fargo"
+parser = "wells_fargo"
+CSV_date_format = "%m/%d/%Y"
+
 [import_accounts.wf_checking]
 display_name = "WF Checking"
 ledger_account = "Assets:Bank:Checking"
@@ -226,3 +233,69 @@ last4 = "4770"
     assert derived.id == "wf_checking"
     assert derived.last4 == "4770"
     assert derived.import_account_id == "wf_checking"
+
+
+def _workspace_toml(tmp_path: Path, tables: str) -> Path:
+    settings = tmp_path / "settings"
+    settings.mkdir(parents=True)
+    workspace_toml = settings / "workspace.toml"
+    workspace_toml.write_text(
+        """
+[workspace]
+name = "Sources"
+
+[dirs]
+csv_dir = "inbox"
+journal_dir = "journals"
+init_dir = "rules"
+opening_bal_dir = "opening"
+imports_dir = "imports"
+"""
+        + tables,
+        encoding="utf-8",
+    )
+    return workspace_toml
+
+
+def test_load_config_refuses_an_account_naming_an_unknown_institution(tmp_path: Path) -> None:
+    workspace_toml = _workspace_toml(
+        tmp_path,
+        """
+[import_accounts.wf_checking]
+display_name = "WF Checking"
+ledger_account = "Assets:Bank:Checking"
+institution = "wells_fargo"
+""",
+    )
+
+    with pytest.raises(ValueError, match="unknown institution template: wells_fargo"):
+        load_config(workspace_toml)
+
+
+def test_load_config_refuses_an_account_naming_an_unknown_profile(tmp_path: Path) -> None:
+    workspace_toml = _workspace_toml(
+        tmp_path,
+        """
+[import_accounts.custom_checking]
+display_name = "Custom Checking"
+ledger_account = "Assets:Bank:Checking"
+import_profile_id = "gone"
+""",
+    )
+
+    with pytest.raises(ValueError, match="unknown import profile: gone"):
+        load_config(workspace_toml)
+
+
+def test_load_config_refuses_an_account_with_no_source_at_all(tmp_path: Path) -> None:
+    workspace_toml = _workspace_toml(
+        tmp_path,
+        """
+[import_accounts.orphan]
+display_name = "Orphan"
+ledger_account = "Assets:Bank:Checking"
+""",
+    )
+
+    with pytest.raises(ValueError, match="no institution configured"):
+        load_config(workspace_toml)

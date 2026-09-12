@@ -13,7 +13,7 @@ from .config_service import AppConfig
 from .custom_csv_service import normalize_custom_csv_to_intermediate
 from .header_parser import HEADER_RE, set_header_payee
 from .import_identity_service import ImportIdentityStore, source_payload_hash_for_lines
-from .import_profile_service import import_source_summary, resolve_import_source
+from .institution_registry import canonical_template_id, display_name_for
 from .journal_block_service import lf_txn_id_line, mint_lf_txn_id
 from .journal_query_service import (
     ACCOUNT_LINE_RE,
@@ -90,6 +90,33 @@ class ImportPreviewBlockedError(Exception):
         return detail
 
 
+def import_source_summary(config: AppConfig, account_cfg: dict) -> dict:
+    """Describe where an import account's CSVs come from.
+
+    ``load_config`` refuses a config whose accounts don't resolve, so the
+    template or profile this returns is always one the importer can use.
+    """
+    profile_id = str(account_cfg.get("import_profile_id") or "").strip()
+    if profile_id:
+        profile_cfg = config.import_profiles.get(profile_id, {})
+        return {
+            "mode": "custom",
+            "profile_id": profile_id,
+            "institution_id": None,
+            "display_name": str(profile_cfg.get("display_name") or "Custom CSV"),
+            "profile": profile_cfg,
+        }
+
+    institution_id = canonical_template_id(account_cfg.get("institution")) or account_cfg.get("institution")
+    return {
+        "mode": "institution",
+        "profile_id": None,
+        "institution_id": institution_id,
+        "display_name": display_name_for(institution_id, fallback=str(institution_id)) if institution_id else None,
+        "profile": config.institution_templates.get(institution_id or "", {}),
+    }
+
+
 def _parse_institution_csv(
     config: AppConfig, csv_path: Path, institution_template_id: str
 ) -> tuple[Adapter, list[Record]]:
@@ -123,7 +150,7 @@ def _parse_institution_csv(
 
 def normalize_csv_to_intermediate(config: AppConfig, csv_path: Path, account_cfg: dict) -> str:
     """Convert a raw statement CSV into the intermediate CSV `ledger convert` reads."""
-    source = resolve_import_source(config, account_cfg)
+    source = import_source_summary(config, account_cfg)
     if source["mode"] == "custom":
         return normalize_custom_csv_to_intermediate(csv_path, source["profile"])
 
@@ -155,7 +182,7 @@ def _scan_csv_stats(
     import csv as _csv
 
     try:
-        source = resolve_import_source(config, account_cfg)
+        source = import_source_summary(config, account_cfg)
         dates: list[str] = []
 
         if source["mode"] == "custom":
@@ -726,7 +753,7 @@ def preview_import(
         raise FileNotFoundError(str(csv_path))
 
     account_cfg = config.import_accounts[import_account_id]
-    source = resolve_import_source(config, account_cfg)
+    source = import_source_summary(config, account_cfg)
     account = str(account_cfg["ledger_account"])
     date_fmt = (
         str(source["profile"].get("CSV_date_format") or "%Y/%m/%d")

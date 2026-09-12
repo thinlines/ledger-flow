@@ -4,6 +4,8 @@ from dataclasses import dataclass, field
 from functools import cached_property
 from pathlib import Path
 
+from .institution_registry import canonical_template_id
+
 try:
     import tomllib
 except ModuleNotFoundError:  # pragma: no cover
@@ -217,6 +219,36 @@ class AppConfig:
         return account.ledger_account if account else ""
 
 
+def _validate_import_sources(
+    import_accounts: dict, institution_templates: dict, import_profiles: dict
+) -> None:
+    """Refuse a config whose import accounts don't name a source we can parse.
+
+    The write path already pairs every account with its template or profile, so
+    reaching here means the TOML was edited outside the app or an adapter went
+    away. Failing at load keeps every reader downstream free to assume the
+    source resolves.
+    """
+    for account_id, cfg in import_accounts.items():
+        profile_id = str(cfg.get("import_profile_id") or "").strip()
+        if profile_id:
+            if profile_id not in import_profiles:
+                raise ValueError(
+                    f"Import account {account_id!r} names an unknown import profile: {profile_id}"
+                )
+            continue
+
+        institution_id = str(
+            canonical_template_id(cfg.get("institution")) or cfg.get("institution") or ""
+        ).strip()
+        if not institution_id:
+            raise ValueError(f"Import account {account_id!r} has no institution configured")
+        if institution_id not in institution_templates:
+            raise ValueError(
+                f"Import account {account_id!r} names an unknown institution template: {institution_id}"
+            )
+
+
 def load_config(config_toml: Path) -> AppConfig:
     with config_toml.open("rb") as f:
         raw = tomllib.load(f)
@@ -229,13 +261,17 @@ def load_config(config_toml: Path) -> AppConfig:
         else _derive_tracked_accounts(import_accounts)
     )
 
+    institution_templates = raw.get("institution_templates", {})
+    import_profiles = raw.get("import_profiles", {})
+    _validate_import_sources(import_accounts, institution_templates, import_profiles)
+
     return AppConfig(
         root_dir=config_toml.parent.parent,
         config_toml=config_toml,
         workspace=raw.get("workspace", {}),
         dirs=raw["dirs"],
-        institution_templates=raw.get("institution_templates", {}),
+        institution_templates=institution_templates,
         import_accounts=import_accounts,
         tracked_accounts=tracked_accounts,
-        import_profiles=raw.get("import_profiles", {}),
+        import_profiles=import_profiles,
     )

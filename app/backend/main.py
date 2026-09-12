@@ -75,11 +75,11 @@ from services.git_snapshot_service import hours_since_last_snapshot, snapshot_co
 from services.header_parser import HEADER_RE as _HEADER_RE
 from services.header_parser import TransactionStatus, parse_header, set_header_status
 from services.import_history_service import list_import_history, record_applied_import
-from services.import_profile_service import import_source_summary
 from services.import_service import (
     ImportPreviewBlockedError,
     apply_import,
     archive_inbox_csv,
+    import_source_summary,
     preview_import_safely,
     remove_inbox_csv,
     scan_candidates,
