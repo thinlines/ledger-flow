@@ -368,15 +368,9 @@ def resolve_duplicate_candidate(
 
             updated_imported = list(imported_block)
             if imported_other_account != destination_account:
-                rewritten, changed = rewrite_posting_account(
+                updated_imported[imported_posting_idx] = rewrite_posting_account(
                     updated_imported[imported_posting_idx], destination_account
                 )
-                if not changed:
-                    raise HTTPException(
-                        status_code=422,
-                        detail="Could not rewrite the duplicate transaction.",
-                    )
-                updated_imported[imported_posting_idx] = rewritten
             updated_imported = _replace_user_metadata(updated_imported, _user_metadata_lines(manual_block))
             match_id = f"match_{uuid4()}"
             updated_imported = _upsert_match_tags(updated_imported, match_id)

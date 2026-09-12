@@ -529,8 +529,9 @@ def _apply_operation(lines: list[str], operation: dict) -> tuple[list[str], str 
             return lines, "A posting in this transaction changed since it was scanned"
         if posting_update.get("expectedUnknown") and "Unknown" not in match.group(2):
             return lines, "This transaction is already resolved"
-        rewritten, replaced = rewrite_posting_account(line, posting_update["targetAccount"])
-        if not replaced:
+        try:
+            rewritten = rewrite_posting_account(line, posting_update["targetAccount"])
+        except ValueError:
             return lines, "A posting in this transaction could not be rewritten"
         txn_lines[relative_index] = rewritten
 

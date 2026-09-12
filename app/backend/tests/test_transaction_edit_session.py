@@ -13,13 +13,16 @@ from pathlib import Path
 
 import pytest
 from conftest import read_operation_events
-
 from services.config_service import AppConfig
 from services.header_parser import TransactionStatus
 from services.projection_db import database_path
 from services.projection_service import refresh_projection
 from services.transaction_edit_service import (
+    AccountChange,
+    ActionConflict,
     AlreadyInState,
+    EditError,
+    MatchRestoration,
     NotACategory,
     NotTracked,
     SplitTransaction,
@@ -27,6 +30,7 @@ from services.transaction_edit_service import (
     TransactionNotFound,
     edit,
 )
+from services.undo_service import UndoOutcome, undo_event
 
 JOURNAL = """\
 2026-03-15 * Whole Foods
@@ -155,7 +159,7 @@ def run(books: AppConfig):
     """Apply verbs to one transaction and hand back the finished session."""
 
     def _run(txn_id: str, apply, *, expect_hash: str | None = None, **kwargs):
-        with edit(books, tag="test", event_type="transaction.recategorized.v1", **kwargs) as session:
+        with edit(books, **kwargs) as session:
             apply(session.open(txn_id, expect_hash=expect_hash))
         return session
 
@@ -170,19 +174,50 @@ def run(books: AppConfig):
 class TestOpening:
     def test_unknown_id_is_not_found(self, books: AppConfig) -> None:
         with pytest.raises(TransactionNotFound):
-            with edit(books, tag="test", event_type="t.v1") as session:
+            with edit(books) as session:
                 session.open("txn_nope")
 
     def test_stale_hash_is_refused_and_journal_untouched(self, books: AppConfig) -> None:
         before = _text(books)
         with pytest.raises(StaleTransaction):
-            with edit(books, tag="test", event_type="t.v1") as session:
+            with edit(books) as session:
                 session.open("txn_wf", expect_hash="sha256:stale").set_notes("x")
         assert _text(books) == before
 
     def test_current_hash_is_accepted(self, books: AppConfig, run) -> None:
         run("txn_wf", lambda t: t.set_notes("ok"), expect_hash=_block_hash(books, "txn_wf"))
         assert "; notes: ok" in _text(books)
+
+    def test_reopening_after_an_edit_reuses_the_handle(self, books) -> None:
+        original_hash = _block_hash(books, "txn_target")
+        with edit(books) as session:
+            transaction = session.open("txn_target", expect_hash=original_hash)
+            transaction.set_notes("updated")
+            reopened = session.open("txn_target", expect_hash=original_hash)
+            assert reopened is transaction
+            assert reopened.notes == "updated"
+            with pytest.raises(StaleTransaction):
+                session.open("txn_target", expect_hash="sha256:stale")
+        assert "; notes: updated" in _text(books)
+
+    def test_deleted_handles_are_refused(self, books) -> None:
+        with edit(books) as session:
+            transaction = session.open("txn_target")
+            transaction.delete()
+            with pytest.raises(TransactionNotFound, match="deleted"):
+                session.open("txn_target")
+            with pytest.raises(TransactionNotFound, match="deleted"):
+                transaction.set_notes("wrong block")
+        assert _row(books, "txn_target") is None
+        assert _row(books, "txn_wf") is not None
+
+    def test_handles_are_closed_after_exit(self, books) -> None:
+        with edit(books) as session:
+            transaction = session.open("txn_target")
+        with pytest.raises(EditError, match="closed"):
+            transaction.set_notes("too late")
+        with pytest.raises(EditError, match="closed"):
+            session.open("txn_target")
 
 
 # ---------------------------------------------------------------------------
@@ -192,21 +227,19 @@ class TestOpening:
 
 class TestRoles:
     def test_roles_resolve_on_an_ordinary_transaction(self, books: AppConfig) -> None:
-        with edit(books, tag="test", event_type="t.v1") as session:
+        with edit(books) as session:
             txn = session.open("txn_wf")
-            assert txn.source_posting.account == "Assets:Bank:Checking"
-            assert txn.category_posting.account == "Expenses:Groceries"
-            assert txn.category_posting.commodity == "USD"
-            assert len(txn.postings) == 2
+            assert txn.source_account == "Assets:Bank:Checking"
+            assert txn.category_account == "Expenses:Groceries"
 
-    def test_transfer_has_no_category_posting(self, books: AppConfig) -> None:
-        with edit(books, tag="test", event_type="t.v1") as session:
-            assert session.open("txn_transfer").category_posting is None
+    def test_transfer_has_no_category_account(self, books: AppConfig) -> None:
+        with edit(books) as session:
+            assert session.open("txn_transfer").category_account is None
 
     def test_split_refuses_to_name_one_category(self, books: AppConfig) -> None:
         with pytest.raises(SplitTransaction):
-            with edit(books, tag="test", event_type="t.v1") as session:
-                assert session.open("txn_split").category_posting
+            with edit(books) as session:
+                assert session.open("txn_split").category_account
 
 
 # ---------------------------------------------------------------------------
@@ -238,22 +271,22 @@ class TestSetCategory:
 
     def test_already_uncategorized(self, books: AppConfig) -> None:
         with pytest.raises(AlreadyInState, match="already uncategorized"):
-            with edit(books, tag="test", event_type="t.v1") as session:
+            with edit(books) as session:
                 session.open("txn_target").set_category(None)
 
     def test_already_this_category(self, books: AppConfig) -> None:
         with pytest.raises(AlreadyInState, match="already has this category"):
-            with edit(books, tag="test", event_type="t.v1") as session:
+            with edit(books) as session:
                 session.open("txn_wf").set_category("Expenses:Groceries")
 
     def test_transfer_is_refused(self, books: AppConfig) -> None:
         with pytest.raises(NotACategory):
-            with edit(books, tag="test", event_type="t.v1") as session:
+            with edit(books) as session:
                 session.open("txn_transfer").set_category("Expenses:Groceries")
 
     def test_split_is_refused(self, books: AppConfig) -> None:
         with pytest.raises(SplitTransaction):
-            with edit(books, tag="test", event_type="t.v1") as session:
+            with edit(books) as session:
                 session.open("txn_split").set_category("Expenses:Groceries")
 
 
@@ -269,17 +302,17 @@ class TestSetSourceAccount:
 
     def test_untracked_target_is_refused(self, books: AppConfig) -> None:
         with pytest.raises(NotTracked):
-            with edit(books, tag="test", event_type="t.v1") as session:
+            with edit(books) as session:
                 session.open("txn_wf").set_source_account("Assets:Nope")
 
     def test_already_this_account(self, books: AppConfig) -> None:
         with pytest.raises(AlreadyInState):
-            with edit(books, tag="test", event_type="t.v1") as session:
+            with edit(books) as session:
                 session.open("txn_wf").set_source_account("Assets:Bank:Checking")
 
     def test_two_tracked_legs_are_refused(self, books: AppConfig) -> None:
         with pytest.raises(SplitTransaction):
-            with edit(books, tag="test", event_type="t.v1") as session:
+            with edit(books) as session:
                 session.open("txn_transfer").set_source_account("Assets:Bank:Savings")
 
 
@@ -299,7 +332,7 @@ class TestSetStatus:
 
     def test_already_this_status(self, books: AppConfig) -> None:
         with pytest.raises(AlreadyInState):
-            with edit(books, tag="test", event_type="t.v1") as session:
+            with edit(books) as session:
                 session.open("txn_wf").set_status(TransactionStatus.cleared)
 
 
@@ -327,7 +360,7 @@ class TestNotes:
     def test_unchanged_note_is_refused(self, books: AppConfig, run) -> None:
         run("txn_wf", lambda t: t.set_notes("same"))
         with pytest.raises(AlreadyInState):
-            with edit(books, tag="test", event_type="t.v1") as session:
+            with edit(books) as session:
                 session.open("txn_wf").set_notes("same")
 
 
@@ -358,23 +391,23 @@ class TestMetadataAndTags:
         assert lines[header + 1] == "    ; lf_txn_id: txn_wf"
 
 
-class TestVerbsReturnWhatTheyReplaced:
-    def test_every_verb_answers_with_the_prior_value(self, books: AppConfig) -> None:
-        with edit(books, tag="test", event_type="t.v1") as session:
-            transaction = session.open("txn_target")
-
-            assert transaction.set_category("Expenses:Groceries") == "Expenses:Unknown"
-            assert (
-                transaction.set_source_account("Assets:Bank:Savings")
-                == "Assets:Bank:Checking"
-            )
-            assert transaction.set_status(TransactionStatus.cleared) is TransactionStatus.unmarked
-            assert transaction.set_notes("a note") == ""
-            assert transaction.set_metadata("lf_match_id", "m1") is None
-            assert transaction.clear_metadata("lf_match_id") == "m1"
-            assert transaction.set_tag("manual") is False
-            assert transaction.clear_tag("manual") is True
-            assert transaction.delete().startswith("2026-03-20")
+class TestVerbResults:
+    @pytest.mark.parametrize(
+        ("apply", "expected"),
+        [
+            (lambda t: t.set_category(" Expenses:Groceries "),
+             AccountChange("Expenses:Unknown", "Expenses:Groceries")),
+            (lambda t: t.set_source_account(" Assets:Bank:Savings "),
+             AccountChange("Assets:Bank:Checking", "Assets:Bank:Savings")),
+            (lambda t: t.set_status(TransactionStatus.cleared), TransactionStatus.unmarked),
+            (lambda t: t.set_notes("a note"), ""),
+            (lambda t: t.set_metadata("lf_match_id", "m1"), None),
+            (lambda t: t.set_tag("manual"), False),
+        ],
+    )
+    def test_verb_returns_the_previous_and_applied_state(self, books, apply, expected) -> None:
+        with edit(books) as session:
+            assert apply(session.open("txn_target")) == expected
 
 
 # ---------------------------------------------------------------------------
@@ -400,11 +433,11 @@ class TestDeleteAndRestore:
 
     def test_restore_puts_the_block_back_in_date_order(self, books: AppConfig) -> None:
         before = _text(books)
-        with edit(books, tag="test", event_type="t.v1") as session:
+        with edit(books) as session:
             session.open("txn_target").delete()
         block = _last_event(books)["payload"]["deleted_block"]
 
-        with edit(books, tag="test", event_type="t.v1") as session:
+        with edit(books) as session:
             session.restore("journals/2026.journal", block)
 
         assert _text(books) == before
@@ -412,7 +445,7 @@ class TestDeleteAndRestore:
     def test_restore_refuses_to_duplicate(self, books: AppConfig) -> None:
         block = "2026-03-20 Target\n    ; lf_txn_id: txn_target\n    Assets:Bank:Checking  $-1.00\n    Expenses:Unknown  $1.00"
         with pytest.raises(AlreadyInState):
-            with edit(books, tag="test", event_type="t.v1") as session:
+            with edit(books) as session:
                 session.restore("journals/2026.journal", block)
 
 
@@ -458,7 +491,7 @@ class TestBytePreservation:
         )
         refresh_projection(config)
 
-        with edit(config, tag="test", event_type="t.v1") as session:
+        with edit(config) as session:
             session.open("txn_wf").set_notes("no newline")
 
         assert not (config.journal_dir / "2026.journal").read_text(
@@ -466,41 +499,78 @@ class TestBytePreservation:
         ).endswith("\n\n")
 
 
-class TestComposition:
-    def test_two_transactions_one_operation(self, books: AppConfig) -> None:
-        before = len(read_operation_events(books.root_dir))
-
-        with edit(books, tag="test", event_type="t.v1") as session:
-            session.open("txn_target").set_category("Expenses:Groceries")
-            session.open("txn_wf").set_notes("both")
-
-        assert len(read_operation_events(books.root_dir)) == before + 1
-        text = _text(books)
-        assert "; notes: both" in text
-        assert "Expenses:Unknown" not in text
-
-    def test_a_refusal_late_in_the_session_changes_nothing(self, books: AppConfig) -> None:
+class TestSessionActions:
+    @pytest.mark.parametrize("second_id", ["txn_target", "txn_wf"])
+    def test_a_second_action_refuses_the_entire_session(self, books: AppConfig, second_id) -> None:
         before = _text(books)
         events_before = len(read_operation_events(books.root_dir))
-
-        with pytest.raises(AlreadyInState):
-            with edit(books, tag="test", event_type="t.v1") as session:
+        with pytest.raises(ActionConflict, match="only one action"):
+            with edit(books) as session:
                 session.open("txn_target").set_category("Expenses:Groceries")
-                session.open("txn_wf").set_category("Expenses:Groceries")
-
+                session.open(second_id).set_category("Expenses:Household")
         assert _text(books) == before
         assert len(read_operation_events(books.root_dir)) == events_before
+
+    def test_catching_a_second_action_refusal_cannot_commit(self, books: AppConfig) -> None:
+        before = _text(books)
+        events_before = len(read_operation_events(books.root_dir))
+        with pytest.raises(ActionConflict, match="cannot commit"):
+            with edit(books) as session:
+                session.open("txn_target").set_category("Expenses:Groceries")
+                with pytest.raises(ActionConflict):
+                    session.open("txn_wf").set_notes("both")
+        assert _text(books) == before
+        assert len(read_operation_events(books.root_dir)) == events_before
+
+    def test_reading_another_transaction_does_not_choose_the_operation_target(self, books) -> None:
+        with edit(books) as session:
+            session.open("txn_wf")
+            session.open("txn_target").set_category("Expenses:Groceries")
+        event = _last_event(books)
+        assert event["type"] == "transaction.recategorized.v1"
+        assert event["payload"]["txn_id"] == "txn_target"
+        assert undo_event(books, event["id"]).outcome == UndoOutcome.SUCCESS
+        assert _text(books) == JOURNAL
+
+    def test_reading_records_nothing(self, books) -> None:
+        count = len(read_operation_events(books.root_dir))
+        with edit(books) as session:
+            assert session.open("txn_wf").notes == ""
+        assert session.result is None
+        assert len(read_operation_events(books.root_dir)) == count
 
     def test_result_carries_post_edit_identity(self, books: AppConfig) -> None:
         stale = _block_hash(books, "txn_target")
 
-        with edit(books, tag="test", event_type="t.v1") as session:
+        with edit(books) as session:
             session.open("txn_target").set_category("Expenses:Groceries")
 
         identity = session.result.identity("txn_target")
         assert identity.txn_id == "txn_target"
         assert identity.block_hash == _block_hash(books, "txn_target")
         assert identity.block_hash != stale
+
+
+class TestRecordedUndo:
+    @pytest.mark.parametrize("txn_id, apply, event_type", [
+        ("txn_target", lambda t: t.set_category("Expenses:Groceries"), "transaction.recategorized.v1"),
+        ("txn_wf", lambda t: t.set_source_account("Assets:Bank:Savings"), "transaction.account_reassigned.v1"),
+        ("txn_target", lambda t: t.set_status(TransactionStatus.cleared), "transaction.status_toggled.v1"),
+        ("txn_wf", lambda t: t.set_notes("note"), "transaction.notes_updated.v1"),
+        ("txn_target", lambda t: t.delete(), "transaction.deleted.v1"),
+    ])
+    def test_the_verb_records_an_event_that_undo_restores(self, books, run, txn_id, apply, event_type):
+        before = _text(books)
+        run(txn_id, apply)
+        event = _last_event(books)
+        assert event["type"] == event_type
+        result = undo_event(books, event["id"])
+        assert result.outcome == UndoOutcome.SUCCESS
+        assert _text(books) == before
+        compensation = _last_event(books)
+        assert compensation["type"] == f"{event_type}.compensated.v1"
+        assert compensation["compensates"] == event["id"]
+        assert compensation["payload"]["compensated_event_id"] == event["id"]
 
 
 class TestSymmetry:
@@ -553,10 +623,10 @@ class TestSymmetry:
     def test_delete_then_restore_restores_the_journal(self, books: AppConfig) -> None:
         before = _text(books)
 
-        with edit(books, tag="test", event_type="t.v1") as session:
+        with edit(books) as session:
             block = session.open("txn_wf").delete()
 
-        with edit(books, tag="test", event_type="t.v1") as session:
+        with edit(books) as session:
             session.restore("journals/2026.journal", block)
 
         assert _text(books) == before
@@ -568,9 +638,18 @@ class TestSymmetry:
 
 
 class TestUnmatchAndMatch:
+    @pytest.mark.parametrize("recorded", [{}, "invalid", {
+        "txn_id": "txn_matched", "match_id": MATCH_ID,
+        "manual_block": "", "archive_path": "journals/archived-manual.journal",
+        "category": "Expenses:Groceries",
+    }])
+    def test_incomplete_restoration_is_a_domain_refusal(self, recorded):
+        with pytest.raises(EditError, match="Incomplete event payload"):
+            MatchRestoration.from_payload({"match_restoration": recorded})
+
     def test_unmatch_unstamps_restores_and_empties_the_archive(self, matched: AppConfig) -> None:
-        with edit(matched, tag="unmatch", event_type="transaction.unmatched.v1") as session:
-            session.unmatch(session.open("txn_matched"), match_id=MATCH_ID)
+        with edit(matched) as session:
+            session.unmatch("txn_matched", match_id=MATCH_ID)
 
         text = (matched.journal_dir / "2026.journal").read_text(encoding="utf-8")
         imported = text.split("2026-03-15 Whole Foods")[0]
@@ -581,8 +660,8 @@ class TestUnmatchAndMatch:
         assert not (matched.journal_dir / "archived-manual.journal").exists()
 
     def test_unmatch_is_one_operation_carrying_its_inverse(self, matched: AppConfig) -> None:
-        with edit(matched, tag="unmatch", event_type="transaction.unmatched.v1") as session:
-            session.unmatch(session.open("txn_matched"), match_id=MATCH_ID)
+        with edit(matched) as session:
+            session.unmatch("txn_matched", match_id=MATCH_ID)
 
         payload = _last_event(matched)["payload"]
         assert payload["match_id"] == MATCH_ID
@@ -593,22 +672,17 @@ class TestUnmatchAndMatch:
 
     def test_unknown_match_is_not_found(self, matched: AppConfig) -> None:
         with pytest.raises(TransactionNotFound):
-            with edit(matched, tag="unmatch", event_type="t.v1") as session:
-                session.unmatch(session.open("txn_matched"), match_id="match_nope")
+            with edit(matched) as session:
+                session.unmatch("txn_matched", match_id="match_nope")
 
     def test_match_is_the_inverse_of_unmatch(self, matched: AppConfig) -> None:
-        with edit(matched, tag="unmatch", event_type="transaction.unmatched.v1") as session:
-            session.unmatch(session.open("txn_matched"), match_id=MATCH_ID)
+        with edit(matched) as session:
+            restoration = session.unmatch("txn_matched", match_id=MATCH_ID)
         payload = _last_event(matched)["payload"]
+        assert MatchRestoration.from_payload(payload) == restoration
 
-        with edit(matched, tag="undo", event_type="transaction.matched.v1") as session:
-            session.match(
-                session.open("txn_matched"),
-                match_id=MATCH_ID,
-                manual_block=payload["restored_block"],
-                archive_path=payload["deleted_journal_path"],
-                category=payload["previous_account"],
-            )
+        with edit(matched) as session:
+            session.match(restoration)
 
         text = (matched.journal_dir / "2026.journal").read_text(encoding="utf-8")
         assert text.count("2026-03-15") == 1
@@ -620,3 +694,22 @@ class TestUnmatchAndMatch:
         archive = (matched.journal_dir / "archived-manual.journal").read_text(encoding="utf-8")
         assert "2026-03-15 Whole Foods" in archive
         assert f"; lf_match_id: {MATCH_ID}" in archive
+
+    def test_recorded_unmatch_can_be_undone(self, matched):
+        before = (matched.journal_dir / "2026.journal").read_text()
+        with edit(matched) as session:
+            session.unmatch("txn_matched", match_id=MATCH_ID)
+        event = _last_event(matched)
+        assert event["type"] == "transaction.unmatched.v1"
+        assert undo_event(matched, event["id"]).outcome == UndoOutcome.SUCCESS
+        assert (matched.journal_dir / "2026.journal").read_text() == before
+
+    def test_uncategorized_unmatch_keeps_an_exact_category_for_its_inverse(self, matched):
+        path = matched.journal_dir / "2026.journal"
+        path.write_text(MATCHED_JOURNAL.replace("Expenses:Groceries", "Expenses:Unknown"))
+        with edit(matched) as session:
+            session.unmatch("txn_matched", match_id=MATCH_ID)
+        event = _last_event(matched)
+        assert event["payload"]["match_restoration"]["category"] == "Expenses:Unknown"
+        assert undo_event(matched, event["id"]).outcome == UndoOutcome.SUCCESS
+        assert "Expenses:Unknown" in path.read_text()

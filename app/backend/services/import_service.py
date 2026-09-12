@@ -535,7 +535,7 @@ def _parse_transaction(
             pm = ACCOUNT_LINE_RE.match(line)
             if pm is None or pm.group(2).strip() != UNKNOWN_ACCOUNT:
                 continue
-            rewritten_lines[index], _ = rewrite_posting_account(line, category_account)
+            rewritten_lines[index] = rewrite_posting_account(line, category_account)
         lines = rewritten_lines
         for posting in postings:
             if posting["account"] == UNKNOWN_ACCOUNT:

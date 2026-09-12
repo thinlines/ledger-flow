@@ -26,11 +26,6 @@ from services import journal_writer, transaction_edit_service
 from services.config_service import AppConfig
 from services.header_parser import TransactionStatus
 from services.journal_block_service import locate_block_by_id
-from services.journal_query_service import (
-    ACCOUNT_LINE_RE,
-    ACCOUNT_ONLY_RE,
-    TXN_START_RE,
-)
 from services.operations_service import (
     hash_file,
     list_operations,
@@ -220,17 +215,7 @@ def _compensating(config: AppConfig, event: dict) -> Iterator[transaction_edit_s
     still holds the state the forward action produced.
     """
     try:
-        with transaction_edit_service.edit(
-            config,
-            tag="undo",
-            event_type=f"{event.get('type', '')}.compensated.v1",
-            compensates=event.get("id", ""),
-            summary=f"Undid: {event.get('summary', '')}",
-            payload={
-                **event.get("payload", {}),
-                "compensated_event_id": event.get("id", ""),
-            },
-        ) as session:
+        with transaction_edit_service.edit(config, compensating=event) as session:
             yield session
     except transaction_edit_service.EditError as exc:
         raise UndoFailedError(str(exc)) from exc
@@ -259,8 +244,7 @@ def _undo_transaction_recategorized(config: AppConfig, event: dict) -> str:
 
     with _compensating(config, event) as session:
         transaction = session.open(_payload_txn_id(payload))
-        posting = transaction.category_posting
-        if posting is None or posting.account != new_account:
+        if transaction.category_account != new_account:
             raise UndoFailedError(f"Destination account {new_account} not found on transaction")
         transaction.set_category(previous_account)
     return session.result.operation_id
@@ -276,8 +260,7 @@ def _undo_transaction_account_reassigned(config: AppConfig, event: dict) -> str:
 
     with _compensating(config, event) as session:
         transaction = session.open(_payload_txn_id(payload))
-        posting = transaction.source_posting
-        if posting is None or posting.account != new_account:
+        if transaction.source_account != new_account:
             raise UndoFailedError(f"Source account {new_account} not found on transaction")
         transaction.set_source_account(previous_account)
     return session.result.operation_id
@@ -324,44 +307,11 @@ def _undo_transaction_notes_updated(config: AppConfig, event: dict) -> str:
     return session.result.operation_id
 
 
-def _category_from_block(block_text: str) -> str | None:
-    """Recover the category account from a pre-session unmatch payload, which
-    recorded no ``previous_account``."""
-    for line in block_text.splitlines():
-        stripped = line.strip()
-        if stripped.startswith(";") or not stripped or TXN_START_RE.match(stripped):
-            continue
-        match = ACCOUNT_LINE_RE.match(line) or ACCOUNT_ONLY_RE.match(line)
-        if match and match.group(2).strip().startswith(("Expenses:", "Income:", "Revenue:")):
-            return match.group(2).strip()
-    return None
-
-
 def _undo_transaction_unmatched(config: AppConfig, event: dict) -> str:
-    """Re-create the match that was undone — unmatch's inverse."""
-    payload = event.get("payload", {})
-    match_id = payload.get("match_id", "")
-    manual_block = payload.get("restored_block") or payload.get("restored_manual_block") or ""
-    archive_rel = (
-        payload.get("deleted_journal_path")
-        or payload.get("archive_path")
-        or "journals/archived-manual.journal"
-    )
-    if not match_id or not manual_block:
-        raise UndoFailedError("Incomplete event payload")
-
-    category = payload.get("previous_account") or _category_from_block(manual_block)
-    if not category:
-        raise UndoFailedError("Could not determine category from restored manual block")
-
+    """Re-create a match from the restoration recorded by unmatch."""
     with _compensating(config, event) as session:
-        session.match(
-            session.open(_payload_txn_id(payload)),
-            match_id=match_id,
-            manual_block=manual_block,
-            archive_path=archive_rel,
-            category=category,
-        )
+        restoration = transaction_edit_service.MatchRestoration.from_payload(event.get("payload", {}))
+        session.match(restoration)
     return session.result.operation_id
 
 

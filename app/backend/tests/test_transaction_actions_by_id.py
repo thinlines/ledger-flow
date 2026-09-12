@@ -306,6 +306,20 @@ class TestRecategorizeById:
 
 
 class TestReassignAccountById:
+    def test_response_reports_the_normalized_account_applied(self, tmp_path, monkeypatch) -> None:
+        config = _workspace(tmp_path, monkeypatch)
+        result = main.transactions_reassign_account(
+            ReassignAccountRequest(
+                txnId="txn_wf",
+                blockHash=_block_hash(config, "txn_wf"),
+                newAccountLedgerName=" Assets:Bank:Savings ",
+            )
+        )
+        assert result["newAccount"] == "Assets:Bank:Savings"
+        assert "Assets:Bank:Savings  USD -50.00" in (
+            config.journal_dir / "2026.journal"
+        ).read_text()
+
     def test_reassigns_source_posting(self, tmp_path, monkeypatch) -> None:
         config = _workspace(tmp_path, monkeypatch)
         block_hash = _block_hash(config, "txn_wf")

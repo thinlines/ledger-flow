@@ -2,12 +2,11 @@
 
 This module is the write-side counterpart of the projection. The projection
 answers *what does this transaction say*; the session answers *change it to
-say this*. A caller opens a session, opens one or more transactions by
+say this*. A caller opens a session, opens a transaction by
 durable id, calls verbs in the user's vocabulary, and lets the session
 commit::
 
-    with edit(config, tag="recategorize",
-              event_type="transaction.recategorized.v1") as session:
+    with edit(config) as session:
         txn = session.open(txn_id, expect_hash=block_hash)
         txn.set_category("Expenses:Groceries")
 
@@ -19,18 +18,17 @@ staleness, posting classification, rendering, trailing-newline preservation,
 the journal mutation, re-projection, and the undo payload. Callers never
 assemble payloads and never compute a workspace path.
 
-Every verb returns the value it replaced — the prior category, account,
-status, note, metadata value, tag presence, or block text — so a caller that
-needs to report or re-apply the old state never has to read it out first.
+Each session records one semantic action; its verb determines the event type.
+Account changes return both the previous and applied account. Other verbs
+return the prior value. Match and unmatch compose their edits privately.
 
 Refusals are typed (:class:`EditError` subclasses) and carry the message the
 user sees, so the first-party application and automation clients read the
 same text. One translation table maps them to HTTP status codes, in the API
 layer.
 
-Two private layers live below the seam and are not exported: a posting-line
-codec (``_parse_posting``, over the line primitives in ``journal_syntax``)
-and a journal-file layer
+Two private layers live below the seam and are not exported: posting role
+selection and a journal-file layer
 (:class:`_JournalFile` — locate, splice, date-ordered insert, trailing-newline
 preservation, drop a file left holding only comments). They are implementation
 of the session; promote either only when a second public consumer appears.
@@ -39,6 +37,9 @@ Adding an action means adding one verb here whose inverse is another verb —
 ``set_category`` inverts itself with the prior account, ``delete`` inverts to
 ``restore``, ``unmatch`` to ``match``. A verb with no inverse in that table is
 at the wrong grain.
+
+Undo dispatch supports the existing row actions. Standalone metadata, tag,
+restore, and match actions have direct inverse verbs but no dispatcher handlers.
 """
 
 from __future__ import annotations
@@ -46,21 +47,18 @@ from __future__ import annotations
 import re
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
-from dataclasses import dataclass
-from decimal import Decimal
-from functools import cached_property
+from dataclasses import asdict, dataclass
+from functools import cached_property, wraps
 from pathlib import Path
 
 from . import journal_writer
 from .archive_service import archive_manual_entry
-from .commodity import parse_amount, split_balance_assertion
 from .config_service import AppConfig
 from .header_parser import TransactionStatus, parse_header, set_header_status
 from .journal_block_service import hash_block, locate_block_by_hash, locate_block_by_id
 from .journal_syntax import (
     LF_TXN_ID_META_RE,
     META_RE,
-    POSTING_RE,
     TXN_START_RE,
     posting_account,
     rewrite_posting_account,
@@ -109,6 +107,10 @@ class NotTracked(EditError):
     """The target account is not one of the workspace's tracked accounts."""
 
 
+class ActionConflict(EditError):
+    """A session attempted more than one semantic action."""
+
+
 class AlreadyInState(EditError):
     """The transaction already holds the requested value; nothing to change."""
 
@@ -119,18 +121,58 @@ class AlreadyInState(EditError):
 
 
 @dataclass(frozen=True)
-class Posting:
-    """One leg of a transaction, addressed by role or by ``index``.
+class AccountChange:
+    """The previous account and the normalized account actually applied."""
 
-    Postings have no identity of their own in the journal: they are a value
-    read from the transaction and changed through its verbs.
-    """
+    previous: str
+    applied: str
 
-    index: int
-    account: str
-    amount: Decimal | None = None
-    commodity: str | None = None
-    assertion: str | None = None
+
+@dataclass(frozen=True)
+class MatchRestoration:
+    """Everything needed to reverse an unmatch, produced by that action."""
+
+    txn_id: str
+    match_id: str
+    manual_block: str
+    archive_path: str
+    category: str | None
+
+    def __post_init__(self) -> None:
+        if any(not isinstance(value, str) or not value.strip() for value in (
+            self.txn_id, self.match_id, self.manual_block, self.archive_path
+        )) or (self.category is not None and (
+            not isinstance(self.category, str) or not self.category.strip()
+        )):
+            raise EditError("Incomplete event payload for match restoration")
+
+    @classmethod
+    def from_payload(cls, payload: Mapping) -> MatchRestoration:
+        """Read a current restoration or normalize a historical unmatch payload."""
+        recorded = payload.get("match_restoration")
+        if recorded is not None:
+            try:
+                return cls(**recorded)
+            except TypeError as exc:
+                raise EditError("Incomplete event payload for match restoration") from exc
+        txn_id = str(payload.get("txn_id") or "").strip()
+        match_id = payload.get("match_id", "")
+        block = payload.get("restored_block") or payload.get("restored_manual_block") or ""
+        if not txn_id or not match_id or not block:
+            raise EditError("Incomplete event payload for match restoration")
+        category = payload.get("previous_account")
+        if not category:
+            category = next(
+                (account for line in block.splitlines()
+                 if (account := posting_account(line)) is not None
+                 and account.startswith(("Expenses:", "Income:", "Revenue:"))),
+                None,
+            )
+        if not category:
+            raise EditError("Could not determine category from restored manual block")
+        archive = (payload.get("deleted_journal_path") or payload.get("archive_path")
+                   or "journals/archived-manual.journal")
+        return cls(txn_id, match_id, block, archive, category)
 
 
 @dataclass(frozen=True)
@@ -154,26 +196,40 @@ class EditResult:
 
 
 # ---------------------------------------------------------------------------
-# Posting-line codec (private)
+# Action recording (private)
 # ---------------------------------------------------------------------------
 
 
-def _parse_posting(line: str, index: int) -> Posting | None:
-    """Read one posting line into a value, or ``None`` if it is not a posting."""
-    account = posting_account(line)
-    if account is None:
-        return None
-    match = POSTING_RE.match(line)
-    amount_text = (match.group(2) or "") if match else ""
-    _, assertion = split_balance_assertion(amount_text)
-    parsed = parse_amount(amount_text)
-    return Posting(
-        index=index,
-        account=account,
-        amount=parsed.value if parsed is not None else None,
-        commodity=parsed.commodity if parsed is not None else None,
-        assertion=assertion,
-    )
+def _action(tag: str, event_type: str):
+    """Record one semantic action while allowing its private composition."""
+
+    def decorate(verb):
+        @wraps(verb)
+        def call(subject, *args, **kwargs):
+            session = subject._session if isinstance(subject, Transaction) else subject
+            session._check_active()
+            if isinstance(subject, Transaction):
+                subject._check_live()
+            if session._composing:
+                return verb(subject, *args, **kwargs)
+            if session._action is not None:
+                session._failed = True
+                raise ActionConflict("An edit session permits only one action")
+            session._action = (tag, event_type)
+            session._payload = {}
+            if isinstance(subject, Transaction):
+                session._target(subject)
+            session._composing = True
+            try:
+                return verb(subject, *args, **kwargs)
+            except Exception:
+                session._failed = True
+                raise
+            finally:
+                session._composing = False
+        return call
+
+    return decorate
 
 
 _TAG_LINE_RE = re.compile(r"^(\s*);\s*:([^;]*?):\s*$")
@@ -301,6 +357,7 @@ class Transaction:
 
     @property
     def _block(self) -> list[str]:
+        self._check_live()
         return self._file.lines[self._start : self._end]
 
     @property
@@ -310,6 +367,7 @@ class Transaction:
 
     @property
     def header(self) -> str:
+        self._check_live()
         return self._file.lines[self._start]
 
     @property
@@ -350,65 +408,60 @@ class Transaction:
         return self.metadata.get("notes", "")
 
     @property
-    def postings(self) -> tuple[Posting, ...]:
-        return tuple(posting for _, posting in self._posting_lines())
+    def source_account(self) -> str | None:
+        """The single tracked account, absent when no posting has that role."""
+        posting = self._role_posting(tracked=True)
+        return posting[1] if posting else None
 
     @property
-    def source_posting(self) -> Posting | None:
-        """The tracked-account leg, or ``None`` when the block has none."""
-        tracked = [p for p in self.postings if p.account in self._session._tracked]
-        if len(tracked) > 1:
-            raise SplitTransaction("Cannot reassign a multi-account transaction")
-        return tracked[0] if tracked else None
-
-    @property
-    def category_posting(self) -> Posting | None:
-        """The single non-tracked leg. ``None`` for a transfer; raises for a split."""
-        others = [p for p in self.postings if p.account not in self._session._tracked]
-        if len(others) > 1:
-            raise SplitTransaction("Cannot re-categorize a split transaction")
-        return others[0] if others else None
+    def category_account(self) -> str | None:
+        """The single category account; absent for a transfer, refused for a split."""
+        posting = self._role_posting(tracked=False)
+        return posting[1] if posting else None
 
     # -- verbs -------------------------------------------------------------
 
-    def set_category(self, account: str | None) -> str:
+    @_action("recategorize", "transaction.recategorized.v1")
+    def set_category(self, account: str | None) -> AccountChange:
         """Move the category leg. ``None`` resets it to uncategorized."""
         requested = (account or "").strip()
         target = requested or UNCATEGORIZED_ACCOUNT
-        posting = self.category_posting
+        posting = self._role_posting(tracked=False)
         if posting is None:
             raise NotACategory("Cannot re-categorize a transfer")
-        if posting.account == target:
+        if posting[1] == target:
             raise AlreadyInState(
                 "Transaction is already uncategorized"
                 if not requested
                 else "Transaction already has this category"
             )
-        self._rewrite_account(posting.index, target)
-        self._session._record(previous_account=posting.account, new_account=target)
+        self._rewrite_account(posting[0], target)
+        self._session._record(previous_account=posting[1], new_account=target)
         self._session._describe(
-            f"Recategorized: {self.payee} on {self.date} ({posting.account} → {target})"
+            f"Recategorized: {self.payee} on {self.date} ({posting[1]} → {target})"
         )
-        return posting.account
+        return AccountChange(posting[1], target)
 
-    def set_source_account(self, ledger_account: str) -> str:
+    @_action("reassign-account", "transaction.account_reassigned.v1")
+    def set_source_account(self, ledger_account: str) -> AccountChange:
         """Move the transaction to a different tracked account."""
         target = (ledger_account or "").strip()
         if target not in self._session._tracked:
             raise NotTracked("Not a tracked account")
-        posting = self.source_posting
+        posting = self._role_posting(tracked=True)
         if posting is None:
             raise NotACategory("Cannot reassign account on this transaction")
-        if posting.account == target:
+        if posting[1] == target:
             raise AlreadyInState("Transaction already belongs to this account")
-        self._rewrite_account(posting.index, target)
-        self._session._record(previous_account=posting.account, new_account=target)
+        self._rewrite_account(posting[0], target)
+        self._session._record(previous_account=posting[1], new_account=target)
         self._session._describe(
             f"Reassigned account: {self.payee} on {self.date} "
-            f"({posting.account} → {target})"
+            f"({posting[1]} → {target})"
         )
-        return posting.account
+        return AccountChange(posting[1], target)
 
+    @_action("toggle-status", "transaction.status_toggled.v1")
     def set_status(self, status: TransactionStatus) -> TransactionStatus:
         """Set the clearing status the bank has confirmed."""
         previous = self.status
@@ -423,6 +476,7 @@ class Transaction:
         )
         return previous
 
+    @_action("notes", "transaction.notes_updated.v1")
     def set_notes(self, notes: str) -> str:
         """Set (or, with an empty string, remove) the transaction's note."""
         previous = self.notes
@@ -434,6 +488,7 @@ class Transaction:
         self._session._describe(f"Notes updated: {self.payee} on {self.date}")
         return previous
 
+    @_action("metadata", "transaction.metadata_updated.v1")
     def set_metadata(self, key: str, value: str | None) -> str | None:
         """Set one journal metadata key; ``None`` clears it. Idempotent."""
         name = key.strip().lower()
@@ -448,14 +503,17 @@ class Transaction:
         """Remove one journal metadata key. Idempotent."""
         return self.set_metadata(key, None)
 
+    @_action("tag", "transaction.tags_updated.v1")
     def set_tag(self, name: str) -> bool:
         """Add a bare ``; :name:`` tag to the block. Idempotent."""
         return self._write_tag(name, present=True)
 
+    @_action("tag", "transaction.tags_updated.v1")
     def clear_tag(self, name: str) -> bool:
         """Remove a bare ``; :name:`` tag from the block. Idempotent."""
         return self._write_tag(name, present=False)
 
+    @_action("delete", "transaction.deleted.v1")
     def delete(self) -> str:
         """Remove the transaction from the journal."""
         phrase = f"Deleted transaction: {self.payee} on {self.date}"
@@ -465,17 +523,28 @@ class Transaction:
 
     # -- internals ---------------------------------------------------------
 
-    def _posting_lines(self) -> list[tuple[int, Posting]]:
-        found: list[tuple[int, Posting]] = []
-        for index in range(self._start + 1, self._end):
-            posting = _parse_posting(self._file.lines[index], len(found))
-            if posting is not None:
-                found.append((index, posting))
-        return found
+    def _check_live(self) -> None:
+        self._session._check_active()
+        if self._deleted:
+            raise TransactionNotFound("Transaction was deleted in this session")
 
-    def _rewrite_account(self, posting_index: int, account: str) -> None:
-        line_index, _ = self._posting_lines()[posting_index]
-        rewritten, _ = rewrite_posting_account(self._file.lines[line_index], account)
+    def _role_posting(self, *, tracked: bool) -> tuple[int, str] | None:
+        self._check_live()
+        postings = [
+            (index, account)
+            for index in range(self._start + 1, self._end)
+            if (account := posting_account(self._file.lines[index])) is not None
+            and (account in self._session._tracked) == tracked
+        ]
+        if len(postings) > 1:
+            raise SplitTransaction(
+                "Cannot reassign a multi-account transaction" if tracked
+                else "Cannot re-categorize a split transaction"
+            )
+        return postings[0] if postings else None
+
+    def _rewrite_account(self, line_index: int, account: str) -> None:
+        rewritten = rewrite_posting_account(self._file.lines[line_index], account)
         self._file.splice(line_index, line_index + 1, [rewritten])
 
     def _comment_insert_index(self) -> int:
@@ -547,29 +616,19 @@ class Transaction:
 
 
 class Session:
-    """One journal mutation, one recorded operation, any number of verbs."""
+    """One semantic action, one journal mutation, one recorded operation."""
 
-    def __init__(
-        self,
-        config: AppConfig,
-        *,
-        tag: str,
-        event_type: str,
-        actor: str,
-        compensates: str | None,
-        summary: str | None,
-        payload: dict | None,
-    ) -> None:
+    def __init__(self, config: AppConfig, *, actor: str, compensating: Mapping | None) -> None:
         self._config = config
-        self._tag = tag
-        self._event_type = event_type
         self._actor = actor
-        self._compensates = compensates
-        self._summary_override = summary
-        self._payload_override = payload
+        self._compensating = compensating
+        self._action: tuple[str, str] | None = None
+        self._composing = False
+        self._failed = False
+        self._active = True
         self._files: dict[str, _JournalFile] = {}
         self._deferred: list[tuple[Path, Callable[[Path], None]]] = []
-        self._opened: list[Transaction] = []
+        self._opened: dict[str, Transaction] = {}
         self._refs: dict[str, ProjectedTransactionRef] = {}
         self._removed: set[str] = set()
         self._phrases: list[str] = []
@@ -581,6 +640,7 @@ class Session:
 
     def open(self, txn_id: str, *, expect_hash: str | None = None) -> Transaction:
         """Open one transaction by durable id, refusing a stale block hash."""
+        self._check_active()
         if not self._refreshed:
             refresh_projection(self._config)
             self._refreshed = True
@@ -589,21 +649,24 @@ class Session:
             raise TransactionNotFound(_NOT_FOUND_DETAIL)
         if expect_hash is not None and expect_hash != ref.raw_block_hash:
             raise StaleTransaction(_STALE_DETAIL)
+        existing = self._opened.get(ref.id)
+        if existing is not None:
+            existing._check_live()
+            if not self._payload:
+                self._target(existing)
+            return existing
         file = self._file(ref.journal_path)
         span = file.locate(ref.id, ref.raw_block_hash)
         transaction = Transaction(self, ref.id, file, span)
-        self._opened.append(transaction)
+        self._opened[ref.id] = transaction
         self._refs[ref.id] = ref
         if not self._payload:
-            self._payload = {
-                "journal_path": ref.journal_path,
-                "header_line": ref.raw_header,
-                "txn_id": ref.id,
-            }
+            self._target(transaction)
         return transaction
 
     # -- session-level verbs ----------------------------------------------
 
+    @_action("restore", "transaction.restored.v1")
     def restore(self, journal_path: str, block_text: str) -> None:
         """Put a previously deleted block back, in date order — delete's inverse."""
         block_lines = block_text.rstrip("\n").splitlines()
@@ -628,8 +691,12 @@ class Session:
             else "Restored transaction"
         )
 
-    def unmatch(self, imported: Transaction, *, match_id: str) -> None:
+    @_action("unmatch", "transaction.unmatched.v1")
+    def unmatch(
+        self, txn_id: str, *, match_id: str, expect_hash: str | None = None
+    ) -> MatchRestoration:
         """Undo a match: unstamp the imported row, bring the manual entry back."""
+        imported = self.open(txn_id, expect_hash=expect_hash)
         match = find_projected_transaction_match(self._config, match_id)
         if match is None or match.imported_transaction_id != imported.id:
             raise TransactionNotFound("Transaction match not found")
@@ -638,11 +705,12 @@ class Session:
         except TransactionNotFound as exc:
             raise TransactionNotFound("Archived manual transaction not found") from exc
 
+        category = imported.category_account
+        archive_path = archived.journal_path
         imported.clear_tag("manual")
         imported.clear_metadata("lf_match_id")
         imported.clear_metadata("match-id")
-        category = imported.category_posting
-        if category is not None and category.account != UNCATEGORIZED_ACCOUNT:
+        if category is not None and category != UNCATEGORIZED_ACCOUNT:
             imported.set_category(None)
 
         archived.clear_metadata("lf_match_id")
@@ -651,25 +719,24 @@ class Session:
         archived._remove(drop_empty_file=True)
         self.restore(imported.journal_path, restored)
 
-        self._record(match_id=match_id)
+        restoration = MatchRestoration(imported.id, match_id, restored, archive_path, category)
+        self._record(match_id=match_id, match_restoration=asdict(restoration))
         self._phrases = [
             f"Unmatched: {imported.payee} on {imported.date} (match-id: {match_id})"
         ]
+        return restoration
 
-    def match(
-        self,
-        imported: Transaction,
-        *,
-        match_id: str,
-        manual_block: str,
-        archive_path: str,
-        category: str | None = None,
-    ) -> None:
-        """Re-create a match: restamp the imported row, re-archive the manual
-        entry — unmatch's inverse."""
+    @_action("match", "transaction.matched.v1")
+    def match(self, restoration: MatchRestoration) -> None:
+        """Reverse an unmatch using the restoration it produced."""
+        imported = self.open(restoration.txn_id)
+        match_id = restoration.match_id
+        manual_block = restoration.manual_block
+        archive_path = restoration.archive_path
+        category = restoration.category
         imported.set_tag("manual")
         imported.set_metadata("lf_match_id", match_id)
-        if category and category != UNCATEGORIZED_ACCOUNT:
+        if category is not None and imported.category_account != category:
             imported.set_category(category)
 
         manual_id = _block_txn_id(manual_block)
@@ -692,6 +759,18 @@ class Session:
         ]
 
     # -- internals ---------------------------------------------------------
+
+    def _check_active(self) -> None:
+        if not self._active:
+            raise EditError("The edit session is closed")
+
+    def _target(self, transaction: Transaction) -> None:
+        ref = self._refs[transaction.id]
+        self._payload = {
+            "journal_path": ref.journal_path,
+            "header_line": ref.raw_header,
+            "txn_id": ref.id,
+        }
 
     @cached_property
     def _tracked(self) -> frozenset[str]:
@@ -726,6 +805,15 @@ class Session:
         self._phrases.append(phrase)
 
     def _commit(self) -> None:
+        if self._failed:
+            raise ActionConflict("The edit action failed; the session cannot commit")
+        if self._action is None:
+            return
+        tag, event_type = self._action
+        forward = self._compensating
+        if forward is not None:
+            tag = "undo"
+            event_type = f"{forward.get('type', '')}.compensated.v1"
         paths = [file.path for file in self._files.values()]
         paths.extend(path for path, _ in self._deferred if path not in paths)
         if not paths:
@@ -733,8 +821,8 @@ class Session:
         with journal_writer.mutate(
             config=self._config,
             paths=paths,
-            tag=self._tag,
-            event_type=self._event_type,
+            tag=tag,
+            event_type=event_type,
             actor=self._actor,
         ) as mutation:
             for file in self._files.values():
@@ -742,21 +830,19 @@ class Session:
             for path, action in self._deferred:
                 action(path)
             mutation.summary = (
-                self._summary_override
-                if self._summary_override is not None
+                f"Undid: {forward.get('summary', '')}" if forward is not None
                 else "; ".join(self._phrases)
             )
             mutation.payload = (
-                dict(self._payload_override)
-                if self._payload_override is not None
-                else dict(self._payload)
+                {**forward.get("payload", {}), "compensated_event_id": forward.get("id", "")}
+                if forward is not None else dict(self._payload)
             )
-            mutation.compensates = self._compensates
+            mutation.compensates = forward.get("id", "") if forward is not None else None
         self.result = EditResult(mutation.event_id, self._identities())
 
     def _identities(self) -> dict[str, Identity]:
         found: dict[str, Identity] = {}
-        for transaction in self._opened:
+        for transaction in self._opened.values():
             if transaction._deleted:
                 continue
             ref = self._refs[transaction.id]
@@ -774,43 +860,22 @@ class Session:
 
 @contextmanager
 def edit(
-    config: AppConfig,
-    *,
-    tag: str,
-    event_type: str,
-    actor: str = "user",
-    compensates: str | None = None,
-    summary: str | None = None,
-    payload: dict | None = None,
+    config: AppConfig, *, actor: str = "user", compensating: Mapping | None = None
 ) -> Iterator[Session]:
-    """Open an edit session. Verbs run in memory; the session writes on exit.
+    """Apply one semantic action in memory and commit on successful exit.
 
-    Args:
-        config: the workspace.
-        tag: short slug for the writer's backup filenames.
-        event_type: operation type recorded on success.
-        actor: recorded as the operation's actor. Defaults to ``"user"``.
-        compensates: the forward operation this session undoes, if any.
-        summary: overrides the summary the verbs would have written.
-        payload: replaces the undo payload the verbs would have written —
-            a compensating operation carries the forward event's payload
-            rather than its own inverse.
+    The verb chooses the event type, backup tag, summary, and undo payload.
+    A second action refuses the entire session. Match and unmatch compose
+    their related changes internally. Opening or reading handles records nothing.
+    Reopening an id returns its existing handle; deleted handles are refused.
+    Handles are valid only inside the context. Read ``session.result`` after exit.
 
-    Yields:
-        A :class:`Session`. Read ``session.result`` after the block for the
-        operation id and each opened transaction's post-edit identity.
-
-    Raises:
-        EditError: any domain refusal; the journal is left untouched.
+    ``compensating`` is the forward event being undone. Its operation metadata
+    is derived here rather than assembled by each inverse caller.
     """
-    session = Session(
-        config,
-        tag=tag,
-        event_type=event_type,
-        actor=actor,
-        compensates=compensates,
-        summary=summary,
-        payload=payload,
-    )
-    yield session
-    session._commit()
+    session = Session(config, actor=actor, compensating=compensating)
+    try:
+        yield session
+        session._commit()
+    finally:
+        session._active = False

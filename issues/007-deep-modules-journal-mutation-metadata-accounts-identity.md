@@ -456,7 +456,7 @@ spanning two transactions (unmatch, transfer linkage) must share one mutation
 and one operation and the caller should not have to know that.
 
 ```python
-with edit(config, tag="recategorize", event_type="transaction.recategorized.v1") as session:
+with edit(config) as session:
     session.open(txn_id, expect_hash=block_hash).set_category("Expenses:Groceries")
 
 session.result.operation_id        # the recorded operation
@@ -465,23 +465,39 @@ session.result.identity(txn_id)    # post-edit durable id + block hash
 
 The whole surface: `edit()`, `Session.open` / `.restore` / `.unmatch` / `.match`,
 `Transaction`'s reads (`date`, `payee`, `status`, `notes`, `metadata`, `tags`,
-`postings`, `source_posting`, `category_posting`, `block_text`) and its verbs
+`source_account`, `category_account`, `block_text`) and its verbs
 (`set_category`, `set_source_account`, `set_status`, `set_notes`,
 `set_metadata` / `clear_metadata`, `set_tag` / `clear_tag`, `delete`), the
-`Posting` / `Identity` / `EditResult` values, and six typed refusals.
+`AccountChange` / `MatchRestoration` / `Identity` / `EditResult` values, and
+seven typed refusals.
 
 Each verb writes its own undo payload, so no caller assembles one, and every
 undo handler is now the forward verb with the payload's prior value plus one
 semantic precondition. `undo_service` went from 833 lines to 497; `main.py`
 from 2679 to 2254.
 
-**Deliberate deviations from the sketch.** `Posting` is a read-only value: its
-only setter would have been `account`, which is the same change `set_category`
-and `set_source_account` already express in the user's words, and routing it
-through the parent for validation would have bought a second way to do one
-thing. `unmatch` and `match` are session verbs rather than compositions the
-caller assembles, because the archive's shape (append with a header, drop the
-file when only comments remain) is journal knowledge, not API knowledge.
+**Interface simplification after the five-commit audit.** A session permits one
+semantic action, and the verb chooses its event type and backup tag. A second
+action refuses the entire session, including when the caller catches the
+refusal. This replaces the unsafe general composition interface: the first
+transaction's id and the last verb's scalar payload could previously describe
+different changes. Match and unmatch still compose related edits privately
+inside one mutation. Undo passes the forward event as `compensating=event`;
+the session derives the compensation's summary, type, and payload.
+
+Reopening a transaction returns the existing handle, including after an edit;
+its expected hash checks the original block. Deleted handles are refused and
+handles close when the session exits. Reading alone records no operation.
+
+Posting details are private. Mutation callers read `source_account` and
+`category_account`; the two account-changing verbs return `AccountChange`
+with the previous and normalized applied account. This also makes reassignment
+responses report exactly the account written to the journal.
+
+`unmatch(txn_id, match_id=..., expect_hash=...)` returns a `MatchRestoration`
+and records it in the operation. `match(restoration)` consumes that value.
+`MatchRestoration.from_payload` normalizes historical payload names and category
+recovery, so undo no longer knows archive filenames or parses block text.
 
 **Scope fence.** The six row-action endpoints import nothing from the journal
 writer, the journal syntax module, the block-location helpers, or the
@@ -494,7 +510,9 @@ import-apply, unknowns-apply, reconcile, rules-history-apply.
 they pair. The account-rewrite helper is gone from `transfer_service` (its
 third copy, in `reconciliation_duplicate_service`, is deleted), and every site
 that hand-paired `ACCOUNT_LINE_RE` with `ACCOUNT_ONLY_RE` to read an account
-asks `posting_account` instead.
+asks `posting_account` instead. Both primitives agree on posting recognition;
+`rewrite_posting_account` returns rewritten text or raises `ValueError` for a
+non-posting line, replacing the inconsistently checked boolean result.
 
 Still open here: the metadata key registry and `12-tags.dat` generation (seam
 4) slot in behind the metadata verbs without changing the interface; the batch

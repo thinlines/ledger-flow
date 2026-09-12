@@ -18,31 +18,35 @@ ACCOUNT_ONLY_RE = re.compile(r"^(\s+)([^\s].*?)\s*$")
 LF_TXN_ID_META_RE = re.compile(r"^\s*;\s*lf_txn_id:\s*(\S+)\s*$")
 
 
-def posting_account(line: str) -> str | None:
-    """The account a posting line names, or ``None`` for any other line.
-
-    Comment lines, blank lines, and the transaction header all answer ``None``.
-    """
+def _posting_match(line: str) -> re.Match[str] | None:
+    """Recognize a posting once for both reading and rewriting."""
     match = ACCOUNT_LINE_RE.match(line) or ACCOUNT_ONLY_RE.match(line)
     if match is None:
         return None
     account = match.group(2).strip()
     if not account or account.startswith(";"):
         return None
-    return account
+    return match
 
 
-def rewrite_posting_account(line: str, target_account: str) -> tuple[str, bool]:
+def posting_account(line: str) -> str | None:
+    """The account a posting line names, or ``None`` for any other line.
+
+    Comment lines, blank lines, and the transaction header all answer ``None``.
+    """
+    match = _posting_match(line)
+    return match.group(2).strip() if match is not None else None
+
+
+def rewrite_posting_account(line: str, target_account: str) -> str:
     """Rename a posting line's account, preserving its alignment and amount.
 
-    Returns ``(line, False)`` unchanged when the line is not a posting.
+    Raises ``ValueError`` when the line is not a posting, using the same
+    recognition as ``posting_account``. An unchanged account is still valid.
     """
-    match = ACCOUNT_LINE_RE.match(line)
-    if match:
-        return (f"{match.group(1)}{target_account}{match.group(3)}{match.group(4)}", True)
-
-    match = ACCOUNT_ONLY_RE.match(line)
-    if match:
-        return (f"{match.group(1)}{target_account}", True)
-
-    return line, False
+    match = _posting_match(line)
+    if match is None:
+        raise ValueError("Cannot rewrite a non-posting line")
+    if match.re is ACCOUNT_LINE_RE:
+        return f"{match.group(1)}{target_account}{match.group(3)}{match.group(4)}"
+    return f"{match.group(1)}{target_account}"

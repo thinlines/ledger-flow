@@ -763,12 +763,10 @@ _EDIT_REFUSAL_STATUS: dict[type[EditError], int] = {
 
 
 @contextmanager
-def _transaction_edit(*, tag: str, event_type: str):
+def _transaction_edit():
     """One edit session, with its typed refusals translated to HTTP once."""
     try:
-        with transaction_edit_service.edit(
-            _require_workspace_config(), tag=tag, event_type=event_type
-        ) as session:
+        with transaction_edit_service.edit(_require_workspace_config()) as session:
             yield session
     except EditError as exc:
         raise HTTPException(
@@ -788,9 +786,7 @@ def _edited(session, txn_id: str) -> dict:
 
 @app.post("/api/transactions/toggle-status")
 def transactions_toggle_status(req: ToggleStatusRequest) -> dict:
-    with _transaction_edit(
-        tag="toggle-status", event_type="transaction.status_toggled.v1"
-    ) as session:
+    with _transaction_edit() as session:
         transaction = session.open(req.txnId, expect_hash=req.blockHash)
         next_status = _STATUS_CYCLE[transaction.status]
         transaction.set_status(next_status)
@@ -800,7 +796,7 @@ def transactions_toggle_status(req: ToggleStatusRequest) -> dict:
 
 @app.post("/api/transactions/delete")
 def transactions_delete(req: DeleteTransactionRequest) -> dict:
-    with _transaction_edit(tag="delete", event_type="transaction.deleted.v1") as session:
+    with _transaction_edit() as session:
         session.open(req.txnId, expect_hash=req.blockHash).delete()
 
     return {"success": True, "eventId": session.result.operation_id}
@@ -808,41 +804,36 @@ def transactions_delete(req: DeleteTransactionRequest) -> dict:
 
 @app.post("/api/transactions/recategorize")
 def transactions_recategorize(req: RecategorizeTransactionRequest) -> dict:
-    with _transaction_edit(
-        tag="recategorize", event_type="transaction.recategorized.v1"
-    ) as session:
+    with _transaction_edit() as session:
         transaction = session.open(req.txnId, expect_hash=req.blockHash)
-        previous_account = transaction.set_category(req.newCategory)
-        new_account = transaction.category_posting.account
+        change = transaction.set_category(req.newCategory)
 
     return {
         "success": True,
-        "previousAccount": previous_account,
-        "newAccount": new_account,
+        "previousAccount": change.previous,
+        "newAccount": change.applied,
         **_edited(session, req.txnId),
     }
 
 
 @app.post("/api/transactions/reassign-account")
 def transactions_reassign_account(req: ReassignAccountRequest) -> dict:
-    with _transaction_edit(
-        tag="reassign-account", event_type="transaction.account_reassigned.v1"
-    ) as session:
-        previous_account = session.open(
+    with _transaction_edit() as session:
+        change = session.open(
             req.txnId, expect_hash=req.blockHash
         ).set_source_account(req.newAccountLedgerName)
 
     return {
         "success": True,
-        "previousAccount": previous_account,
-        "newAccount": req.newAccountLedgerName,
+        "previousAccount": change.previous,
+        "newAccount": change.applied,
         **_edited(session, req.txnId),
     }
 
 
 @app.post("/api/transactions/notes")
 def transactions_notes(req: UpdateNotesRequest) -> dict:
-    with _transaction_edit(tag="notes", event_type="transaction.notes_updated.v1") as session:
+    with _transaction_edit() as session:
         session.open(req.txnId, expect_hash=req.blockHash).set_notes(req.notes)
 
     return {"success": True, **_edited(session, req.txnId)}
@@ -850,9 +841,9 @@ def transactions_notes(req: UpdateNotesRequest) -> dict:
 
 @app.post("/api/transactions/unmatch")
 def transactions_unmatch(req: UnmatchTransactionRequest) -> dict:
-    with _transaction_edit(tag="unmatch", event_type="transaction.unmatched.v1") as session:
+    with _transaction_edit() as session:
         session.unmatch(
-            session.open(req.txnId, expect_hash=req.blockHash), match_id=req.matchId
+            req.txnId, expect_hash=req.blockHash, match_id=req.matchId
         )
 
     return {"success": True, **_edited(session, req.txnId)}
