@@ -16,15 +16,13 @@
 	export let onOpen: (row: TransactionRow) => void;
 	export let onToggleClearing: ((row: TransactionRow) => void) | null;
 
-	// Row amount: transfers read as unsigned movement; in single-account scope
-	// "good" changes (asset up, liability down) earn a + and the accent tone.
-	$: amountText = row.isTransfer
-		? formatCurrency(Math.abs(row.amount), baseCurrency, { signMode: 'negative-only' })
-		: formatCurrency(row.amount, baseCurrency, {
-				signMode: accountKind ? 'good-change-plus' : 'negative-only',
-				accountKind: accountKind ?? undefined
-			});
-	$: amountGood = !row.isTransfer && accountKind && goodChangeTone(row.amount, accountKind) === 'positive';
+	// Render the posting sign for transfers too, so the two account sides remain
+	// distinguishable. In single-account scope, "good" changes earn a + sign.
+	$: amountText = formatCurrency(row.amount, baseCurrency, {
+		signMode: accountKind ? 'good-change-plus' : 'negative-only',
+		accountKind: accountKind ?? undefined
+	});
+	$: amountGood = accountKind && goodChangeTone(row.amount, accountKind) === 'positive';
 	$: pending = row.transferState === 'pending' || row.status === 'pending';
 
 	let element: HTMLButtonElement | null = null;

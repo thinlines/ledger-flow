@@ -239,7 +239,14 @@ def _build_transaction_records(
                 "transactionStartLine": start_line,
                 "transactionEndLine": end_line,
                 "currentAccount": posting["account"],
-                "amount": posting["amount"],
+                # Review the movement in the tracked source account. The
+                # unknown posting is the balancing category leg and has the
+                # opposite sign, which makes transfer candidates look wrong.
+                "amount": (
+                    str(context["sourceAmountNumber"])
+                    if context["sourceAmountNumber"] is not None
+                    else posting["amount"]
+                ),
                 "counterpartyAccount": counterparty,
                 "line": posting["line"],
                 "sourceTrackedAccountId": context["sourceTrackedAccountId"],
